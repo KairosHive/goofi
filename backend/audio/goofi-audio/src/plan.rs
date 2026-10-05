@@ -30,6 +30,8 @@ pub enum Source {
     Sum { at: Region, channels: u16, parts: Vec<(Region, u16)> },
     /// A scalar-sourced param: its own one-channel region, refilled when its atomic moves.
     Scalar { at: Region, param: usize },
+    /// A computed param: the worker's last `[C, BLOCK]` result, copied in as it lands and held.
+    Block { at: Region, channels: u16, param: usize },
     /// An Array input: filled from the node's inbox each block, one sample per sample entered.
     Inbox { at: Region, channels: u16, inbox: usize },
 }
@@ -136,15 +138,20 @@ pub fn compile(
     // An edge is decided over EVERY instance, as the control half decides it: a reference onto
     // a disabled producer stays an edge, one with no region behind it.
     let mut refs: HashMap<(Uid, usize), (Uid, &'static str)> = HashMap::new();
+    // A computed param reads the worker's block, a region of its own.
+    let mut computed: HashSet<(Uid, usize)> = HashSet::new();
     for (uid, inst) in live {
         let Some(nv) = view.nodes.get(uid) else { continue };
         for (i, d) in inst.manifest.params.iter().enumerate() {
             let bound = nv.bindings.iter().find(|b| b.key.group == d.group && b.key.name == d.name);
             if let Some(b) = bound.filter(|b| is_edge(b, all)) {
                 refs.insert((*uid, i), b.vars[0].wire().expect("an edge"));
+            } else if bound.is_some_and(|b| b.live && b.id.is_some()) {
+                computed.insert((*uid, i));
             }
         }
     }
+    let block_width = |uid: Uid, i: usize| computed.contains(&(uid, i)).then(|| live[&uid].param_chans[i].load(Ordering::Relaxed).clamp(1, CEILING));
     let feeds = |consumer: Uid| -> Vec<Uid> {
         let inst = &live[&consumer];
         let mut from: Vec<Uid> = inst
@@ -189,7 +196,9 @@ pub fn compile(
                 None => parts_of(*uid, s.name, &outs_of).iter().map(|p| p.1).max().unwrap_or(1),
             })
             .collect();
-        counts.extend((0..inst.manifest.params.len()).filter_map(|i| refs.get(&(*uid, i)).map(|p| outs_of.get(p).map_or(1, |o| o.1))));
+        counts.extend((0..inst.manifest.params.len()).filter_map(|i| {
+            refs.get(&(*uid, i)).map(|p| outs_of.get(p).map_or(1, |o| o.1)).or_else(|| block_width(*uid, i))
+        }));
         let scalars: Vec<f64> = inst.manifest.params.iter().map(|d| scalar_of(nv.params, d)).collect();
         let wanted = inst.twin.channels(&counts, &scalars, inst.manifest.outputs.len());
         for (i, o) in inst.manifest.outputs.iter().enumerate() {
@@ -221,7 +230,10 @@ pub fn compile(
             .map(|i| match refs.get(&(*uid, i)).map(|p| outs_of.get(p)) {
                 Some(Some(part)) => source_of(vec![*part], &own, &mut plan.arena_len),
                 Some(None) => Source::Silence,
-                None => Source::Scalar { at: alloc(1, &mut plan.arena_len), param: i },
+                None => match block_width(*uid, i) {
+                    Some(channels) => Source::Block { at: alloc(channels, &mut plan.arena_len), channels, param: i },
+                    None => Source::Scalar { at: alloc(1, &mut plan.arena_len), param: i },
+                },
             })
             .collect();
         if inst.manifest.type_name == crate::nodes::audio_out::TYPE && !silent.contains(uid) {
@@ -248,7 +260,7 @@ pub fn compile(
         .iter()
         .map(|(input, _, sel)| {
             let own = match input {
-                Source::Region { channels, .. } | Source::Sum { channels, .. } | Source::Inbox { channels, .. } => {
+                Source::Region { channels, .. } | Source::Sum { channels, .. } | Source::Inbox { channels, .. } | Source::Block { channels, .. } => {
                     *channels
                 }
                 Source::Silence | Source::Scalar { .. } => 1,

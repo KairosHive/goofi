@@ -166,9 +166,6 @@ fn param_line(p: &goofi_core::Param, source: Option<&goofi_graph::SourceInfo>) -
         Some(s) if s.state.mode == goofi_graph::Mode::Expression => {
             format!("expr: {} → {value}{}", s.state.expression, error(s))
         }
-        Some(s) if s.state.mode == goofi_graph::Mode::Reference => {
-            format!("ref: {} → {value}{}", s.state.reference, error(s))
-        }
         _ => format!("{value} ({ty})"),
     }
 }
@@ -258,15 +255,18 @@ pub fn node(
 }
 
 /// One variable as `variable list` and `control list` answer it.
-pub(crate) fn variable_json(store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
+pub(crate) fn variable_json(g: &Graph, store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
     let mut e = json!({ "name": name, "value": v.value });
     // What holds it, its own lock and its group's together — the answer a writer needs.
     e["lock"] = json!(store.lock_of(name));
     if let Some(c) = &v.control {
         e["control"] = json!(c);
     }
-    if let Some(s) = &v.source {
-        e["source"] = json!(s);
+    if let Some(x) = &v.expression {
+        e["expression"] = json!(x);
+        if let Some(error) = g.variable_binding_error(name) {
+            e["error"] = json!(error);
+        }
     }
     e
 }
@@ -274,7 +274,7 @@ pub(crate) fn variable_json(store: &goofi_core::variables::VariableStore, name: 
 /// `variable list`: what an expression can read and the variable writes can set.
 pub fn variables(g: &Graph) -> Value {
     let store = g.variables();
-    let entries: Vec<Value> = store.entries().map(|(name, v)| variable_json(&store, name, v)).collect();
+    let entries: Vec<Value> = store.entries().map(|(name, v)| variable_json(g, &store, name, v)).collect();
     let groups: serde_json::Map<String, Value> =
         store.groups().map(|(group, rec)| (group.to_string(), json!(rec))).collect();
     json!({ "variables": entries, "groups": groups })

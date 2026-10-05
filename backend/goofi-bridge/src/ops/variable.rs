@@ -4,13 +4,13 @@ use serde_json::{json, Value};
 
 use super::{op, Any, NoArgs, ReadOp, WriteOp};
 use crate::{inspect, Txn};
-use goofi_core::variables::{Control, ControlKind, Lock, VariableSource};
+use goofi_core::variables::{Control, ControlKind, Lock};
 use goofi_core::Data;
 use goofi_graph::{Command, Graph};
 
 op!(List, "variable list", 0, NoArgs,
     "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The `system` group is goofi's own: config-locked for life, and its EPHEMERAL members — `system.goofi_home` and the `system.audio_*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
-    "{variables: [{name, value, lock: {config, value}, control?, source?}], groups: {group: {lock}}}");
+    "{variables: [{name, value, lock: {config, value}, control?, expression?, error?}], groups: {group: {lock}}}");
 
 op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
     pub name: Option<String>,
@@ -31,8 +31,9 @@ op!(EntryEdit, "variable entry edit", 1, EntryEditArgs {
     #[serde(default, deserialize_with = "super::nullable")]
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
+    pub expression: Option<String>,
 },
-    "Change an existing variable's value: a number, a list of numbers (nested for a wider array), a bool or a string, as `variable entry add` takes it. A control widget must be able to draw the new value. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it.",
+    "Change an existing variable's value: a number, a list of numbers (nested for a wider array), a bool or a string, as `variable entry add` takes it. A control widget must be able to draw the new value. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it. `expression` makes the variable COMPUTED, in the one language a param's expression is: bare — `nd('level')`, `nd('midi').out.cc[74]`, `variables.desk.gain` — the manager copies that one frame or element as it comes, at the producer's rate; around any Python it evaluates on its own worker. Nobody else may set a computed variable; an empty expression clears it. A name it spells follows a rename as a param's does.",
     "{value} — the value as stored");
 
 op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs {
@@ -41,13 +42,6 @@ op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs {
     "Delete a patch variable. A config-locked one refuses, and a system variable always is.",
     "{removed: true}");
 
-op!(EntrySource, "variable entry source", 2, EntrySourceArgs {
-    pub name: String,
-    pub reference: String,
-    pub index: Option<i64>,
-},
-    "Make a variable FOLLOW one producer output, `node.slot`, at that producer's rate: the manager writes the variable on every frame that changes it, and nobody else may set it until the source is cleared with an empty reference. `index` picks one number out of a frame wider than one — a MIDI controller's `cc` is 128 of them — and a frame that holds one number needs none. The reference follows a node rename exactly as a param's does. A config-locked variable refuses; a value-locked one holds its value and takes nothing.",
-    "{source: {reference, index} | null}");
 
 op!(EntryLock, "variable entry lock", 1, EntryLockArgs {
     pub name: String,
@@ -86,8 +80,8 @@ op!(GroupLock, "variable group lock", 1, GroupLockArgs {
     "{lock: {config, value}} — the group's lock as stored");
 
 op!(ControlList, "control list", 0, NoArgs,
-    "Every control panel and the group it draws, and every group holding a widget: each element with its value, its widget (`control`), its lock and what it follows (`source`).",
-    "{panels: [{panel, group}], groups: {group: {lock, elements: [{name, element, value, control, lock, source?}]}}}");
+    "Every control panel and the group it draws, and every group holding a widget: each element with its value, its widget (`control`), its lock and the expression that computes it.",
+    "{panels: [{panel, group}], groups: {group: {lock, elements: [{name, element, value, control, lock, expression?, error?}]}}}");
 
 op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub group: String,
@@ -121,8 +115,9 @@ op!(ControlEdit, "control edit", 2, ControlEditArgs {
     pub w: Option<f64>,
     pub h: Option<f64>,
     pub resolution: Option<u32>,
+    pub expression: Option<String>,
 },
-    "Change a widget: `name` renames the element (every expression reading it follows), and the rest re-shape the widget, its range, its options or its cell. `resolution` re-sizes a paint pad, which starts it clear. ONE undo step, and refused by a config lock.",
+    "Change a widget: `name` renames the element (every expression reading it follows), `expression` makes it computed as `variable entry edit` does — `nd('midi').out.cc[74]` puts a controller's knob on it, an empty one hands it back to the hand — and the rest re-shape the widget, its range, its options or its cell. `resolution` re-sizes a paint pad, which starts it clear. ONE undo step, and refused by a config lock.",
     "{name} — the element's full name after the edit");
 
 op!(ControlRemove, "control remove", 2, ControlRemoveArgs {
@@ -140,14 +135,6 @@ op!(ControlPaint, "control paint", 2, ControlPaintArgs {
     "Draw onto a `paint` widget's array, as ONE undoable edit of its variable — the pad sends each finished hand stroke through this same op. The variable holds the sheet as an `[h, w, 4]` RGBA array in 0..1; `node snapshot variables/<group>.<element> --raw` reads it back. `ops` is one op per line or `;`, `//` to end of line a comment: `stroke [ink] [width w] [soft s] [cap round|butt|square] [dash solid|dash|dot] : <path>`, `fill [ink] : <path>` and `clear`, which drops what came before. A path is `M x y` (move), `L x y` (line), `C x1 y1 x2 y2 x y` (cubic bezier) and `Z` (close), and must start with `M`. Ink is `#rgb`, `#rrggbb`, `#rrggbbaa` or `erase`; the stroke defaults are black, width 10, soft 0, cap round, dash solid. Coordinates, width and soft span 0..1000 whatever pixel size the pad is, the origin is the TOP-left with y running down. A `+ms` before an op or a segment is its time since the previous one, so a drawing replays.",
     "{ops, shape} — the ops drawn, and the sheet's shape");
 
-op!(ControlSource, "control source", 2, ControlSourceArgs {
-    pub group: String,
-    pub element: String,
-    pub reference: String,
-    pub index: Option<i64>,
-},
-    "Make a widget FOLLOW one producer output, `node.slot`, with `index` picking one number out of a wide frame — a MIDI controller's `cc` is 128 of them — so a knob on a controller drives the widget. An empty reference clears it. Refused by a config lock.",
-    "{source: {reference, index} | null}");
 
 impl ReadOp for List {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
@@ -196,22 +183,38 @@ impl WriteOp for EntryEdit {
             return Err(format!("no variable `{name}` — `variable entry add` creates one"));
         };
         // A control-only edit is what the panel sends when it moves a widget, so the value is optional
-        // once a `control` is given — and the entry keeps the one it holds, followed or locked as it may be.
+        // once a `control` or an `expression` is given — and the entry keeps the one it holds.
         let value = match a.value.map(|v| v.0).filter(|v| !v.is_null()) {
             Some(val) => Some(literal(val)?),
-            None if a.control.is_some() => None,
+            None if a.control.is_some() || a.expression.is_some() => None,
             None => return Err("missing value".to_string()),
         };
         let stored = value.clone().unwrap_or(held);
-        tx.apply(Command::EditVariable { name, value, at: None, control: a.control })?;
+        let mut cmds = Vec::new();
+        if value.is_some() || a.control.is_some() {
+            cmds.push(Command::EditVariable { name: name.clone(), value, at: None, control: a.control });
+        }
+        if let Some(expression) = a.expression {
+            cmds.push(Command::SourceVariable { name, expression: Some(expression) });
+        }
+        tx.apply(compound(cmds))?;
         Ok(json!({ "value": stored }))
     }
 
     fn label(a: &EntryEditArgs, _: &Value) -> String {
-        match &a.value {
-            None => format!("Edit control {}", a.name),
+        match (&a.value, &a.expression) {
+            (None, Some(_)) => format!("Compute variable {}", a.name),
+            (None, None) => format!("Edit control {}", a.name),
             _ => format!("Set variable {}", a.name),
         }
+    }
+}
+
+/// One command or several as one undo step.
+fn compound(mut cmds: Vec<Command>) -> Command {
+    match cmds.len() {
+        1 => cmds.pop().expect("one"),
+        _ => Command::Compound(cmds),
     }
 }
 
@@ -226,26 +229,6 @@ impl WriteOp for EntryRemove {
     }
 }
 
-/// `index` picks one number out of a frame wider than one; a whole number or nothing.
-fn source_of(reference: &str, index: Option<i64>) -> Result<Option<VariableSource>, String> {
-    let index = index
-        .map(|i| usize::try_from(i).map_err(|_| format!("`index` is a whole number, not `{i}`")))
-        .transpose()?;
-    let reference = reference.trim().to_string();
-    Ok((!reference.is_empty()).then_some(VariableSource { reference, index }))
-}
-
-impl WriteOp for EntrySource {
-    fn run(tx: &mut Txn, a: EntrySourceArgs) -> Result<Value, String> {
-        let source = source_of(&a.reference, a.index)?;
-        tx.apply(Command::SourceVariable { name: a.name, source: source.clone() })?;
-        Ok(json!({ "source": source }))
-    }
-
-    fn label(a: &EntrySourceArgs, _: &Value) -> String {
-        format!("Source variable {}", a.name)
-    }
-}
 
 /// The lock an edit asks for over `held`: an axis it does not name keeps what it has.
 fn lock_over(held: Lock, config: Option<bool>, value: Option<bool>) -> Lock {
@@ -345,7 +328,7 @@ impl ReadOp for ControlList {
                 .entries()
                 .filter(|(name, v)| v.control.is_some() && name.split_once('.').is_some_and(|(gr, _)| gr == group))
                 .map(|(name, v)| {
-                    let mut e = inspect::variable_json(&store, name, v);
+                    let mut e = inspect::variable_json(&tx.g, &store, name, v);
                     e["element"] = json!(name.split_once('.').map_or(name, |(_, el)| el));
                     e
                 })
@@ -444,8 +427,11 @@ impl WriteOp for ControlEdit {
             let value = (a.resolution.is_some() && control.kind == ControlKind::Paint).then(|| control.born_value());
             cmds.push(Command::EditVariable { name: target.clone(), value, at: None, control: Some(Some(control)) });
         }
+        if let Some(expression) = a.expression {
+            cmds.push(Command::SourceVariable { name: target.clone(), expression: Some(expression) });
+        }
         if cmds.is_empty() {
-            return Err("nothing to change — give a name, a kind, a range, options or a cell".into());
+            return Err("nothing to change — give a name, a kind, a range, options, a cell or an expression".into());
         }
         tx.apply(Command::Compound(cmds))?;
         Ok(json!({ "name": target }))
@@ -503,15 +489,3 @@ impl WriteOp for ControlPaint {
     }
 }
 
-impl WriteOp for ControlSource {
-    fn run(tx: &mut Txn, a: ControlSourceArgs) -> Result<Value, String> {
-        let name = element_of(&tx.g, &a.group, &a.element)?;
-        let source = source_of(&a.reference, a.index)?;
-        tx.apply(Command::SourceVariable { name, source: source.clone() })?;
-        Ok(json!({ "source": source }))
-    }
-
-    fn label(a: &ControlSourceArgs, _: &Value) -> String {
-        format!("Source {}.{}", a.group, a.element)
-    }
-}

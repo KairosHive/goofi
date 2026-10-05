@@ -183,7 +183,7 @@ pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
     }
 }
 
-/// The one params bag, `{group: {param: value | {value, expression, reference, mode, triggers}}}`,
+/// The one params bag, `{group: {param: value | {value, expression, mode, triggers}}}`,
 /// as one [`Command::EditParam`] per entry, typed against the params the node holds NOW.
 pub fn param_commands(
     g: &Graph,
@@ -302,11 +302,8 @@ fn param_change(
         }
         return Ok((Some(coerced_value(existing, spec)), None));
     };
-    if let Some(k) = o
-        .keys()
-        .find(|k| !matches!(k.as_str(), "value" | "expression" | "reference" | "mode" | "triggers"))
-    {
-        return Err(format!("unknown field `{k}` — value, expression, reference, mode, triggers"));
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "value" | "expression" | "mode" | "triggers")) {
+        return Err(format!("unknown field `{k}` — value, expression, mode, triggers"));
     }
     let field = |k: &str| o.get(k).filter(|v| !v.is_null());
     if pulse && field("value").is_some() {
@@ -319,50 +316,29 @@ fn param_change(
             .transpose()
     };
     let expression = text("expression")?;
-    let reference = text("reference")?;
     let mode = field("mode")
         .map(|v| {
             serde_json::from_value::<Mode>(v.clone())
                 .ok()
-                .ok_or_else(|| format!("mode is `constant`, `expression` or `reference`, not {v}"))
+                .ok_or_else(|| format!("mode is `constant` or `expression`, not {v}"))
         })
         .transpose()?;
     let triggers = field("triggers")
         .map(|v| v.as_bool().ok_or_else(|| format!("triggers is a bool, not {v}")))
         .transpose()?;
-    if expression.is_none() && reference.is_none() && mode.is_none() && triggers.is_none() {
+    if expression.is_none() && mode.is_none() && triggers.is_none() {
         return Ok((value, None));
     }
     let cur = cur.unwrap_or_default();
-    let given = |t: &Option<String>| t.as_deref().is_some_and(|s| !s.is_empty());
-    let mode = match (mode, given(&expression), given(&reference)) {
-        (Some(m), _, _) => m,
-        (None, true, true) => {
-            return Err("an expression and a reference at once: say which with `mode`".to_string())
-        }
-        (None, true, false) => Mode::Expression,
-        (None, false, true) => Mode::Reference,
-        // Clearing the active text is what switches it off.
-        (None, false, false) => match cur.mode {
-            Mode::Expression if expression.as_deref() == Some("") => Mode::Constant,
-            Mode::Reference if reference.as_deref() == Some("") => Mode::Constant,
-            m => m,
-        },
+    let mode = match (mode, expression.as_deref()) {
+        (Some(m), _) => m,
+        (None, Some("")) => Mode::Constant,
+        (None, Some(_)) => Mode::Expression,
+        (None, None) => cur.mode,
     };
-    let state = SourceState {
-        mode,
-        expression: expression.unwrap_or(cur.expression),
-        reference: reference.unwrap_or(cur.reference),
-        triggers: triggers.unwrap_or(cur.triggers),
-    };
-    match state.mode {
-        Mode::Expression if state.expression.is_empty() => {
-            return Err("mode `expression` with no expression to evaluate".to_string())
-        }
-        Mode::Reference if state.reference.is_empty() => {
-            return Err("mode `reference` with no reference to follow".to_string())
-        }
-        _ => {}
+    let state = SourceState { mode, expression: expression.unwrap_or(cur.expression), triggers: triggers.unwrap_or(cur.triggers) };
+    if state.mode == Mode::Expression && state.expression.is_empty() {
+        return Err("mode `expression` with no expression to evaluate".to_string());
     }
     Ok((value, Some(state)))
 }
@@ -374,23 +350,16 @@ pub enum Mode {
     #[default]
     Constant,
     Expression,
-    Reference,
 }
 
-/// The one variable a reference rewrites to: the bare-variable source the runtime copies without
-/// an evaluator.
-const REF_VAR: &str = "ref";
-/// The namespace an expression and a reference read a variable under.
-const VARIABLES_NAMESPACE: &str = "variables";
-
-/// A param's source record: the AUTHORED state, both texts retained whatever the mode, and
+/// A param's source record: the AUTHORED state, the text retained whatever the mode, and
 /// everything below it DERIVED from the active one at settle.
 struct ParamSource {
     state: SourceState,
     /// Compiled from [`Self::rewritten`], never from the authored text: the evaluator is handed
     /// variables, not names. `None` when the compile failed, or there is no evaluator.
     id: Option<goofi_node::BindingId>,
-    /// Derived: the active text with every reference replaced by a generated variable.
+    /// Derived: the text with every term replaced by a generated variable.
     rewritten: String,
     /// Derived: one entry per variable `rewritten` names, resolved against the graph.
     vars: Vec<BoundVar>,
@@ -410,11 +379,24 @@ struct Derived {
 }
 
 impl ParamSource {
+    fn fresh(state: SourceState) -> ParamSource {
+        ParamSource { state, id: None, rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), bind_error: None }
+    }
+
     /// Whether the graph SHIPS this source. A constant mode and a source the graph could not bind
     /// both leave the param on its literal, and the node is TOLD so.
     fn live(&self) -> bool {
         self.state.mode != Mode::Constant && self.bind_error.is_none()
     }
+}
+
+/// One variable's source as the follower reads it: the rewritten text, the evaluator's handle —
+/// none for a bare source — and every variable it names, resolved.
+pub struct VariableBinding<'a> {
+    pub name: &'a str,
+    pub rewritten: &'a str,
+    pub id: Option<goofi_node::BindingId>,
+    pub vars: &'a [BoundVar],
 }
 
 /// [`ParamSource`] projected for the bridge and the `.gfi`: the authored state, and why it does
@@ -490,6 +472,8 @@ struct Runtime {
     time: Arc<goofi_core::time::Time>,
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
+    /// Every variable with an expression, derived at settle as a param's source is.
+    variable_binds: IndexMap<String, ParamSource>,
     /// Types that exist on disk but cannot load here → why. Greyed in the palette, so a node
     /// needing an uninstalled dependency explains itself instead of silently not existing.
     unavailable: std::collections::BTreeMap<String, Greyed>,
@@ -580,6 +564,7 @@ impl Graph {
                 epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 time: Arc::new(goofi_core::time::Time::new()),
                 evaluator: None,
+                variable_binds: IndexMap::new(),
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
@@ -644,30 +629,24 @@ impl Graph {
         out
     }
 
-    /// Every variable group the patch refers to: in a source's text, a feed, or what a variable
-    /// follows. What holds a MIDI device open — a group a device's name resolves to is read.
+    /// Every variable group the patch refers to: in a source's text, a feed, or a variable's
+    /// expression. What holds a MIDI device open — a group a device's name resolves to is read.
     pub fn referenced_groups(&self) -> HashSet<String> {
         let group_of = |name: &str| goofi_core::variables::split_variable(name).map(|(g, _)| g.to_string());
         let mut out = HashSet::new();
-        for (_, leaf) in self.leaves() {
-            for r in leaf.sources.values().flat_map(|b| &b.refs) {
-                if let expr_rewrite::Target::Variable { key } = &r.target {
-                    out.extend(group_of(key));
-                }
+        let node_refs = self.leaves().flat_map(|(_, leaf)| leaf.sources.values()).flat_map(|b| &b.refs);
+        for r in node_refs.chain(self.runtime.variable_binds.values().flat_map(|b| &b.refs)) {
+            if let expr_rewrite::Target::Variable { key } = &r.target {
+                out.extend(group_of(key));
             }
+        }
+        for (_, leaf) in self.leaves() {
             let typed = self.typed(leaf);
             for (_, group, d) in goofi_node::feed_decls(leaf.manifest) {
                 if let Some(goofi_core::Param::Str { value, .. }) = goofi_node::param(&typed, d.group, group) {
                     if !value.is_empty() {
                         out.insert(value.clone());
                     }
-                }
-            }
-        }
-        for (_, v) in self.variables().entries() {
-            if let Some(s) = &v.source {
-                if let Some(name) = s.reference.strip_prefix("variables.") {
-                    out.extend(group_of(name));
                 }
             }
         }
@@ -691,49 +670,51 @@ impl Graph {
         Ok(())
     }
 
-    /// Set or clear what a variable follows, answering what it followed. The reference is held to
-    /// the spelling a param's is; what it names is resolved by the follower, as nodes come and go.
-    pub fn set_variable_source(
-        &mut self,
-        name: &str,
-        source: Option<goofi_core::variables::VariableSource>,
-    ) -> Result<Option<goofi_core::variables::VariableSource>, String> {
-        if let Some(s) = &source {
-            parse_reference(&s.reference)?;
+    /// Set or clear the expression a variable is computed by, answering the one it replaced. The
+    /// text is held to the spelling a param's is; what it names is resolved at every settle.
+    pub fn set_variable_expression(&mut self, name: &str, expression: Option<String>) -> Result<Option<String>, String> {
+        if let Some(e) = &expression {
+            expr_rewrite::rewrite(e).map_err(|e| e.0)?;
         }
-        self.variables().set_source(name, source)
+        self.variables().set_expression(name, expression)
     }
 
-    /// Every followed variable, resolved: the variable, the producer's uid and slot, and the index.
-    /// A source that does not resolve is left out and carries its error instead.
-    pub fn variable_sources(&self) -> Vec<(String, Uid, String, Option<usize>)> {
-        let followed: Vec<(String, goofi_core::variables::VariableSource)> =
-            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), v.source.clone()?))).collect();
-        followed
-            .into_iter()
-            .filter_map(|(name, s)| {
-                let (uid, slot) = self.resolve_variable_source(&s).ok()?;
-                Some((name, uid, slot.to_string(), s.index))
-            })
+    /// Why a variable's expression cannot bind, from the last settle.
+    pub fn variable_binding_error(&self, name: &str) -> Option<String> {
+        self.runtime.variable_binds.get(name).and_then(|b| b.bind_error.clone())
+    }
+
+    /// Every variable with a live expression, as the follower reads it.
+    pub fn variable_bindings(&self) -> Vec<VariableBinding<'_>> {
+        self.runtime
+            .variable_binds
+            .iter()
+            .filter(|(_, b)| b.live())
+            .map(|(name, b)| VariableBinding { name, rewritten: &b.rewritten, id: b.id, vars: &b.vars })
             .collect()
     }
 
-    /// Why a variable's source delivers nothing: the node or the output it names is not there.
-    /// The one derivation, so the projection and the follower cannot answer differently.
-    pub fn variable_source_error(&self, source: &goofi_core::variables::VariableSource) -> Option<String> {
-        self.resolve_variable_source(source).err()
-    }
-
-    fn resolve_variable_source(&self, source: &goofi_core::variables::VariableSource) -> Result<(Uid, &'static str), String> {
-        let (node, slot) = source.reference.split_once('.').ok_or("a source is `node.slot`")?;
-        // A variable is a slot of the patch's own producer, followed as any stream is.
-        if node == VARIABLES_NAMESPACE {
-            return match self.variables().contains(slot) {
-                true => Ok((Uid::VARIABLES, goofi_core::variables::slot_name(slot))),
-                false => Err(format!("variable `{slot}` is not defined")),
-            };
+    /// Derive every variable's expression against the graph, as a param's source is: a handle
+    /// compiled once per text, and the reason a text cannot bind kept beside it.
+    fn derive_variables(&mut self) {
+        let wanted: Vec<(String, String)> =
+            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), v.expression.clone()?))).collect();
+        let gone: Vec<String> = self.runtime.variable_binds.keys().filter(|k| !wanted.iter().any(|(n, _)| n == *k)).cloned().collect();
+        for name in gone {
+            if let Some(b) = self.runtime.variable_binds.shift_remove(&name) {
+                if let (Some(ev), Some(id)) = (&self.runtime.evaluator, b.id) {
+                    ev.release(id);
+                }
+            }
         }
-        self.resolve_stream(node, Some(slot))
+        for (name, expression) in wanted {
+            let state = SourceState { mode: Mode::Expression, expression, triggers: false };
+            let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| ParamSource::fresh(state.clone()));
+            let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
+            let (id, error) = self.compiled(&prior, &derived);
+            let record = ParamSource { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
+            self.runtime.variable_binds.insert(name, record);
+        }
     }
 
     /// Whether a group name is held: by the variables, or by a control panel that names it.
@@ -783,9 +764,19 @@ impl Graph {
     /// whose source text changed.
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
+        self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })
+    }
+
+    /// Re-set every variable expression `edit` rewrites.
+    fn rewrite_variable_expressions(&mut self, edit: impl Fn(&str) -> Option<String>) {
+        let edits: Vec<(String, String)> =
+            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), edit(v.expression.as_deref()?)?))).collect();
+        for (name, expression) in edits {
+            let _ = self.variables().set_expression(&name, Some(expression));
+        }
     }
 
     /// Re-set every source `edit` rewrites, answering the distinct nodes whose source changed.
@@ -807,6 +798,7 @@ impl Graph {
     /// Derive every binding from its authored texts against the graph as it stands, and touch the
     /// ones that moved, so their nodes are re-sent. Runs at settle.
     fn derive_bindings(&mut self) {
+        self.derive_variables();
         let mut keys: Vec<(Uid, ParamKey)> =
             self.leaves().flat_map(|(uid, e)| e.sources.keys().map(move |k| (uid, k.clone()))).collect();
         keys.sort();
@@ -864,10 +856,11 @@ impl Graph {
     }
 
     /// The handle for a derivation: the prior one where the rewritten text is the text it
-    /// compiled, else a fresh compile, and the prior released. A refused compile is the error.
+    /// compiled, else a fresh compile, and the prior released. A refused compile is the error. A
+    /// BARE text compiles to nothing: the engine reads its one target in Rust.
     fn compiled(&self, prior: &ParamSource, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
         let evaluator = self.runtime.evaluator.as_ref();
-        if prior.state.mode == Mode::Expression && next.error.is_none() {
+        if prior.state.mode == Mode::Expression && next.error.is_none() && !expr_rewrite::is_bare(&next.rewritten) {
             if prior.id.is_some() && prior.rewritten == next.rewritten {
                 return (prior.id, None);
             }
@@ -890,6 +883,11 @@ impl Graph {
 
     fn source_state(&self, uid: Uid, key: &ParamKey) -> Option<SourceState> {
         self.leaf(uid).and_then(|e| e.sources.get(key)).map(|s| s.state.clone())
+    }
+
+    /// The evaluator the graph compiles against, for the manager's own worker.
+    pub fn evaluator(&self) -> Option<Arc<dyn goofi_node::ExprEvaluator>> {
+        self.runtime.evaluator.clone()
     }
 
     /// Inject the param-expression evaluator (pyo3, from goofi-python). Wired by the CLI at
@@ -1501,7 +1499,6 @@ impl Graph {
                 let state = SourceState {
                     mode: if enabled { Mode::Expression } else { Mode::Constant },
                     expression: e.source.to_string(),
-                    reference: String::new(),
                     triggers: e.trigger,
                 };
                 let _ = self.set_source(uid, group, name, state);
@@ -1678,29 +1675,11 @@ impl Graph {
                 (slot == Some(old) && Some(n) == facade.as_deref()).then(|| new.to_string()),
             )
         };
-        let referrers = self.rewrite_sources(|s| {
-            let expression = expr_rewrite::rename_refs(&s.expression, rename);
-            let reference = expr_rewrite::rename_reference(&s.reference, rename);
-            (expression.is_some() || reference.is_some()).then(|| SourceState {
-                expression: expression.unwrap_or_else(|| s.expression.clone()),
-                reference: reference.unwrap_or_else(|| s.reference.clone()),
-                ..s.clone()
-            })
-        });
-        // A variable follows a producer by the same spelling, so the one rename reaches it too.
-        let followed: Vec<(String, goofi_core::variables::VariableSource)> = self
-            .variables()
-            .entries()
-            .filter_map(|(name, v)| {
-                let s = v.source.as_ref()?;
-                let reference = expr_rewrite::rename_reference(&s.reference, rename)?;
-                Some((name.to_string(), goofi_core::variables::VariableSource { reference, index: s.index }))
-            })
-            .collect();
-        for (name, source) in followed {
-            let _ = self.variables().set_source(&name, Some(source));
-        }
-        referrers
+        // A variable's expression spells a producer as a param's does, so the one rename reaches it.
+        self.rewrite_variable_expressions(|e| expr_rewrite::rename_refs(e, rename));
+        self.rewrite_sources(|s| {
+            Some(SourceState { expression: expr_rewrite::rename_refs(&s.expression, rename)?, ..s.clone() })
+        })
     }
 
     pub fn set_node_pos(&mut self, uid: Uid, pos: [f64; 2]) -> Result<(), String> {
@@ -1749,7 +1728,6 @@ impl Graph {
                         "value": param_value_json(p),
                         "mode": source.map(|b| b.state.mode).unwrap_or_default(),
                         "expression": source.map(|b| b.state.expression.clone()).unwrap_or_default(),
-                        "reference": source.map(|b| b.state.reference.clone()).unwrap_or_default(),
                     }),
                 );
             }
@@ -2512,8 +2490,6 @@ impl Graph {
     fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
         let param = self.leaf(uid).and_then(|e| goofi_node::param_dim(&self.typed(e), &key.group, &key.name));
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
-        let reference = (!state.reference.is_empty()).then(|| goofi_node::mailbox::split_index(&state.reference)
-            .and_then(|(base, index)| parse_reference(base).map(|r| (r, index))));
         let missing = |vars: &[BoundVar]| {
             vars.iter().find_map(|v| match v {
                 BoundVar::Missing { reason, .. } => Some(reason.clone()),
@@ -2521,50 +2497,46 @@ impl Graph {
             })
         };
         let none = |error: Option<String>| Derived { rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), error };
-        let Some(param) = param else {
+        // A variable's expression has no param behind it; a node's does, or the record dangles.
+        if uid != Uid::VARIABLES && param.is_none() {
             return none(Some(format!("no such param `{}/{}`", key.group, key.name)));
-        };
+        }
         match state.mode {
             Mode::Constant => none(None),
             Mode::Expression => match scanned {
                 Some(Ok((rewritten, refs))) => {
                     let vars = self.resolve_vars(uid, key, &refs);
-                    let error = missing(&vars);
+                    // A bare read is a cable: it crosses a plane only where a cable may.
+                    let bare = expr_rewrite::is_bare(&rewritten);
+                    let error = missing(&vars).or_else(|| bare.then(|| self.bare_kind_error(uid, &refs[0], param.as_ref())).flatten());
                     Derived { rewritten, vars, refs, error }
                 }
                 Some(Err(e)) => Derived { rewritten: state.expression.clone(), vars: Vec::new(), refs: Vec::new(), error: Some(e.0) },
                 None => none(Some("no expression to evaluate".to_string())),
             },
-            Mode::Reference => match reference {
-                Some(Ok((r, index))) => {
-                    let refs = vec![r];
-                    let vars = self.resolve_vars(uid, key, &refs);
-                    let error = missing(&vars).or_else(|| self.reference_kind_error(uid, &refs[0], &param));
-                    let rewritten = index.map_or_else(|| REF_VAR.to_string(), |i| format!("{REF_VAR}[{i}]"));
-                    Derived { rewritten, vars, refs, error }
-                }
-                Some(Err(e)) => none(Some(e)),
-                None => none(Some("no reference to follow".to_string())),
-            },
         }
     }
 
-    /// Why a resolved reference cannot feed the param on `reader`: the producer's slot kind
-    /// against the param's type. An engine-local kind drives a param on its own plane as a plan
-    /// edge (audio rate), so that pairing passes too. `None` when they agree, or when the
-    /// producer was not found (already reported).
-    fn reference_kind_error(&self, reader: Uid, r: &expr_rewrite::VarRef, param: &Param) -> Option<String> {
-        let Target::Node { name, slot: Some(slot) } = &r.target else { return None };
+    /// Why a bare read of a producer cannot feed `param` on `reader`: an engine-local output never
+    /// leaves its plane, so it drives a numeric param of its own engine as a plan edge and nothing
+    /// else. `None` when the read is fine, or when the producer was not found (already reported).
+    fn bare_kind_error(&self, reader: Uid, r: &expr_rewrite::VarRef, param: Option<&Param>) -> Option<String> {
+        let Target::Node { name, slot } = &r.target else { return None };
         let uid = self.uid_by_name(name)?;
-        let kind = self.slots(uid, Dir::Out).into_iter().find(|(_, label, _)| label == slot)?.2;
+        let outputs = self.slots(uid, Dir::Out);
+        let (_, slot, kind) = match (slot, outputs.len()) {
+            (Some(slot), _) => outputs.into_iter().find(|(_, label, _)| label == slot)?,
+            (None, 1) => outputs.into_iter().next()?,
+            (None, _) => return None,
+        };
+        kind.engine_local()?;
         let wants = match param {
-            Param::Str { .. } => goofi_core::SlotType::String,
+            Some(Param::Str { .. }) => goofi_core::SlotType::String,
             _ => goofi_core::SlotType::Array,
         };
         let same_plane = self.leaf(reader).map(|e| e.engine) == self.leaf(uid).map(|e| e.engine);
-        let plan_edge = kind.engine_local().is_some() && wants == goofi_core::SlotType::Array && same_plane;
-        (!kind.feeds(wants) && !plan_edge).then(|| {
-            format!("`{name}.{slot}` is a {} output; this param references a {} one", kind.name(), wants.name())
+        (wants != goofi_core::SlotType::Array || !same_plane).then(|| {
+            format!("`{name}.{slot}` is an {} output, read on its own plane alone; this param reads {}", kind.name(), wants.name())
         })
     }
 
@@ -3273,9 +3245,6 @@ impl Graph {
                         if let Some(src) = expr_rewrite::rename_refs(&s.expression, remap) {
                             s.expression = src;
                         }
-                        if let Some(r) = expr_rewrite::rename_reference(&s.reference, remap) {
-                            s.reference = r;
-                        }
                         (group, name, s)
                     })
                     .collect(),
@@ -3316,7 +3285,7 @@ impl Graph {
         let variables = self.variables();
         patch.variables = variables
             .entries()
-            .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), source: v.source.clone(), lock: v.lock }))
+            .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), expression: v.expression.clone(), lock: v.lock }))
             .collect();
         patch.variable_groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
         // The flat arrangement always exists (at worst the default), so it always rides.
@@ -3325,17 +3294,15 @@ impl Graph {
     }
 
     /// The document a browser replica holds: the patch, every root present, and beside a
-    /// variable's source why it delivers nothing — the one runtime fact the panel shows inline.
+    /// variable's expression why it cannot bind — the one runtime fact the panel shows inline.
     pub fn replica(&self) -> serde_json::Value {
         let mut doc = serde_json::to_value(self.document()).expect("a plain record");
         for root in ["nodes", "links", "variables", "variable_groups"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
-        let sourced: Vec<(String, goofi_core::variables::VariableSource)> =
-            self.variables().entries().filter_map(|(n, v)| Some((n.to_string(), v.source.clone()?))).collect();
-        for (name, s) in sourced {
-            if let Some(error) = self.variable_source_error(&s) {
-                doc["variables"][name]["source"]["error"] = serde_json::Value::String(error);
+        for (name, b) in &self.runtime.variable_binds {
+            if let (Some(error), Some(record)) = (&b.bind_error, doc["variables"].get_mut(name)) {
+                record["error"] = serde_json::Value::String(error.clone());
             }
         }
         doc
@@ -3394,8 +3361,8 @@ impl Graph {
             if let Some(c) = &v.control {
                 let _ = variables.apply_change(name, None, None, Some(Some(c.clone())));
             }
-            if let Some(s) = &v.source {
-                let _ = variables.set_source(name, Some(s.clone()));
+            if let Some(e) = &v.expression {
+                let _ = variables.set_expression(name, Some(e.clone()));
             }
             if let Some(l) = v.lock {
                 let _ = variables.set_lock(name, l);
@@ -3560,23 +3527,6 @@ fn pick_output<'a, T>(
     }
 }
 
-/// A reference's `node.slot` as the one variable its record resolves — the same term an
-/// expression's `nd('node').out.slot` rewrites to.
-fn parse_reference(reference: &str) -> Result<expr_rewrite::VarRef, String> {
-    let Some((name, slot)) = reference.split_once('.') else {
-        return Err(format!("a reference spells `node.slot`, not `{reference}`"));
-    };
-    if name == VARIABLES_NAMESPACE && goofi_core::variables::is_valid_variable_name(slot) {
-        return Ok(expr_rewrite::VarRef { var: REF_VAR.to_string(), target: Target::Variable { key: slot.to_string() } });
-    }
-    if !goofi_core::variables::is_valid_name(name) || !goofi_core::variables::is_valid_name(slot) {
-        return Err(format!("`{reference}` is not a legal reference: {NAME_RULE}"));
-    }
-    Ok(expr_rewrite::VarRef {
-        var: REF_VAR.to_string(),
-        target: Target::Node { name: name.to_string(), slot: Some(slot.to_string()) },
-    })
-}
 
 /// The health plane's one mutator: apply one report off any engine's drain. A free function so
 /// the drain can hold the engines and the node map apart.

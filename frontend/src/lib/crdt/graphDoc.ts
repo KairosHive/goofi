@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Midi, VariableSource } from '$lib/api/generated';
+import type { Link, Literal, Lock, Midi } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -102,9 +102,6 @@ export interface ControlView {
 /** What holds a variable or a group: `config` its name, widget and membership, `value` its value. */
 export type LockView = Lock;
 
-/** What a variable follows; `error` says why it delivers nothing (its node or output is gone). */
-export type SourceView = VariableSource & { error?: string };
-
 export interface VariableView {
 	/** The full `group.element` — what an expression spells and every op names. */
 	name: string;
@@ -112,19 +109,12 @@ export interface VariableView {
 	element: string;
 	/** Present when this variable is a control-panel element. */
 	control?: ControlView;
-	/** Present when the manager writes this variable from a producer; nobody else may set it. */
-	source?: SourceView;
+	/** Present when the manager COMPUTES this variable; nobody else may set it. */
+	expression?: string;
+	/** Why the expression delivers nothing: its node or output is gone, or it does not compile. */
+	error?: string;
 	/** The variable's OWN lock; its group's reaches it too — see `effectiveLock`. */
 	lock: LockView;
-}
-
-function sourceOf(raw: unknown): SourceView | undefined {
-	const s = obj(raw);
-	if (typeof s.reference !== 'string') return undefined;
-	const view: SourceView = { reference: s.reference };
-	if (typeof s.index === 'number') view.index = s.index;
-	if (typeof s.error === 'string') view.error = s.error;
-	return view;
 }
 
 function lockOf(raw: unknown): LockView {
@@ -163,14 +153,16 @@ export function variableViews(doc: Doc): VariableView[] {
 		const g = obj(raw);
 		const dot = name.indexOf('.');
 		if (dot > 0) {
-			out.push({
+			const view: VariableView = {
 				name,
 				group: name.slice(0, dot),
 				element: name.slice(dot + 1),
 				control: (g.control as ControlView | undefined) ?? undefined,
-				source: sourceOf(g.source),
 				lock: lockOf(g.lock)
-			});
+			};
+			if (typeof g.expression === 'string') view.expression = g.expression;
+			if (typeof g.error === 'string') view.error = g.error;
+			out.push(view);
 		}
 	}
 	return out;
@@ -252,7 +244,7 @@ export function isValidIdentifier(name: string): boolean {
 }
 
 /** The NODE name rule, the mirror of the Rust `is_valid_name`: a letter then letters or digits, not
- * a keyword — a reference spells `node.slot`, so no underscore either. Variables keep the rule above. */
+ * a keyword. Variables keep the rule above. */
 export function isValidName(name: string): boolean {
 	return /^[A-Za-z][A-Za-z0-9]*$/.test(name) && !RESERVED.has(name);
 }

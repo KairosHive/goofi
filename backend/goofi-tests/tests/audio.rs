@@ -161,12 +161,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(osc, "osc", "pitch", 1.75);
     sounds(&g, "an octave up, 880 Hz", |x| near(crossings(x), 176));
 
-    // Step: a param referencing an audio output is a plan edge at audio rate — the gain reads
+    // Step: a bare expression over an audio output is a plan edge at audio rate — the gain reads
     // the oscillator itself, so the output is its square: never negative, full scale.
     let osc_name = g.doc()["nodes"][hex(osc)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(gain), "param": "gain/gain", "reference": format!("{osc_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(gain), "param": "gain/gain", "expression": format!("nd('{osc_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     let (d, _) = drive(&g, TENTH);
@@ -180,11 +180,11 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("node param edit", j!({ "node": hex(gain), "param": "gain/gain", "value": 0.5, "mode": "constant" }));
     sounds(&g, "sine plus one, halved, on a half offset", |x| (peak(x) - 1.0).abs() < 0.01 && (mean(x) - 0.5).abs() < 0.02);
 
-    // Step: a reference the graph refuses is never a plan edge: a Str param cannot read an audio
+    // Step: a bare read the graph refuses is never a plan edge: a Str param cannot read an audio
     // output, the record keeps the literal, and the sound is unchanged.
     let refused = g.call(
         "node param edit",
-        j!({ "node": hex(osc), "param": "osc/waveform", "reference": format!("{osc_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(osc), "param": "osc/waveform", "expression": format!("nd('{osc_name}')") }),
     );
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("STRING")), "{refused}");
     let (e2, _) = drive(&g, TENTH);
@@ -474,7 +474,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let midi_name = g.doc()["nodes"][hex(midi)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(voices), "param": "env/gate", "reference": format!("{midi_name}.gate"), "mode": "reference" }),
+        j!({ "node": hex(voices), "param": "env/gate", "expression": format!("nd('{midi_name}').out.gate") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     g.link(voices, "out", out, "input");
@@ -553,24 +553,47 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(source, "constant", "value", 0.75);
     sounds(&g, "the gain to follow its source", |x| (peak(x) - 0.75).abs() < 0.01);
 
+    // Step: a COMPUTED expression is the worker's result, a block in the plan arena one block
+    // behind, and it HOLDS while the evaluator is away: the audio thread never waits for Python.
+    let evaluator = Arc::new(FirstVar::default());
+    g.graph().set_evaluator(evaluator.clone());
+    let bound = g.call(
+        "node param edit",
+        j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{source_name}') * 1") }),
+    );
+    assert!(bound["error"].is_null(), "{bound}");
+    g.set_param(source, "constant", "value", 0.5);
+    sounds(&g, "the computed gain to land", |x| (peak(x) - 0.5).abs() < 0.01);
+    evaluator.latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    g.set_param(source, "constant", "value", 1.0);
+    assert!(
+        g.stays(|g| {
+            let (x, _) = drive(g, TENTH);
+            (peak(&x) - 0.5).abs() < 0.01
+        }),
+        "a stalled evaluator holds the last block"
+    );
+    evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
+    sounds(&g, "…and the result lands once it is back", |x| (peak(x) - 1.0).abs() < 0.01);
+
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names
     // it and the node reads silence — because a NaN is not a value a plan can carry.
     let poison = g.add("_TestConst");
     let poison_name = g.doc()["nodes"][hex(poison)]["name"].as_str().unwrap().to_string();
     g.set_param(poison, "constant", "nan", true);
-    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "reference": format!("{poison_name}.out"), "mode": "reference" }));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{poison_name}')") }));
     let why = g.until("the NaN to be refused", |g| g.error(gain3));
     assert!(why.contains("evaluated to NaN"), "{why}");
     sounds(&g, "silence where the NaN would have played", |x| x.iter().all(|v| v.is_finite()) && peak(x) == 0.0);
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 1.0, "mode": "constant" }));
     g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
 
-    // Step: a reference to a frame wider than one reads its first element, no error; back on a
+    // Step: a bare read of a frame wider than one reads its first element, no error; back on a
     // constant, the literal lands.
     g.set_param(source, "constant", "length", 4);
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(gain3), "param": "gain/gain", "reference": format!("{source_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{source_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     assert!(g.stays(|g| g.error(gain3).is_none()), "a wide frame reads whole");
@@ -831,7 +854,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let gate_name = g.doc()["nodes"][hex(gate)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(env), "param": "env/gate", "reference": format!("{gate_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(env), "param": "env/gate", "expression": format!("nd('{gate_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     let (shut, _) = drive(&g, TENTH);
@@ -870,7 +893,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let in4_name = g.doc()["nodes"][hex(in4)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(env), "param": "env/gate", "reference": format!("{in4_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(env), "param": "env/gate", "expression": format!("nd('{in4_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     g.until("four voices, one shut", |g| {
@@ -1418,7 +1441,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let follow_name = g.doc()["nodes"][hex(follow)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(bank), "param": "band/gains", "reference": format!("{follow_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(bank), "param": "band/gains", "expression": format!("nd('{follow_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
 
@@ -1494,7 +1517,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let bound = g.call(
         "node param edit",
         j!({ "node": hex(chord_bank), "param": "band/pitch",
-             "reference": format!("{voices_name}.out"), "mode": "reference" }),
+             "expression": format!("nd('{voices_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
 
@@ -1537,7 +1560,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let bound = g.call(
         "node param edit",
         j!({ "node": hex(chord_bank), "param": "band/gate",
-             "reference": format!("{gates_name}.out"), "mode": "reference" }),
+             "expression": format!("nd('{gates_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     let released = settled(&g, chord_bank, "and the same partial once that voice is let go");

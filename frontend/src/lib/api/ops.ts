@@ -37,7 +37,6 @@ export type OpName =
 	| 'variable entry add'
 	| 'variable entry edit'
 	| 'variable entry remove'
-	| 'variable entry source'
 	| 'variable entry lock'
 	| 'variable entry rename'
 	| 'variable group add'
@@ -50,7 +49,6 @@ export type OpName =
 	| 'control edit'
 	| 'control remove'
 	| 'control paint'
-	| 'control source'
 	| 'library list'
 	| 'library get'
 	| 'library save'
@@ -117,7 +115,6 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'variable entry add': 'write',
 	'variable entry edit': 'write',
 	'variable entry remove': 'write',
-	'variable entry source': 'write',
 	'variable entry lock': 'write',
 	'variable entry rename': 'write',
 	'variable group add': 'write',
@@ -130,7 +127,6 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'control edit': 'write',
 	'control remove': 'write',
 	'control paint': 'write',
-	'control source': 'write',
 	'library list': 'read',
 	'library get': 'read',
 	'library save': 'effect',

@@ -42,7 +42,7 @@ op!(Edit, "node edit", 1, EditArgs {
     pub viewer: Option<Vec<Value>>,
 },
     "Edit a node's own record: rename it, move it, set viewers — any of them, in one step and one undo. An omitted field is left alone. Params are `node param edit`'s. A sub-patch boundary port takes every field: its name is in the one namespace nd() reads, so a collision is refused exactly as a leaf's is, and its `value` slot takes a viewer exactly as a leaf's output does.\n\n\
-                   A `name` is a letter then letters or digits, and not a Python keyword, for every kind of node. An expression reads a name as an ATTRIBUTE — a sub-patch's slot in `nd('chain').out.drain` — and a reference spells `name.slot`, so one that cannot be read there breaks every source naming it, and the rewrite that follows the NEXT rename can no longer find what it broke.\n\n\
+                   A `name` is a letter then letters or digits, and not a Python keyword, for every kind of node. An expression reads a name as an ATTRIBUTE — a sub-patch's slot in `nd('chain').out.drain` — so one that cannot be read there breaks every source naming it, and the rewrite that follows the NEXT rename can no longer find what it broke.\n\n\
                    Each `--viewer` is one slot's inline view, `{\"slot\": \"out\", \"kind\": …, \"settings\": …}`, merged slot by slot so only the slots named move; `{\"slot\": \"out\", \"clear\": true}` removes that slot's stored view. `kind` is one of: {viewer_kinds}.",
     "{ok: true}");
 
@@ -51,13 +51,12 @@ op!(ParamEdit, "node param edit", 2, ParamEditArgs {
     pub param: ParamAddr,
     pub value: Option<Any>,
     pub expression: Option<String>,
-    pub reference: Option<String>,
     pub mode: Option<String>,
     pub triggers: Option<bool>,
 },
-    "Set ONE param, addressed `group/param` — or ONE element of a vector param, `group/param[2]`, whose literal is that dimension and whose source drives that dimension alone, over whatever the whole param's source gives the others. A vector's `value` is a list, as JSON or as bare numbers `1 0 0 1`; one number fills every element. A vector's `expression` given as a Python LIST of its length, `[t, 0, 0, 1]`, is one expression per element, each on its own; any other expression drives the whole param and gives a list. `value` is coerced to the param's declared type — a fraction into an int rounds, a value of the wrong kind falls back to that type's zero; the declared min/max are the editor's range, NOT a clamp. A param has ONE active source, named by `mode`: `constant` (the value), `expression` (Python over nd(), variables and me, at control rate), or `reference` (one producer output spelled `node.slot`, no Python, at the producer's rate). Giving an `expression` or a `reference` implies its mode, so binding one is a single flag; the other two are RETAINED across a mode switch, an empty text clears that text (and the mode, if it was the active one), and a mode or trigger given alone edits what is already there. A `value` on a driven param switches it to `constant`. A reference's producer slot must match the param: a number or bool references any output that may feed an ARRAY input and that holds one element, or selects one flat element with `node.slot[index]`. A string references a STRING output.\n\n\
-                       `triggers` defaults false, and that is almost always right: a binding re-evaluates on its own — when a referenced node emits, when a referenced param (`nd('x').params.<group>.<param>`, `me.params.…`) is edited, or on each of the node's own runs for a ref-less one — and the node reads the fresh value on its next normal run. `triggers: true` ALSO wakes the node's process() on every evaluation, making the reference its clock. Reach for it only when the node would otherwise not run (a trigger input with no wire into it) and you want the referenced node to drive it. Never on a ref-less expression (`t`, `variables.x`): that free-runs the node at its common.max_frequency.",
-    "{value, error} — the value as STORED, with its bind error: a compile failure, an unknown producer, or a slot of the wrong kind.");
+    "Set ONE param, addressed `group/param` — or ONE element of a vector param, `group/param[2]`, whose literal is that dimension and whose source drives that dimension alone, over whatever the whole param's source gives the others. A vector's `value` is a list, as JSON or as bare numbers `1 0 0 1`; one number fills every element. A vector's `expression` given as a Python LIST of its length, `[t, 0, 0, 1]`, is one expression per element, each on its own; any other expression drives the whole param and gives a list. `value` is coerced to the param's declared type — a fraction into an int rounds, a value of the wrong kind falls back to that type's zero; the declared min/max are the editor's range, NOT a clamp. A param has ONE active source, named by `mode`: `constant` (the value) or `expression` (Python over nd(), variables and me). A BARE expression — one target, an optional index: `nd('level')`, `nd('osc').out.sig`, `nd('midi').out.cc[74]`, `variables.desk.gain` — never enters Python: the engine copies that frame or element as it comes, at the producer's rate, and on the audio plane reads an audio output at audio rate. Anything around the target is evaluated on the engine's worker, one step behind, and the param holds the last result while it runs. Giving an `expression` implies its mode, so binding one is a single flag; the text is RETAINED across a mode switch, an empty text clears it, and a mode or trigger given alone edits what is already there. A `value` on a driven param switches it to `constant`.\n\n\
+                       `triggers` defaults false, and that is almost always right: a binding re-evaluates on its own — when a referenced node emits, when a referenced param (`nd('x').params.<group>.<param>`, `me.params.…`) is edited, or on each of the node's own runs for a ref-less one — and the node reads the fresh value on its next normal run. `triggers: true` ALSO wakes the node's process() on every evaluation, making the source its clock. Reach for it only when the node would otherwise not run (a trigger input with no wire into it) and you want the referenced node to drive it. Never on a ref-less expression (`t`, `variables.x`): that free-runs the node at its common.max_frequency.",
+    "{value, error} — the value as STORED, with its bind error: a compile failure or an unknown producer.");
 
 op!(ParamRequest, "node param request", 2, ParamRequestArgs {
     pub node: NodeRef,
@@ -76,7 +75,7 @@ op!(Remove, "node remove", 1, RemoveArgs {
 op!(Baseline, "node baseline", 1, BaselineArgs {
     pub node: NodeRef,
 },
-    "Take the touched filter's zero point to be what this node holds NOW — what the inspector's Clear button does. A param reads as touched when its value, its expression or its reference differs from that zero, and with no zero recorded the zero is the type's own declared default. A plugin's declared default is its FACTORY default, so loading a preset moves hundreds of params at once and the filter that exists to show the few in play fills with everything the preset moved; this is how that is reset to the few that follow. It edits no param and breaks no binding: an expression or a reference keeps driving exactly as it did, and the Expression and Reference filters still find it. Undoable.",
+    "Take the touched filter's zero point to be what this node holds NOW — what the inspector's Clear button does. A param reads as touched when its value or its expression differs from that zero, and with no zero recorded the zero is the type's own declared default. A plugin's declared default is its FACTORY default, so loading a preset moves hundreds of params at once and the filter that exists to show the few in play fills with everything the preset moved; this is how that is reset to the few that follow. It edits no param and breaks no binding: an expression keeps driving exactly as it did, and the Expression filter still finds it. Undoable.",
     "{ok: true, cleared: int} — how many params the new zero point covers");
 
 op!(Restart, "node restart", 1, RestartArgs {
@@ -405,7 +404,6 @@ impl WriteOp for ParamEdit {
         let given = [
             ("value", a.value.map(|v| v.0)),
             ("expression", a.expression.map(Value::String)),
-            ("reference", a.reference.map(Value::String)),
             ("mode", a.mode.map(Value::String)),
             ("triggers", a.triggers.map(Value::Bool)),
         ];
@@ -439,9 +437,9 @@ impl WriteOp for ParamEdit {
 
     fn label(a: &ParamEditArgs, _: &Value) -> String {
         let param = a.param.0.rsplit('/').next().unwrap_or(&a.param.0);
-        match (&a.expression, &a.reference) {
-            (Some(_), _) | (_, Some(_)) => format!("Set {param} source"),
-            _ => format!("Set {param}"),
+        match &a.expression {
+            Some(_) => format!("Set {param} source"),
+            None => format!("Set {param}"),
         }
     }
 }

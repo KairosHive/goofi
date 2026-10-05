@@ -198,16 +198,6 @@ pub struct Group {
 /// note's velocity at `(channel - 1) * 128 + number`, the wheel in -1..1 and the pressure in 0..1.
 pub const MIDI_ENTRIES: [(&str, usize); 4] = [("cc", 16 * 128), ("notes", 16 * 128), ("bend", 16), ("pressure", 16)];
 
-/// What a variable follows: one producer output, `node.slot`, and for a frame wider than one
-/// number the index it reads. A followed variable is written by the manager on every frame and by
-/// nobody else — a MIDI knob bound to a widget is one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(optional_fields)]
-pub struct VariableSource {
-    pub reference: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index: Option<usize>,
-}
 
 /// A code-owned system variable: its group is config-locked for life. An EPHEMERAL one is
 /// value-locked too — goofi derives its value, it is re-derived at every reassert, and a `.gfi`
@@ -376,20 +366,22 @@ fn group_of(name: &str) -> &str {
     split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
-/// One variable: its latest frame beside the widget, source and lock it carries. The frame is
+/// One variable: its latest frame beside the widget, expression and lock it carries. The frame is
 /// the plane's; the rest is the document's (`goofi_graph::doc::VariableRecord`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Variable {
     pub value: Data,
     pub control: Option<Control>,
-    pub source: Option<VariableSource>,
+    /// The expression the manager computes it by — bare, one producer's frame copied as it comes;
+    /// in Python, evaluated as a param's is. A computed variable is written by nobody else.
+    pub expression: Option<String>,
     /// The variable's OWN lock, apart from its group's; absent is the default.
     pub lock: Option<Lock>,
 }
 
 impl Variable {
     pub fn of(value: Data) -> Variable {
-        Variable { value, control: None, source: None, lock: None }
+        Variable { value, control: None, expression: None, lock: None }
     }
 
     pub fn own_lock(&self) -> Lock {
@@ -485,25 +477,26 @@ impl VariableStore {
         self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    pub fn source(&self, name: &str) -> Option<&VariableSource> {
-        self.entries.get(name)?.source.as_ref()
+    pub fn expression(&self, name: &str) -> Option<&str> {
+        self.entries.get(name)?.expression.as_deref()
     }
 
-    /// Set or clear what a variable follows, answering what it followed. A source is config.
-    pub fn set_source(&mut self, name: &str, source: Option<VariableSource>) -> Result<Option<VariableSource>, String> {
+    /// Set or clear the expression a variable is computed by, answering the one it replaced. An
+    /// expression is config.
+    pub fn set_expression(&mut self, name: &str, expression: Option<String>) -> Result<Option<String>, String> {
         if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        Ok(std::mem::replace(&mut self.entries[name].source, source))
+        Ok(std::mem::replace(&mut self.entries[name].expression, expression.filter(|e| !e.trim().is_empty())))
     }
 
-    /// The follower's own write: what the source delivered. A value-locked variable takes
+    /// The follower's own write: what the expression delivered. A value-locked variable takes
     /// nothing, silently.
     pub fn follow(&mut self, name: &str, value: Data) {
-        // A variable with no source has no follower: a pick already in flight when one is cleared
-        // would otherwise land after, and overwrite the value the clearing author then typed.
-        if !is_ephemeral(name) && !self.lock_of(name).value && self.source(name).is_some() {
+        // A variable with no expression has no follower: a pick already in flight when one is
+        // cleared would otherwise land after, and overwrite the value the clearing author then typed.
+        if !is_ephemeral(name) && !self.lock_of(name).value && self.expression(name).is_some() {
             self.move_value(name, value);
         }
     }
@@ -537,10 +530,6 @@ impl VariableStore {
         self.groups.get(group)?.midi.as_ref()
     }
 
-    /// Every MIDI group with its device, in creation order.
-    pub fn midi_groups(&self) -> impl Iterator<Item = (&str, &Midi)> {
-        self.groups.iter().filter_map(|(g, rec)| Some((g.as_str(), rec.midi.as_ref()?)))
-    }
 
     /// Open a device as a group: the device's flag, which locks the group whole, and its entries
     /// at rest. Not a command — the session owns it, as it owns the system group.
@@ -685,8 +674,8 @@ impl VariableStore {
         if self.lock_of(name).value {
             return Err(format!("variable `{name}` is value-locked"));
         }
-        if let Some(s) = self.source(name) {
-            return Err(format!("variable `{name}` follows `{}`; clear its source to set it", s.reference));
+        if let Some(e) = self.expression(name) {
+            return Err(format!("variable `{name}` is computed by `{e}`; clear its expression to set it"));
         }
         let Some(existing) = self.get(name) else { return Err(format!("no such variable `{name}`")) };
         if existing.dtype_tag() != value.dtype_tag() {

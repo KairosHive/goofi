@@ -634,7 +634,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     // A reference on a pulse is a gate, and a low one fires nothing.
     let bound = g.call("node param edit",
                        j!({ "node": hex(n), "param": "count/reset",
-                            "reference": format!("{gate_name}.out"), "mode": "reference" }));
+                            "expression": format!("nd('{gate_name}')") }));
     assert!(bound["error"].is_null(), "{bound}");
     g.until("the count to climb under a low gate", |_| past(20.0).then_some(()));
 

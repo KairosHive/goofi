@@ -15,7 +15,6 @@ import {
 } from '$lib/api/control';
 import type { OpName } from '$lib/api/ops';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
-import { wantedDtype } from '$lib/inspector/expr/refs';
 import { bareName } from '$lib/editor/typeId';
 import { consoleStore } from './console.svelte';
 import { selection } from './selection.svelte';
@@ -478,7 +477,6 @@ export class GraphStore {
 						param: `${group}/${base}_${to}`,
 						value: d.value,
 						expression: d.expression ?? '',
-						reference: d.reference ?? '',
 						mode: d.mode ?? 'constant',
 						triggers: d.triggers ?? false
 					}
@@ -572,28 +570,28 @@ export class GraphStore {
 		await this.ctl.call('control paint', { group, element, ops });
 	}
 
-	/** Make a widget follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
-	async sourceControl(group: string, element: string, reference: string, index?: number): Promise<void> {
-		await this.ctl.call('control source', index === undefined ? { group, element, reference } : { group, element, reference, index });
+	/** Compute a widget by `expression`; an empty text hands it back to the hand. */
+	async computeControl(group: string, element: string, expression: string): Promise<void> {
+		await this.ctl.call('control edit', { group, element, expression });
 	}
 
-	/** The `node.slot` a param or a variable of `type` may follow on node `uid`, or null for none. A
-	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half.
-	 * With `slot`, only that slot may answer. */
-	referenceFor(uid: string, type: string, slot?: string): string | null {
+	/** The bare read of node `uid` a param or a variable of `type` may take — a string reads a STRING
+	 * output, everything else an ARRAY one — or null where no output fits. With `slot`, only that
+	 * slot may answer. */
+	readFor(uid: string, type: string, slot?: string): string | null {
 		const node = this.nodeById(uid);
 		if (!node) return null;
-		const want = wantedDtype(type);
+		const want: SlotDtype = type === 'string' ? 'STRING' : 'ARRAY';
 		const key = Object.entries(node.output_slots).find(([k, d]) => (slot === undefined || k === slot) && feeds(d as SlotDtype, want))?.[0];
-		return key ? slotReference(node, key) : null;
+		return key ? readExpression(node, key) : null;
 	}
 
-	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
+	/** Make the widget named `name` read the first output of node `uid` that can feed it. */
 	async linkControl(name: string, uid: string): Promise<string | null> {
 		const gv = this.variables.find((v) => v.name === name);
-		const reference = gv ? this.referenceFor(uid, gv.control && KIND[gv.control.kind].draws === 'text' ? 'string' : 'float') : null;
-		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
-		return reference;
+		const expression = gv ? this.readFor(uid, gv.control && KIND[gv.control.kind].draws === 'text' ? 'string' : 'float') : null;
+		if (gv && expression) await this.computeControl(gv.group, gv.element, expression);
+		return expression;
 	}
 
 	async removeControl(group: string, element: string): Promise<void> {
@@ -637,7 +635,7 @@ export class GraphStore {
 		this._refreshing = rest;
 	}
 
-	/** Edit a param's source record: any subset of mode, expression, reference and triggers. A text
+	/** Edit a param's source record: any subset of mode, expression and triggers. A text
 	 * given implies its mode; an empty text clears it. The manager's rules are the op's. */
 	async setSource(node: string, group: string, name: string, source: SourcePatch): Promise<void> {
 		await this._paramCall('node param edit', node, group, name, { ...source });
@@ -648,8 +646,7 @@ export class GraphStore {
 		await this._paramCall('node param edit', node, group, name, {
 			mode: zero.mode ?? 'constant',
 			value: zero.value,
-			expression: zero.expression ?? '',
-			reference: zero.reference ?? ''
+			expression: zero.expression ?? ''
 		});
 	}
 
@@ -766,9 +763,11 @@ export class GraphStore {
 	}
 }
 
-/** The `node.slot` reference to `slot`; a facade keys slots by port uid, so the label names it. */
-export function slotReference(node: NodeInstanceInfo, slot: string): string {
-	return `${node.name}.${node.slot_labels?.[slot] ?? slot}`;
+/** The expression that reads `slot` of `node`: bare on a node with one output, the spelling its
+ * completion offers, else `.out.<label>` — a facade keys slots by port uid, so the label names it. */
+export function readExpression(node: NodeInstanceInfo, slot: string): string {
+	if (Object.keys(node.output_slots).length === 1) return `nd('${node.name}')`;
+	return `nd('${node.name}').out.${node.slot_labels?.[slot] ?? slot}`;
 }
 
 let _live: ParamLive | null = null;

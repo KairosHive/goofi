@@ -151,7 +151,7 @@ impl GraphicsEngine {
         recorder: Arc<goofi_record::Recorder>,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
-        let shared = Arc::new(Shared::new(waker));
+        let shared = Arc::new(Shared::new("graphics", &iox, waker)?);
         let stats = Arc::new(Stats::default());
         let troubles = runtime::Troubles::default();
         let runtime = Arc::new(Mutex::new(Runtime::new(

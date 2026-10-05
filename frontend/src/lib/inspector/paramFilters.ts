@@ -13,7 +13,7 @@ export const paramKey = (group: string, name: string): string => `${group}/${nam
 
 /** A param's zero point: its baseline entry, else its factory default on a constant. */
 export function zero(d: ParamDescriptor, base: Baseline, group: string, name: string): ParamBaseline {
-	return base?.[paramKey(group, name)] ?? { value: d.default, mode: 'constant', expression: '', reference: '' };
+	return base?.[paramKey(group, name)] ?? { value: d.default, mode: 'constant', expression: '' };
 }
 
 /** Whether two zero points are the same one. `Object.is`, so a NaN default compares equal to
@@ -22,8 +22,7 @@ function sameZero(a: ParamBaseline, b: ParamBaseline): boolean {
 	return (
 		Object.is(a.value, b.value) &&
 		(a.mode ?? 'constant') === (b.mode ?? 'constant') &&
-		(a.expression ?? '') === (b.expression ?? '') &&
-		(a.reference ?? '') === (b.reference ?? '')
+		(a.expression ?? '') === (b.expression ?? '')
 	);
 }
 
@@ -33,10 +32,9 @@ export function isModified(d: ParamDescriptor, base?: Baseline, group = '', name
 	const z = zero(d, base, group, name);
 	const mode = d.mode ?? 'constant';
 	if (mode !== (z.mode ?? 'constant')) return true;
-	// Only the ACTIVE source is compared. The other two texts are RETAINED across a mode switch, so
-	// an expression left behind by a param now on a constant is not a change to that param.
+	// Only the ACTIVE source is compared. The text is RETAINED across a mode switch, so an
+	// expression left behind by a param now on a constant is not a change to that param.
 	if (mode === 'expression') return (d.expression ?? '') !== (z.expression ?? '');
-	if (mode === 'reference') return (d.reference ?? '') !== (z.reference ?? '');
 	// A pulse holds no value, so nothing about one can have moved.
 	if (d.type === 'pulse') return false;
 	return d.value !== z.value;

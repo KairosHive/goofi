@@ -38,14 +38,14 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     g.call("control add", j!({ "group": "patch", "kind": "paint", "element": "pad", "resolution": 16 }));
     g.call("control paint", j!({ "group": "patch", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
     let sheet = g.until("the painted sheet", |g| Some(g.snapshot_array("variables/patch.pad")).filter(|d| f32s(d)[3] > 0.0));
-    // A lock rides the archive too, the entry's own and its group's, and so does what it follows.
+    // A lock rides the archive too, the entry's own and its group's, and so does what computes it.
     g.call("variable entry lock", j!({ "name": "patch.gain", "value": true }));
-    g.call("variable entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
+    g.call("variable entry edit", j!({ "name": "patch.gain", "expression": "nd('level')[0]" }));
     g.call("variable group lock", j!({ "group": "patch", "config": true }));
-    // …and a reference over it: the archive carries the whole record, the expression retained.
+    // …and a literal over the sink's expression: the archive carries the whole record, the text retained.
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
-    g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size", "reference": "level.out" }));
+    g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size", "value": 256 }));
 
     let scope = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [40.0, 10.0] }))["inst_id"]
         .as_str().unwrap().to_string();
@@ -70,10 +70,10 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!(recs[&outer]["type"], "SubPatch", "the facade is a node record: {:?}", recs[&outer]);
     assert_eq!(recs[&spare]["type"], "OutTable", "…and so is the port");
     assert_eq!(recs[&scope]["scope"], outer, "membership rides the record it belongs to");
-    // A source rides INLINE on the param it drives: the literal, the mode and both retained texts.
+    // A source rides INLINE on the param it drives: the literal, the mode and the retained text.
     let source = &recs[&hex(sink)]["params"]["buffer"]["size"];
-    assert_eq!((&source["mode"], &source["expression"], &source["reference"]),
-               (&j!("reference"), &j!("variables.patch.gain * 64"), &j!("level.out")), "{source}");
+    assert_eq!((&source["value"], &source["mode"], &source["expression"]),
+               (&j!(256), &j!("constant"), &j!("variables.patch.gain * 64")), "{source}");
     assert!(saved["patch"]["links"].as_object().is_some_and(|l| !l.is_empty()), "links are a keyed map");
 
     let saved_gain = saved["patch"]["variables"]["patch.gain"].clone();
@@ -81,7 +81,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!((&saved_gain["control"]["kind"], &saved_gain["control"]["x"]), (&j!("knob"), &j!(2.0)),
                "the widget and its place ride the archive: {saved_gain}");
     assert_eq!(saved_gain["lock"], j!({ "config": false, "value": true }), "{saved_gain}");
-    assert_eq!(saved_gain["source"], j!({ "reference": "level.out", "index": 0 }), "{saved_gain}");
+    assert_eq!(saved_gain["expression"], j!("nd('level')[0]"), "{saved_gain}");
     assert!(saved_gain["value"].is_number(), "a narrow value is a literal in the manifest: {saved_gain}");
     assert!(saved["patch"]["variables"]["patch.pad"].get("value").is_none(), "a wide array is a file beside it");
     assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
@@ -118,10 +118,10 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
             keys.send(&[0xb1, 7, 127]).expect("a control change");
             Some(g.snapshot_array(&format!("variables/{live}.cc"))).filter(|d| (f32s(d)[74] - 64.0 / 127.0).abs() < 1e-6 && f32s(d)[128 + 7] > 0.99)
         });
-        // A widget follows an entry of the bus as it follows a node's output, index and all, and
-        // the follow is what keeps the device open once the learn ends. No patch carries the group.
+        // A widget reads an entry of the bus as it reads a node's output, index and all, and the
+        // read is what keeps the device open once the learn ends. No patch carries the group.
         g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
-        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": format!("variables.{live}.cc"), "index": 74 }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("variables.{live}.cc[74]") }));
         g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
         g.call("midi learn", j!({ "on": false }));
         assert!(g.call("variable list", j!({}))["groups"].get(&live).is_some(), "read by a widget, the device stays open");
@@ -132,15 +132,15 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                 "the device is the session's, the reader the patch's: {}", saved["patch"]["variable_groups"]);
         // The last reader gone, the device is let go with its group; a reader made with no device
         // open waits for one, and the watch opens the port for it without a learn.
-        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "" }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": "" }));
         g.until("the device to close with no reader", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
         assert!(!held(&g), "a device nothing reads is let go");
-        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": format!("variables.{live}.cc"), "index": 74 }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("variables.{live}.cc[74]") }));
         g.until("the device to open for its reader", |g| held(g).then_some(()));
         // Pulled, the device takes its group with it; the reader waits for the next plug.
         drop(keys.take());
         g.until("the pulled device's group to go", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
-        g.call("control source", j!({ "group": "desk", "element": "cutoff", "reference": "" }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": "" }));
         g.call("control remove", j!({ "group": "desk", "element": "cutoff" }));
     } else {
         assert_eq!(g.call("midi learn", j!({ "on": true }))["groups"], j!([]), "no sequencer, no port");
@@ -250,7 +250,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!((&reborn["control"]["kind"], &reborn["control"]["w"]), (&j!("knob"), &j!(2.0)),
                "the load restored the widget and its place: {reborn}");
     assert_eq!(reborn["lock"], j!({ "config": true, "value": true }), "the load restored both locks: {reborn}");
-    assert_eq!(reborn["source"]["reference"], "level.out", "…and what it follows: {reborn}");
+    assert_eq!(reborn["expression"], "nd('level')[0]", "…and what computes it: {reborn}");
     let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().unwrap();
     assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));

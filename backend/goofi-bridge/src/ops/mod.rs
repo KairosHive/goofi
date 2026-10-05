@@ -437,7 +437,6 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<variable::EntryAdd>()),
             Leaf(write::<variable::EntryEdit>()),
             Leaf(write::<variable::EntryRemove>()),
-            Leaf(write::<variable::EntrySource>()),
             Leaf(write::<variable::EntryLock>()),
             Leaf(write::<variable::EntryRename>()),
         ]),
@@ -457,7 +456,6 @@ pub static TREE: &[Entry] = &[
         Leaf(write::<variable::ControlEdit>()),
         Leaf(write::<variable::ControlRemove>()),
         Leaf(write::<variable::ControlPaint>()),
-        Leaf(write::<variable::ControlSource>()),
     ]),
     Group("library", "the node types — what `node add` can build", &[
         Leaf(read::<library::List>()),

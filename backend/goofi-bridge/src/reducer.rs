@@ -16,14 +16,29 @@ use tokio::sync::broadcast;
 pub type SlotKey = (Uid, String);
 /// A unique id per `/data` connection, so its spec contribution can be tracked + removed.
 pub type ConnId = u64;
-/// One variable following this slot, and the number it reads out of each frame.
+/// One variable's expression reading this slot, and the variable of that expression the frame
+/// lands in.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tap {
     pub variable: String,
-    pub index: Option<usize>,
+    pub var: String,
 }
-/// What a tap delivers: the variable, and the value its frame held.
-pub type Followed = (String, goofi_core::Data);
+
+/// One computed variable as the follower holds it: the rewritten text, the evaluator's handle —
+/// none for a bare source — and every variable it names.
+pub struct Following {
+    pub name: String,
+    pub rewritten: String,
+    pub id: Option<goofi_node::BindingId>,
+    pub vars: Vec<(String, goofi_node::Var)>,
+}
+
+/// What reaches the follower: a tap's frame, or the whole set of variables it computes, from
+/// settled state, with the evaluator the graph compiled them against.
+pub enum Followed {
+    Frame { variable: String, var: String, frame: goofi_core::Data },
+    Desired(Vec<Following>, Option<Arc<dyn goofi_node::ExprEvaluator>>),
+}
 
 /// What one connection declares for a slot: the viewers' specs and the rate its display paints at.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -194,6 +209,11 @@ impl SlotReducers {
         for reducer in self.inner.lock().values() {
             reducer.poke();
         }
+    }
+
+    /// Hand the follower what settled state says it computes; the taps below feed it.
+    pub fn follow(&self, msg: Followed) {
+        let _ = self.follow.send(msg);
     }
 
     /// Declare every followed slot at once, from settled state: a slot in `taps` feeds its
@@ -550,10 +570,13 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if fresh || retap.swap(false, Ordering::Acquire) {
                 let taps = taps.lock().clone();
                 if let (false, Some(d)) = (taps.is_empty(), latest.lock().clone()) {
+                    // The frame as it came, the stamps off: a variable holds a value, not its tick.
+                    let frame = match d.value() {
+                        goofi_core::Value::Array(a) => goofi_core::Data::array(a.clone(), goofi_core::Meta::default()),
+                        _ => d,
+                    };
                     for tap in taps {
-                        if let Some(v) = pick(&d, tap.index) {
-                            let _ = follow.send((tap.variable, v));
-                        }
+                        let _ = follow.send(Followed::Frame { variable: tap.variable, var: tap.var, frame: frame.clone() });
                     }
                 }
             }
@@ -696,14 +719,3 @@ impl Peek {
     }
 }
 
-/// What a tap reads out of a frame: the indexed element of an array, or the frame whole, with
-/// the stamps off — a variable holds a value, not the tick it came from.
-fn pick(d: &goofi_core::Data, index: Option<usize>) -> Option<goofi_core::Data> {
-    use goofi_core::{Data, Meta, Value};
-    match (d.value(), index) {
-        (Value::Str(s), None) => Some(Data::text(s.clone())),
-        (Value::Array(a), None) => Some(Data::array(a.clone(), Meta::default())),
-        (Value::Array(a), Some(i)) => a.values().nth(i).map(|x| Data::number(f64::from(x))),
-        _ => None,
-    }
-}

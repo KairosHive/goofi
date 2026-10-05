@@ -169,7 +169,7 @@
 										{/if}
 									</div>
 									<div class="entry-value">
-										{#if held.value || entry.source || value === null}
+										{#if held.value || entry.expression !== undefined || value === null}
 											<span class="ro-value" data-testid="variable-value">{shown(value)}</span>
 										{:else if typeof value === 'number'}
 											<NumberInput data-testid="variable-value" aria-label="Entry value" {value}
@@ -180,7 +180,7 @@
 										{/if}
 									</div>
 									<Select data-testid="variable-type" aria-label="Entry form" value={form}
-										disabled={held.config || held.value || !!entry.source}
+										disabled={held.config || held.value || entry.expression !== undefined}
 										options={form === 'number' || form === 'text' ? ['number', 'text'] : ['number', 'text', form]}
 										onChange={(value) => setForm(entry, value as Form)} />
 									{#if !held.config}

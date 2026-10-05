@@ -1,10 +1,10 @@
 //! A bound param's latest-wins mailboxes and the ONE rule for reading them — shared by every
-//! engine that evaluates a binding on a thread of its own.
+//! engine that holds a binding on a thread of its own.
 
 use goofi_core::{Data, Param};
 use indexmap::IndexMap;
 
-use crate::{BindingId, EvalCtx, ExprEvaluator, Local};
+use crate::{BindingId, Local};
 
 /// One variable's cell. It holds a [`Local`] because that is what the evaluator's locals channel
 /// takes: a `variables.*` term is a scalar, an `nd()` term a whole frame.
@@ -50,13 +50,7 @@ pub enum Var {
     Missing(String),
 }
 
-/// A variable's value read into `target`'s shape, so a bare variable is coerced like any other source.
-fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
-    let held = goofi_core::control::data_of(value).ok_or_else(|| format!("`{value:?}` holds nothing"))?;
-    Ok(goofi_core::control::read(&held, target))
-}
-
-/// Split an optional flat array index from a reference or a resolved variable.
+/// Split an optional flat array index from a bare source.
 pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     let Some((base, tail)) = source.split_once('[') else {
         return Ok((source, None));
@@ -64,22 +58,26 @@ pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     let index = tail.strip_suffix(']')
         .filter(|text| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|text| text.parse::<usize>().ok())
-        .ok_or_else(|| format!("invalid reference index in `{source}`"))?;
+        .ok_or_else(|| format!("invalid index in `{source}`"))?;
     Ok((base, Some(index)))
 }
 
-/// One frame as a param of `target`'s kind — what a bare source copies on arrival: the element
-/// `index` names, or the frame whole.
-fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
+/// One arrival as the frame it is: the element `index` names, or the frame whole. The one rule a
+/// bare source copies by, so a tap and a binding read a producer alike.
+pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
+    let frame = match local {
+        Local::Value(value) => goofi_core::control::data_of(value).ok_or_else(|| format!("`{value:?}` holds nothing"))?,
+        Local::Frame(frame) => frame.clone(),
+    };
     match (frame.value(), index) {
-        (goofi_core::Value::Texture(_), _) => Err("a reference cannot read an unrendered texture submission".into()),
-        (goofi_core::Value::Table(_), _) => Err("a reference cannot follow a TABLE output".into()),
+        (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),
+        (goofi_core::Value::Table(_), _) => Err("a bare source cannot read a TABLE output".into()),
         (goofi_core::Value::Array(a), Some(at)) => {
-            let x = a.values().nth(at).ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))?;
-            Ok(goofi_core::control::read(&Data::number(f64::from(x)), target))
+            let x = a.values().nth(at).ok_or_else(|| format!("index {at} is outside frame {:?}", a.shape()))?;
+            Ok(Data::number(f64::from(x)))
         }
         (goofi_core::Value::Str(_), Some(_)) => Err("a STRING output has no element to index".into()),
-        (_, None) => Ok(goofi_core::control::read(frame, target)),
+        (_, None) => Ok(frame),
     }
 }
 
@@ -88,7 +86,7 @@ fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param
 #[derive(Clone, Debug)]
 pub struct Expression {
     pub source: String,
-    /// `None` for a bare-variable source, which needs no evaluator.
+    /// `None` for a BARE source — one target, an optional index — which needs no evaluator.
     pub id: Option<BindingId>,
     pub vars: IndexMap<String, Mailbox>,
 }
@@ -130,39 +128,28 @@ impl Expression {
         }
     }
 
-    /// The expression's current value: `Ok(None)` when nothing has arrived yet (the literal
-    /// stands), `Err` when it cannot be evaluated at all.
-    pub fn evaluate(
-        &self,
-        evaluator: Option<&dyn ExprEvaluator>,
-        t: f64,
-        target: &Param,
-    ) -> Result<Option<Param>, String> {
+    /// What the expression reads now: `Ok(None)` while a variable has not arrived (the literal
+    /// stands), `Err` when one cannot be resolved. A bare source is its one arrival, picked in
+    /// Rust; a computed one is every arrival, for the evaluator.
+    pub fn inputs(&self) -> Result<Option<Inputs>, String> {
         if let Some(reason) = self.vars.values().find_map(Mailbox::unresolved) {
             return Err(reason.to_string());
-        }
-        // A bare variable is read without the evaluator: a variable's value as it is, and a
-        // referenced producer's frame as the one element it must hold.
-        let (variable, index) = if self.id.is_none() {
-            split_index(self.source.trim())?
-        } else {
-            (self.source.trim(), None)
-        };
-        match self.vars.get(variable).and_then(Mailbox::value) {
-            Some(Local::Value(value)) => return value_as(value, target).map(Some),
-            Some(Local::Frame(frame)) if self.id.is_none() => return scalar_of(frame, target, index).map(Some),
-            _ => {}
         }
         if self.vars.values().any(|m| m.value().is_none()) {
             return Ok(None);
         }
-        let (Some(evaluator), Some(id)) = (evaluator, self.id) else {
-            return Err(format!("`{}` needs the expression evaluator", self.source));
-        };
-        let locals = self.vars.iter().map(|(n, m)| (n.clone(), m.value().cloned())).collect();
-        evaluator
-            .eval(id, &EvalCtx { locals: &locals, t, target })
-            .map(Some)
-            .map_err(|e| e.0)
+        if self.id.is_some() {
+            let locals = self.vars.iter().map(|(n, m)| (n.clone(), m.value().cloned().expect("arrived"))).collect();
+            return Ok(Some(Inputs::Computed(locals)));
+        }
+        let (variable, index) = split_index(self.source.trim())?;
+        let held = self.vars.get(variable).and_then(Mailbox::value).ok_or_else(|| format!("`{}` is not one target", self.source))?;
+        pick(held, index).map(|frame| Some(Inputs::Bare(frame)))
     }
+}
+
+/// What an expression has to read: the frame a bare source is, or the locals a computed one takes.
+pub enum Inputs {
+    Bare(Data),
+    Computed(Vec<(String, Local)>),
 }

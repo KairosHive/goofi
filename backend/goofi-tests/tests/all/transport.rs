@@ -114,7 +114,7 @@ struct Fleet {
 impl Fleet {
     fn new() -> Fleet {
         let iox = goofi_tests::iox();
-        Fleet { shared: Arc::new(Shared::new(Arc::new(DrainWaker::default()))), bells: iox.node().unwrap() }
+        Fleet { shared: Arc::new(Shared::new("signal", &iox, Arc::new(DrainWaker::default())).unwrap()), bells: iox.node().unwrap() }
     }
 
     fn spawn(&self, uid: Uid) -> Node {

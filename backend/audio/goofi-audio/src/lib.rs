@@ -298,6 +298,8 @@ pub(crate) struct Instance {
     pub(crate) control: Handle,
     /// The channel count each Array input last saw — what the plan sizes its inbox by.
     pub(crate) chans: Vec<Arc<AtomicU16>>,
+    /// Per param, the channel count its last computed result had — what sizes its block.
+    pub(crate) param_chans: Vec<Arc<AtomicU16>>,
     /// The ring size each Array input asks for, in floats, sized by the frames it takes.
     wanted: Vec<Arc<AtomicUsize>>,
     /// What each inbox ring and each output's rings were minted for; a plan or a frame past it
@@ -356,7 +358,7 @@ const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> AudioEngine {
+    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> Result<AudioEngine, String> {
         host::warm();
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
@@ -377,14 +379,14 @@ impl AudioEngine {
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
         let anchor = Arc::new(runtime::Anchor::new(time.clone()));
-        AudioEngine {
+        Ok(AudioEngine {
             instance,
             time,
             clock,
             device: None,
             tried: None,
             stats: Arc::new(Stats::default()),
-            shared: Arc::new(Shared::new(waker.clone())),
+            shared: Arc::new(Shared::new("audio", &iox, waker.clone())?),
             audio: Arc::new(AudioShared {
                 rate: AtomicU64::new(RATE.to_bits()),
                 clock,
@@ -410,9 +412,9 @@ impl AudioEngine {
             pending: Vec::new(),
             dirty: false,
             last: Plan::default(),
-            bells: iox.node().expect("an iceoryx2 node for the audio engine's bells"),
+            bells: iox.node()?,
             iox,
-        }
+        })
     }
 
     /// Where a `.vst3` bundle is scanned — a `goofi` answering `vst3-scan` — and which folders
@@ -796,12 +798,16 @@ impl Engine for AudioEngine {
         // made on its own thread, where an OS handle it opens never has to cross one.
         let inboxes: Vec<control::Inbox> = inbox_in.into_iter().map(control::Inbox::new).collect();
         let (inbox_chans, wanted) = AudioHalf::cells(&inboxes);
+        let (blocks_in, blocks_out) = rtrb::RingBuffer::<f32>::new(control::BLOCKS_RING);
+        let param_chans: Vec<Arc<AtomicU16>> = manifest.params.iter().map(|_| Arc::new(AtomicU16::new(1))).collect();
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let birth = control::Birth {
             uid,
             manifest,
             params: atomics.clone(),
             inboxes,
+            blocks: blocks_in,
+            param_chans: param_chans.clone(),
             taps: tap_out,
             recs: rec_out,
             ports,
@@ -831,6 +837,7 @@ impl Engine for AudioEngine {
             node,
             params: atomics,
             inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), self.audio.rate())).collect(),
+            blocks: blocks_out,
             taps: tap_in,
             recs: rec_in,
             dead: false,
@@ -839,7 +846,7 @@ impl Engine for AudioEngine {
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, wanted, minted });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted });
         self.dirty = true;
         self.shared.waker.notify();
         None

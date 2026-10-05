@@ -47,7 +47,6 @@ const UNKNOWN: ParamDescriptor = {
 	refreshable: false,
 	mode: 'constant',
 	expression: null,
-	reference: null,
 	triggers: false,
 	error: null,
 	section: 0,
@@ -75,7 +74,6 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 		return {
 			mode,
 			expression: typeof el.expression === 'string' ? el.expression : null,
-			reference: typeof el.reference === 'string' ? el.reference : null,
 			triggers: el.triggers === true,
 			error: cx.runtime(uid)?.errors?.[group]?.[key] ?? null,
 			value: typeof live === 'number' ? live : undefined
@@ -85,7 +83,6 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 		mode,
 		...(dims > 1 ? { elements: () => Array.from({ length: dims }, (_, i) => element(i)) } : {}),
 		expression: () => (typeof leaf().expression === 'string' ? leaf().expression : null),
-		reference: () => (typeof leaf().reference === 'string' ? leaf().reference : null),
 		triggers: () => leaf().triggers === true,
 		error: () => cx.runtime(uid)?.errors?.[group]?.[name] ?? null,
 		// What a param SHOWS: a driven one reads what its source evaluated to, a withdrawn value

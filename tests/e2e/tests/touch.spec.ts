@@ -160,7 +160,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await expect(pane(page), 'a single selection opens the inspector').toHaveClass(/open/);
 		});
 
-		await test.step('a reference is picked by finger: the mode chip, then the node, then its slot', async () => {
+		await test.step('a source is chosen by finger: the fx chip seeds an expression, and = retains it', async () => {
 			lfo = await addNode(page, 'LFO', [40, 260]);
 			await waitForNode(page, lfo);
 			const nameOf = (u: string): Promise<string> =>
@@ -175,56 +175,43 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			// The entry background opens the source controls.
 			await field.tap({ position: { x: 2, y: 2 } });
 			await expect(field.getByTestId('param-more'), 'the background opened the source row').toBeVisible();
-			await field.getByTestId('param-mode-reference').tap();
-			await field.getByTestId('param-ref-node').tap();
-			const option = page.getByTestId('param-ref-node-list').getByRole('option', { name: lfoName });
-			await expect(option, 'the list opens on focus and names the producer').toBeVisible();
-			await option.tap();
-			const frequency = (key: 'mode' | 'expression' | 'reference'): Promise<unknown> =>
+			const frequency = (key: 'mode' | 'expression'): Promise<unknown> =>
 				page.evaluate(
 					([u, k]) =>
 						(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.params
 							.lfo.frequency[k],
 					[osc, key] as const
 				);
-			await expect
-				.poll(() => frequency('reference'), {
-					message: 'the producer has one output, so the pair committed as node.slot'
-				})
-				.toBe(`${lfoName}.out`);
-			// The other two chips by the same finger: fx seeds an expression from the literal, and `=`
-			// returns to the constant with the reference RETAINED.
 			await field.getByTestId('param-mode-expression').tap();
 			await expect.poll(() => frequency('mode')).toBe('expression');
 			await expect
 				.poll(async () => typeof (await frequency('expression')) === 'string', {
-					message: 'switching to fx seeded an expression'
+					message: 'switching to fx seeded an expression from the literal'
 				})
 				.toBe(true);
+			const seeded = await frequency('expression');
+			// `=` by the same finger returns to the constant with the expression RETAINED.
 			await field.getByTestId('param-mode-constant').tap();
 			await expect.poll(() => frequency('mode')).toBe('constant');
-			expect.soft(await frequency('reference'), 'a mode switch retains the reference').toBe(`${lfoName}.out`);
+			expect.soft(await frequency('expression'), 'a mode switch retains the expression').toBe(seeded);
 		});
 
-		await test.step('a node carried onto a param row offers the two ways to drive it', async () => {
+		await test.step('a node carried onto a param row is read by it', async () => {
 			const row = pane(page).getByTestId('param-field-amplitude');
 			const card = (await page.locator(`.svelte-flow__node[data-id="${lfo}"] .header`).boundingBox())!;
 			const at = (await row.boundingBox())!;
 			const to = { x: Math.round(at.x + at.width / 2), y: Math.round(at.y + at.height / 2) };
 			await swipe(page, { x: Math.round(card.x + card.width / 2), y: Math.round(card.y + card.height / 2) }, to);
-			const menu = page.locator('.context-menu');
-			await expect(menu, 'the drop asks which kind of link it is').toBeVisible();
-			await menu.getByText(/^Reference/).tap();
 			await expect
 				.poll(() =>
 					page.evaluate(
 						(u) =>
 							(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.params
-								.lfo.amplitude.reference,
+								.lfo.amplitude.expression,
 						osc
 					)
 				)
-				.toBe(`${lfoName}.out`);
+				.toBe(`nd('${lfoName}')`);
 		});
 
 		await test.step('a long press on a control tells what it does, and does NOT do it', async () => {
@@ -435,7 +422,7 @@ test('a finger held on a viewer reads it, and follows as it moves, without movin
 test('a held slot or control element is picked for reference, and a held param takes it', async ({ page }) => {
 	await page.goto('/');
 	await waitForApp(page);
-	const param = (u: string, name: string, key: 'mode' | 'expression' | 'reference'): Promise<unknown> =>
+	const param = (u: string, name: string, key: 'mode' | 'expression'): Promise<unknown> =>
 		page.evaluate(
 			([uid, n, k]) =>
 				(window as any).goofi.query.graph().nodes.find((x: { uid: string }) => x.uid === uid)?.params.lfo[n][k],
@@ -475,7 +462,7 @@ test('a held slot or control element is picked for reference, and a held param t
 				.toBe('carrier');
 		});
 
-		await test.step('a held output slot is picked, and a held param follows it', async () => {
+		await test.step('a held output slot is picked, and a held param reads it', async () => {
 			const pin = page.locator(`.svelte-flow__node[data-id="${lfo}"] [data-testid="slot-output-pin"]`);
 			const pick = page.getByRole('menuitem', { name: 'Select for reference' });
 			// The sheet covers the canvas; its ✕ clears the way to the slot.
@@ -486,12 +473,12 @@ test('a held slot or control element is picked for reference, and a held param t
 			await tapNode(page, osc);
 			const field = pane(page).getByTestId('param-field-frequency');
 			await field.scrollIntoViewIfNeeded();
-			const take = page.getByRole('menuitem', { name: 'Reference selection: carrier.out' });
+			const take = page.getByRole('menuitem', { name: "Reference selection: nd('carrier')" });
 			await longPress(page, await corner(field), take);
 			await take.tap();
-			await expect.poll(() => param(osc, 'frequency', 'mode')).toBe('reference');
-			expect(await param(osc, 'frequency', 'reference')).toBe('carrier.out');
-			await expect(page.getByTestId('reference-edge'), 'the selected node draws what it follows').toHaveCount(1);
+			await expect.poll(() => param(osc, 'frequency', 'mode')).toBe('expression');
+			expect(await param(osc, 'frequency', 'expression')).toBe("nd('carrier')");
+			await expect(page.getByTestId('reference-edge'), 'the selected node draws what it reads').toHaveCount(1);
 		});
 
 		await test.step('a held control element is picked, and a held param reads it', async () => {

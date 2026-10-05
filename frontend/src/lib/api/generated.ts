@@ -5,8 +5,8 @@
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
 export type Literal = number | string | boolean | Literal[];
-export type Mode = "constant" | "expression" | "reference";
-export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, reference?: string, triggers?: boolean, };
+export type Mode = "constant" | "expression";
+export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, triggers?: boolean, };
 export type VideoQuality = "small" | "high" | "very_high";
 export type RecordedOutput = { slot: string, quality: VideoQuality, };
 export type NodeRecord = { type: string, name: string, pos: [number, number], 
@@ -22,8 +22,11 @@ export type Control = { kind: ControlKind, min?: number, max?: number, step?: nu
  */
 resolution?: number, x: number, y: number, w: number, h: number, };
 export type Lock = { config: boolean, value: boolean, };
-export type VariableSource = { reference: string, index?: number, };
-export type VariableRecord = { value?: Literal, control?: Control, source?: VariableSource, lock?: Lock, };
+export type VariableRecord = { value?: Literal, control?: Control, 
+/**
+ * The expression the manager computes it by, bare or in Python; absent is set by hand.
+ */
+expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, };
 export type PatchDoc = { 
@@ -59,7 +62,7 @@ role: ParamRole | null,
 /**
  * True when the node declared a refresh method for this param.
  */
-refreshable: boolean, mode: Mode, expression: string | null, reference: string | null, 
+refreshable: boolean, mode: Mode, expression: string | null, 
 /**
  * When true, an arrival that changes the value wakes the node's `process()`.
  */

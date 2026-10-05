@@ -34,6 +34,7 @@ use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_node::{ScannedType, Stamp};
+use goofi_core::indexmap::IndexMap;
 
 /// How long a `/term` socket waits for the PTY's end-of-stream after the child is reaped: ConPTY
 /// keeps its pseudoconsole open past the child's death, so on Windows that end never comes.
@@ -938,15 +939,10 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
     let recorder = Arc::new(goofi_record::Recorder::new(g.time()));
-    let signal = goofi_signal::SignalEngine::new(
-        iox.clone(),
-        g.instance().to_string(),
-        g.time(),
-        g.drain_waker(),
-    );
+    let signal = goofi_signal::SignalEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker())?;
     g.register_engine(Box::new(signal));
     if let Some(clock) = clock {
-        g.register_engine(Box::new(goofi_audio::AudioEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)));
+        g.register_engine(Box::new(goofi_audio::AudioEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
     }
     match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.clone()) {
         Ok(engine) => g.register_engine(Box::new(engine)),
@@ -1446,50 +1442,106 @@ pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crat
     }
 }
 
-/// The follower: every tap's pick lands here, a batch at a time, and is written into the store —
-/// which publishes it — under the store's lock alone. The manager writing, so no undo entry, no
-/// dirty mark, and no document.
+/// The follower, the manager's expression worker: every tap's frame lands here, a batch at a
+/// time, in the expression that reads it; a bare one is copied and a computed one evaluated, and
+/// the value is written into the store — which publishes it — under the store's lock alone. The
+/// manager writing, so no undo entry, no dirty mark, and no document.
 fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Followed>) {
     let owner = state.clone();
     owner.scope.spawn("goofi-follower", move || {
-        let store = state.graph.lock().variable_store();
+        let (store, time) = {
+            let g = state.graph.lock();
+            (g.variable_store(), g.time())
+        };
         let mut pace = reducer::Pace::new();
+        let mut held: IndexMap<String, goofi_node::Expression> = IndexMap::new();
+        let mut evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>> = None;
         loop {
-            // A bounded wait, so the stop is read between batches.
-            let first = match rx.recv_timeout(BROADCAST_PERIOD) {
-                Ok(first) => first,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if state.stopping.stopped() {
-                        return;
-                    }
-                    continue;
-                }
+            // A bounded wait, so the stop is read between batches; a timed expression runs on it.
+            let first = match rx.recv_timeout(state.reducers.cap_interval()) {
+                Ok(first) => Some(first),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if state.stopping.stopped() => return,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             };
-            // One write per viewer interval: a followed slot at its full rate publishes each
-            // variable's newest pick once.
-            let mut latest: HashMap<String, goofi_core::Data> = HashMap::new();
-            latest.insert(first.0, first.1);
+            // One write per viewer interval: a followed slot at its full rate lands each frame's
+            // newest once, and the batch is read whole before anything is evaluated.
             let interval = state.reducers.cap_interval();
             let due = pace.due(interval, Instant::now());
-            while let Ok((name, value)) = rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
-                latest.insert(name, value);
+            let mut touched: Vec<String> = Vec::new();
+            let mut batch: Vec<reducer::Followed> = first.into_iter().collect();
+            while let Ok(msg) = rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                batch.push(msg);
             }
             pace.take(interval, Instant::now());
-            let mut store = store.lock();
-            for (name, value) in latest {
-                store.follow(&name, value);
+            for msg in batch {
+                match msg {
+                    reducer::Followed::Desired(wanted, ev) => {
+                        evaluator = ev;
+                        let previous = std::mem::take(&mut held);
+                        for f in wanted {
+                            let mut expr = goofi_node::Expression::new(f.rewritten, f.id, f.vars);
+                            if let Some(p) = previous.get(&f.name) {
+                                expr.carry(p, |var| p.vars.contains_key(var));
+                            }
+                            held.insert(f.name.clone(), expr);
+                            touched.push(f.name);
+                        }
+                    }
+                    reducer::Followed::Frame { variable, var, frame } => {
+                        if let Some(expr) = held.get_mut(&variable) {
+                            expr.deliver(&var, frame);
+                            touched.push(variable);
+                        }
+                    }
+                }
+            }
+            // A computed expression with no stream behind it follows the time, every interval.
+            touched.extend(held.iter().filter(|(_, e)| e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
+            touched.sort();
+            touched.dedup();
+            let t = time.now();
+            for name in touched {
+                let Some(expr) = held.get(&name) else { continue };
+                let value = match expr.inputs() {
+                    Ok(Some(goofi_node::mailbox::Inputs::Bare(frame))) => Ok(frame),
+                    Ok(Some(goofi_node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
+                        (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0) }).map_err(|e| e.0),
+                        _ => Err("no expression evaluator available".to_string()),
+                    },
+                    Ok(None) => continue,
+                    Err(e) => Err(e),
+                };
+                match value {
+                    Ok(frame) => store.lock().follow(&name, frame),
+                    Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("variables"), goofi_supervisor::log::Level::Error, None, format!("`{name}`: {why}")),
+                }
             }
         }
     });
 }
 
-/// Hand the reducers every followed slot, from settled state, after each mutation.
+/// Hand the follower every variable expression and the reducers every slot one reads, from
+/// settled state, after each mutation.
 fn sync_followers(state: &AppState, g: &Graph) {
     let mut taps: HashMap<reducer::SlotKey, Vec<reducer::Tap>> = HashMap::new();
-    for (variable, uid, slot, index) in g.variable_sources() {
-        taps.entry((uid, slot)).or_default().push(reducer::Tap { variable, index });
+    let mut wanted = Vec::new();
+    for b in g.variable_bindings() {
+        let vars = b.vars.iter().map(|v| {
+            let (var, resolved) = match v {
+                // The reducer brings the frame; the follower subscribes to nothing itself.
+                goofi_node::BoundVar::Stream { var, producer, slot, .. } => {
+                    taps.entry((*producer, slot.to_string())).or_default().push(reducer::Tap { variable: b.name.to_string(), var: var.clone() });
+                    (var, goofi_node::Var::Stream { service: String::new(), held: None })
+                }
+                goofi_node::BoundVar::Value { var, value } => (var, goofi_node::Var::Value(value.clone())),
+                goofi_node::BoundVar::Missing { var, reason } => (var, goofi_node::Var::Missing(reason.clone())),
+            };
+            (var.clone(), resolved)
+        });
+        wanted.push(reducer::Following { name: b.name.to_string(), rewritten: b.rewritten.to_string(), id: b.id, vars: vars.collect() });
     }
+    state.reducers.follow(reducer::Followed::Desired(wanted, g.evaluator()));
     state.reducers.set_taps(taps);
     // The bindings may have moved: the producer re-reads who it rings.
     state.variables.poke();

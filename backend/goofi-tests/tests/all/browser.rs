@@ -254,7 +254,7 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
     g.set_param(level, "control", "value", 0.25);
-    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "reference": "level.out" })).await;
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "nd('level')" })).await;
     let (mut live, _) = tokio_tungstenite::connect_async(format!("{base}/params/{uid}")).await.unwrap();
     let pair = |m: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>| -> Value {
         let Some(Ok(Message::Text(t))) = m else { panic!("the params socket stopped: {m:?}") };

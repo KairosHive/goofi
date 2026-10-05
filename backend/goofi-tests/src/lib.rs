@@ -1137,12 +1137,15 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
     names
 }
 
-/// The one-variable evaluator a modulation step needs: the freshest frame's first sample,
-/// coerced to the target's own type — no interpreter, so a scenario runs in the default suite.
-/// It counts its compiles, so a test can tell a refreshed binding from a rebuilt one.
+/// The one-variable evaluator a modulation step needs: its first variable's frame, whole, which
+/// the reader coerces as it does any frame — no interpreter, so a scenario runs in the default
+/// suite. It counts its compiles, so a test can tell a refreshed binding from a rebuilt one, and
+/// holds while `latch` is raised, so a test can see a stalled evaluation hold the value before it.
 #[derive(Default)]
 pub struct FirstVar {
     pub compiles: std::sync::atomic::AtomicUsize,
+    pub evals: std::sync::atomic::AtomicUsize,
+    pub latch: std::sync::atomic::AtomicBool,
 }
 
 impl goofi_node::ExprEvaluator for FirstVar {
@@ -1150,25 +1153,23 @@ impl goofi_node::ExprEvaluator for FirstVar {
         self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(goofi_node::Compiled { id: 1 })
     }
-    fn eval(
-        &self,
-        _id: goofi_node::BindingId,
-        ctx: &goofi_node::EvalCtx<'_>,
-    ) -> Result<goofi_core::Param, goofi_node::ExprError> {
-        let value = ctx
-            .locals
-            .values()
-            .flatten()
-            .find_map(|local| match local {
-                // A frame reads as a control frame does: a text with no number in it is nothing.
-                goofi_node::Local::Frame(d) => goofi_core::control::numbers(d).next(),
-                goofi_node::Local::Value(p) => p.as_f64(),
-            })
-            .ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
-        match ctx.target {
-            goofi_core::Param::Num { int: true, .. } | goofi_core::Param::Str { .. } => Ok(ctx.target.clone()),
-            target => Ok(goofi_core::control::read(&goofi_core::Data::number(value), target)),
+    fn eval(&self, _id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+        while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        first_var(ctx)
     }
     fn release(&self, _id: goofi_node::BindingId) {}
+}
+
+/// The first variable's frame, whole — what every test evaluator answers with. A text with no
+/// number in it is an error, as a Python arithmetic over it would be.
+pub fn first_var(ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+    let (_, local) = ctx.locals.first().ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
+    let frame = goofi_node::mailbox::pick(local, None).map_err(goofi_node::ExprError)?;
+    if goofi_core::control::numbers(&frame).next().is_none() {
+        return Err(goofi_node::ExprError(format!("no number in {:?}", frame.value())));
+    }
+    Ok(frame)
 }

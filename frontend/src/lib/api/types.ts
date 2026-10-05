@@ -8,7 +8,7 @@ export type ParamMode = Mode;
 
 /** Every member once: the record is checked against the generated union in both directions. */
 const keys = <K extends string>(all: Record<K, 0>): readonly K[] => Object.keys(all) as K[];
-export const PARAM_MODES = keys<ParamMode>({ constant: 0, expression: 0, reference: 0 });
+export const PARAM_MODES = keys<ParamMode>({ constant: 0, expression: 0 });
 export const VIDEO_QUALITIES = keys<VideoQuality>({ small: 0, high: 0, very_high: 0 });
 
 /** What `node param edit` takes beside a value: any subset, and a text given implies its mode. */
@@ -29,7 +29,6 @@ export type UnknownParam = ParamBase & { type: 'unknown'; value: unknown };
 export interface ElementSource {
 	mode: ParamMode;
 	expression: string | null;
-	reference: string | null;
 	triggers: boolean;
 	error: string | null;
 	value: number | undefined;

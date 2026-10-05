@@ -36,6 +36,8 @@ pub fn tap_ring(width: u16) -> usize {
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
+/// The computed results ring holds a few blocks of a few channels; a wider result is dropped.
+pub const BLOCKS_RING: usize = (3 + 8 * BLOCK) * 4;
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
 /// How much of a file one read takes, in frames of the file's own rate.
@@ -119,6 +121,10 @@ pub struct AudioHalf {
     /// The pulse params raised since the last run, by index.
     pulses: Vec<usize>,
     inboxes: Vec<Inbox>,
+    /// The computed params' results to the audio thread, and per param the channel count the
+    /// plan sizes its region by.
+    blocks: rtrb::Producer<f32>,
+    param_chans: Vec<Arc<AtomicU16>>,
     /// One per output: the ring the audio thread fills after every block.
     taps: Vec<rtrb::Consumer<f32>>,
     ports: Ports,
@@ -136,6 +142,8 @@ pub struct Birth {
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
     pub inboxes: Vec<Inbox>,
+    pub blocks: rtrb::Producer<f32>,
+    pub param_chans: Vec<Arc<AtomicU16>>,
     pub taps: Vec<rtrb::Consumer<f32>>,
     /// Per output: the recording ring's consumer.
     pub recs: Vec<rtrb::Consumer<f32>>,
@@ -160,6 +168,8 @@ impl AudioHalf {
             refused: None,
             pulses: Vec::new(),
             inboxes: birth.inboxes,
+            blocks: birth.blocks,
+            param_chans: birth.param_chans,
             taps: birth.taps,
             recs: birth.recs,
             play: ports.play.take().map(Play::new),
@@ -356,6 +366,23 @@ impl Executor for AudioHalf {
             }
         }
         self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
+    }
+
+    /// A computed result, `[t]` or `[c, t]`, to the audio thread as one chunk; a moved channel
+    /// count asks for the re-plan that re-sizes its region.
+    fn frame(&mut self, param: usize, frame: &Data) -> bool {
+        let goofi_core::Value::Array(a) = frame.value() else { return false };
+        let (chans, len) = match a.shape() {
+            [t] => (1, *t),
+            [c, t] => (*c, *t),
+            _ => return false,
+        };
+        let width = (chans.min(crate::plan::CEILING as usize)) as u16;
+        let moved = chans * len > 0 && self.param_chans[param].swap(width, Ordering::Relaxed) != width;
+        if let Ok(chunk) = self.blocks.write_chunk_uninit(3 + chans * len) {
+            chunk.fill_from_iter([param as f32, chans as f32, len as f32].into_iter().chain(a.values()));
+        }
+        moved
     }
 
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {

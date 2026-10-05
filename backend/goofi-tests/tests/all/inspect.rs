@@ -6,7 +6,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use goofi_core::Param;
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 use serde_json::Value;
@@ -141,7 +140,7 @@ fn inspect_patch_draws_only_the_edges_that_are_facts_at_this_level() {
 
 const BLEW_UP: &str = "the expression blew up";
 
-/// An evaluator that compiles anything and hands the target value back, or refuses while `broken`.
+/// An evaluator that compiles anything and hands the first variable back, or refuses while `broken`.
 struct Flaky {
     broken: Arc<AtomicBool>,
 }
@@ -150,11 +149,11 @@ impl ExprEvaluator for Flaky {
     fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
         Ok(Compiled { id: 1 })
     }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError> {
+    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
         if self.broken.load(Ordering::Relaxed) {
             return Err(BLEW_UP.into());
         }
-        Ok(ctx.target.clone())
+        goofi_tests::first_var(ctx)
     }
     fn release(&self, _id: BindingId) {}
 }

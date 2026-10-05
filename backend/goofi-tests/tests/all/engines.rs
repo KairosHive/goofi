@@ -490,16 +490,18 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let boundary = t.until("the boundary echo", |_| back.latest());
     assert!(!f32s(&boundary).is_empty(), "the oscillator's block came back through the boundary");
 
-    // Step: cross-engine modulation. A signal param binds to nd('SkelAudioOsc'); the skeleton
-    // rings the binding's own event id, the mailbox holds the frame latest-wins, and the
-    // evaluated value lands exactly once — static data cannot spam writes.
+    // Step: cross-engine modulation. A signal param binds to the skeleton's ARRAY echo — its
+    // AUDIO output never leaves its plane — which republishes the last boundary frame verbatim once
+    // the wire into it is cut; the skeleton rings the binding's own event id, the mailbox holds the
+    // frame latest-wins, and the evaluated value lands exactly once — static data cannot spam writes.
+    t.call("link remove", j!({ "from": ep(hex(osc), "out"), "to": ep(hex(audio), "input") }));
     let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
     let meter = t.add("_TestParamWrites");
     t.link(audio_in, "out", meter, "input");
     let bound = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value",
-             "expression": format!("nd('{audio_name}').out.out"), "mode": "expression" }),
+             "expression": format!("nd('{audio_name}').out.echo"), "mode": "expression" }),
     );
     assert!(bound["error"].is_null(), "a signal param binds to a skeleton's output: {bound}");
     let writes = t.probe(meter, "out");
@@ -511,23 +513,23 @@ fn a_scheduled_engine_beside_the_signal_one() {
         "latest-wins modulation of a STATIC value writes once, however many ticks pass"
     );
 
-    // Step: a reference obeys the same rule a cable does: a signal Float param reads the
-    // AudioIn frame, while direct audio references are refused with both kinds named.
+    // Step: a bare read obeys the same rule a cable does: a signal Float param reads the
+    // AudioIn frame, while a direct read of an audio output is refused with both kinds named.
     let refused = t.call(
         "node param edit",
-        j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(meter), "param": "control/value", "expression": format!("nd('{audio_name}').out.out") }),
     );
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("ARRAY")), "{refused}");
     let audio_in_name = t.doc()["nodes"][hex(audio_in)]["name"].as_str().unwrap().to_string();
     let bound = t.call(
         "node param edit",
-        j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_in_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(meter), "param": "control/value", "expression": format!("nd('{audio_in_name}')") }),
     );
     assert!(bound["error"].is_null(), "a Float param references the audio frame: {bound}");
     let picker = t.add("_TestPicker");
     let refused = t.call(
         "node param edit",
-        j!({ "node": hex(picker), "param": "io/device", "reference": format!("{audio_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(picker), "param": "io/device", "expression": format!("nd('{audio_name}').out.out") }),
     );
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("STRING")), "{refused}");
     t.call("node remove", j!({ "node": hex(picker) }));

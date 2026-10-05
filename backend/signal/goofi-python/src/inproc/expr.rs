@@ -1,29 +1,27 @@
-//! `PyExprEvaluator` — the pyo3 param-expression evaluator the engine injects.
+//! `PyExprEvaluator` — the pyo3 expression evaluator the engines' workers call into.
 
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use goofi_supervisor::sync::Mutex;
 
-use goofi_core::{Data, Param, Value};
+use goofi_core::{Data, Meta, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule, PyString};
+use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
 
 /// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
-/// generated variable, so the expression is plain math over ordinary locals — with `np`, `math`'s
-/// whole namespace and `time()` simply there. ONE dict as eval's variables, deliberately: a split
-/// variables/locals pair breaks name lookup inside comprehensions. Locals land last, so a node
-/// named `sin` shadows math's.
+/// generated variable, so an expression compiles ONCE into a function of `t` and those variables,
+/// over a module scope with `np`, `math`'s whole namespace and `time()` simply there. `lfo()` and
+/// `noi()` read the call's time and range off a thread local, so no namespace is rebuilt per call.
+/// A result leaves as a string, or as the shape and bytes of an f32 array.
 const EVAL_SRC: &str = r#"
 import numpy as np
+import threading
 from math import *
 from time import time
 
-__goofi_scope = {k: v for k, v in globals().items() if not k.startswith("__")}
-
-def __goofi_compile(source):
-    return compile(source, "<goofi-expr>", "eval")
+__goofi_call = threading.local()
 
 def __goofi_noise(src):
     # Hash integer coordinates, then interpolate with zero slope at each endpoint.
@@ -37,19 +35,37 @@ def __goofi_noise(src):
     blend = f * f * f * (f * (f * 6 - 15) + 10)
     return sample(x) * (1 - blend) + sample(x + 1) * blend
 
-def __goofi_eval(code, locals_, t, lo, hi):
-    ns = dict(__goofi_scope)
-    ns["t"] = t
-    def lfo(*, freq=1, src=t, vmin=lo, vmax=hi):
-        return vmin + (vmax - vmin) * (sin(tau * freq * src) + 1) / 2
-    def noi(*, freq=1, src=t, vmin=lo, vmax=hi):
-        return vmin + (vmax - vmin) * __goofi_noise(freq * src)
-    ns.update(lfo=lfo, noi=noi)
-    ns.update(locals_)
-    return eval(code, ns)
+def lfo(*, freq=1, src=None, vmin=None, vmax=None):
+    c = __goofi_call
+    src = c.t if src is None else src
+    vmin = c.lo if vmin is None else vmin
+    vmax = c.hi if vmax is None else vmax
+    return vmin + (vmax - vmin) * (sin(tau * freq * src) + 1) / 2
+
+def noi(*, freq=1, src=None, vmin=None, vmax=None):
+    c = __goofi_call
+    src = c.t if src is None else src
+    vmin = c.lo if vmin is None else vmin
+    vmax = c.hi if vmax is None else vmax
+    return vmin + (vmax - vmin) * __goofi_noise(freq * src)
+
+def __goofi_compile(source, names):
+    # The source on a line of its own, so a trailing comment ends before the closing parenthesis.
+    return eval(compile("lambda t" + "".join(", " + n for n in names) + ": (\n" + source + "\n)", "<goofi-expr>", "eval"))
+
+def __goofi_eval(fn, t, lo, hi, locals_):
+    c = __goofi_call
+    c.t, c.lo, c.hi = t, lo, hi
+    out = fn(t, **locals_)
+    if isinstance(out, str):
+        return out
+    a = np.asarray(out, dtype=np.float32)
+    if a.ndim == 0:
+        a = a.reshape(1)
+    return a.shape, np.ascontiguousarray(a).tobytes()
 "#;
 
-/// The pyo3 evaluator: the harness functions plus the code objects keyed by [`BindingId`].
+/// The pyo3 evaluator: the harness functions plus the compiled functions keyed by [`BindingId`].
 pub struct PyExprEvaluator {
     compile_fn: Py<PyAny>,
     eval_fn: Py<PyAny>,
@@ -76,7 +92,8 @@ impl PyExprEvaluator {
     }
 }
 
-/// Convert a resolved `Data` to a Python object; a table is unsupported and reads as `None`.
+/// A frame as the expression sees it: an array as a numpy view over its bytes, a string as itself;
+/// a table or a texture is `None`.
 fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
     match d.value() {
         Value::Array(s) => Ok(goofi_pymod::numpy_f32(py, s.shape(), s.as_bytes())?.unbind()),
@@ -85,46 +102,19 @@ fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
     }
 }
 
-/// Extract a scalar `T`, falling back to `.item()` on a size-1 array because numpy 2.x rejects
-/// `float(np.array([x]))` and goofi promotes every scalar to a shape-[1] array.
-fn to_scalar<'py, T>(result: &Bound<'py, PyAny>, noun: &str) -> Result<T, String>
-where
-    T: for<'a> FromPyObject<'a, 'py, Error = PyErr>,
-{
-    if let Ok(v) = result.extract::<T>() {
-        return Ok(v);
-    }
-    let not_a = || format!("expression result is not a {noun}");
-    let np = PyModule::import(result.py(), "numpy").map_err(|e| e.to_string())?;
-    let a = np.getattr("asarray").and_then(|f| f.call1((result,))).map_err(|_| not_a())?;
-    let size: usize = a.getattr("size").and_then(|s| s.extract()).map_err(|_| not_a())?;
-    if size != 1 {
-        return Err(format!("expression result is not a scalar {noun} (size {size})"));
-    }
-    a.call_method0("item").and_then(|it| it.extract::<T>()).map_err(|_| not_a())
-}
-
-/// The Python result as the frame it is, read into the target param's kind: a string target
-/// takes the result printed, any other its numbers, one or a sequence.
-fn coerce(result: &Bound<'_, PyAny>, target: &Param) -> Result<Param, String> {
-    let frame = match target {
-        Param::Str { .. } => Data::text(result.str().map_err(|e| e.to_string())?.to_string()),
-        _ => {
-            let values: Vec<f64> = match to_scalar::<f64>(result, "number") {
-                Ok(v) => vec![v],
-                Err(_) => result
-                    .extract::<Vec<f64>>()
-                    .or_else(|_| result.call_method0("tolist").and_then(|l| l.extract::<Vec<f64>>()))
-                    .map_err(|_| "expression result is not a number or a sequence of numbers".to_string())?,
-            };
-            // `as i64` silently saturates NaN and ±inf; error instead.
-            if matches!(target, Param::Num { int: true, .. }) && values.iter().any(|v| !v.is_finite()) {
-                return Err("expression result is not a finite number".to_string());
-            }
-            Data::numbers(values)
-        }
-    };
-    Ok(goofi_core::control::read(&frame, target))
+/// The names an expression's variables wear, in the order the rewrite minted them: `__v0`, `__v1`
+/// and so on, which is the order the harness declares them in.
+fn names_of(source: &str) -> Vec<String> {
+    let mut names: Vec<String> = goofi_node::expr::tokens(source)
+        .iter()
+        .filter(|t| t.kind == goofi_node::expr::Kind::Ident)
+        .map(|t| &source[t.start..t.end])
+        .filter(|w| w.strip_prefix("__v").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 impl ExprEvaluator for PyExprEvaluator {
@@ -133,7 +123,7 @@ impl ExprEvaluator for PyExprEvaluator {
             let code = self
                 .compile_fn
                 .bind(py)
-                .call1((source,))
+                .call1((source, names_of(source)))
                 .map_err(|e| ExprError(e.to_string()))?;
             let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
             self.codes.lock().insert(id, code.unbind());
@@ -141,8 +131,8 @@ impl ExprEvaluator for PyExprEvaluator {
         })
     }
 
-    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError> {
-        crate::attach(|py| -> Result<Param, ExprError> {
+    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError> {
+        crate::attach(|py| -> Result<Data, ExprError> {
             let code = self
                 .codes
                 .lock()
@@ -152,22 +142,23 @@ impl ExprEvaluator for PyExprEvaluator {
             let locals = PyDict::new(py);
             for (name, local) in ctx.locals {
                 let val: Py<PyAny> = match local {
-                    Some(Local::Frame(d)) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
-                    Some(Local::Value(p)) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
-                    None => py.None(),
+                    Local::Frame(d) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
+                    Local::Value(p) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
                 };
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;
             }
-            let (lo, hi) = match ctx.target {
-                Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
-                _ => (0.0, 1.0),
-            };
             let result = self
                 .eval_fn
                 .bind(py)
-                .call1((code.bind(py), &locals, ctx.t, lo, hi))
+                .call1((code.bind(py), ctx.t, ctx.range.0, ctx.range.1, &locals))
                 .map_err(|e| ExprError(e.to_string()))?;
-            coerce(&result, ctx.target).map_err(ExprError)
+            if let Ok(text) = result.extract::<String>() {
+                return Ok(Data::text(text));
+            }
+            let (shape, bytes) = result
+                .extract::<(Vec<usize>, Bound<'_, PyBytes>)>()
+                .map_err(|_| ExprError("expression result is not a number, a sequence of numbers or a string".into()))?;
+            Data::array_f32(shape, bytes.as_bytes().to_vec(), Meta::default()).map_err(|e| ExprError(e.to_string()))
         })
     }
 

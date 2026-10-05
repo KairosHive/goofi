@@ -22,7 +22,6 @@ const base: ParamBase = {
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	reference: null,
 	triggers: false,
 	error: null,
 	section: 0,
@@ -105,8 +104,8 @@ describe('controlKind', () => {
 		expect(controlKind(pulseParam())).toBe('pulse');
 	});
 
-	it('keeps a pulse a pulse in reference mode, so the button stays and the chips show', () => {
-		expect(controlKind(pulseParam({ mode: 'reference', reference: 'clock.out' }))).toBe('pulse');
+	it('keeps a pulse a pulse under a bare read, so the button stays and the chips show', () => {
+		expect(controlKind(pulseParam({ mode: 'expression', expression: "nd('clock')" }))).toBe('pulse');
 	});
 
 	/* The mode used to win here, and the driven row rendered the source's editor INSTEAD of the
@@ -114,9 +113,9 @@ describe('controlKind', () => {
 	   what the source produces — which leaves this mapping a function of the type alone. */
 	it('gives a driven param the very control its type gets, whatever drives it', () => {
 		expect(controlKind(floatParam({ mode: 'expression' }))).toBe('numeric');
-		expect(controlKind(intParam({ mode: 'reference' }))).toBe('numeric');
+		expect(controlKind(intParam({ mode: 'expression' }))).toBe('numeric');
 		expect(controlKind(boolParam({ mode: 'expression' }))).toBe('toggle');
-		expect(controlKind(stringParam({ options: ['a'], mode: 'reference' }))).toBe('select');
+		expect(controlKind(stringParam({ options: ['a'], mode: 'expression' }))).toBe('select');
 		expect(controlKind(stringParam({ mode: 'expression' }))).toBe('text');
 		expect(controlKind(unknownParam({ mode: 'expression' }))).toBe('unknown');
 	});
@@ -129,24 +128,23 @@ describe('controlKind', () => {
 // The row's parts come from one plan, so a change to what a vector or a colour shows is a change
 // here, not a condition scattered through the markup.
 describe('rowPlan', () => {
-	const list = { individual: false, picking: false };
-	const entries = { individual: true, picking: false };
+	const list = { individual: false };
+	const entries = { individual: true };
 	const colour = (over: Partial<NumParam> = {}): NumParam =>
 		floatParam({ value: [1, 0, 0, 1], color: true, ...over });
 
 	it('shows a scalar as its control, with no switch and the whole foot', () => {
 		const p = rowPlan(floatParam(), list);
-		expect(p).toMatchObject({ face: 'numeric', viewSwitch: false, list: false, elements: false, source: null, foot: true });
+		expect(p).toMatchObject({ face: 'numeric', viewSwitch: false, list: false, elements: false, source: false, foot: true });
 	});
 
 	it('shows a constant colour as the picker over its list, with the foot beside the list', () => {
-		expect(rowPlan(colour(), list)).toMatchObject({ face: 'color', viewSwitch: true, list: true, elements: false, source: null, foot: true, disabled: false });
+		expect(rowPlan(colour(), list)).toMatchObject({ face: 'color', viewSwitch: true, list: true, elements: false, source: false, foot: true, disabled: false });
 	});
 
 	it('shows a driven colour as the source editor in place of the list', () => {
 		const p = rowPlan(colour({ mode: 'expression', expression: '[1, 0, 0, 1]' }), list);
-		expect(p).toMatchObject({ list: false, source: 'expression', foot: true, disabled: true });
-		expect(rowPlan(colour(), { ...list, picking: true })).toMatchObject({ list: false, source: 'reference' });
+		expect(p).toMatchObject({ list: false, source: true, foot: true, disabled: true });
 	});
 
 	it('opens a colour as entries: a vector face, entry rows, and no whole foot', () => {
@@ -155,13 +153,13 @@ describe('rowPlan', () => {
 	});
 
 	it('shows the entries alone while a whole source is set; the list view releases it', () => {
-		expect(rowPlan(colour({ mode: 'reference', reference: 'a.out' }), entries)).toMatchObject({ foot: false, source: null, elements: true });
+		expect(rowPlan(colour({ mode: 'expression', expression: "nd('a')" }), entries)).toMatchObject({ foot: false, source: false, elements: true });
 	});
 
 	it('disables the list face while an entry has a source of its own', () => {
 		const d: ParamDescriptor = {
 			...colour(),
-			elements: [{ mode: 'expression', expression: '0', reference: null, triggers: false, error: null, value: 0 }]
+			elements: [{ mode: 'expression', expression: '0', triggers: false, error: null, value: 0 }]
 		};
 		expect(rowPlan(d, list).disabled).toBe(true);
 		expect(rowPlan(d, entries).disabled).toBe(false);

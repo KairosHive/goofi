@@ -9,7 +9,7 @@
 	import { inputPorts, inputUnits, outputTops } from './nodeMetrics';
 	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { graph, slotReference } from '$lib/stores/graph.svelte';
+	import { graph, readExpression } from '$lib/stores/graph.svelte';
 	import { nodeHealth } from './nodeHealth';
 	import { StatusDot } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
@@ -49,7 +49,7 @@
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function slotMenu(x: number, y: number, slot: string): void {
-		menu = { x, y, items: selection().referenceItems({ node: node.uid, slot }, slotReference(node, slot)) };
+		menu = { x, y, items: selection().referenceItems({ node: node.uid, slot }, readExpression(node, slot)) };
 	}
 	// The touch door onto the right-click menu; the click its release fires is the menu's, not the add menu's.
 	let pressSlot = '';

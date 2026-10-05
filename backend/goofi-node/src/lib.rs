@@ -287,22 +287,21 @@ pub enum Local {
     Value(Param),
 }
 
-/// Per-evaluation context handed to [`ExprEvaluator::eval`].
+/// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.
 pub struct EvalCtx<'a> {
-    /// The expression's variables, keyed by the generated name the rewrite minted; `None` has not
-    /// arrived yet, and the expression sees it as absent.
-    pub locals: &'a std::collections::HashMap<String, Option<Local>>,
+    /// The expression's variables by the generated name the rewrite minted, in its order.
+    pub locals: &'a [(String, Local)],
     /// Patch seconds (`NodeCtx::now`), off the one patch time — for time-based expressions.
     pub t: f64,
-    /// The param being driven, a type template the evaluator coerces its result to.
-    pub target: &'a Param,
+    /// The driven param's declared range, which `lfo()` and `noi()` span by default.
+    pub range: (f64, f64),
 }
 
-/// Evaluates param expressions; implemented in `goofi-python` and injected, so the engine core
-/// carries no pyo3 dependency.
+/// Evaluates expressions; implemented in `goofi-python` and injected, so the engine core carries
+/// no pyo3 dependency. A result is a frame, read into its target through `control::read`.
 pub trait ExprEvaluator: Send + Sync {
     fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
-    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError>;
+    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
     fn release(&self, id: BindingId);
 }
 

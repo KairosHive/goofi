@@ -1,6 +1,6 @@
 //! The expression rewrite (spec §5.3): `nd('lfo').out.sig.mean() * variables.gain` becomes
 //! `__v0.mean() * __v1` plus the variable map the graph resolves. Slots live behind `.out`,
-//! params behind `.params`, a bare reference is the single output, and `me` is this node.
+//! params behind `.params`, a bare `nd('x')` is the single output, and `me` is this node.
 
 use goofi_node::expr::is_ident;
 use goofi_node::ExprError;
@@ -195,23 +195,11 @@ fn splice(source: &str, mut edits: Vec<(usize, usize, String)>) -> Option<String
     Some(out)
 }
 
-/// The same rename over a reference's `node.slot`, so one closure serves both retained texts.
-pub fn rename_reference(
-    reference: &str,
-    rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
-) -> Option<String> {
-    let (base, index) = goofi_node::mailbox::split_index(reference).ok()?;
-    let (name, slot) = base.split_once('.')?;
-    let (new_name, new_slot) = rename(name, Some(slot));
-    if new_name.is_none() && new_slot.is_none() {
-        return None;
-    }
-    Some(format!(
-        "{}.{}{}",
-        new_name.unwrap_or_else(|| name.to_string()),
-        new_slot.unwrap_or_else(|| slot.to_string()),
-        index.map_or_else(String::new, |i| format!("[{i}]"))
-    ))
+/// Whether a rewritten expression is BARE: exactly one target with an optional flat index, which
+/// an engine reads in Rust and never hands the interpreter. The one owner of that predicate.
+pub fn is_bare(rewritten: &str) -> bool {
+    let Ok((var, _)) = goofi_node::mailbox::split_index(rewritten.trim()) else { return false };
+    var.strip_prefix("__v").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The identifier after a `.` at `end`, and where it stops. `None` when the next thing is a

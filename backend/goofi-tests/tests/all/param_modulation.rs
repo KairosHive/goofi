@@ -1,20 +1,17 @@
 //! Parameter modulation through the public expression interface.
 
-use std::collections::HashMap;
-use goofi_core::Param;
+use goofi_core::{control, Param};
 use goofi_node::{EvalCtx, ExprEvaluator};
 use goofi_python::inproc::PyExprEvaluator;
 
 #[test]
 fn modulation_uses_the_current_target_range_and_coordinate() {
     let evaluator = PyExprEvaluator::new().unwrap();
-    let locals = HashMap::new();
     let evaluate = |source: &str, t: f64, lo: f64, hi: f64| {
-        let target = Param::float(0.0, lo, hi);
         let code = evaluator.compile(source).unwrap();
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &locals, t, target: &target });
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t, range: (lo, hi) });
         evaluator.release(code.id);
-        result.map(|p| p.as_f64().expect("a number"))
+        result.map(|d| control::number_of(&d))
     };
     for (t, expected) in [(0.0, 4.0), (0.25, 6.0), (0.75, 2.0)] {
         assert!((evaluate("lfo()", t, 2.0, 6.0).unwrap() - expected).abs() < 1e-10);
@@ -42,11 +39,13 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
             assert_eq!(actual, explicit);
         }
     }
+    // The result is a frame; the reader reads it into its param, an int rounded.
     let code = evaluator.compile("lfo()").unwrap();
     for (lo, hi) in [(2, 6), (-10, 20)] {
         let target = Param::int(0, lo, hi);
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &locals, t: 0.25, target: &target }).unwrap();
-        assert!(matches!(&result, Param::Num { value, int: true, .. } if value[0] == hi as f64), "{result:?}");
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.25, range: (lo as f64, hi as f64) }).unwrap();
+        let read = control::read(&result, &target);
+        assert!(matches!(&read, Param::Num { value, int: true, .. } if value[0] == hi as f64), "{read:?}");
     }
     evaluator.release(code.id);
     for source in ["lfo(1)", "noi(1)", "lfo(rate=1)", "noi(rate=1)"] {

@@ -4,11 +4,9 @@ A panel that hosts machines. A machine is a set of states, the transitions betwe
 the playheads that travel through them. A playhead writes the values its states hold into
 patch variables, and any param reads them the way it reads a control panel today.
 
-The same work unifies control data: a param, a variable, a control panel widget and a machine
-attribute hold one kind of value, and variables become producers on the data plane with the
-standing and the transport an output slot has. It also removes the reference mode: a param is
-a constant or an expression, and one expression worker in the shared runtime serves every
-engine. The control data and expression work must not add net lines; the machine may.
+Control data is unified already: a param, a variable, a control panel widget and a machine
+attribute hold one kind of value, a variable is a producer on the data plane, and a param is a
+constant or an expression served by one expression worker per engine. The machine builds on that.
 
 Status: in progress. This records the product decisions agreed through 2026-10-04. Build on
 `AGENTS.md` and the code; this file carries only what the code cannot say.
@@ -21,55 +19,11 @@ Status: in progress. This records the product decisions agreed through 2026-10-0
   so a literal holds seven significant digits and a whole number up to 16,777,216 exactly;
   every read of an f32 yields the f64 its shortest decimal denotes, so `0.97` reads as `0.97`.
 
-### Variables are producers
-
-- A variable with an expression is a computed variable: bare, it copies the element or the
-  frame on the producer's thread, as the tap does today; computed, the manager's expression
-  worker evaluates it like an engine's, latest-wins.
-- A pad's sheet reaches the GPU through `graphics:Variable`, which puts a variable's frame on
-  a cable.
-- Every reader of a variable subscribes to its wire, the default `variables.system.*`
-  expressions of every node included: a service takes 256 subscribers, so a patch of more
-  nodes than that reading one variable is refused by the transport. Raise the ceiling, or
-  share one subscription per process, when a patch asks.
-
 ### The control panel
 
 - `ControlKind` gains `Vector` and `Color`: a vector draws a `[n]` array, a colour a `[4]`,
-  through `fits` as the other kinds do.
-
-### Expressions, one way
-
-- A param has two modes, constant and expression. The reference mode, `SourceState.reference`,
-  `ParamEntry.reference`, `parse_reference`, `rename_reference`, the reference variable name,
-  the `reference` argument and descriptor field, the third segment of the mode switch, and
-  the reference picker as a mode are removed. The picker inserts `nd('osc').out[2]` into the
-  expression editor; that is the one spelling. The reference overlay in the node editor draws
-  every `nd()` and `variables.` dependency a bare or computed expression names. A variable's
-  source is the same `{expression}` a param has; `VariableSource`, `variable entry source` and
-  `control source` go, and `control edit {expression}` and `variable entry edit {expression}`
-  take their place.
-- An expression is BARE when its rewritten form is exactly one target with an optional index.
-  A bare expression never enters the interpreter: the engine reads the element or the frame in
-  Rust and, on the audio plane, carries it as a plan edge at zero latency. `expr_rewrite`
-  owns the predicate; `Expression.id == None` is its one effect.
-- Any Python around the target enters the interpreter, on one expression worker per engine
-  that `goofi-runtime` owns. The engine's own thread (a node thread, the audio callback, the
-  graphics ticker) never attaches to Python. The worker evaluates when an input arrives (a
-  stream frame, a variable frame, a settle) or on `TICK` for a timed expression, and hands
-  the result over latest-wins: the engine reads the last value that stands until the next one.
-  A late or stalled evaluation holds the previous value; nothing waits and nothing is dropped.
-  On the audio plane the result is a `[C, BLOCK]` array in the plan arena, one block behind
-  its inputs; on the signal and graphics planes it is the mailbox value the node reads now.
-- Why the engine thread never attaches: the free-threaded interpreter's cyclic collector stops
-  every thread. `goofi-tests/examples/expr_block.rs` measured a block expression at 3 to
-  25 us against a 1333 us budget, and collector stalls of 68 to 208 ms while other threads
-  made cyclic garbage; `gc.disable()` removed them. A held block is the one acceptable outcome.
-- The evaluator's per-call list conversion and dict rebuild go: a frame goes in as a numpy
-  view over its bytes and comes out as bytes, read through `control::read` like any frame.
-- `plan::is_edge` keeps its test (bare, live, same-engine, one target); it no longer needs a
-  mode. The signal plane's `Var::Stream` subscription and the graphics plane's plan edge are
-  the same seam on their planes.
+  through `fits` as the other kinds do. Unbuilt; it lands with the panel stage, whose
+  Playwright session lists a vector.
 
 ### Attributes travel as variables
 
@@ -185,9 +139,6 @@ Under the `machine` phrase, all commands with inverses unless marked:
 
 ### Tests
 
-- Extend `editing.rs` and `running.rs`: a computed expression on an audio param held one
-  block behind and holding under a stalled evaluator (the test evaluator blocks on a latch);
-  a bare audio expression still a plan edge; the value path proven to leave no doc patch.
 - `goofi-tests/tests/all/machine.rs`: one session builds a machine through ops, binds a
   param through `variables.<playhead>.<attr>` with `FirstVar`, fires a transition and polls
   the param through `probe` on the consumer and the playhead variables through their
@@ -208,6 +159,10 @@ Under the `machine` phrase, all commands with inverses unless marked:
 - Whether a `when` expression may reference a node output directly (`nd('x').out`). Not now:
   it would make the machine a stream consumer. A followed variable is the seam.
 - Transition priority beyond `weight`: an explicit order is not offered until a patch asks.
+- Every reader of a variable subscribes to its wire, the default `variables.system.*`
+  expressions of every node included: a service takes 256 subscribers, so a patch of more
+  nodes than that reading one variable is refused by the transport. Raise the ceiling, or
+  share one subscription per process, when a patch asks.
 
 ## Not to be done
 
@@ -229,21 +184,20 @@ Build in this order. Each stage ends at a tested commit, with the full local che
 is a point to compact the context. Read this file and `AGENTS.md` first; inspect the diff since
 the last stage's commit; keep this file current by deleting what has shipped.
 
-1. **Expressions, one way.** The reference mode removed, the bare predicate, the expression
-   worker in `goofi-runtime` for all three engines with latest-wins handover, the evaluator's
-   bytes path, variable expressions. Report the line delta: the control data stage shipped at
-   +28 and the variables stage at +100, and the three stages together must not add net lines,
-   so this one removes at least 128.
-2. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
-3. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions.
+1. **Machines.** The model, the ops, the `goofi-machines` thread, the situation.
+2. **The panel.** The canvas, the cards, the dot, the side pane, the Playwright sessions, and
+   the `Vector` and `Color` control kinds.
 
-**Handover, 2026-10-04.** Shipped before this file's stages: three panel defects (`626470cb`),
-MIDI as a variable bus (`74fcb166`), a Variable node per engine (`20d689ba`), and the MIDI
-rework (`ce200131`): a device group is the session's, opened while a reader — an expression,
-a Variable feed, a followed variable — names it and during a 30 s `midi learn`; the Variable
-nodes take `group` then `element`, two refreshable lists. Stage 1, Expressions, is next and has
-not started. The reference mode it removes is `Mode::Reference` in `goofi-graph` (`derive`,
-`resolve_vars`, `reference_kind_error`) and the `reference` texts of `SourceState`; the feed
-role (`goofi_node::Role::Feed`) and `referenced_groups` read variables and must keep working.
+**Handover, 2026-10-04.** The Expressions stage shipped: a param is a constant or an
+expression; a bare expression (`expr_rewrite::is_bare`: one target, an optional index) is read in
+Rust and is the audio plan edge; anything else runs on `goofi_runtime::expr::Worker`, one per
+engine, latest-wins, and on audio lands as a `[C, BLOCK]` block (`plan::Source::Block`) held
+while the evaluator is away; a variable's `expression` is computed by the manager's follower
+thread; the evaluator takes numpy views in and bytes out. The control data stage shipped at +28
+lines and the variables stage at +100; the expressions stage removed the rest, so the three
+together add no net lines. Stage 1, Machines, is next and has not started: `Graph::group_taken`
+holds a playhead's group, `VariableStore::follow` is the write a machine makes, and the
+follower in `goofi-bridge` shows the pace and the lock discipline a `goofi-machines` thread
+takes.
 
 Roadmap maintenance does not start implementation. Wait for the user's build instruction.

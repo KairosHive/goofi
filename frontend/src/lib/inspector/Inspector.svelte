@@ -16,7 +16,7 @@
 	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import ParamField from './ParamField.svelte';
 	import { isNumeric } from './controlKind';
-	import { expressionFor, MODE_FACE, sourceForMode } from './paramSeed';
+	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import MetadataPanel from '$lib/editor/MetadataPanel.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
@@ -151,48 +151,31 @@
 		return () => uiStore.closeEditor(id);
 	});
 	// A node dragged out of the editor onto a param row: the row is a target only where the node HAS
-	// an output that param may follow, so the menu can never open on a link the manager would refuse.
+	// an output that param may read, so the drop never binds what the manager would refuse.
 	const dragged = $derived(uiStore.nodeDrag);
 	$effect(() =>
-		uiStore.onNodeDrop(formId, (uid, zone, at) => {
+		uiStore.onNodeDrop(formId, (uid, zone) => {
 			const [group, name] = zone.split('/');
-			const reference = g.referenceFor(uid, node?.params?.[group]?.[name]?.type ?? '');
-			if (reference) menu = { x: at.x, y: at.y, items: linkItems(group, name, uid, reference) };
+			const expression = g.readFor(uid, node?.params?.[group]?.[name]?.type ?? '');
+			if (expression) setSource(group, name, { expression });
 		})
 	);
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-
-	/** The two ways one dropped node can drive a param: followed, or read by an expression. */
-	function linkItems(group: string, name: string, uid: string, reference: string): MenuItem[] {
-		const expression = expressionFor(reference, Object.keys(g.nodeById(uid)?.output_slots ?? {}).length);
-		return [
-			{
-				label: `Reference ${reference}`,
-				icon: 'workflow',
-				action: () => setSource(group, name, { reference })
-			},
-			{
-				label: `Expression ${expression}`,
-				icon: 'terminal',
-				action: () => setSource(group, name, { expression })
-			}
-		];
-	}
 
 	function modulate(group: string, name: string, kind: 'lfo' | 'noi'): void {
 		const freq = 0.01 + Math.random() * 0.19;
 		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
 
-	/** The source the app's reference pick gives this param, or null where the param may not take it. */
+	/** The expression the app-wide pick gives this param, or null where the param may not take it. */
 	function pickedSource(d: ParamDescriptor): SourcePatch | null {
 		const pick = selection().reference;
 		if (!pick) return null;
 		if ('variable' in pick) {
 			return g.variables.some((v) => v.name === pick.variable) ? { expression: `variables.${pick.variable}` } : null;
 		}
-		const reference = pick.node === node?.uid ? null : g.referenceFor(pick.node, d.type, pick.slot);
-		return reference ? { reference } : null;
+		const expression = pick.node === node?.uid ? null : g.readFor(pick.node, d.type, pick.slot);
+		return expression ? { expression } : null;
 	}
 
 	/** A row's menu, from a right click or a held touch: LFO and Noise on a numeric row, and the pick. */
@@ -205,7 +188,7 @@
 			: [];
 		const source = pickedSource(descriptor);
 		if (source) {
-			const label = `Reference selection: ${source.expression ?? source.reference}`;
+			const label = `Reference selection: ${source.expression}`;
 			items.push({ label, icon: 'circle-dot', action: () => setSource(group, name, source) });
 		}
 		return items;
@@ -295,7 +278,7 @@
 	/** The row's drop-zone key, or null where this node cannot drive that param. */
 	function dropZone(group: string, name: string, d: ParamDescriptor): string | null {
 		if (!dragged || dragged === node?.uid) return null;
-		return g.referenceFor(dragged, d.type) ? `${formId}#${paramKey(group, name)}` : null;
+		return g.readFor(dragged, d.type) ? `${formId}#${paramKey(group, name)}` : null;
 	}
 
 	// A group whose every param is hidden has no tab.
@@ -422,8 +405,7 @@
 
 	const FILTER_TITLE: Record<ParamMode, string> = {
 		constant: 'the params holding a value set by hand',
-		expression: 'the params Python drives',
-		reference: "the params following a node's output slot"
+		expression: 'the params an expression drives'
 	};
 </script>
 
@@ -581,7 +563,7 @@
 							onChange={() => (filters = { ...filters, nonDefault: !filters.nonDefault })}
 						/>
 						<!-- Clearing moves the default this counts from; it edits no param, so an expression
-						     or a reference keeps driving and keeps answering the source strip. -->
+						     keeps driving and keeps answering the source strip. -->
 						<IconButton
 							variant="ghost"
 							density="chrome"

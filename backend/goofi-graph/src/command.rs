@@ -43,19 +43,18 @@ impl Applied {
     }
 }
 
-/// A param's source record as [`Command::EditParam`] carries it: the mode, and the expression and
-/// reference it retains whatever the mode. Nothing retained and a constant mode is no record.
+/// A param's source record as [`Command::EditParam`] carries it: the mode, and the expression it
+/// retains whatever the mode. Nothing retained and a constant mode is no record.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SourceState {
     pub mode: Mode,
     pub expression: String,
-    pub reference: String,
     pub triggers: bool,
 }
 
 impl SourceState {
     pub fn is_empty(&self) -> bool {
-        self.mode == Mode::Constant && self.expression.is_empty() && self.reference.is_empty()
+        self.mode == Mode::Constant && self.expression.is_empty()
     }
 }
 
@@ -176,10 +175,10 @@ pub enum Command {
         group: String,
         lock: Option<goofi_core::variables::Lock>,
     },
-    /// Set or clear what a variable follows. Inverts as the source it replaced.
+    /// Set or clear the expression a variable is computed by. Inverts as the one it replaced.
     SourceVariable {
         name: String,
-        source: Option<goofi_core::variables::VariableSource>,
+        expression: Option<String>,
     },
     /// Move a tab to a position in the strip. Its CONTENT is a position, so it cannot ride
     /// [`Command::LayoutContents`]; it inverts as another reorder, aimed at where the tab is now.
@@ -546,11 +545,11 @@ impl Command {
                 let old = store.get(&name).cloned();
                 let at = store.index_of(&name);
                 let old_control = Some(store.control(&name).cloned());
-                let (old_source, old_lock) = (store.source(&name).cloned(), store.own_lock(&name));
+                let (old_expression, old_lock) = (store.expression(&name).map(str::to_string), store.own_lock(&name));
                 store.remove(&name)?;
                 let mut inverse = vec![Command::EditVariable { name: name.clone(), value: old, at, control: old_control }];
-                if old_source.is_some() {
-                    inverse.push(Command::SourceVariable { name: name.clone(), source: old_source });
+                if old_expression.is_some() {
+                    inverse.push(Command::SourceVariable { name: name.clone(), expression: old_expression });
                 }
                 if !old_lock.is_default() {
                     inverse.push(Command::LockVariable { name, lock: old_lock });
@@ -596,9 +595,9 @@ impl Command {
                 Ok(Applied::done(Outcome::Ok, Command::LockVariableGroup { group, lock: old }))
             }
 
-            Command::SourceVariable { name, source } => {
-                let old = g.set_variable_source(&name, source)?;
-                Ok(Applied::done(Outcome::Ok, Command::SourceVariable { name, source: old }))
+            Command::SourceVariable { name, expression } => {
+                let old = g.set_variable_expression(&name, expression)?;
+                Ok(Applied::done(Outcome::Ok, Command::SourceVariable { name, expression: old }))
             }
 
             Command::LayoutReorderTab { tab, to_index } => {

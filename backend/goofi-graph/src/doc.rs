@@ -2,7 +2,7 @@
 //! paste admits. Every spelling the `.gfi` and the clipboard carry is a field here.
 
 use goofi_core::record::RecordedOutput;
-use goofi_core::variables::{Control, Group, Lock, VariableSource};
+use goofi_core::variables::{Control, Group, Lock};
 use goofi_core::Data;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct PatchDoc {
     pub arrangement: Option<Value>,
 }
 
-/// One variable as the document carries it: `{control?, source?, lock?}`. The replica carries no
+/// One variable as the document carries it: `{control?, expression?, lock?}`. The replica carries no
 /// value — a value is a frame on the data plane. The manifest carries a narrow one as a literal;
 /// a wide array is a file beside it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -44,8 +44,9 @@ pub struct VariableRecord {
     pub value: Option<Data>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<Control>,
+    /// The expression the manager computes it by, bare or in Python; absent is set by hand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<VariableSource>,
+    pub expression: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<Lock>,
 }
@@ -85,8 +86,6 @@ pub struct ParamEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<bool>,
 }
 
@@ -96,7 +95,6 @@ impl ParamEntry {
         Some(SourceState {
             mode: self.mode?,
             expression: self.expression.clone().unwrap_or_default(),
-            reference: self.reference.clone().unwrap_or_default(),
             triggers: self.triggers.unwrap_or(false),
         })
     }
@@ -104,7 +102,6 @@ impl ParamEntry {
     pub fn with_source(mut self, s: &SourceState) -> ParamEntry {
         self.mode = Some(s.mode);
         self.expression = (!s.expression.is_empty()).then(|| s.expression.clone());
-        self.reference = (!s.reference.is_empty()).then(|| s.reference.clone());
         self.triggers = s.triggers.then_some(true);
         self
     }

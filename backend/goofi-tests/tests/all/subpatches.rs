@@ -8,11 +8,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use goofi_core::Param;
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 
-/// Compiles anything and hands the target value back. With one installed, a binding error in the
+/// Compiles anything and hands the first variable back. With one installed, a binding error in the
 /// reply is the GRAPH's own resolution talking rather than "no evaluator here".
 struct Always;
 
@@ -20,8 +19,8 @@ impl ExprEvaluator for Always {
     fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
         Ok(Compiled { id: 1 })
     }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError> {
-        Ok(ctx.target.clone())
+    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
+        goofi_tests::first_var(ctx)
     }
     fn release(&self, _id: BindingId) {}
 }
@@ -661,14 +660,14 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     g.link(buf, "out", sink, "input");
 
     // An inner sub-patch around the Buffer, then an outer one around that: a copy has to recurse.
-    // The Buffer reads its neighbour by name — as an expression and as a reference — so the copy
-    // has both to get right. A third member is NAMED like a slot: a paste must rename the copied
+    // The Buffer reads its neighbour by name on two params, so the copy has both to get right.
+    // A third member is NAMED like a slot: a paste must rename the copied
     // node and never the slot label that happens to spell the same word.
     let lfo = g.add("LFO");
     g.call("node edit", j!({ "node": hex(lfo), "name": "lfo" }));
     g.call("node param edit", j!({ "node": hex(buf), "param": "common/max_frequency",
                                    "expression": "nd('lfo')" }));
-    g.call("node param edit", j!({ "node": hex(buf), "param": "buffer/size", "reference": "lfo.out" }));
+    g.call("node param edit", j!({ "node": hex(buf), "param": "buffer/size", "expression": "nd('lfo')" }));
     let decoy = g.add("LFO");
     g.call("node edit", j!({ "node": hex(decoy), "name": "out" }));
     let inner = group(&g, &[hex(buf), hex(lfo), hex(decoy)]);
@@ -724,13 +723,10 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
         .expect("the copied oscillator");
     let copy_name = doc_now["nodes"][&inner_osc]["name"].as_str().unwrap().to_string();
     let bound = g.call("node state", j!({ "node": leaf }))["text"].as_str().unwrap().to_string();
-    assert!(bound.contains(&format!("nd('{copy_name}')")),
-            "the copy reads its OWN oscillator `{copy_name}`: {bound}");
-    assert!(bound.contains(&format!("ref: {copy_name}.out")),
-            "the reference follows the copy too, its slot label untouched: {bound}");
+    assert_eq!(bound.matches(&format!("nd('{copy_name}')")).count(), 2,
+               "both params read the copy's OWN oscillator `{copy_name}`, the slot label untouched: {bound}");
     assert!(!bound.contains("no node named"), "…and that name resolves: {bound}");
-    assert!(!bound.contains("nd('lfo')") && !bound.contains("ref: lfo."),
-            "…and nothing still reads the original's: {bound}");
+    assert!(!bound.contains("nd('lfo')"), "…and nothing still reads the original's: {bound}");
 
     // It is INDEPENDENT: editing the copy leaves the original alone.
     g.call("node param edit", j!({ "node": leaf, "param": "common/max_frequency", "value": 3.0 }));

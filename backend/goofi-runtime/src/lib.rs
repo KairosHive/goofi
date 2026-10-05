@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Param, SlotType};
+use goofi_node::mailbox::Inputs;
 use goofi_node::{
-    BindingId, BindingView, DrainWaker, EventId, ExprEvaluator, Expression, GraphView, NodeFault, NodeManifest,
+    BindingId, BindingView, DrainWaker, EventId, Expression, GraphView, NodeFault, NodeManifest,
     NodeStage, NodeView, ParamDecl, ParamGroups, ParamKey, Status, Uid, Var,
 };
 use goofi_supervisor::sync::Mutex;
@@ -21,6 +22,7 @@ use goofi_transport::{
 use indexmap::IndexMap;
 
 mod common;
+pub mod expr;
 pub mod host;
 pub mod hosted;
 
@@ -137,7 +139,9 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
 /// What every runtime of one engine shares. An engine's own additions live beside it, in a
 /// struct of its own that only its [`Executor`] sees.
 pub struct Shared {
-    pub evaluator: Mutex<Option<Arc<dyn ExprEvaluator>>>,
+    pub evaluator: expr::SharedEvaluator,
+    /// The engine's expression worker: a computed binding is evaluated there and nowhere else.
+    pub worker: expr::Worker,
     pub reports: Mutex<Vec<(Uid, Status)>>,
     pub waker: Arc<DrainWaker>,
     /// A runtime saw something only a settle can act on — a shape moved, a file opened.
@@ -145,8 +149,10 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new(waker: Arc<DrainWaker>) -> Shared {
-        Shared { evaluator: Mutex::new(None), reports: Mutex::new(Vec::new()), waker, replan: AtomicBool::new(false) }
+    pub fn new(engine: &str, iox: &Iox, waker: Arc<DrainWaker>) -> Result<Shared, String> {
+        let evaluator: expr::SharedEvaluator = Arc::new(Mutex::new(None));
+        let worker = expr::Worker::start(engine, iox, evaluator.clone())?;
+        Ok(Shared { evaluator, worker, reports: Mutex::new(Vec::new()), waker, replan: AtomicBool::new(false) })
     }
 
     fn report(&self, uid: Uid, status: Status) {
@@ -313,6 +319,11 @@ pub trait Executor {
     /// The live values moved, or an arrival on a triggering binding asks for a run.
     fn params_changed(&mut self, _values: &[Param], _trigger: bool) -> Ticked {
         Ticked::default()
+    }
+    /// A computed binding on the whole of `param` evaluated to `frame`, read as a param beside;
+    /// an engine that carries a frame per block takes it whole here. True asks for a re-plan.
+    fn frame(&mut self, _param: usize, _frame: &Data) -> bool {
+        false
     }
     /// A pulse param was raised: by the op, or by its source's rising edge.
     fn pulse(&mut self, _param: usize) -> Ticked {
@@ -548,6 +559,8 @@ struct Bind {
     elem: Option<usize>,
     key: ParamKey,
     expr: Expression,
+    /// The worker's handover for a computed expression; a bare one is read on this thread.
+    cell: Option<Arc<expr::Cell>>,
     /// What the engine sent, so a re-send that moved nothing is told from one that did.
     sent: (String, Vec<(String, Var)>),
     trigger: bool,
@@ -800,8 +813,9 @@ impl<E: Executor> Runtime<E> {
             if let Some(p) = &previous {
                 expr.carry(&p.expr, |name| kept_names.iter().any(|n| n == name));
             }
-            self.binds.push(Bind { param,
-                elem, key, expr, sent, trigger, streams });
+            let kept_cell = previous.as_mut().and_then(|p| p.cell.take());
+            let cell = id.map(|_| kept_cell.unwrap_or_else(|| Arc::new(expr::Cell::new(door_service(&self.base)))));
+            self.binds.push(Bind { param, elem, key, expr, cell, sent, trigger, streams });
         }
         let mut pass = Pass::default();
         for dropped in old {
@@ -1024,10 +1038,26 @@ impl<E: Executor> Runtime<E> {
             }
         }
         touched.dedup();
-        let trigger = touched.iter().any(|i| self.binds[*i].trigger && self.binds[*i].key.group != COMMON);
+        // A bare source moves on arrival; a computed one when its result lands.
+        let fires = |b: &Bind| b.trigger && b.key.group != COMMON;
+        let mut trigger = touched.iter().any(|i| fires(&self.binds[*i]) && self.binds[*i].expr.id.is_none());
         let mut pass = Pass::default();
         for i in touched {
             self.evaluate(i, &mut pass);
+        }
+        for i in 0..self.binds.len() {
+            let Some(result) = self.binds[i].cell.as_ref().and_then(|c| c.take()) else { continue };
+            trigger |= fires(&self.binds[i]);
+            let (param, whole) = (self.binds[i].param, self.binds[i].elem.is_none());
+            let mut replan = false;
+            let outcome = result.map(|frame| {
+                replan = whole && self.exec.frame(param, &frame);
+                Some(goofi_core::control::read(&frame, &self.target(i)))
+            });
+            if replan {
+                self.shared.ask_settle();
+            }
+            self.land(i, outcome, &mut pass);
         }
         for (key, why) in undecodable {
             self.record_error(key, Some(why), &mut pass);
@@ -1145,20 +1175,46 @@ impl<E: Executor> Runtime<E> {
         self.absorb(ticked);
     }
 
+    /// The param a binding is read into: an element binding reads as that one dimension, a scalar
+    /// of the param's kind.
+    fn target(&self, i: usize) -> Param {
+        let b = &self.binds[i];
+        match b.elem {
+            Some(k) => self.consts[b.param].dim(k),
+            None => self.consts[b.param].clone(),
+        }
+    }
+
+    /// Read one binding: a bare source lands now, a computed one goes to the worker and lands when
+    /// its result comes back, and a source with nothing arrived leaves the literal standing.
+    fn evaluate(&mut self, i: usize, pass: &mut Pass) {
+        let target = self.target(i);
+        let outcome = match self.binds[i].expr.inputs() {
+            Err(e) => Err(e),
+            Ok(None) => Ok(None),
+            Ok(Some(Inputs::Bare(frame))) => Ok(Some(goofi_core::control::read(&frame, &target))),
+            Ok(Some(Inputs::Computed(locals))) => {
+                let b = &self.binds[i];
+                let range = match &target {
+                    Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
+                    _ => (0.0, 1.0),
+                };
+                let job = expr::Job { id: b.expr.id.expect("computed"), locals, t: self.time.now(), range };
+                self.shared.worker.submit(b.cell.as_ref().expect("a computed binding has a cell"), job);
+                return;
+            }
+        };
+        self.land(i, outcome, pass);
+    }
+
     /// One binding's value into its atomic — the literal when nothing has arrived or it cannot be
     /// evaluated — and the report of what changed.
-    fn evaluate(&mut self, i: usize, pass: &mut Pass) {
+    fn land(&mut self, i: usize, outcome: Result<Option<Param>, String>, pass: &mut Pass) {
         let b = &self.binds[i];
         let param = b.param;
         let elem = b.elem;
-        // An element binding is evaluated against that one dimension as a scalar of the param's kind.
-        let target = &match elem {
-            Some(k) => self.consts[param].dim(k),
-            None => self.consts[param].clone(),
-        };
-        let evaluator = self.shared.evaluator.lock().clone();
-        let t = self.time.now();
-        let (value, error) = match b.expr.evaluate(evaluator.as_deref(), t, target) {
+        let target = &self.target(i);
+        let (value, error) = match outcome {
             Ok(Some(v)) if !scalar(&v).is_finite() => (None, Some(format!("evaluated to {}", scalar(&v)))),
             Ok(v) => (v, None),
             Err(e) => (None, Some(e)),

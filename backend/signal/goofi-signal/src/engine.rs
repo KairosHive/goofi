@@ -46,12 +46,12 @@ impl SignalEngine {
         self.host = Some(exe);
     }
 
-    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> SignalEngine {
-        SignalEngine {
+    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
+        Ok(SignalEngine {
+            shared: Arc::new(Shared::new("signal", &iox, waker)?),
             iox,
             instance,
             time,
-            shared: Arc::new(Shared::new(waker)),
             hosts: HashMap::new(),
             dirty: false,
             dyn_types: HashMap::new(),
@@ -59,7 +59,7 @@ impl SignalEngine {
             booted: false,
             host: None,
             bells: None,
-        }
+        })
     }
 
     /// Register a type; `manifest` leaks, once per type. A name another type held is REPLACED,

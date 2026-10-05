@@ -116,8 +116,8 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await baseline(page, 'midikeys_test_keys.cc');
 		keys.play([0xb0, 74, 127]);
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
-		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.source)
-			.toEqual({ reference: 'variables.midikeys_test_keys.cc', index: 74 });
+		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
+			.toBe('variables.midikeys_test_keys.cc[74]');
 		// A click on a listening learn cancels it.
 		await widget.click();
 		await expect(widget).toHaveAttribute('aria-pressed', 'true');
@@ -127,8 +127,8 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await widget.click();
 		await baseline(page, 'midikeys_test_keys.notes');
 		keys.play([0x91, 61, 100]);
-		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.source)
-			.toEqual({ reference: 'variables.midikeys_test_keys.notes', index: 128 + 61 });
+		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
+			.toBe(`variables.midikeys_test_keys.notes[${128 + 61}]`);
 		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'variables.desk.level' });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;

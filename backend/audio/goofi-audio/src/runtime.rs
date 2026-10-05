@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
 use goofi_node::{NodeManifest, ParamSpec, Uid};
 
-use crate::plan::{Plan, Source, SILENCE};
+use crate::plan::{Plan, Source, Stage, SILENCE};
 
 /// Blocks in a row a node may exceed its budget before it leaves the plan.
 pub const OVERRUNS: u8 = 8;
@@ -42,6 +42,8 @@ pub struct Slot {
     pub params: Arc<[AtomicU64]>,
     /// One per Array input, in declaration order.
     pub inboxes: Vec<Frames>,
+    /// The computed params' results, a chunk each: `param`, `channels`, `len`, then the samples.
+    pub blocks: rtrb::Consumer<f32>,
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
@@ -124,6 +126,35 @@ impl Inbox {
 
 /// Drop all but the newest `keep` (at most `QUEUED`) chunks queued `from` samples on; answers
 /// whether any went.
+/// Every computed result that landed since the last block, each into its param's region: a block
+/// is copied, a shorter result holds its last sample, a narrower one repeats its last channel. A
+/// param with no result this block keeps the region as it was — the hold.
+fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: &mut [f32]) {
+    while let Ok(head) = ring.read_chunk(3) {
+        let (a, b) = head.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+        let (param, chans, len) = (at(0) as usize, at(1) as usize, at(2) as usize);
+        head.commit_all();
+        let Ok(body) = ring.read_chunk(chans * len) else { break };
+        let region = stage.params.iter().find_map(|s| match s {
+            Source::Block { at, channels, param: p } if *p == param => Some((*at, *channels as usize)),
+            _ => None,
+        });
+        if let (Some((at, channels)), true) = (region, chans * len > 0) {
+            let (a, b) = body.as_slices();
+            let sample = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+            let region = carve(arena, &[(at, channels * BLOCK)]).take(0);
+            for c in 0..channels {
+                let from = c.min(chans - 1) * len;
+                for i in 0..BLOCK {
+                    region[c * BLOCK + i] = sample(from + if len >= BLOCK { i } else { len - 1 });
+                }
+            }
+        }
+        body.commit_all();
+    }
+}
+
 fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool {
     let Ok(readable) = ring.read_chunk(ring.slots()) else { return false };
     let (a, b) = readable.as_slices();
@@ -629,6 +660,7 @@ impl Runtime {
         let arena: &mut [f32] = &mut self.arena;
         for stage in &self.plan.stages {
             let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
+            take_blocks(&mut slot.blocks, stage, arena);
             for src in stage.params.iter().chain(&stage.ins) {
                 match src {
                     Source::Scalar { at, param } => {
@@ -656,7 +688,7 @@ impl Runtime {
                         let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
                         slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
                     }
-                    Source::Silence | Source::Region { .. } => {}
+                    Source::Silence | Source::Region { .. } | Source::Block { .. } => {}
                 }
             }
             // The stage writes its outputs and its scalar strip; everything else it reads.
@@ -841,7 +873,7 @@ impl<'a> Carved<'a> {
     fn port(&self, src: &Source) -> Port<'a> {
         match src {
             Source::Silence => Port::new(self.read(SILENCE, BLOCK), 1, false),
-            Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } => {
+            Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } | Source::Block { at, channels, .. } => {
                 Port::new(self.read(*at, *channels as usize * BLOCK), *channels, true)
             }
             Source::Scalar { at, .. } => Port::new(self.read(*at, BLOCK), 1, true),
@@ -852,7 +884,7 @@ impl<'a> Carved<'a> {
     fn first(&self, src: &Source) -> f32 {
         match src {
             Source::Silence => 0.0,
-            Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } => {
+            Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } | Source::Block { at, .. } => {
                 self.read(*at, BLOCK)[0]
             }
         }

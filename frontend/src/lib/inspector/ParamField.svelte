@@ -22,7 +22,6 @@
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
 	import MidiLearn from './MidiLearn.svelte';
-	import RefPicker from './RefPicker.svelte';
 
 	let {
 		paramName,
@@ -72,34 +71,22 @@
 	);
 
 	function acceptVariable(el: HTMLDivElement): { destroy(): void } {
-		const drop = (event: Event): void => {
-			picking = false;
-			onSetSource({ expression: (event as CustomEvent<string>).detail });
-		};
+		const drop = (event: Event): void => onSetSource({ expression: (event as CustomEvent<string>).detail });
 		el.addEventListener('variable-expression-drop', drop);
 		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
 	}
 
-	// A reference chosen before one is retained shows the picker without a record to show yet.
-	let picking = $state(false);
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
-	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', picking }));
+	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual' }));
 	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
 	/** Each element's own source, which an entry row shows beside its number. */
 	const elements = $derived(descriptor.elements ?? []);
 	const elementDisabled = (i: number): boolean => driven || (elements[i]?.mode ?? 'constant') !== 'constant';
 
 	const elementName = (i: number): string => (isNumeric(descriptor) && descriptor.color ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
-	// The element a reference is being picked for, before one is retained.
-	let pickingElement = $state<number | null>(null);
 	function chooseElement(i: number, mode: ParamMode): void {
-		pickingElement = null;
 		const el = elements[i];
 		if (!el || mode === el.mode) return;
-		if (mode === 'reference' && !el.reference) {
-			pickingElement = i;
-			return;
-		}
 		const seed = { ...descriptor, value: numValues(num!)[i], expression: el.expression } as ParamDescriptor;
 		onSetElementSource?.(i, sourceForMode(seed, mode));
 	}
@@ -121,27 +108,14 @@
 	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
 
 	const driven = $derived(descriptor.mode !== 'constant');
-	// The error and preview belong to a source that IS live: a picker over a retained expression
-	// shows neither.
-	const shown = $derived(descriptor.mode === 'reference' || (descriptor.mode === 'expression' && !picking));
-	$effect(() => {
-		if (descriptor.mode === 'reference') picking = false;
-	});
 
 	const MODE_TITLE: Record<ParamMode, string> = {
 		constant: 'a value set here by hand, unchanging until you edit it',
-		expression: 'Python over nd(), variables and me, evaluated at control rate',
-		reference: "one node's output slot, followed at that node's rate"
+		expression: "a bare nd('node') or variables.group.element copied as it comes, or Python over them"
 	};
 
 	function choose(mode: ParamMode): void {
-		picking = false;
-		if (mode === descriptor.mode) return;
-		if (mode === 'reference' && !descriptor.reference) {
-			picking = true;
-		} else {
-			onSetSource(sourceForMode(descriptor, mode));
-		}
+		if (mode !== descriptor.mode) onSetSource(sourceForMode(descriptor, mode));
 	}
 </script>
 
@@ -291,7 +265,6 @@
 				<div class="pf-elements" data-testid="param-elements">
 					{#each numValues(num) as held, i (i)}
 						{@const el = elements[i]}
-						{@const picking = pickingElement === i}
 						<div class="pf-element" data-testid={`param-element-${i}`}>
 							<div class="pf-element-row">
 								<span class="pf-element-name">{elementName(i)}</span>
@@ -306,7 +279,7 @@
 									data-testid={`param-element-number-${i}`}
 								/>
 								<Segmented
-									value={picking ? 'reference' : (el?.mode ?? 'constant')}
+									value={el?.mode ?? 'constant'}
 									bad={!!el?.error}
 									segments={PARAM_MODES.map((id) => ({
 										id,
@@ -324,18 +297,7 @@
 									testid={`param-element-learn-${i}`}
 								/>
 							</div>
-							{#if picking || el?.mode === 'reference'}
-								<RefPicker
-									value={el?.reference ?? null}
-									paramType="num"
-									reader={selfName}
-									onCommit={(reference) => {
-										pickingElement = null;
-										onSetElementSource?.(i, { reference });
-									}}
-									testid={`param-element-ref-${i}`}
-								/>
-							{:else if el?.mode === 'expression'}
+							{#if el?.mode === 'expression'}
 								<ExprEditor
 									{selfName}
 									value={el.expression ?? ''}
@@ -346,7 +308,7 @@
 									testid={`param-element-expr-${i}`}
 								/>
 							{/if}
-							{#if el?.error && !picking}
+							{#if el?.error}
 								<div class="src-error" title={el.error}>
 									<span class="prefix"><Icon name="triangle-alert" /></span>
 									<span class="msg">{el.error}</span>
@@ -357,7 +319,7 @@
 				</div>
 			{/if}
 			{#if num && plan.list}
-				<!-- The whole list, typed as one: what an expression or a reference would hand the param. -->
+				<!-- The whole list, typed as one: what an expression would hand the param. -->
 				<TextInput
 					class="pf-list"
 					value={`[${numValues(num).map((v) => Number(v.toFixed(4))).join(', ')}]`}
@@ -373,25 +335,15 @@
 			{/if}
 			{#if plan.source}
 				<div class="src-region">
-					{#if plan.source === 'reference'}
-						<RefPicker
-							value={descriptor.reference}
-							paramType={descriptor.type}
-							reader={selfName}
-							onCommit={(reference) => onSetSource({ reference })}
-							testid="param-ref"
-						/>
-					{:else}
-						<ExprEditor
-							{selfName}
-							value={descriptor.expression ?? ''}
-							error={descriptor.error}
-							onCommit={(expression) => onSetSource({ expression })}
-							label={`${paramName} expression`}
-							placeholder="nd('oscillator0').out.data.mean()"
-							testid="param-expr-input"
-						/>
-					{/if}
+					<ExprEditor
+						{selfName}
+						value={descriptor.expression ?? ''}
+						error={descriptor.error}
+						onCommit={(expression) => onSetSource({ expression })}
+						label={`${paramName} expression`}
+						placeholder="nd('oscillator0').out.data.mean()"
+						testid="param-expr-input"
+					/>
 				</div>
 			{/if}
 			{#if driven && plan.foot}
@@ -411,7 +363,7 @@
 			{/if}
 			{#if plan.foot}
 			<Segmented
-				value={picking ? 'reference' : descriptor.mode}
+				value={descriptor.mode}
 				bad={!!descriptor.error}
 				segments={PARAM_MODES.map((id) => ({
 					id,
@@ -432,7 +384,7 @@
 	{/if}
 	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,
 	     and a failure is not a readout. -->
-	{#if shown && descriptor.error}
+	{#if driven && descriptor.error}
 		<div class="src-error" title={descriptor.error} data-testid="param-source-error">
 			<span class="prefix"><Icon name="triangle-alert" /></span>
 			<span class="msg">{descriptor.error}</span>

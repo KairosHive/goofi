@@ -51,7 +51,6 @@ pub struct ParamBase {
     pub refreshable: bool,
     pub mode: Mode,
     pub expression: Option<String>,
-    pub reference: Option<String>,
     /// When true, an arrival that changes the value wakes the node's `process()`.
     pub triggers: bool,
     /// The active source's bind, compile or arrival error.
@@ -124,7 +123,6 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: source.map(|s| s.state.mode).unwrap_or_default(),
         expression: source.and_then(|s| text(&s.state.expression)),
-        reference: source.and_then(|s| text(&s.state.reference)),
         triggers: source.is_some_and(|s| s.state.triggers),
         error: source.and_then(|s| s.error.clone()),
     };
@@ -381,7 +379,7 @@ pub fn snapshot(
 /// variable records, each declared once in Rust and checked into the tree.
 pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
-    use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi, VariableSource};
+    use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi};
     use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
@@ -397,7 +395,6 @@ pub fn typescript() -> String {
         ControlKind::decl(&cfg),
         Control::decl(&cfg),
         Lock::decl(&cfg),
-        VariableSource::decl(&cfg),
         VariableRecord::decl(&cfg),
         Midi::decl(&cfg),
         Group::decl(&cfg),

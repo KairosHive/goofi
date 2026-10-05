@@ -576,24 +576,24 @@ fn shaders_render_on_the_gpu() {
     assert!(close(px(&copied, 0, 0), px(&direct, 0, 0)), "and the copy is not mirrored");
     assert!(close(px(&copied, 7, 0), px(&direct, 7, 0)));
 
-    // Step: a reference moves a param at control rate, the one door every modulation uses.
+    // Step: a bare read moves a param at control rate, the one door every modulation uses.
     let knob = g.add("_TestScalar");
     g.ready(knob);
     g.set_param(knob, "control", "value", 0.5);
     let knob_name = g.name(&hex(knob));
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain",
-                                  "reference": format!("{knob_name}.out"), "mode": "reference" }));
+                                  "expression": format!("nd('{knob_name}')") }));
     drawn(&g, level, "half gain by reference", |d| close(px(d, 0, 0), [0.125, 0.25, 0.5, 1.0]));
     g.set_param(knob, "control", "value", 2.0);
     drawn(&g, level, "double gain by reference", |d| close(px(d, 0, 0), [0.5, 1.0, 2.0, 1.0]));
 
-    // Step: the size is a param like any other, so a reference DRIVES it — a signal decides how
-    // many texels a stage has, and the engine re-plans around what the reference last said.
+    // Step: the size is a param like any other, so a bare read DRIVES it — a signal decides how
+    // many texels a stage has, and the engine re-plans around what the read last said.
     g.set_param(knob, "control", "value", 96.0);
     g.call("node param edit", j!({ "node": hex(level), "param": "common/width",
-                                   "reference": format!("{knob_name}.out"), "mode": "reference" }));
+                                   "expression": format!("nd('{knob_name}')") }));
     drawn(&g, level, "the referenced width", |d| shape(d) == vec![32, 96, 4]);
-    assert!(g.error(level).is_none(), "a reference on the size is not a fault");
+    assert!(g.error(level).is_none(), "a bare read on the size is not a fault");
     g.call("node param edit", j!({ "node": hex(level), "param": "common/width", "mode": "constant" }));
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain", "mode": "constant" }));
     drawn(&g, level, "and it follows its input again", |d| shape(d) == vec![32, 64, 4]);
@@ -765,23 +765,23 @@ fn shaders_render_on_the_gpu() {
     g.set_param(dial, "control", "value", 0.5);
     let dial_name = g.name(&hex(dial));
     g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 1.0]));
-    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": format!("{dial_name}.out") }));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "expression": format!("nd('{dial_name}')") }));
     drawn(&g, inked, "an element reference", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
     g.set_param(inked, "look", "ink[1]", 0.75);
     drawn(&g, inked, "an element literal", |d| close(px(d, 0, 0), [0.0, 0.75, 1.0, 0.5]));
     let full = g.add("_TestScalar");
     g.ready(full);
     g.set_param(full, "control", "value", 1.0);
-    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "reference": format!("{}.out", g.name(&hex(full))) }));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("nd('{}')", g.name(&hex(full))) }));
     drawn(&g, inked, "the element over the whole", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 0.5]));
     let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
-    assert!(text.contains(&format!("look.ink = ref: {}.out → [1, 1, 1, 0.5]", g.name(&hex(full)))), "{text}");
-    assert!(text.contains(&format!("look.ink[3] = ref: {dial_name}.out → 0.5")), "{text}");
+    assert!(text.contains(&format!("look.ink = expr: nd('{}') → [1, 1, 1, 0.5]", g.name(&hex(full)))), "{text}");
+    assert!(text.contains(&format!("look.ink[3] = expr: nd('{dial_name}') → 0.5")), "{text}");
     let copied = g.call("nodes copy", j!({ "nodes": [hex(inked)] }));
-    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["reference"], j!(format!("{dial_name}.out")));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["expression"], j!(format!("nd('{dial_name}')")));
     assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0, 0.75, 1, 1]));
     assert!(g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink[4]", "value": 1.0 })).contains("no param"));
-    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "reference": "" }));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "expression": "" }));
     drawn(&g, inked, "the element let go", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 1.0]));
     // A vector's literal may come as bare numbers, and a LIST of expressions is one per element.
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "mode": "constant" }));

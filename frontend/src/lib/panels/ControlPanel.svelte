@@ -11,7 +11,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
-	import RefPicker from '$lib/inspector/RefPicker.svelte';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import {
 		Bar,
 		Chip,
@@ -346,26 +346,19 @@
 		input?.select();
 	}
 
-	const learn = (gv: VariableView) => (ref: string, index: number) =>
-		void g.sourceControl(group, gv.element, ref, index).catch(() => {});
+	const learn = (gv: VariableView) => (variable: string, index: number) =>
+		void g.computeControl(group, gv.element, `${variable}[${index}]`).catch(() => {});
 
-	// A widget is either set by hand or LINKED to one output of a node. `linking` is the link
-	// segment lit before a node is chosen, so the picker shows with nothing to show yet.
-	let linkingFor = $state<string | null>(null);
-	const linking = $derived(!!pickedView && linkingFor === picked && !pickedView.source);
+	// A widget is either set by hand or COMPUTED by an expression. `computing` is the expression
+	// segment lit before one is written, so the editor shows with nothing to show yet.
+	let computingFor = $state<string | null>(null);
+	const computing = $derived(!!pickedView && computingFor === picked && pickedView.expression === undefined);
 
-	function setSource(pv: VariableView, reference: string): void {
+	function setExpression(pv: VariableView, expression: string): void {
 		if (midiLearn.target === `control:${pv.name}`) midiLearn.stop();
-		linkingFor = null;
-		void g.sourceControl(group, pv.element, reference).catch(() => {});
+		computingFor = null;
+		void g.computeControl(group, pv.element, expression).catch(() => {});
 	}
-
-	function setIndex(pv: VariableView, index: number): void {
-		const ref = pv.source?.reference;
-		if (!ref) return;
-		void g.sourceControl(group, pv.element, ref, Math.max(0, Math.round(index))).catch(() => {});
-	}
-
 
 </script>
 
@@ -483,9 +476,9 @@
 					>
 						<div
 							class="widget"
-							class:held={held.value || gv.source !== undefined}
-							class:broken={gv.source?.error !== undefined}
-							title={gv.source ? gv.source.error ?? `Follows ${gv.source.reference}` : held.value ? 'Value-locked' : undefined}
+							class:held={held.value || gv.expression !== undefined}
+							class:broken={gv.error !== undefined}
+							title={gv.expression !== undefined ? gv.error ?? `Computed by ${gv.expression}` : held.value ? 'Value-locked' : undefined}
 						>
 							{@render widget(c, c.kind === 'paint' ? null : variableValue(gv.name), gv.element, (v) => commitValue(gv, v), gv.name, (v) => v !== null && g.previewVariableValue(gv.name, v))}
 						</div>
@@ -592,38 +585,35 @@
 						</Field>
 						<Field label="source">
 							<Segmented
-								value={pv.source || linking ? 'link' : 'value'}
+								value={pv.expression !== undefined || computing ? 'expression' : 'value'}
 								segments={[
 									{ id: 'value', label: 'value', title: 'Set by hand, on the widget itself', testid: 'control-source-value' },
 									{
-										id: 'link',
-										label: 'link',
-										title: 'Follow one output of a node — a MIDI controller, say. Drop the node onto the widget, or pick it',
-										testid: 'control-source-link'
+										id: 'expression',
+										label: 'expr',
+										title: "Computed by an expression — a node's output or a MIDI controller's knob copied as it comes, or Python over them. Drop a node onto the widget, learn, or write it",
+										testid: 'control-source-expression'
 									}
 								]}
-								onChange={(id) => (id === 'link' ? (linkingFor = picked) : pv.source ? setSource(pv, '') : (linkingFor = null))}
+								onChange={(id) => (id === 'expression' ? (computingFor = picked) : pv.expression !== undefined ? setExpression(pv, '') : (computingFor = null))}
 								aria-label="source"
 								data-testid="control-source"
 							/>
 						</Field>
-						{#if pv.source || linking}
-							<Field label="link" doc="The node output the widget follows; a node dropped onto the widget lands here">
-								<RefPicker
-									value={pv.source?.reference ?? null}
-									paramType={variableForm(pv.name) === 'text' ? 'string' : 'float'}
-									onCommit={(r) => setSource(pv, r)}
-									testid="control-props-link"
+						{#if pv.expression !== undefined || computing}
+							<Field label="expression" doc="What computes the widget; a node dropped onto the widget lands here, and learn writes the controller's element">
+								<ExprEditor
+									value={pv.expression ?? ''}
+									error={pv.error ?? null}
+									onCommit={(e) => setExpression(pv, e)}
+									label={`${pv.element} expression`}
+									placeholder="nd('midi0').out.cc[74]"
+									testid="control-props-expression"
 								/>
 							</Field>
 						{/if}
-						{#if pv.source?.error}
-							<p class="error-text" role="alert" data-testid="control-source-error">{pv.source.error}</p>
-						{/if}
-						{#if pv.source}
-							<Field label="index" doc="Which number of a wide frame the widget reads — a controller's cc holds 128. Learn, on the widget, finds it">
-								<NumberInput value={pv.source.index ?? 0} min={0} step={1} onChange={(v) => setIndex(pv, v)} />
-							</Field>
+						{#if pv.error}
+							<p class="error-text" role="alert" data-testid="control-source-error">{pv.error}</p>
 						{/if}
 						{#if variableForm(pv.name) === 'number'}
 							<Field label="range" doc="min, max and step">

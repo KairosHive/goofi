@@ -18,7 +18,6 @@ const base = {
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	reference: null,
 	triggers: false,
 	error: null
 } as const;
@@ -29,8 +28,6 @@ const float = (value: number, dflt: number): ParamDescriptor =>
 const expr = (text: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 	({ ...float(value, dflt), mode: 'expression', expression: text }) as ParamDescriptor;
 
-const ref = (target: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
-	({ ...float(value, dflt), mode: 'reference', reference: target }) as ParamDescriptor;
 
 const F = (f: Partial<Filters>): Filters => ({ ...SHOW_ALL, ...f });
 
@@ -64,28 +61,28 @@ describe('isModified', () => {
 
 	// The whole point of Clear: a preset moved these, and after clearing they are the new zero.
 	it('is false once a baseline records the value it now holds', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '' } };
 		expect(isModified(float(0.7, 0.5), b, 'common', 'frequency')).toBe(false);
 	});
 
 	it('is true again once the value moves off the recorded baseline', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '' } };
 		expect(isModified(float(0.9, 0.5), b, 'common', 'frequency')).toBe(true);
 	});
 
 	// A mapping survives Clear as a MAPPING — it keeps driving, and keeps answering the source
 	// strip — but it stops counting as changed, which is what makes the list quiet again.
 	it('is false for an expression the baseline already recorded', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't' } };
 		expect(isModified(expr('t'), b, 'common', 'frequency')).toBe(false);
 	});
 
 	it('is true when the expression text itself changes after a clear', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't' } };
 		expect(isModified(expr('t * 2'), b, 'common', 'frequency')).toBe(true);
 	});
 
-	// The other two texts are RETAINED across a mode switch, so only the ACTIVE one is compared.
+	// The text is RETAINED across a mode switch, so only the ACTIVE source is compared.
 	it('ignores an expression left behind by a param now back on a constant', () => {
 		const retained = { ...float(0.5, 0.5), mode: 'constant', expression: 'old' } as ParamDescriptor;
 		expect(isModified(retained)).toBe(false);
@@ -97,20 +94,18 @@ describe('the source set', () => {
 		expect(narrowing(SHOW_ALL)).toBe(false);
 		expect(admits(SHOW_ALL, float(0.5, 0.5), NONE)).toBe(true);
 		expect(admits(SHOW_ALL, expr('t'), NONE)).toBe(true);
-		expect(admits(SHOW_ALL, ref('lfo.out'), NONE)).toBe(true);
 	});
 
 	it('flips one mode at a time, and says so', () => {
 		const off = toggleSource(SHOW_ALL, 'constant');
-		expect(off.sources).toEqual(['expression', 'reference']);
+		expect(off.sources).toEqual(['expression']);
 		expect(narrowing(off)).toBe(true);
 		expect(toggleSource(off, 'constant').sources.sort()).toEqual(SHOW_ALL.sources.slice().sort());
 	});
 
 	it('admits only the modes still ticked', () => {
-		const mapped = F({ sources: ['expression', 'reference'] });
+		const mapped = F({ sources: ['expression'] });
 		expect(admits(mapped, expr('t'), NONE)).toBe(true);
-		expect(admits(mapped, ref('lfo.out'), NONE)).toBe(true);
 		expect(admits(mapped, float(0.5, 0.5), NONE)).toBe(false);
 	});
 
@@ -140,7 +135,7 @@ describe('admits', () => {
 describe('admits over a row list', () => {
 	const groups: Record<string, Record<string, ParamDescriptor>> = {
 		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
-		shape: { curve: expr('t'), target: ref('lfo.out') }
+		shape: { curve: expr('t'), target: expr("nd('lfo')") }
 	};
 	const rowsOf = (f: Filters, names = Object.keys(groups)) =>
 		names.flatMap((g) => Object.entries(groups[g]).filter(([n, d]) => admits(f, d, NONE, g, n)).map(([n]) => n));
@@ -152,20 +147,20 @@ describe('admits over a row list', () => {
 
 	it('narrows one group to the sources still ticked', () => {
 		const mapped = F({ sources: ['expression'] });
-		expect(rowsOf(mapped, ['shape'])).toEqual(['curve']);
+		expect(rowsOf(mapped, ['shape'])).toEqual(['curve', 'target']);
 		expect(rowsOf(mapped, ['common'])).toEqual([]);
 	});
 
 	it('spans every group, which is what a search hands back, and narrows it to the sources ticked', () => {
 		expect(rowsOf(SHOW_ALL).length).toBe(4);
-		expect(rowsOf(F({ sources: ['expression'] }))).toEqual(['curve']);
+		expect(rowsOf(F({ sources: ['expression'] }))).toEqual(['curve', 'target']);
 	});
 });
 
 describe('settleNonDefault', () => {
 	const groups = {
 		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
-		shape: { curve: expr('t'), target: ref('lfo.out') }
+		shape: { curve: expr('t'), target: expr("nd('lfo')") }
 	};
 
 	// The list is the NODE's, because the clear beside it is: it says what pressing that would take
@@ -202,10 +197,10 @@ describe('settleNonDefault', () => {
 		const list = listOf(groups);
 		expect(list.size).toBe(3);
 		const b: Baseline = {
-			'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' },
-			'common/amplitude': { value: 0.5, mode: 'constant', expression: '', reference: '' },
-			'shape/curve': { value: 0.5, mode: 'expression', expression: 't', reference: '' },
-			'shape/target': { value: 0.5, mode: 'reference', reference: 'lfo.out', expression: '' }
+			'common/frequency': { value: 0.7, mode: 'constant', expression: '' },
+			'common/amplitude': { value: 0.5, mode: 'constant', expression: '' },
+			'shape/curve': { value: 0.5, mode: 'expression', expression: 't' },
+			'shape/target': { value: 0.5, mode: 'expression', expression: "nd('lfo')" }
 		};
 		const cleared = settleNonDefault(list, groups, b);
 		expect(cleared.size).toBe(0);
