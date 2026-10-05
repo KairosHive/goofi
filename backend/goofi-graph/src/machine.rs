@@ -161,22 +161,22 @@ pub struct Transition {
     pub duration: f64,
     #[serde(default)]
     pub curve: Curve,
-    /// The draw among transitions that fire together; 0 is never drawn.
-    #[serde(default = "one")]
-    pub weight: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Trigger {
     Manual,
+    /// `weight` is its share of the draw among the triggers that fire in one tick; 0 is never drawn.
     After {
         seconds: Seconds,
         #[serde(default = "one")]
-        chance: f64,
+        weight: f64,
     },
     When {
         expression: String,
+        #[serde(default = "one")]
+        weight: f64,
     },
     Meet {
         #[serde(default)]
@@ -223,7 +223,7 @@ impl Machine {
     /// Every expression the machine evaluates.
     pub fn expressions(&self) -> impl Iterator<Item = &str> {
         self.transitions.values().flat_map(|t| &t.triggers).filter_map(|tr| match tr {
-            Trigger::When { expression } => Some(expression.as_str()),
+            Trigger::When { expression, .. } => Some(expression.as_str()),
             Trigger::After { seconds: Seconds::Expression(e), .. } => Some(e.as_str()),
             _ => None,
         })
@@ -254,15 +254,18 @@ impl Machine {
             if !self.states.contains_key(&t.to) {
                 return Err(format!("transition `{id}` enters `{}`, which is no state of the machine", t.to));
             }
-            if !(t.duration >= 0.0 && t.weight >= 0.0) {
-                return Err(format!("transition `{id}`: duration and weight are at least 0"));
+            if t.duration.is_nan() || t.duration < 0.0 {
+                return Err(format!("transition `{id}`: duration is at least 0"));
             }
             for trigger in &t.triggers {
                 match trigger {
-                    Trigger::After { seconds: Seconds::Fixed(s), chance } if !(*s >= 0.0 && (0.0..=1.0).contains(chance)) => {
-                        return Err(format!("transition `{id}`: `after` takes seconds of at least 0 and a chance in 0..1"));
+                    Trigger::After { weight, .. } | Trigger::When { weight, .. } if weight.is_nan() || *weight < 0.0 => {
+                        return Err(format!("transition `{id}`: a trigger's weight is at least 0"));
                     }
-                    Trigger::After { seconds: Seconds::Expression(e), .. } | Trigger::When { expression: e } => {
+                    Trigger::After { seconds: Seconds::Fixed(s), .. } if s.is_nan() || *s < 0.0 => {
+                        return Err(format!("transition `{id}`: `after` takes seconds of at least 0"));
+                    }
+                    Trigger::After { seconds: Seconds::Expression(e), .. } | Trigger::When { expression: e, .. } => {
                         check_expression(e).map_err(|why| format!("transition `{id}`: {why}"))?;
                     }
                     _ => {}
@@ -641,7 +644,7 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
                 Trigger::After { seconds, .. } if !head.due.contains_key(id) => {
                     head.due.insert(id.clone(), head.arrived + ctx.seconds(seconds));
                 }
-                Trigger::When { expression } if !head.gates.contains_key(id) => {
+                Trigger::When { expression, .. } if !head.gates.contains_key(id) => {
                     let gate = ctx.gate(expression);
                     head.gates.insert(id.clone(), gate);
                 }
@@ -748,32 +751,25 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
             if head.flight.is_some() {
                 continue;
             }
+            // Every trigger firing this tick, across the transitions out of here, is one draw by weight.
             let mut fired: Vec<(String, f64)> = Vec::new();
             for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &head.state)) {
-                let mut fires = false;
                 for trigger in &t.triggers {
                     match trigger {
-                        Trigger::After { seconds, chance } => {
+                        Trigger::After { weight, .. } => {
                             if head.due.get(id).is_some_and(|due| ctx.now >= *due) {
-                                if draw(&mut run.rng) < *chance {
-                                    fires = true;
-                                } else {
-                                    head.due.insert(id.clone(), ctx.now + ctx.seconds(seconds));
-                                }
+                                fired.push((id.clone(), *weight));
                             }
                         }
-                        Trigger::When { expression } => {
+                        Trigger::When { expression, weight } => {
                             let gate = ctx.gate(expression);
                             if gate && !head.gates.get(id).copied().unwrap_or(false) {
-                                fires = true;
+                                fired.push((id.clone(), *weight));
                             }
                             head.gates.insert(id.clone(), gate);
                         }
                         _ => {}
                     }
-                }
-                if fires && t.weight > 0.0 {
-                    fired.push((id.clone(), t.weight));
                 }
             }
             if let Some(id) = pick(&fired, &mut run.rng) {
@@ -786,7 +782,7 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
         for state in arrivals.iter().chain(&departures) {
             let residents: Vec<(String, f64)> =
                 run.heads.iter().filter(|(_, h)| h.flight.is_none() && h.state == *state).map(|(ph, h)| (ph.clone(), h.arrived)).collect();
-            for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, state) && t.weight > 0.0) {
+            for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, state)) {
                 for trigger in &t.triggers {
                     let chosen: Vec<String> = match trigger {
                         Trigger::Meet { policy } if arrivals.contains(state) && residents.len() >= 2 => match policy {
@@ -816,7 +812,7 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
     }
 }
 
-/// One of the transitions that fired, drawn by weight.
+/// One of the triggers that fired, drawn by weight; the transition it is on.
 fn pick(fired: &[(String, f64)], rng: &mut u64) -> Option<String> {
     let total: f64 = fired.iter().map(|(_, w)| w).sum();
     if total <= 0.0 {

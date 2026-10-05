@@ -260,7 +260,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 				await rawCall(page, 'machine attribute add', { machine: 'sweep', name: 'level', value: 0.5, kind: { type: 'num', vmin: 0, vmax: 1 } });
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'A', pos: [0, 0], values: { level: 0.2 } });
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'B', pos: [320, 40] });
-				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', triggers: [{ kind: 'manual' }, { kind: 'after', seconds: 2, chance: 0.5 }], duration: 1 });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', triggers: [{ kind: 'manual' }, { kind: 'after', seconds: 2, weight: 0.5 }], duration: 1 });
 				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', triggers: [{ kind: 'when', expression: 'variables.system.time > 1' }] });
 				await rawCall(page, 'machine playhead add', { machine: 'sweep', start: 'A' });
 				for (const name of names) {
@@ -271,7 +271,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 							g.commands.setPanelState(g.query.panels()[0].panelId, { machine: 'sweep' });
 						});
 						await expect(page.getByTestId('state-card-A')).toBeVisible();
-						await page.getByTestId('transition-t1').click({ button: 'right' });
+						await page.getByTestId('transition-t1').click();
 						await expect(page.getByTestId('machine-transition')).toBeVisible();
 					}
 					if (name === 'Inspector') {

@@ -35,7 +35,7 @@ export type State = { pos: [number, number], values?: Record<string, Literal>, }
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
 export type Policy = "fifo" | "lifo" | "all";
 export type Seconds = number | string;
-export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, chance: number, } | { "kind": "when", expression: string, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
+export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, weight: number, } | { "kind": "when", expression: string, weight: number, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
 export type Transition = { 
 /**
  * A state name, or `*` for any state.
@@ -44,11 +44,7 @@ from: string, to: string, triggers?: Array<Trigger>,
 /**
  * Seconds; 0 is instant.
  */
-duration: number, curve: Curve, 
-/**
- * The draw among transitions that fire together; 0 is never drawn.
- */
-weight: number, };
+duration: number, curve: Curve, };
 export type Playhead = { color: string, start: string, };
 export type Machine = { attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
 /**

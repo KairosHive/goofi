@@ -14,7 +14,7 @@ const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list 
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve, weight}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values}}, transitions: {id: {from, to, triggers, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -39,7 +39,7 @@ op!(Edit, "machine edit", 1, EditArgs {
     pub machine: String,
     pub seed: Option<u64>,
 },
-    "Change a machine's own settings: `seed` starts its random draws — an `after` trigger's chance and the draw among transitions that fire together — so a run repeats.",
+    "Change a machine's own settings: `seed` starts its random draws — the draw among the triggers that fire together — so a run repeats.",
     "{seed}");
 
 op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
@@ -117,9 +117,8 @@ op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub triggers: Option<Value>,
     pub duration: Option<f64>,
     pub curve: Option<String>,
-    pub weight: Option<f64>,
 },
-    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the dwell). It fires when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or a tap in the panel; `{kind: after, seconds, chance?}` — once the playhead has dwelt `seconds` (a number, or an expression over `variables.*` read on entry), rolling `chance` (default 1; a failed roll re-arms the same dwell); `{kind: when, expression}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival. When several transitions out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn) — a random branch is several `after` transitions of one dwell with different weights.",
+    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the dwell). It fires when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or the inspector's fire button; `{kind: after, seconds, weight?}` — once the playhead has dwelt `seconds` (a number, or an expression over `variables.*` read on entry); `{kind: when, expression, weight?}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. When several `after` and `when` triggers out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn) — a random branch is several `after` triggers of one dwell with different weights. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival.",
     "{id} — the transition's id, `t1`, `t2`, …, which every later op addresses it by");
 
 op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
@@ -130,7 +129,6 @@ op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
     pub triggers: Option<Value>,
     pub duration: Option<f64>,
     pub curve: Option<String>,
-    pub weight: Option<f64>,
 },
     "Change a transition: any of the fields `machine transition add` takes, the rest kept. `triggers` replaces the whole list.",
     "{id}");
@@ -495,7 +493,6 @@ impl WriteOp for TransitionAdd {
             triggers: a.triggers.map(parse_triggers).transpose()?.unwrap_or_default(),
             duration: a.duration.unwrap_or(0.0),
             curve: a.curve.as_deref().map(parse_curve).transpose()?.unwrap_or_default(),
-            weight: a.weight.unwrap_or(1.0),
         };
         m.transitions.insert(id.clone(), t);
         set(tx, &a.machine, m)?;
@@ -525,9 +522,6 @@ impl WriteOp for TransitionEdit {
         }
         if let Some(curve) = &a.curve {
             t.curve = parse_curve(curve)?;
-        }
-        if let Some(weight) = a.weight {
-            t.weight = weight;
         }
         set(tx, &a.machine, m)?;
         Ok(json!({ "id": a.id }))

@@ -32,7 +32,6 @@
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { Chip, EmptyState, Icon, IconButton, Select } from '$lib/ui';
 	import PanelBar from './PanelBar.svelte';
 	import SidePane from './SidePane.svelte';
@@ -48,8 +47,6 @@
 	const name = $derived((asStateObject(panelState) as MachineState).machine ?? '');
 	// A machine the document no longer holds leaves the panel on its chooser, as a removed one does.
 	const machine = $derived(name ? g.machines[name] : undefined);
-	const playheads = $derived(Object.keys(machine?.playheads ?? {}));
-	watchVariables(() => playheads.map((p) => `${p}.state`));
 
 	function choose(machine: string): void {
 		setState({ machine }, 'authored', `Show machine ${machine}`);
@@ -85,16 +82,6 @@
 	});
 	const dismiss = (): void => sel.dismissInspectorFor(panelId);
 
-	/** Fire `id` for every playhead in its `from`: resting there, or moving there. */
-	function fire(id: string): void {
-		const t = machine?.transitions[id];
-		if (!t) return;
-		for (const p of playheads) {
-			const at = String(variableValue(`${p}.state`) ?? machine!.playheads[p].start);
-			if (t.from === '*' || at === t.from) void call('machine fire', { playhead: p, transition: id });
-		}
-	}
-
 	// ---- the flow's nodes and edges, derived from the document; a drag pins a box until the doc agrees.
 	let flowNodes = $state.raw<Node[]>([]);
 	let flowEdges = $state.raw<Edge[]>([]);
@@ -121,16 +108,22 @@
 		}
 		const selected = sel.edges(panelId);
 		// A `*` transition has no box to leave from; it is listed under every state and fired there.
-		flowEdges = Object.entries(m.transitions)
-			.filter(([, t]) => t.from in m.states && t.to in m.states)
-			.map(([id, t]) => ({
+		const drawn = Object.entries(m.transitions).filter(([, t]) => t.from in m.states && t.to in m.states);
+		// The transitions between one pair of boxes, either way, take lanes side by side.
+		const pairKey = (t: { from: string; to: string }): string => [t.from, t.to].sort().join('|');
+		const lanes = new Map<string, string[]>();
+		for (const [id, t] of drawn) lanes.set(pairKey(t), [...(lanes.get(pairKey(t)) ?? []), id]);
+		flowEdges = drawn.map(([id, t]) => {
+			const siblings = lanes.get(pairKey(t))!;
+			return {
 				id,
 				source: t.from,
 				target: t.to,
 				type: 'transition',
 				selected: selected.has(id),
-				data: { summary: summary(t), onFire: () => fire(id), onPick: () => sel.setSelection(panelId, [], [id]) }
-			}));
+				data: { summary: summary(t), k: siblings.indexOf(id), n: siblings.length, onPick: () => sel.setSelection(panelId, [], [id]) }
+			};
+		});
 	});
 	/** Flow's own `selected` flags, written back from the store after Flow has had its say. */
 	function reassertSelection(): void {
@@ -336,7 +329,7 @@
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} onFire={fire} onClose={dismiss} />
+						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} />
 					{/snippet}
 				</SidePane>
 			</div>

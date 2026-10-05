@@ -80,11 +80,17 @@
 		background: transparent;
 		cursor: crosshair;
 	}
-	/* The outline lights under the pointer, and while a cable in flight has this box as its target. */
+	/* The outline lights and thickens fourfold under the pointer — inward, as a shadow, so nothing
+	   moves — and while a cable in flight has this box as its target. */
 	.card:hover,
 	.card:has(> :global(.port.connectingto)),
 	.card:has(> :global(.port.valid)) {
 		border-color: var(--accent);
+		box-shadow: inset 0 0 0 3px var(--accent);
+	}
+	/* Under the pointer the band reaches half again as far, outward, so the box keeps its size. */
+	.card:hover :global(.port) {
+		inset: calc(-1 * var(--space-3));
 	}
 	.body {
 		position: relative;

@@ -24,13 +24,11 @@
 		name,
 		m,
 		subject,
-		onFire,
 		onClose
 	}: {
 		name: string;
 		m: Machine;
 		subject: Subject;
-		onFire: (id: string) => void;
 		onClose: () => void;
 	} = $props();
 
@@ -107,7 +105,7 @@
 					<span class="when">{triggerSummary(t)}</span>
 				{/snippet}
 				{#snippet children()}
-					<TransitionForm {name} {m} {id} {onFire} />
+					<TransitionForm {name} {m} {id} />
 				{/snippet}
 			</Disclosure>
 		{/each}
@@ -158,7 +156,7 @@
 		</IdentityBar>
 		<ScrollArea>
 			<div class="rows">
-				<TransitionForm {name} {m} id={subject.id} {onFire} />
+				<TransitionForm {name} {m} id={subject.id} />
 			</div>
 		</ScrollArea>
 	{:else}

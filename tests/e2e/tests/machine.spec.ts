@@ -87,7 +87,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		// A transition dragged from one box's edge into the other; the inspector shows it, selected.
 		await drag(page, hasTouch, card0, card1);
 		const label = page.getByTestId('transition-t1');
-		await expect(label).toHaveText('tap');
+		await expect(label).toHaveText('manual');
 		const inspector = page.getByTestId('machine-inspector');
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await expect(page.getByTestId('machine-transition')).toBeVisible();
@@ -110,11 +110,16 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(() => onTopEdge(dot, card0)).toBe(true);
 		await expect(page.getByTestId('playhead-state')).toHaveText('state0');
 
-		// The tap fires it, and the dot comes to rest on the target box.
+		// A tap on the label selects it; the inspector's fire button moves the playhead, and the dot
+		// comes to rest on the target box.
 		await press(label);
+		await expect(inspector).toHaveAttribute('data-subject', 'transition');
+		await press(inspector.getByTestId('transition-fire'));
 		await expect(dot).toHaveAttribute('data-state', 'state1');
 		await expect(dot).toHaveAttribute('data-flying', 'false');
 		await expect.poll(() => onTopEdge(dot, card1)).toBe(true);
+		if (hasTouch) await page.touchscreen.tap(corner.x, corner.y);
+		else await page.mouse.click(corner.x, corner.y);
 		await expect(page.getByTestId('playhead-state')).toHaveText('state1');
 
 		// The machine's name and seed are the inspector's; the bar's select is the switch between machines.
@@ -133,17 +138,21 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 
 		await page.screenshot({ path: testInfo.outputPath('machine.png') });
 
-		// The transition goes with the Delete key, picked from its label; the box's ✕ is gone with it.
-		if (hasTouch) {
-			const touch = await touchSession(page);
-			const at = (await label.boundingBox())!;
-			await touch.down({ x: at.x + at.width / 2, y: at.y + at.height / 2 });
-			await expect(inspector).toHaveAttribute('data-subject', 'transition');
-			await touch.up();
-		} else {
-			await label.click({ button: 'right' });
-			await expect(inspector).toHaveAttribute('data-subject', 'transition');
-		}
+		// A transition back the other way runs beside the first, its label apart from the first's, and
+		// either label selects its own.
+		await rawCall(page, 'machine transition add', { machine: 'machine0', from: 'state1', to: 'state0', triggers: [{ kind: 'manual' }] });
+		const back = page.getByTestId('transition-t2');
+		await expect(back).toBeVisible();
+		const [l1, l2] = await Promise.all([label.boundingBox(), back.boundingBox()]);
+		expect(l1!.x + l1!.width <= l2!.x || l2!.x + l2!.width <= l1!.x || l1!.y + l1!.height <= l2!.y || l2!.y + l2!.height <= l1!.y, `the two labels do not overlap: ${JSON.stringify(l1)} ${JSON.stringify(l2)}`).toBe(true);
+		await press(back);
+		await expect(page.locator('.svelte-flow__edge.selected')).toHaveAttribute('data-id', /t2/);
+		await page.keyboard.press('Delete');
+		await expect(back).toHaveCount(0);
+
+		// The first goes with the Delete key too, picked from its label; the box's ✕ is gone with it.
+		await press(label);
+		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await page.keyboard.press('Delete');
 		await expect(label).toHaveCount(0);
 		await expect(card0.getByTestId('state-remove')).toHaveCount(0);

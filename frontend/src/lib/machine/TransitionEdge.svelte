@@ -1,15 +1,14 @@
 <!-- A transition on the machine canvas: a line from box to box, or a loop off the side when it
      re-enters its own state, with chevrons along it for the way it goes — one stroke, so hover and
-     selection reach the whole of it. A click on the line selects it; its label carries the trigger
-     summary, and a tap on the label fires it. -->
+     selection reach the whole of it. Two between one pair of boxes run side by side. A click on the
+     line or on its label, which carries the trigger summary, selects it. -->
 <script lang="ts">
 	import { BaseEdge, EdgeLabel, useStore, type EdgeProps, type InternalNode } from '@xyflow/svelte';
-	import { createLongPress } from 'panelty';
-	import { course, marked, type Box } from './geometry';
+	import { course, labelAt, lane, marked, type Box } from './geometry';
 	import { CARD_W, FALLBACK_H } from './layout';
 
 	let { id, source, target, selected, data }: EdgeProps = $props();
-	const d = $derived(data as { summary: string; onFire: () => void; onPick: () => void });
+	const d = $derived(data as { summary: string; k: number; n: number; onPick: () => void });
 
 	const store = useStore();
 	const boxOf = (n: InternalNode | undefined): Box | null =>
@@ -20,23 +19,10 @@
 		const a = boxOf(store.nodeLookup.get(source));
 		const b = boxOf(store.nodeLookup.get(target));
 		if (!a || !b) return null;
-		const c = course(a, source === target ? a : b);
-		return { d: marked(c), label: c.at(0.5) };
+		const l = lane(d.k, d.n, source, target);
+		const c = course(a, source === target ? a : b, l.offset);
+		return { d: marked(c), label: source === target ? c.at(0.5) : labelAt(c, a, b, l.at) };
 	});
-
-	// The touch door onto the inspector: a held label picks, and the lift's click is then not a fire.
-	let held = false;
-	const press = createLongPress(() => {
-		held = true;
-		d.onPick();
-	});
-	function tap(): void {
-		if (held) {
-			held = false;
-			return;
-		}
-		d.onFire();
-	}
 </script>
 
 {#if geometry}
@@ -47,28 +33,29 @@
 			class="label nodrag nopan"
 			class:picked={selected}
 			data-testid={`transition-${id}`}
-			title="Tap to fire; hold or right-click to inspect"
-			onclick={tap}
-			oncontextmenu={(e) => {
-				e.preventDefault();
+			title="Select the transition"
+			onclick={(e) => {
+				// Stopped here: the label sits in the pane, and Flow would read the click as the pane's.
+				e.stopPropagation();
 				d.onPick();
-			}}
-			onpointerdown={(e) => {
-				if (e.pointerType !== 'mouse') press.start(e);
-			}}
-			onpointermove={press.move}
-			onpointerup={press.cancel}
-			onpointercancel={press.cancel}>{d.summary}</button
+			}}>{d.summary}</button
 		>
 	</EdgeLabel>
 {/if}
 
 <style>
-	/* The stroke alone: its ink on hover and selection is the editor's, from app.css. */
+	/* The stroke, with its hover and selection ink: Flow's own sheet, loaded after app.css, would
+	   otherwise keep the selected line grey. */
 	:global(.svelte-flow__edge-path.transition) {
 		stroke-width: 2;
 		stroke-linecap: round;
 		stroke-linejoin: round;
+	}
+	:global(.svelte-flow__edge:hover .svelte-flow__edge-path.transition) {
+		stroke: var(--ring-accent);
+	}
+	:global(.svelte-flow__edge.selected .svelte-flow__edge-path.transition) {
+		stroke: var(--accent);
 	}
 	.label {
 		min-height: var(--hit);

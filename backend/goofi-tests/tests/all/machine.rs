@@ -118,13 +118,13 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert_eq!(number(&g, "head.gain"), 0.0);
     assert_eq!(g.variable("head.label"), j!("c"), "a string switches on arrival");
 
-    // A dwell: the playhead leaves after its seconds, reached by polling. A chance of 0 never rolls.
+    // A dwell: the playhead leaves after its seconds, reached by polling. A weight of 0 is never drawn.
     let t3 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "triggers": [{ "kind": "after", "seconds": 0.2 }] }))["id"].clone();
     at_rest_in(&g, "head", "A");
-    write("machine transition edit", j!({ "machine": "seq", "id": t3, "triggers": [{ "kind": "after", "seconds": 0.05, "chance": 0.0 }] }));
+    write("machine transition edit", j!({ "machine": "seq", "id": t3, "triggers": [{ "kind": "after", "seconds": 0.05, "weight": 0.0 }] }));
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "C");
-    assert!(g.stays(|g| text(g, "head.state") == "C"), "a failed roll re-arms and never leaves");
+    assert!(g.stays(|g| text(g, "head.state") == "C"), "a trigger of weight 0 never leaves");
     write("machine transition remove", j!({ "machine": "seq", "id": t3 }));
 
     // A `when` trigger reads a variable through the one expression language, on the rising edge.

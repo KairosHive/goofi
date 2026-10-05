@@ -9,8 +9,8 @@ export const CURVES = ['step', 'linear', 'in', 'out', 'in_out', 'smooth'] as con
 /** A fresh trigger of `kind`, with the defaults the manager would fill. */
 export function blankTrigger(kind: TriggerKind): Trigger {
 	switch (kind) {
-		case 'after': return { kind, seconds: 1, chance: 1 };
-		case 'when': return { kind, expression: '' };
+		case 'after': return { kind, seconds: 1, weight: 1 };
+		case 'when': return { kind, expression: '', weight: 1 };
 		case 'meet': return { kind, policy: 'fifo' };
 		case 'alone': return { kind };
 		default: return { kind: 'manual' };
@@ -20,9 +20,9 @@ export function blankTrigger(kind: TriggerKind): Trigger {
 /** One trigger in a few words, as an edge label carries it. */
 export function triggerText(t: Trigger): string {
 	switch (t.kind) {
-		case 'manual': return 'tap';
-		case 'after': return `after ${t.seconds}s${t.chance < 1 ? ` ·${t.chance}` : ''}`;
-		case 'when': return `when ${t.expression}`;
+		case 'manual': return 'manual';
+		case 'after': return `after ${t.seconds}s${t.weight !== 1 ? ` ×${t.weight}` : ''}`;
+		case 'when': return `when ${t.expression}${t.weight !== 1 ? ` ×${t.weight}` : ''}`;
 		case 'meet': return `meet ${t.policy}`;
 		case 'alone': return 'alone';
 	}

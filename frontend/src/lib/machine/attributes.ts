@@ -24,20 +24,28 @@ export function faceOf(a: Attribute): Face {
 	return Array.isArray(a.default) && a.default.length > 1 ? 'vector' : 'number';
 }
 
+/** The part of a constant param's descriptor that is the same for every literal. */
+const constant = (fallback: Literal | null) => ({
+	doc: null,
+	default: fallback,
+	section: 0,
+	show: null,
+	role: null,
+	refreshable: false,
+	mode: 'constant' as const,
+	expression: null,
+	triggers: false,
+	error: null
+});
+
+/** A bare number as a constant param with a slider over `vmin..vmax`: a transition's setting. */
+export function numberDescriptor(value: number, vmin: number, vmax: number, fallback = value): ParamDescriptor {
+	return { ...constant(fallback), type: 'num', value, vmin, vmax, int: false, options: [], color: false };
+}
+
 /** `value` of attribute `a` as a constant param, for ParamField to draw. */
 export function descriptorFor(a: Attribute, value: Literal): ParamDescriptor {
-	const base = {
-		doc: null,
-		default: a.default,
-		section: 0,
-		show: null,
-		role: null,
-		refreshable: false,
-		mode: 'constant' as const,
-		expression: null,
-		triggers: false,
-		error: null
-	};
+	const base = constant(a.default);
 	const k = a.kind;
 	switch (k.type) {
 		case 'num':
