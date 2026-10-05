@@ -30,7 +30,7 @@ impl TermLike for Terminal {
     fn move_cursor_right(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}C")) } else { Ok(()) } }
     fn move_cursor_left(&self, n: usize) -> std::io::Result<()> { if n > 0 { self.write_str(&format!("\x1b[{n}D")) } else { Ok(()) } }
     fn write_line(&self, s: &str) -> std::io::Result<()> { self.write_str(s)?; self.write_str("\n") }
-    fn write_str(&self, s: &str) -> std::io::Result<()> { goofi_supervisor::log::terminal_write(s.as_bytes()) }
+    fn write_str(&self, s: &str) -> std::io::Result<()> { goofi_supervisor::log::terminal_write(s) }
     fn clear_line(&self) -> std::io::Result<()> { self.write_str("\r\x1b[2K") }
     fn flush(&self) -> std::io::Result<()> { Ok(()) }
 }
