@@ -15,7 +15,7 @@ export type NodeRecord = { type: string, name: string, pos: [number, number],
  */
 scope?: string, params: { [key in string]: { [key in string]: ParamEntry } }, viewers?: JsonValue, baseline?: JsonValue, record: Array<RecordedOutput>, };
 export type Link = { node_out: string, slot_out: string, node_in: string, slot_in: string, };
-export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint";
+export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint" | "vector" | "color";
 export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, 
 /**
  * A paint pad's side in texels; absent is 128.

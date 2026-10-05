@@ -21,7 +21,7 @@ op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
     #[schemars(with = "Option<Value>")]
     pub control: Option<Option<Control>>,
 },
-    "Create a patch variable. Give `group` alone to add an entry holding 0 under the first free entry0/entry1/... name. Otherwise `name` and `value` are required. `name` is `group.element` — every variable is in a group. `value` is a number, a list of numbers (nested for a wider array), a bool or a string; a bool is stored as 1 or 0, and a param reading a variable converts it to its own kind. A name the patch already holds is refused — `variable entry edit` changes one. `control` makes it a control-panel element: {kind, min, max, step, options, x, y, w, h}, where kind is knob/slider/number/text/toggle/dropdown/paint and must be able to draw the value.",
+    "Create a patch variable. Give `group` alone to add an entry holding 0 under the first free entry0/entry1/... name. Otherwise `name` and `value` are required. `name` is `group.element` — every variable is in a group. `value` is a number, a list of numbers (nested for a wider array), a bool or a string; a bool is stored as 1 or 0, and a param reading a variable converts it to its own kind. A name the patch already holds is refused — `variable entry edit` changes one. `control` makes it a control-panel element: {kind, min, max, step, options, x, y, w, h}, where kind is knob/slider/number/text/toggle/dropdown/paint/vector/color and must be able to draw the value.",
     "{name, value} — the name and value as stored");
 
 op!(EntryEdit, "variable entry edit", 1, EntryEditArgs {
@@ -98,7 +98,7 @@ op!(ControlAdd, "control add", 2, ControlAddArgs {
     pub options: Option<Value>,
     pub resolution: Option<u32>,
 },
-    "Bear a widget in a control panel's group: a variable holding what the kind draws, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A `paint` pad holds an `[h, w, 4]` RGBA array in 0..1, `resolution` texels a side (128 when not given). A config-locked group refuses it, as it refuses every other edit to what it holds.",
+    "Bear a widget in a control panel's group: a variable holding what the kind draws, carrying the widget. `kind` is knob/slider/number/text/toggle/dropdown/paint/vector/color. `element` is minted `knob0`, `knob1`, … when not given, and the cell is the first free one when `x`/`y` are not. A `paint` pad holds an `[h, w, 4]` RGBA array in 0..1, `resolution` texels a side (128 when not given); a `vector` an `[n]` array, born `[0, 0, 0]`; a `color` an `[4]` RGBA in 0..1. A config-locked group refuses it, as it refuses every other edit to what it holds.",
     "{name, control} — the variable's full name and the widget as stored");
 
 op!(ControlEdit, "control edit", 2, ControlEditArgs {
@@ -375,7 +375,7 @@ impl WriteOp for ControlAdd {
                 record[key] = v;
             }
         }
-        if matches!(kind, ControlKind::Knob | ControlKind::Slider | ControlKind::Number) {
+        if matches!(kind, ControlKind::Knob | ControlKind::Slider | ControlKind::Number | ControlKind::Vector) {
             for (key, or) in [("min", json!(0.0)), ("max", json!(1.0)), ("step", json!(0.01))] {
                 record.as_object_mut().unwrap().entry(key).or_insert(or);
             }

@@ -888,11 +888,11 @@ impl Layout {
             .collect()
     }
 
-    /// Re-aim every control panel naming group `from` at `to`. A group's identity is its name, so
-    /// a panel holds it the way an expression does, and one rename moves both.
-    pub fn regroup(&self, from: &str, to: &str) -> Vec<Write> {
-        let named = |t: &str, state: &Value| t == "control" && state.get("group").and_then(Value::as_str) == Some(from);
-        self.rekey_panels(named, "group", Value::String(to.to_string()))
+    /// Re-aim every `panel_type` panel whose state `key` names `from` at `to`: a group's or a
+    /// machine's identity is its name, so a panel holds it as an expression does, and one rename moves both.
+    pub fn retarget(&self, panel_type: &str, key: &str, from: &str, to: &str) -> Vec<Write> {
+        let named = |t: &str, state: &Value| t == panel_type && state.get(key).and_then(Value::as_str) == Some(from);
+        self.rekey_panels(named, key, Value::String(to.to_string()))
     }
 
     /// Set a panel's type and/or state. `panel_type` lands FIRST because changing it clears the old

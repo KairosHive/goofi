@@ -3,7 +3,7 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
-	import { asStateObject, ContextMenu, createLongPress, type MenuItem } from 'panelty';
+	import { asStateObject, ContextMenu, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
@@ -13,28 +13,27 @@
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import {
-		Bar,
 		Chip,
-		PaintPad,
 		EmptyState,
 		Field,
 		Icon,
 		IconButton,
-		Knob,
 		NumberInput,
 		Popover,
 		ScrollArea,
 		Segmented,
 		Select,
-		Slider,
 		TextInput,
-		Toggle,
 		isTextEditingTarget
 	} from '$lib/ui';
 	import type { Literal } from '$lib/api/generated';
 	import { CONTROL_COLUMNS, CONTROL_KINDS } from '$lib/api/vocab';
 	import { variableForm, variableImage, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { KIND, cellAt, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
+	import { KIND, bornValue, cellAt, kindFits, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
+	import ControlWidget from './ControlWidget.svelte';
+	import PanelBar from './PanelBar.svelte';
+	import VariableGhost from './VariableGhost.svelte';
+	import { createVariableLift } from './variableLift.svelte';
 
 	interface ControlState {
 		group?: string;
@@ -79,7 +78,7 @@
 		$state(null);
 	// `at` is the ghost's top-left: snapped to the cell it would land on while over the board, else
 	// under the pointer's centre.
-	let lift: { kind: Kind; at: { x: number; y: number }; snapped: boolean; w: number; h: number; from: { x: number; y: number } } | null =
+	let chip: { kind: Kind; at: { x: number; y: number }; snapped: boolean; w: number; h: number; from: { x: number; y: number } } | null =
 		$state(null);
 	// A drop's cell outlives the pointer until the document agrees, so it never flashes back.
 	let pending: { name: string; to: Cell } | null = $state(null);
@@ -163,14 +162,6 @@
 		return v === null ? Promise.resolve() : g.setVariableValue(gv.name, v).catch(() => {});
 	}
 
-	function num(v: Value): number {
-		return typeof v === 'number' ? v : Array.isArray(v) && typeof v[0] === 'number' ? v[0] : 0;
-	}
-	/** The one truth rule, as `control::truth` reads it: a non-empty text, or any number above zero. */
-	function truth(v: Value): boolean {
-		return typeof v === 'string' ? v !== '' : typeof v === 'number' ? v > 0 : Array.isArray(v) ? v.some(truth) : v === true;
-	}
-
 	// Listened to DIRECTLY, not delegated: a finger's touch is snapped to the nearest element that
 	// listens, and a delegated listener is on the root — so the corner buttons took every grab.
 	function grab(el: HTMLElement, on: (e: PointerEvent) => void): { update(on: (e: PointerEvent) => void): void; destroy(): void } {
@@ -187,63 +178,20 @@
 		};
 	}
 
-	let variableGrab: { name: string; x: number; y: number; pointer: number } | null = $state(null);
-
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function elementMenu(x: number, y: number, name: string): void {
 		menu = { x, y, items: selection().referenceItems({ variable: name }, `variables.${name}`) };
 	}
-	// The touch door onto the right-click menu: a held label, before it moves into a drag.
-	let pressName = '';
-	const press = createLongPress((at) => {
-		cancelVariable();
-		elementMenu(at.clientX, at.clientY, pressName);
-	});
-
-	function grabVariable(e: PointerEvent, gv: VariableView): void {
-		if (e.button !== 0) return;
-		if (e.pointerType !== 'mouse') {
-			pressName = gv.name;
-			press.start(e);
-		}
-		variableGrab = { name: gv.name, x: e.clientX, y: e.clientY, pointer: e.pointerId };
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-		e.stopPropagation();
-	}
-
-	function moveVariable(e: PointerEvent): void {
-		press.move(e);
-		if (!variableGrab || variableGrab.pointer !== e.pointerId) return;
-		if (!uiStore.variableDrag && Math.hypot(e.clientX - variableGrab.x, e.clientY - variableGrab.y) < 4) return;
-		uiStore.variableDrag = {
-			name: variableGrab.name, x: e.clientX, y: e.clientY,
-			target: document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-variable-drop]') ?? null
-		};
-	}
-
-	function cancelVariable(): void {
-		press.cancel();
-		variableGrab = null;
-		uiStore.variableDrag = null;
-	}
-
-	function dropVariable(e: PointerEvent): void {
-		if (!variableGrab || variableGrab.pointer !== e.pointerId) return;
-		moveVariable(e);
-		const dropped = uiStore.variableDrag;
-		cancelVariable();
-		if (dropped && elements.some((gv) => gv.name === dropped.name)) {
-			dropped.target?.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${dropped.name}` }));
-		}
-	}
-
-	onDestroy(() => { if (variableGrab) cancelVariable(); });
+	// A label lifts its variable; a held label is the touch door onto the right-click menu.
+	const lift = createVariableLift(elementMenu);
+	const mine = (name: string): boolean => elements.some((gv) => gv.name === name);
+	onDestroy(() => lift.cancel());
 
 	function down(e: PointerEvent, gv: VariableView, resize: boolean): void {
 		// The cell hears its press directly, before any delegated handler on a corner could stop it.
 		if (!edit || !board || (e.target as Element).closest('.zap, .learn, .rename')) return;
 		picked = gv.name;
-		if (!resize) grabVariable(e, gv);
+		if (!resize) lift.start(e, gv.name);
 		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
 		const el = e.currentTarget as HTMLElement;
 		el.setPointerCapture(e.pointerId);
@@ -255,7 +203,7 @@
 	function move(e: PointerEvent): void {
 		if (!drag) return;
 		if (!drag.resize && !onBoard(e)) {
-			moveVariable(e);
+			lift.move(e);
 			drag.to = null;
 			return;
 		}
@@ -270,11 +218,11 @@
 	function up(e: PointerEvent): void {
 		if (!drag) return;
 		if (!drag.resize && !onBoard(e)) {
-			dropVariable(e);
+			lift.drop(e, mine);
 			drag = null;
 			return;
 		}
-		cancelVariable();
+		lift.cancel();
 		const { name, from, to } = drag;
 		drag = null;
 		const gv = elements.find((el) => el.name === name);
@@ -294,23 +242,23 @@
 		const u = unitsOf(board);
 		const born = KIND[kind];
 		const [w, h] = [born.w * u.x - u.gap, born.h * u.y - u.gap];
-		lift = { kind, ...ghostAt(e, kind, w, h), w, h, from: { x: e.clientX, y: e.clientY } };
+		chip = { kind, ...ghostAt(e, kind, w, h), w, h, from: { x: e.clientX, y: e.clientY } };
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		e.preventDefault();
 	}
 
 	function driftChip(e: PointerEvent): void {
-		if (!lift) return;
-		const { at, snapped } = ghostAt(e, lift.kind, lift.w, lift.h);
-		lift.at = at;
-		lift.snapped = snapped;
+		if (!chip) return;
+		const { at, snapped } = ghostAt(e, chip.kind, chip.w, chip.h);
+		chip.at = at;
+		chip.snapped = snapped;
 	}
 
 	// A tap bears the widget where the manager places it; a drag bears it where it was let go.
 	function dropChip(e: PointerEvent): void {
-		if (!lift) return;
-		const { kind, from } = lift;
-		lift = null;
+		if (!chip) return;
+		const { kind, from } = chip;
+		chip = null;
 		const dragged = Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4;
 		const point = dragged ? onBoard(e) : null;
 		if (dragged && !point) return;
@@ -362,33 +310,14 @@
 
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && variableGrab) { drag = null; cancelVariable(); } }} />
-
-{#snippet widget(c: ControlView, value: Value, label: string, onChange: (v: Value) => unknown, name = '', onInput?: (v: Value) => unknown)}
-	{#if c.kind === 'knob'}
-		<Knob {label} value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step ?? 0} {onChange} {onInput} />
-	{:else if c.kind === 'slider'}
-		<Slider value={num(value)} min={c.min ?? 0} max={c.max ?? 1} step={c.step} {onChange} {onInput} />
-	{:else if c.kind === 'number'}
-		<NumberInput value={num(value)} min={c.min} max={c.max} step={c.step ?? 1} {onChange} />
-	{:else if c.kind === 'toggle'}
-		<Toggle value={truth(value)} {onChange} />
-	{:else if c.kind === 'dropdown'}
-		<Select value={String(value ?? '')} options={c.options ?? []} {onChange} />
-	{:else if c.kind === 'paint'}
-		<PaintPad value={variableImage(name)} onStroke={(ops) => name && g.paintControl(group, name.slice(group.length + 1), ops)} />
-	{:else}
-		<TextInput multiline value={String(value ?? '')} aria-label={label} {onChange} {onInput} />
-	{/if}
-{/snippet}
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && lift.active) { drag = null; lift.cancel(); } }} />
 
 {#if menu}
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 
 <div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
-	<Bar style="--bar-bg: transparent; --bar-border: 1px solid var(--border)">
-		{#snippet start()}<span class="title">{group}</span>{/snippet}
+	<PanelBar title={group}>
 		{#snippet end()}
 			<IconButton
 				variant={edit ? 'primary' : 'ghost'}
@@ -400,7 +329,7 @@
 				onclick={() => setEdit(!edit)}><Icon name={edit ? 'check' : 'pencil'} /></IconButton
 			>
 		{/snippet}
-	</Bar>
+	</PanelBar>
 
 	{#if edit}
 		<div class="strip">
@@ -417,13 +346,13 @@
 			<div class="palette" data-testid="control-palette">
 				{#each CONTROL_KINDS as { id: kind } (kind)}
 					<Chip
-						tone={lift?.kind === kind ? 'accent' : 'neutral'}
+						tone={chip?.kind === kind ? 'accent' : 'neutral'}
 						data-testid={`control-palette-${kind}`}
 						title="Drag onto the board, or tap to add"
 						onpointerdown={(e) => liftChip(e, kind)}
 						onpointermove={driftChip}
 						onpointerup={dropChip}
-						onpointercancel={() => (lift = null)}
+						onpointercancel={() => (chip = null)}
 						onclick={(e) => {
 							if (e.detail === 0) void bear(kind, null);
 						}}>{kind}</Chip
@@ -443,8 +372,8 @@
 				style={`--columns: ${CONTROL_COLUMNS}`}
 				onpointermove={move}
 				onpointerup={up}
-				onpointercancel={() => { drag = null; cancelVariable(); }}
-				onlostpointercapture={() => { drag = null; cancelVariable(); }}
+				onpointercancel={() => { drag = null; lift.cancel(); }}
+				onlostpointercapture={() => { drag = null; lift.cancel(); }}
 			>
 				{#if elements.length === 0}
 					<div class="fill">
@@ -480,17 +409,25 @@
 							class:broken={gv.error !== undefined}
 							title={gv.expression !== undefined ? gv.error ?? `Computed by ${gv.expression}` : held.value ? 'Value-locked' : undefined}
 						>
-							{@render widget(c, c.kind === 'paint' ? null : variableValue(gv.name), gv.element, (v) => commitValue(gv, v), gv.name, (v) => v !== null && g.previewVariableValue(gv.name, v))}
+							<ControlWidget
+								control={c}
+								value={c.kind === 'paint' ? null : variableValue(gv.name)}
+								label={gv.element}
+								onChange={(v) => commitValue(gv, v)}
+								onInput={(v) => g.previewVariableValue(gv.name, v)}
+								image={c.kind === 'paint' ? variableImage(gv.name) : null}
+								onStroke={(ops) => g.paintControl(group, gv.element, ops)}
+							/>
 						</div>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<span
 							class="label"
 							title="Drag onto a parameter to set its expression. Double-click to rename"
-							use:grab={(e) => grabVariable(e, gv)}
-							onpointermove={moveVariable}
-							onpointerup={dropVariable}
-							onpointercancel={cancelVariable}
-							onlostpointercapture={cancelVariable}
+							use:grab={(e) => lift.start(e, gv.name)}
+							onpointermove={lift.move}
+							onpointerup={(e) => lift.drop(e, mine)}
+							onpointercancel={lift.cancel}
+							onlostpointercapture={lift.cancel}
 							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
 							>{gv.element}</span
 						>
@@ -579,7 +516,7 @@
 							<Select
 								data-testid="control-props-kind"
 								value={pc.kind}
-								options={CONTROL_KINDS.filter((k) => k.draws === 'any' || k.draws === variableForm(pv.name)).map((k) => k.id)}
+								options={CONTROL_KINDS.filter((k) => kindFits(k, variableForm(pv.name), variableValue(pv.name))).map((k) => k.id)}
 								onChange={(v) => setControl(pv, { kind: v as Kind })}
 							/>
 						</Field>
@@ -615,7 +552,7 @@
 						{#if pv.error}
 							<p class="error-text" role="alert" data-testid="control-source-error">{pv.error}</p>
 						{/if}
-						{#if variableForm(pv.name) === 'number'}
+						{#if variableForm(pv.name) === 'number' || pc.kind === 'vector'}
 							<Field label="range" doc="min, max and step">
 								<NumberInput value={pc.min ?? 0} title="min" onChange={(v) => setControl(pv, { min: v })} />
 								<NumberInput value={pc.max ?? 1} title="max" onChange={(v) => setControl(pv, { max: v })} />
@@ -645,49 +582,32 @@
 		{/key}
 	{/if}
 
-	{#if variableGrab && uiStore.variableDrag}
-		<div class="ghost variable-ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">variables.{uiStore.variableDrag.name}</div>
-	{/if}
+	<VariableGhost {lift} />
 
-	{#if lift}
-		<div class="ghost" class:snapped={lift.snapped} style={`left: ${lift.at.x}px; top: ${lift.at.y}px`} aria-hidden="true">
-			<div class="cell born" style={`width: ${lift.w}px; height: ${lift.h}px`}>
+	{#if chip}
+		<div class="ghost" class:snapped={chip.snapped} style={`left: ${chip.at.x}px; top: ${chip.at.y}px`} aria-hidden="true">
+			<div class="cell born" style={`width: ${chip.w}px; height: ${chip.h}px`}>
 				<div class="widget">
-					{@render widget(
-						{ kind: lift.kind, min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 0, h: 0 },
-						({ number: 0.5, any: 0, text: '', image: null } as const)[KIND[lift.kind].draws],
-						lift.kind,
-						() => {}
-					)}
+					<ControlWidget
+						control={{ kind: chip.kind, min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 0, h: 0 }}
+						value={KIND[chip.kind].draws === 'number' ? 0.5 : bornValue(KIND[chip.kind])}
+						label={chip.kind}
+						onChange={() => {}}
+					/>
 				</div>
-				<span class="label">{lift.kind}</span>
+				<span class="label">{chip.kind}</span>
 			</div>
 		</div>
 	{/if}
 </div>
 
 <style>
-	.variable-ghost {
-		padding: var(--space-2);
-		background: var(--surface-3);
-		color: var(--text);
-		border: 1px solid var(--accent);
-		border-radius: var(--radius-sm);
-	}
 
 	.wrap {
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
-	}
-	.title {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
 	}
 	.strip {
 		display: flex;

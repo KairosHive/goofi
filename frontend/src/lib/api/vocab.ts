@@ -14,6 +14,7 @@ export type PanelTypeId =
 	| 'console'
 	| 'variables'
 	| 'control'
+	| 'machine'
 	| 'agent'
 	| 'recorder';
 
@@ -62,6 +63,7 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
 	{ id: 'variables', title: 'Variables', icon: 'globe', acceptsNode: false, doc: 'the patch variables, which any expression can read' },
 	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of variables' },
+	{ id: 'machine', title: 'Machine', icon: 'waypoints', acceptsNode: false, doc: 'one state machine: its states, transitions and playheads on a canvas' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
 	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
 ];
@@ -84,12 +86,14 @@ export type ControlKindId =
 	| 'text'
 	| 'toggle'
 	| 'dropdown'
-	| 'paint';
+	| 'paint'
+	| 'vector'
+	| 'color';
 
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
-	/** What a widget of this kind draws: one number, a text, or any frame's truth. */
-	readonly draws: 'number' | 'text' | 'image' | 'any';
+	/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, or any frame's truth. */
+	readonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'any';
 	/** The box it is born in, in grid units. */
 	readonly w: number;
 	readonly h: number;
@@ -104,6 +108,8 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 	{ id: 'toggle', draws: 'any', w: 2, h: 2 },
 	{ id: 'dropdown', draws: 'text', w: 6, h: 2 },
 	{ id: 'paint', draws: 'image', w: 8, h: 8 },
+	{ id: 'vector', draws: 'vector', w: 8, h: 2 },
+	{ id: 'color', draws: 'color', w: 2, h: 2 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

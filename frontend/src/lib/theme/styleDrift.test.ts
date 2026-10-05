@@ -878,10 +878,11 @@ describe('coarse-pointer doors', () => {
 	});
 
 	/* PanelHeader's split/join menu is the tree's only right-click, and R-Task 7 gave it a long
-	   press. This keeps that a rule rather than a coincidence. */
+	   press. This keeps that a rule rather than a coincidence. A variable lift handed a hold
+	   handler (`createVariableLift(menu)`) is that long press, built once in variableLift.svelte.ts. */
 	it('never leaves a right-click as the only door (§5.2)', () => {
 		const offenders = components()
-			.filter((c) => bindsRightClick(c.src) && !/createLongPress/.test(c.src))
+			.filter((c) => bindsRightClick(c.src) && !/createLongPress|createVariableLift\(\s*\w/.test(c.src))
 			.map((c) => c.rel);
 		expect(offenders).toEqual([]);
 	});

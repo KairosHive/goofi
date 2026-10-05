@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Midi } from '$lib/api/generated';
+import type { Link, Literal, Lock, Machine, Midi } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -139,6 +139,22 @@ export function midiGroups(doc: Doc): Record<string, Midi> {
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
 		const midi = obj(rec).midi;
 		if (typeof midi === 'object' && midi && typeof (midi as Midi).port === 'string') out[group] = midi as Midi;
+	}
+	return out;
+}
+
+/** Every state machine, by name. The wire leaves an empty map out; a view always has the four. */
+export function machineViews(doc: Doc): Record<string, Machine> {
+	const out: Record<string, Machine> = {};
+	for (const [name, raw] of Object.entries(obj(doc.machines))) {
+		const m = obj(raw) as Partial<Machine>;
+		out[name] = {
+			...m,
+			attributes: m.attributes ?? {},
+			states: m.states ?? {},
+			transitions: m.transitions ?? {},
+			playheads: m.playheads ?? {}
+		};
 	}
 	return out;
 }

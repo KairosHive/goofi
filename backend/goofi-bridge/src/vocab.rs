@@ -64,6 +64,8 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "the patch variables, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
                 doc: "knobs, sliders and text widgets over one group of variables" },
+    PanelType { id: "machine", title: "Machine", icon: "waypoints", accepts_node: false,
+                doc: "one state machine: its states, transitions and playheads on a canvas" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,
@@ -237,8 +239,8 @@ pub fn typescript() -> String {
          \n\
          export interface ControlKindInfo {{\n\
          \treadonly id: ControlKindId;\n\
-         \t/** What a widget of this kind draws: one number, a text, or any frame's truth. */\n\
-         \treadonly draws: 'number' | 'text' | 'image' | 'any';\n\
+         \t/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, or any frame's truth. */\n\
+         \treadonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'any';\n\
          \t/** The box it is born in, in grid units. */\n\
          \treadonly w: number;\n\
          \treadonly h: number;\n\

@@ -31,13 +31,14 @@ import {
 	variableViews,
 	variableGroupLocks,
 	midiGroups,
+	machineViews,
 	arrangementTabs,
 	type Doc,
 	type VariableView,
 	type ControlView,
 	type LockView
 } from '$lib/crdt/graphDoc';
-import type { Literal, Midi } from '$lib/api/generated';
+import type { Literal, Machine, Midi } from '$lib/api/generated';
 import { KIND, type Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
@@ -80,6 +81,9 @@ const IDLE_RECORD: RecordStatus = {
 	streams: [],
 	error: null
 };
+
+/** The `machine` phrase's ops, every one the machine panel may speak. */
+export type MachineOp = Extract<OpName, `machine ${string}`>;
 
 export class GraphStore {
 	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
@@ -139,6 +143,8 @@ export class GraphStore {
 	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
 	/** Every group that reads a MIDI device, by name. */
 	midiGroups: Record<string, Midi> = $derived(midiGroups(this.doc));
+	/** Every state machine, by name, doc-authoritative. */
+	machines: Record<string, Machine> = $derived(machineViews(this.doc));
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
@@ -596,6 +602,18 @@ export class GraphStore {
 
 	async removeControl(group: string, element: string): Promise<void> {
 		await this.ctl.call('control remove', { group, element });
+	}
+
+	/** One `machine …` op, as the panel speaks them: the op vocabulary is the interface, so the
+	 * panel names the op and the manager answers. */
+	machine<T = Record<string, unknown>>(op: MachineOp, payload: Record<string, unknown>): Promise<T> {
+		return this.ctl.call(op, payload) as Promise<T>;
+	}
+
+	/** A card drag or a widget turn in flight: the state's place or values, previewed under the
+	 * machine's key. */
+	previewState(machine: string, name: string, patch: { pos?: [number, number]; values?: Record<string, Literal> }): void {
+		this.ctl.preview(`machine ${machine}`, 'machine state edit', { machine, name, ...patch });
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is

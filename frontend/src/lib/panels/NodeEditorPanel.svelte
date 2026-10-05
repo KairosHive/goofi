@@ -53,7 +53,7 @@
 		type SlotAnchor
 	} from '$lib/editor/slotProximity';
 	import { createLongPress } from 'panelty';
-	import { createDoubleTapZoom, zoomStep } from '$lib/editor/doubleTapZoom';
+	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import { eventPoint } from '$lib/editor/eventPoint';
 	import { serializeClipboard, parseClipboard, fragmentCentre, centroid } from '$lib/editor/clipboard';
 	import { copyText } from '$lib/clipboard';
@@ -160,46 +160,18 @@
 	const onBareCanvas = (target: EventTarget | null): boolean =>
 		Boolean((target as HTMLElement | null)?.classList.contains('svelte-flow__pane'));
 
-	// Double-tap-and-drag zoom, beside pinch; the seam is `zoomOnDoubleClick={false}` below.
-	const tapZoom = createDoubleTapZoom();
-	// Sampled ONCE at the start, so the drag cannot accumulate rounding.
-	let zoomFrom: Viewport | null = null;
-	let zoomAnchor: { x: number; y: number } | null = null;
-
-	/** The pan block. On `touchstart`, not `pointerdown`: SvelteFlow pans by d3-zoom, which binds
-	 * `touchstart` on its own pane wrapper, so only a capture listener above it can stop the pan. */
-	function onCanvasTouchStart(e: TouchEvent): void {
-		// A second finger is a PINCH: hand the whole gesture back rather than compete with it.
-		if (pendingPlacement || e.touches.length > 1 || !onBareCanvas(e.target)) {
-			tapZoom.cancel();
-			return;
-		}
-		const p = eventPoint(e);
-		if (!p || !tapZoom.down(p, e.timeStamp)) return;
-
-		// A double tap held still would otherwise also fire the long-press door on top of the zoom.
-		canvasPress.cancel();
-		zoomFrom = getViewport?.() ?? null;
-		zoomAnchor = screenToFlow?.({ x: p.clientX, y: p.clientY }) ?? null;
-		e.stopPropagation();
-		e.preventDefault();
-	}
-
-	function onCanvasTouchMove(e: TouchEvent): void {
-		const p = eventPoint(e);
-		if (!p) return;
-		const factor = tapZoom.move(p);
-		if (factor === null || !zoomFrom || !zoomAnchor) return;
-		e.stopPropagation();
-		e.preventDefault();
-		setViewport?.(zoomStep(zoomFrom, zoomAnchor, factor, { min: MIN_ZOOM, max: MAX_ZOOM }));
-	}
-
-	function onCanvasTouchEnd(e: TouchEvent): void {
-		const p = eventPoint(e);
-		if (p) tapZoom.up(p, e.timeStamp);
-		zoomFrom = null;
-		zoomAnchor = null;
+	/** The double-tap-and-drag zoom, beside pinch; the seam is `zoomOnDoubleClick={false}` below.
+	 * Bound in `onMount`; a double tap held still stands the long-press door down. */
+	function bindZoom(root: HTMLElement): () => void {
+		return bindTapZoom(root, {
+			allowed: (target) => !pendingPlacement && onBareCanvas(target),
+			onStart: canvasPress.cancel,
+			getViewport: () => getViewport?.(),
+			screenToFlow: (p) => screenToFlow?.(p),
+			setViewport: (v) => setViewport?.(v),
+			min: MIN_ZOOM,
+			max: MAX_ZOOM
+		});
 	}
 
 	// Measure the mounted menu, then re-clamp: a spawn point is a degenerate anchor rect.
@@ -1034,10 +1006,8 @@
 			hasSelection
 		});
 		const root = rootEl as HTMLDivElement;
-		// CAPTURE, so the touch handlers run before d3-zoom's own; `passive: false` so their
-		// `preventDefault` is honoured.
-		const touchOpts = { capture: true, passive: false };
 		const offs = [
+			bindZoom(root),
 			// `document`, not `window`: the shell listens on window, so the canvas's Escape goes first.
 			on(document, 'keydown', onKeydown),
 			on(window, 'paste', onPaste),
@@ -1046,17 +1016,12 @@
 			on(root, 'pointerdown', onCanvasPointerDown),
 			on(root, 'pointermove', canvasPress.move),
 			on(root, 'pointerup', canvasPress.cancel),
-			on(root, 'pointercancel', canvasPress.cancel),
-			on(root, 'touchstart', onCanvasTouchStart, touchOpts),
-			on(root, 'touchmove', onCanvasTouchMove, touchOpts),
-			on(root, 'touchend', onCanvasTouchEnd, touchOpts),
-			on(root, 'touchcancel', tapZoom.cancel, { capture: true })
+			on(root, 'pointercancel', canvasPress.cancel)
 		];
 		return () => {
 			offs.forEach((off) => off());
 			unregisterEditor(panelId);
 			canvasPress.cancel(); // a press in flight must not fire into an unmounted editor
-			tapZoom.cancel(); // …and neither may a zoom gesture keep writing a torn-down viewport
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.

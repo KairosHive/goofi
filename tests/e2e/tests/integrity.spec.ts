@@ -255,8 +255,25 @@ test('a patch under construction holds together at every stage', async ({ page }
 				expect(names).toContain('Inspector');
 				expect(names).not.toContain('Parameters');
 				expect(names).not.toContain('Metadata');
+				// A machine with every kind of thing on it, so the Machine panel mounts a full scene.
+				await rawCall(page, 'machine add', { name: 'sweep' });
+				await rawCall(page, 'machine attribute add', { machine: 'sweep', name: 'level', value: 0.5, control: { kind: 'knob', min: 0, max: 1, step: 0.01 } });
+				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'A', pos: [0, 0], values: { level: 0.2 } });
+				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'B', pos: [320, 40] });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', triggers: [{ kind: 'manual' }, { kind: 'after', seconds: 2, chance: 0.5 }], duration: 1 });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', triggers: [{ kind: 'when', expression: 'variables.system.time > 1' }] });
+				await rawCall(page, 'machine playhead add', { machine: 'sweep', start: 'A' });
 				for (const name of names) {
 					await choosePanelType(page, name);
+					if (name === 'Machine') {
+						await page.evaluate(() => {
+							const g = (window as any).goofi;
+							g.commands.setPanelState(g.query.panels()[0].panelId, { machine: 'sweep' });
+						});
+						await expect(page.getByTestId('state-card-A')).toBeVisible();
+						await page.getByTestId('transition-t1').click({ button: 'right' });
+						await expect(page.getByTestId('machine-transition')).toBeVisible();
+					}
 					if (name === 'Inspector') {
 						await page.getByTestId('panel-node').locator('select').selectOption(osc);
 						await expect(page.locator('.param-form')).toBeVisible();
@@ -268,6 +285,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 					await expectIntact(page, `the ${name} panel`);
 				}
 				await choosePanelType(page, 'Node Editor');
+				await rawCall(page, 'machine remove', { machine: 'sweep' });
 			});
 		}
 

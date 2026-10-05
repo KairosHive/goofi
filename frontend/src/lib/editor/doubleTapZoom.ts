@@ -1,6 +1,6 @@
 /** Double-tap, then drag to zoom — the one-handed zoom recognizer and its viewport arithmetic. */
 import type { Viewport } from '@xyflow/svelte';
-import type { ScreenPoint } from './eventPoint';
+import { eventPoint, type ScreenPoint } from './eventPoint';
 
 /** How long a touch may last and still be a tap. Must stay under the 500 ms long press. */
 export const TAP_MS = 300;
@@ -76,5 +76,67 @@ export function zoomStep(
 		x: from.x + anchor.x * (from.zoom - zoom),
 		y: from.y + anchor.y * (from.zoom - zoom),
 		zoom
+	};
+}
+
+/** Wire the double-tap-and-drag zoom onto `root`'s bare pane. On `touchstart` in CAPTURE, not
+ * `pointerdown`: Svelte Flow pans by d3-zoom, which binds `touchstart` on its own pane wrapper, so
+ * only a capture listener above it can stop the pan. A second finger is a pinch and is handed back.
+ * Answers the teardown; a gesture in flight must not keep writing a torn-down viewport. */
+export function bindTapZoom(
+	root: HTMLElement,
+	o: {
+		/** Whether a touch at `target` may start the gesture: the bare pane, with nothing pending. */
+		allowed: (target: EventTarget | null) => boolean;
+		/** Called as a double tap is recognised, so a long-press door armed by the first tap stands down. */
+		onStart?: () => void;
+		getViewport: () => Viewport | undefined;
+		screenToFlow: (p: { x: number; y: number }) => { x: number; y: number } | undefined;
+		setViewport: (v: Viewport) => void;
+		min: number;
+		max: number;
+	}
+): () => void {
+	const tapZoom = createDoubleTapZoom();
+	// Sampled ONCE at the start, so the drag cannot accumulate rounding.
+	let from: Viewport | null = null;
+	let anchor: { x: number; y: number } | null = null;
+	const start = (e: TouchEvent): void => {
+		if (e.touches.length > 1 || !o.allowed(e.target)) {
+			tapZoom.cancel();
+			return;
+		}
+		const p = eventPoint(e);
+		if (!p || !tapZoom.down(p, e.timeStamp)) return;
+		o.onStart?.();
+		from = o.getViewport() ?? null;
+		anchor = o.screenToFlow({ x: p.clientX, y: p.clientY }) ?? null;
+		e.stopPropagation();
+		e.preventDefault();
+	};
+	const move = (e: TouchEvent): void => {
+		const p = eventPoint(e);
+		if (!p) return;
+		const factor = tapZoom.move(p);
+		if (factor === null || !from || !anchor) return;
+		e.stopPropagation();
+		e.preventDefault();
+		o.setViewport(zoomStep(from, anchor, factor, { min: o.min, max: o.max }));
+	};
+	const end = (e: TouchEvent): void => {
+		const p = eventPoint(e);
+		if (p) tapZoom.up(p, e.timeStamp);
+	};
+	const opts = { capture: true, passive: false };
+	root.addEventListener('touchstart', start, opts);
+	root.addEventListener('touchmove', move, opts);
+	root.addEventListener('touchend', end, opts);
+	root.addEventListener('touchcancel', tapZoom.cancel, { capture: true });
+	return () => {
+		root.removeEventListener('touchstart', start, opts);
+		root.removeEventListener('touchmove', move, opts);
+		root.removeEventListener('touchend', end, opts);
+		root.removeEventListener('touchcancel', tapZoom.cancel, { capture: true });
+		tapZoom.cancel();
 	};
 }

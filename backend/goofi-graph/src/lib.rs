@@ -755,7 +755,7 @@ impl Graph {
         if self.patch.arrangement.control_panels().iter().any(|(_, group)| group == to) {
             return Err(format!("variable group `{to}` already exists"));
         }
-        let writes = self.patch.arrangement.regroup(from, to);
+        let writes = self.patch.arrangement.retarget("control", "group", from, to);
         if writes.is_empty() && !self.variables().has_group(from) {
             return Err(format!("no variable group `{from}`"));
         }
@@ -810,6 +810,8 @@ impl Graph {
         let at = self.patch.machines.get_index_of(from).ok_or_else(|| format!("no machine `{from}`"))?;
         let record = self.patch.machines.shift_remove(from).expect("the index answered");
         self.patch.machines.shift_insert(at, to.to_string(), record);
+        let writes = self.patch.arrangement.retarget("machine", "machine", from, to);
+        self.patch.arrangement.set_contents(&writes);
         self.sync_playheads();
         Ok(())
     }
