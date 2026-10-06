@@ -115,6 +115,10 @@ pub struct AudioHalf {
     manifest: &'static NodeManifest,
     /// The node's scalar params, which say how its inboxes play what enters them.
     params: Arc<[AtomicU64]>,
+    /// Per param, the functional a bare binding holds, and the ramp it is rendered by.
+    functionals: Vec<Option<Arc<[u8]>>>,
+    ramps: Arc<[crate::runtime::Ramps]>,
+    evaluator: goofi_runtime::SharedEvaluator,
     playback: crate::runtime::Playback,
     /// Why the last frame an oscillator was handed could not sound, shown on its `mode`.
     refused: Option<String>,
@@ -141,6 +145,8 @@ pub struct Birth {
     pub uid: goofi_node::Uid,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
+    pub ramps: Arc<[crate::runtime::Ramps]>,
+    pub evaluator: goofi_runtime::SharedEvaluator,
     pub inboxes: Vec<Inbox>,
     pub blocks: rtrb::Producer<f32>,
     pub param_chans: Vec<Arc<AtomicU16>>,
@@ -163,6 +169,9 @@ impl AudioHalf {
         AudioHalf {
             uid: birth.uid,
             manifest: birth.manifest,
+            functionals: vec![None; birth.manifest.params.len()],
+            ramps: birth.ramps,
+            evaluator: birth.evaluator,
             params: birth.params,
             playback: crate::runtime::Playback::of(birth.manifest),
             refused: None,
@@ -339,6 +348,42 @@ impl AudioHalf {
     }
 }
 
+impl AudioHalf {
+    /// Every functional read at the start of each of the `POINTS` blocks from the one the audio
+    /// thread renders next, which the clock tie places in patch time; the ramps take the points.
+    fn breakpoints(&mut self, cx: &Cx<'_>, anchor: &crate::runtime::Anchor) {
+        if self.functionals.iter().all(Option::is_none) {
+            return;
+        }
+        let Some(ev) = self.evaluator.lock().clone() else { return };
+        let (first, epoch) = (anchor.blocks.load(Ordering::Relaxed), anchor.epoch());
+        for (param, code) in self.functionals.iter().enumerate() {
+            let Some(code) = code else { continue };
+            let range = match &cx.consts[param] {
+                goofi_core::Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
+                _ => (0.0, 1.0),
+            };
+            let mut values = [0f32; crate::runtime::POINTS];
+            let mut whole = true;
+            for (i, v) in values.iter_mut().enumerate() {
+                let t = anchor.seconds(first + i as u64, epoch);
+                match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range }) {
+                    Ok(frame) => *v = goofi_core::control::number_of(&frame) as f32,
+                    Err(_) => {
+                        whole = false;
+                        break;
+                    }
+                }
+            }
+            // A functional that cannot be read holds its ramp where it is; the binding's own error
+            // is the runtime's to report.
+            if whole {
+                self.ramps[param].set(first, &values);
+            }
+        }
+    }
+}
+
 impl Executor for AudioHalf {
     /// One frame into the crossing that resamples it to the clock's rate, or that enters its
     /// values as they are for an oscillator to sound.
@@ -385,6 +430,15 @@ impl Executor for AudioHalf {
         moved
     }
 
+    /// A functional on a param is rendered by a ramp through the block boundaries ahead; without
+    /// one the scalar fills as before.
+    fn functional(&mut self, param: usize, code: Option<&Arc<[u8]>>) {
+        if code.is_none() && self.functionals[param].is_some() {
+            self.ramps[param].clear();
+        }
+        self.functionals[param] = code.cloned();
+    }
+
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
         if wires.is_empty() {
             self.inboxes[inbox].pos = 0.0;
@@ -411,6 +465,7 @@ impl Executor for AudioHalf {
         self.pulses.clear();
         let rate = self.audio.rate();
         let anchor = self.audio.anchor.clone();
+        self.breakpoints(cx, &anchor);
         for (i, ring) in self.recs.iter_mut().enumerate() {
             record_out(ring, cx, i, rate, &anchor, publish);
         }

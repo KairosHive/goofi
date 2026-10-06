@@ -2,7 +2,7 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -40,6 +40,8 @@ pub struct Slot {
     pub node: Box<dyn AudioNode>,
     /// The scalar per param, `f64` bits, written by the node's control half.
     pub params: Arc<[AtomicU64]>,
+    /// Per param, the ramp a functional binding is rendered by, in place of the scalar.
+    pub ramps: Arc<[Ramps]>,
     /// One per Array input, in declaration order.
     pub inboxes: Vec<Frames>,
     /// The computed params' results, a chunk each: `param`, `channels`, `len`, then the samples.
@@ -54,6 +56,65 @@ pub struct Slot {
     pub overruns: u8,
     /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
     pub cost: Option<Duration>,
+}
+
+/// How many block boundaries a ramp carries: 16 blocks is 21 ms at 48 kHz, past the control
+/// half's tick, so a late tick holds the last point rather than tearing.
+pub const POINTS: usize = 17;
+
+/// One param's breakpoints: the value at the start of each of `POINTS` blocks from `first`. The
+/// callback ramps linearly across a block between two and holds the last past them.
+struct Points {
+    first: AtomicU64,
+    values: [AtomicU32; POINTS],
+}
+
+/// A param's ramp, double-buffered: the control half writes the back page and flips; the callback
+/// reads the front, which the writer leaves alone until its next tick.
+pub struct Ramps {
+    active: AtomicBool,
+    front: AtomicUsize,
+    pages: [Points; 2],
+}
+
+impl Default for Ramps {
+    fn default() -> Ramps {
+        let page = || Points { first: AtomicU64::new(0), values: std::array::from_fn(|_| AtomicU32::new(0)) };
+        Ramps { active: AtomicBool::new(false), front: AtomicUsize::new(0), pages: [page(), page()] }
+    }
+}
+
+impl Ramps {
+    /// The points from block `first` on, then the ramp is live.
+    pub fn set(&self, first: u64, values: &[f32; POINTS]) {
+        let back = 1 - self.front.load(Ordering::Acquire);
+        let page = &self.pages[back];
+        page.first.store(first, Ordering::Relaxed);
+        for (cell, v) in page.values.iter().zip(values) {
+            cell.store(v.to_bits(), Ordering::Relaxed);
+        }
+        self.front.store(back, Ordering::Release);
+        self.active.store(true, Ordering::Release);
+    }
+
+    pub fn clear(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    /// Block `n` into `region` from the points: false when no ramp is live, so the scalar fills.
+    pub fn fill(&self, n: u64, region: &mut [f32]) -> bool {
+        if !self.active.load(Ordering::Acquire) {
+            return false;
+        }
+        let page = &self.pages[self.front.load(Ordering::Acquire)];
+        let at = |i: usize| f32::from_bits(page.values[i.min(POINTS - 1)].load(Ordering::Relaxed));
+        let i = n.saturating_sub(page.first.load(Ordering::Relaxed)) as usize;
+        let (from, to) = if n < page.first.load(Ordering::Relaxed) || i + 1 >= POINTS { (at(i), at(i)) } else { (at(i), at(i + 1)) };
+        for (k, x) in region.iter_mut().enumerate() {
+            *x = from + (to - from) * k as f32 / BLOCK as f32;
+        }
+        true
+    }
 }
 
 /// The audio thread's end of a device's or a file's feed: chunks of interleaved samples, each
@@ -664,8 +725,11 @@ impl Runtime {
             for src in stage.params.iter().chain(&stage.ins) {
                 match src {
                     Source::Scalar { at, param } => {
-                        let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
                         let region = carve(arena, &[(*at, BLOCK)]).take(0);
+                        if slot.ramps[*param].fill(n, region) {
+                            continue;
+                        }
+                        let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
                         if region[0] != v {
                             region.fill(v);
                         }

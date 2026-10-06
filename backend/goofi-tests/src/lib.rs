@@ -601,6 +601,11 @@ pub fn drive(g: &Goofi, frames: usize) -> (Vec<f32>, u16) {
     goofi_bridge::audio_engine(&mut graph).drive(frames)
 }
 
+/// Put the external audio clock's next block at now in patch time, where a device's clock would be.
+pub fn align(g: &Goofi) {
+    goofi_bridge::audio_engine(&mut g.graph()).align();
+}
+
 /// Wait until every audio control half has taken what the patch last asked of it: one whole
 /// control tick each, acknowledged, so a param edit is in the next block `drive` renders.
 pub fn applied(g: &Goofi) {

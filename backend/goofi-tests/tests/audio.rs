@@ -576,6 +576,38 @@ fn a_patch_sounds_under_the_external_clock() {
     evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
     sounds(&g, "…and the result lands once it is back", |x| (peak(x) - 1.0).abs() < 0.01);
 
+    // Step: a param bound to a machine attribute in flight holds a FUNCTIONAL, and the control half
+    // renders it as a ramp through the block boundaries ahead: the gain climbs block by block from
+    // the level it left toward the target, never past it, and holds the target once the flight ends.
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    for (op, payload) in [
+        ("machine add", j!({ "name": "amp" })),
+        ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "low", "values": { "level": 0.25 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "high", "values": { "level": 1.0 } })),
+        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "triggers": [{ "kind": "manual" }], "duration": 0.5, "curve": "linear" })),
+        ("machine playhead add", j!({ "machine": "amp", "name": "h", "start": "low" })),
+    ] {
+        g.call(op, payload);
+    }
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level" }));
+    sounds(&g, "the gain at the start state's level", |x| (peak(x) - 0.25).abs() < 0.01);
+    // The blocks driven so far put the external clock's time far from the patch's; a device's
+    // would be in step. The next block is now, then the blocks rendered keep pace with the ticks.
+    goofi_tests::align(&g);
+    g.call("machine fire", j!({ "machine": "amp", "playhead": "h", "transition": "t1" }));
+    let mut peaks: Vec<f32> = Vec::new();
+    g.until("the flight to reach the target", |g| {
+        goofi_tests::applied(g);
+        let (x, chans) = drive(g, 8 * 64);
+        peaks.push(peak(&x[x.len() - 64 * chans as usize..]));
+        ((peaks.last().unwrap() - 1.0).abs() < 0.002).then_some(())
+    });
+    assert!(peaks.windows(2).all(|w| w[1] >= w[0] - 1e-4), "the gain climbs block by block: {peaks:?}");
+    assert!(peaks.iter().all(|p| *p <= 1.0 + 1e-4), "never past the target: {peaks:?}");
+    assert!(peaks.iter().any(|p| *p > 0.3 && *p < 0.95), "the ramp was heard on the way: {peaks:?}");
+    assert!(g.stays(|g| (peak(&drive(g, TENTH).0) - 1.0).abs() < 0.002), "the target holds once the flight ends");
+
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names
     // it and the node reads silence — because a NaN is not a value a plan can carry.
     let poison = g.add("_TestConst");

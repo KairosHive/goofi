@@ -323,6 +323,9 @@ pub trait Executor {
     fn frame(&mut self, _param: usize, _frame: &Data) -> bool {
         false
     }
+    /// What a bare binding on the whole of `param` holds before this run: a functional, which an
+    /// engine with a clock of its own reads at its own instants, or not one.
+    fn functional(&mut self, _param: usize, _code: Option<&Arc<[u8]>>) {}
     /// A pulse param was raised: by the op, or by its source's rising edge.
     fn pulse(&mut self, _param: usize) -> Ticked {
         Ticked::default()
@@ -655,6 +658,13 @@ impl<E: Executor> Runtime<E> {
                 // Every expression of the time is read right before the run, at the run's time.
                 let mut pass = Pass::default();
                 for i in 0..self.binds.len() {
+                    if self.binds[i].elem.is_none() {
+                        let code = match self.binds[i].expr.inputs() {
+                            Ok(Some(Inputs::Bare(f))) => f.as_functional().map(Arc::from),
+                            _ => None,
+                        };
+                        self.exec.functional(self.binds[i].param, code.as_ref());
+                    }
                     if self.binds[i].timed() {
                         self.evaluate(i, &mut pass);
                     }
@@ -797,6 +807,9 @@ impl<E: Executor> Runtime<E> {
         }
         let mut pass = Pass::default();
         for dropped in old {
+            if dropped.elem.is_none() {
+                self.exec.functional(dropped.param, None);
+            }
             pass.values |= self.evaluated.shift_remove(&dropped.key).is_some();
             if self.errors.shift_remove(&dropped.key).is_some() {
                 pass.errors.push((dropped.key, None));

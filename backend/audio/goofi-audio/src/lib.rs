@@ -438,6 +438,15 @@ impl AudioEngine {
         (out, channels)
     }
 
+    /// Say that the block the external clock renders next is NOW in patch time: the harness's
+    /// hand on a clock a device would keep in step by itself.
+    pub fn align(&mut self) {
+        let rt = self.runtime.lock();
+        let rate = self.audio.rate();
+        self.audio.anchor.tie(self.time.now(), rate);
+        drop(rt);
+    }
+
     /// Take each `process` of `uid`'s current occupant to cost `cost`, not the wall time it took, so
     /// a test judges the watchdog without racing the scheduler; `None` measures again.
     pub fn state_cost(&mut self, uid: Uid, cost: Option<Duration>) {
@@ -800,11 +809,14 @@ impl Engine for AudioEngine {
         let (inbox_chans, wanted) = AudioHalf::cells(&inboxes);
         let (blocks_in, blocks_out) = rtrb::RingBuffer::<f32>::new(control::BLOCKS_RING);
         let param_chans: Vec<Arc<AtomicU16>> = manifest.params.iter().map(|_| Arc::new(AtomicU16::new(1))).collect();
+        let ramps: Arc<[runtime::Ramps]> = manifest.params.iter().map(|_| runtime::Ramps::default()).collect();
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let birth = control::Birth {
             uid,
             manifest,
             params: atomics.clone(),
+            ramps: ramps.clone(),
+            evaluator: self.shared.evaluator.clone(),
             inboxes,
             blocks: blocks_in,
             param_chans: param_chans.clone(),
@@ -836,6 +848,7 @@ impl Engine for AudioEngine {
             serial,
             node,
             params: atomics,
+            ramps,
             inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), self.audio.rate())).collect(),
             blocks: blocks_out,
             taps: tap_in,

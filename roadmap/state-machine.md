@@ -95,15 +95,14 @@ and the runtime, follower, reducer and `variable list` running a functional at t
 stepper settling every instant it is owed in order (`Machines::advance`, `next_deadline`, stamped
 fire/jump/reset, `arrived`, functionals for attributes and `progress` in flight, the hop bound as
 an error); the thread waking for the next deadline, a stamped request, a replaced model or a
-watched write (`VariableStore::set_watch`), with no pace.
+watched write (`VariableStore::set_watch`), with no pace; the audio control half reading a
+functional at the block boundaries ahead (`Executor::functional`, `Ramps`) and the callback
+ramping between them, with the harness's `align` for the external clock.
 
-1. **Audio breakpoints** (`goofi-audio`): boundary evaluation in the control half, the callback
-   ramp. About +80.
-2. **Panel**: `PlayheadDots` orders residents by `arrived`.
-3. **Tests**: an audio param bound to an interpolating attribute renders the ramp under the
-   external clock and never passes the target; a signal node reads the value for its run; a
-   `common.trigger` pulse runs a node that nothing else runs; an `lfo()` param moves only when
-   its node runs. No rate or latency assertion.
+1. **Panel**: `PlayheadDots` orders residents by `arrived`.
+2. **Tests**: a signal node reads a functional's value for its run; a `common.trigger` pulse runs
+   a node that nothing else runs; an `lfo()` param moves only when its node runs. No rate or
+   latency assertion.
 
 Each stage ends at a tested commit.
 
