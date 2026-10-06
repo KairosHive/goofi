@@ -525,6 +525,9 @@ pub enum Value {
     Array(ArrayStore),
     Str(Arc<str>),
     Table(Arc<IndexMap<String, Data>>),
+    /// A value as a function of the patch time: a compiled expression of `t`, marshaled, that the
+    /// reader runs through the evaluator at the instant it reads. Its constants are its own.
+    Functional(Arc<[u8]>),
 }
 
 /// Two values are equal when they say the same thing; a texture or a table only when it is one.
@@ -535,13 +538,14 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Table(a), Value::Table(b)) => Arc::ptr_eq(a, b),
             (Value::Texture(a), Value::Texture(b)) => Arc::ptr_eq(a, b),
+            (Value::Functional(a), Value::Functional(b)) => a == b,
             _ => false,
         }
     }
 }
 
 /// The GOOF dtype tag bytes by name: a frame's sixth byte indexes this table.
-pub const DTYPE_NAMES: [&str; 4] = ["ARRAY", "STRING", "TABLE", "TEXTURE"];
+pub const DTYPE_NAMES: [&str; 5] = ["ARRAY", "STRING", "TABLE", "TEXTURE", "FUNCTIONAL"];
 
 impl Value {
     /// The GOOF dtype tag byte, an index into [`DTYPE_NAMES`].
@@ -551,6 +555,7 @@ impl Value {
             Value::Str(_) => 1,
             Value::Table(_) => 2,
             Value::Texture(_) => 3,
+            Value::Functional(_) => 4,
         }
     }
 }
@@ -643,6 +648,19 @@ impl Data {
         }))
     }
 
+    /// A functional: the marshaled code of a compiled expression of `t`.
+    pub fn functional(code: impl Into<Arc<[u8]>>, meta: Meta) -> Data {
+        Data(Arc::new(DataInner { value: Value::Functional(code.into()), meta }))
+    }
+
+    /// The code a functional carries, if this is one.
+    pub fn as_functional(&self) -> Option<&[u8]> {
+        match &self.0.value {
+            Value::Functional(code) => Some(code),
+            _ => None,
+        }
+    }
+
     /// Build an f32 array `Data`, promoting 0-d to 1-d and validating channel coords.
     pub fn array_f32(shape: Vec<usize>, buf: Vec<u8>, meta: Meta) -> Result<Data> {
         let samples = 0..buf.len();
@@ -697,6 +715,7 @@ impl Data {
             Value::Array(a) => Ok(a),
             Value::Str(_) => Err("expected an array, got a string".into()),
             Value::Table(_) => Err("expected an array, got a table".into()),
+            Value::Functional(_) => Err("expected an array, got a functional".into()),
         }
     }
 
@@ -706,6 +725,7 @@ impl Data {
             Value::Str(s) => Ok(s),
             Value::Array(_) => Err("expected a string, got an array".into()),
             Value::Table(_) => Err("expected a string, got a table".into()),
+            Value::Functional(_) => Err("expected a string, got a functional".into()),
         }
     }
 
@@ -715,6 +735,7 @@ impl Data {
             Value::Table(t) => Ok(t),
             Value::Array(_) => Err("expected a table, got an array".into()),
             Value::Str(_) => Err("expected a table, got a string".into()),
+            Value::Functional(_) => Err("expected a table, got a functional".into()),
         }
     }
 

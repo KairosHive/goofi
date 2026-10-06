@@ -429,6 +429,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             return;
         };
         let mut feed: Option<SlotFeed> = None;
+        let time = graph.lock().time();
         // The cache still belongs to this service after an idle port is dropped.
         let mut source: Option<String> = None;
         // The graph epoch the address was last read at: a poke re-reads it only when the graph
@@ -628,6 +629,18 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 Some(ready) => ready.clone(),
                 None => {
                     let Some(d) = latest.lock().clone() else { continue };
+                    // A functional is a function of the time; the viewers see its value now.
+                    let d = match (d.as_functional().is_some(), graph.lock().evaluator()) {
+                        (false, _) => d,
+                        (true, None) => continue,
+                        (true, Some(ev)) => match goofi_node::at(&*ev, &d, time.now(), (0.0, 1.0)) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: {}", e.0));
+                                continue;
+                            }
+                        },
+                    };
                     let encoded = if same {
                         goofi_codec::encode_stamps(d.meta())
                     } else {

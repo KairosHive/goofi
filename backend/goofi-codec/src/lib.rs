@@ -180,6 +180,7 @@ enum Body<'a> {
     Array { head: Vec<u8>, samples: &'a [u8] },
     Str(&'a [u8]),
     Texture(Vec<u8>),
+    Functional(&'a [u8]),
     /// Per entry: the key's length, the value frame's length, and that frame's length as bytes.
     Table { map: &'a indexmap::IndexMap<String, Data>, count: [u8; 4], heads: Vec<([u8; 2], usize, [u8; 4])> },
 }
@@ -190,6 +191,7 @@ impl<'a> Body<'a> {
             Value::Texture(t) => Body::Texture(packed("texture", &**t)?),
             Value::Array(store) => Body::Array { head: array_head_bytes(b"<f4", store.shape())?, samples: store.as_bytes() },
             Value::Str(s) => Body::Str(s.as_bytes()),
+            Value::Functional(code) => Body::Functional(code),
             Value::Table(map) => {
                 let mut heads = Vec::with_capacity(map.len());
                 for (key, value) in map.iter() {
@@ -204,7 +206,7 @@ impl<'a> Body<'a> {
     fn len(&self) -> usize {
         match self {
             Body::Array { head, samples } => head.len() + samples.len(),
-            Body::Str(s) => s.len(),
+            Body::Str(s) | Body::Functional(s) => s.len(),
             Body::Texture(t) => t.len(),
             Body::Table { map, heads, .. } => 4 + map.keys().zip(heads).map(|(k, (_, len, _))| 2 + k.len() + 4 + len).sum::<usize>(),
         }
@@ -216,7 +218,7 @@ impl<'a> Body<'a> {
                 out.put(&head);
                 out.put_samples(samples);
             }
-            Body::Str(s) => out.put(s),
+            Body::Str(s) | Body::Functional(s) => out.put(s),
             Body::Texture(t) => out.put(&t),
             Body::Table { map, count, heads } => {
                 out.put(&count);
@@ -258,7 +260,7 @@ pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
 
 /// The tag of a frame that carries the engine's per-emit stamps alone, with no body: sent when
 /// the frame they belong to already reached the viewers, and merged into it there.
-pub const STAMPS_TAG: u8 = 4;
+pub const STAMPS_TAG: u8 = 0xff;
 /// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
 const STAMP_KEYS: [&str; 5] = [META_TIME, META_INDEX, META_UFREQ, META_EMIT, META_SOURCE];
 
@@ -311,6 +313,7 @@ fn hash_into(d: &Data, h: &mut DefaultHasher, root: bool) -> Result<(), EncodeEr
             h.write(store.as_bytes());
         }
         Value::Str(s) => h.write(s.as_bytes()),
+        Value::Functional(code) => h.write(code),
         Value::Table(map) => {
             h.write_usize(map.len());
             for (key, value) in map.iter() {
@@ -351,9 +354,13 @@ fn pack_meta(d: &Data) -> Result<Vec<u8>, EncodeError> {
     match d.value() {
         Value::Texture(_) => pack(carried(meta)),
         Value::Array(store) => pack_array_meta(meta, store.shape(), "float32"),
-        Value::Str(_) | Value::Table(_) => {
+        Value::Str(_) | Value::Table(_) | Value::Functional(_) => {
             let mut entries = carried(meta);
-            let dtype = if matches!(d.value(), Value::Str(_)) { "str" } else { "table" };
+            let dtype = match d.value() {
+                Value::Str(_) => "str",
+                Value::Functional(_) => "functional",
+                _ => "table",
+            };
             entries.push((Mp::from("dtype"), Mp::from(dtype)));
             pack(entries)
         }
@@ -517,6 +524,7 @@ pub(crate) fn decode_at(buf: &Arc<Vec<u8>>, at: Range<usize>, depth: usize) -> s
         }
         2 => decode_table(buf, body, meta, depth),
         3 => Data::texture(rmp_serde::from_slice(&buf[body]).map_err(|e| e.to_string())?, meta),
+        4 => Ok(Data::functional(buf[body].to_vec(), meta)),
         STAMPS_TAG => Err("a stamps frame carries no data".into()),
         other => Err(format!("unknown dtype tag {other}")),
     }

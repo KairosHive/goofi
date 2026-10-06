@@ -147,7 +147,7 @@ struct Flaky {
 
 impl ExprEvaluator for Flaky {
     fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
-        Ok(Compiled { id: 1 })
+        Ok(Compiled { id: 1, code: Arc::from(&b""[..]) })
     }
     fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
         if self.broken.load(Ordering::Relaxed) {
@@ -156,6 +156,9 @@ impl ExprEvaluator for Flaky {
         goofi_tests::first_var(ctx)
     }
     fn release(&self, _id: BindingId) {}
+    fn run(&self, _code: &[u8], _ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
+        Err(ExprError("no functional here".into()))
+    }
 }
 
 #[test]

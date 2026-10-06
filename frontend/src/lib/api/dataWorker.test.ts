@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { encode } from '@msgpack/msgpack';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { STAMPS_TAG } from '$lib/codec/frame';
 
 /** A socket stand-in: records what the worker sends, and delivers what a test hands it. */
 class MockSocket {
@@ -42,11 +43,11 @@ const golden = JSON.parse(
 ) as { entries: { name: string; hex: string }[] };
 const bytes = (hex: string): ArrayBuffer => Uint8Array.from(hex.match(/../g)!, (b) => parseInt(b, 16)).buffer;
 
-/** A stamps frame: the GOOF header under tag 4, its meta, and no body. */
+/** A stamps frame: the GOOF header under the stamps tag, its meta, and no body. */
 function stampsFrame(meta: Record<string, unknown>): ArrayBuffer {
 	const m = encode(meta);
 	const out = new Uint8Array(14 + m.length);
-	out.set([0x47, 0x4f, 0x4f, 0x46, 2, 4]);
+	out.set([0x47, 0x4f, 0x4f, 0x46, 2, STAMPS_TAG]);
 	new DataView(out.buffer).setUint32(6, m.length, true);
 	out.set(m, 14);
 	return out.buffer;

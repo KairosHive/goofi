@@ -1510,7 +1510,11 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             for name in touched {
                 let Some(expr) = held.get(&name) else { continue };
                 let value = match expr.inputs() {
-                    Ok(Some(goofi_node::mailbox::Inputs::Bare(frame))) => Ok(frame),
+                    Ok(Some(goofi_node::mailbox::Inputs::Bare(frame))) => match (&evaluator, frame.as_functional()) {
+                        (Some(ev), Some(_)) => goofi_node::at(&**ev, &frame, t, (0.0, 1.0)).map_err(|e| e.0),
+                        (None, Some(_)) => Err("no expression evaluator available".to_string()),
+                        (_, None) => Ok(frame),
+                    },
                     Ok(Some(goofi_node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
                         (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0) }).map_err(|e| e.0),
                         _ => Err("no expression evaluator available".to_string()),

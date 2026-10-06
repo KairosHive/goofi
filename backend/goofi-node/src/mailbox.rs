@@ -72,6 +72,7 @@ pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
     match (frame.value(), index) {
         (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),
         (goofi_core::Value::Table(_), _) => Err("a bare source cannot read a TABLE output".into()),
+        (goofi_core::Value::Functional(_), Some(_)) => Err("a FUNCTIONAL has no element to index".into()),
         (goofi_core::Value::Array(a), Some(at)) => {
             let x = a.values().nth(at).ok_or_else(|| format!("index {at} is outside frame {:?}", a.shape()))?;
             Ok(Data::number(f64::from(x)))

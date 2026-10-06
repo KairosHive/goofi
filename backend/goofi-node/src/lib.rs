@@ -1,6 +1,7 @@
 //! The ONE node abstraction and its runtime plumbing.
 
 use std::fmt;
+use std::sync::Arc;
 
 use goofi_core::{Data, Param, SlotType};
 use indexmap::IndexMap;
@@ -276,6 +277,8 @@ string_error!(
 /// The result of compiling an expression: the evaluator's opaque handle.
 pub struct Compiled {
     pub id: BindingId,
+    /// The function's code, marshaled: what a functional frame carries.
+    pub code: Arc<[u8]>,
 }
 
 /// One expression variable's value, as the graph resolved it.
@@ -298,9 +301,21 @@ pub struct EvalCtx<'a> {
 /// Evaluates expressions; implemented in `goofi-python` and injected, so the engine core carries
 /// no pyo3 dependency. A result is a frame, read into its target through `control::read`.
 pub trait ExprEvaluator: Send + Sync {
+    /// Compile `source`, a Python expression over `t` and the rewritten variables; one text
+    /// compiles once however many bindings hold it, and `release` lets go of one hold.
     fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
     fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
     fn release(&self, id: BindingId);
+    /// Run a functional's marshaled code at `ctx.t`: what a reader of a functional frame calls.
+    fn run(&self, code: &[u8], ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
+}
+
+/// A functional frame's value at `t`, and any other frame as it is.
+pub fn at(ev: &dyn ExprEvaluator, frame: &Data, t: f64, range: (f64, f64)) -> Result<Data, ExprError> {
+    match frame.as_functional() {
+        Some(code) => ev.run(code, &EvalCtx { locals: &[], t, range }),
+        None => Ok(frame.clone()),
+    }
 }
 
 /// Where a node type's code actually runs. This is the ONE owner of that fact: the palette shows

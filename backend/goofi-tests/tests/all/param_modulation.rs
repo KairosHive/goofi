@@ -51,4 +51,29 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     for source in ["lfo(1)", "noi(1)", "lfo(rate=1)", "noi(rate=1)"] {
         assert!(evaluate(source, 0.0, 0.0, 1.0).is_err(), "{source}");
     }
+
+    // One text compiles once however many bindings hold it, and the last release lets it go.
+    let (a, b) = (evaluator.compile("t + 1").unwrap(), evaluator.compile("t + 1").unwrap());
+    assert_eq!(a.id, b.id, "one source, one compiled function");
+    evaluator.release(a.id);
+    assert_eq!(control::number_of(&evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0) }).unwrap()), 3.0, "held by the other");
+    evaluator.release(b.id);
+    assert!(evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0) }).is_err(), "released");
+
+    // A FUNCTIONAL is a compiled expression's code as a frame: it crosses the wire as bytes, equal
+    // by those bytes, and whoever reads it runs it at their own time; a clamp is the code's own.
+    let compiled = evaluator.compile("min(2 + 3 * t, 5)").unwrap();
+    let frame = goofi_core::Data::functional(compiled.code.clone(), goofi_core::Meta::default());
+    evaluator.release(compiled.id);
+    let crossed = goofi_codec::decode(&goofi_codec::encode(&frame).unwrap()).unwrap();
+    assert_eq!(crossed, frame);
+    assert_eq!(crossed.as_functional(), frame.as_functional());
+    for (t, want) in [(0.0, 2.0), (0.5, 3.5), (1.0, 5.0), (7.0, 5.0)] {
+        let value = goofi_node::at(&evaluator, &crossed, t, (0.0, 1.0)).unwrap();
+        assert_eq!(control::number_of(&value), want, "at t={t}");
+    }
+    let plain = goofi_core::Data::number(4.0);
+    assert_eq!(goofi_node::at(&evaluator, &plain, 9.0, (0.0, 1.0)).unwrap(), plain, "a plain frame is itself");
+    assert!(goofi_codec::decode(&goofi_codec::encode(&goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default())).unwrap()).is_ok());
+    assert!(goofi_node::at(&evaluator, &goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default()), 0.0, (0.0, 1.0)).is_err(), "code that is not code is a run error, not a panic");
 }

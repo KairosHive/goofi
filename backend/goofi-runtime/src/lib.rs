@@ -560,6 +560,13 @@ struct Bind {
     streams: Vec<(String, String, ByteSubscriber)>,
 }
 
+impl Bind {
+    /// Whether the run reads it: a computed expression, or a bare source holding a functional.
+    fn timed(&self) -> bool {
+        self.expr.id.is_some() || matches!(self.expr.inputs(), Ok(Some(Inputs::Bare(f))) if f.as_functional().is_some())
+    }
+}
+
 struct Runtime<E: Executor> {
     uid: Uid,
     engine: &'static str,
@@ -645,10 +652,10 @@ impl<E: Executor> Runtime<E> {
             let now = Instant::now();
             let due = !mail.flush.is_empty() || self.exec.next_wake(self.last_run).is_some_and(|t| t <= now);
             if due {
-                // Every computed expression is read right before the run, at the run's time.
+                // Every expression of the time is read right before the run, at the run's time.
                 let mut pass = Pass::default();
                 for i in 0..self.binds.len() {
-                    if self.binds[i].expr.id.is_some() {
+                    if self.binds[i].timed() {
                         self.evaluate(i, &mut pass);
                     }
                 }
@@ -1145,20 +1152,22 @@ impl<E: Executor> Runtime<E> {
     /// this instant, and a source with nothing arrived leaves the literal standing.
     fn evaluate(&mut self, i: usize, pass: &mut Pass) {
         let target = self.target(i);
+        let range = match &target {
+            Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
+            _ => (0.0, 1.0),
+        };
         let outcome = match self.binds[i].expr.inputs() {
             Err(e) => Err(e),
             Ok(None) => Ok(None),
-            Ok(Some(Inputs::Bare(frame))) => Ok(Some(goofi_core::control::read(&frame, &target))),
-            Ok(Some(Inputs::Computed(locals))) => {
+            Ok(Some(Inputs::Bare(frame))) if frame.as_functional().is_none() => Ok(Some(goofi_core::control::read(&frame, &target))),
+            Ok(Some(inputs)) => {
                 let b = &self.binds[i];
-                let range = match &target {
-                    Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
-                    _ => (0.0, 1.0),
-                };
-                let ctx = EvalCtx { locals: &locals, t: self.time.now(), range };
-                let evaluated = match self.shared.evaluator.lock().clone() {
-                    Some(ev) => ev.eval(b.expr.id.expect("computed"), &ctx).map_err(|e| e.0),
-                    None => Err("no expression evaluator available".to_string()),
+                let evaluated = match (self.shared.evaluator.lock().clone(), inputs) {
+                    (None, _) => Err("no expression evaluator available".to_string()),
+                    (Some(ev), Inputs::Bare(frame)) => goofi_node::at(&*ev, &frame, self.time.now(), range).map_err(|e| e.0),
+                    (Some(ev), Inputs::Computed(locals)) => {
+                        ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.now(), range }).map_err(|e| e.0)
+                    }
                 };
                 let (param, whole) = (b.param, b.elem.is_none());
                 evaluated.map(|frame| {

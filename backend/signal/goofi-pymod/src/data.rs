@@ -92,6 +92,7 @@ impl Data {
             Value::Str(_) => "STRING",
             Value::Table(_) => "TABLE",
             Value::Texture(_) => "TEXTURE",
+            Value::Functional(_) => "FUNCTIONAL",
         }
     }
 

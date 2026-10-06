@@ -72,6 +72,7 @@ impl Writer {
     fn value(&self, d: &Data, depth: usize, out: &mut String) -> NodeResult {
         match d.value() {
             Value::Texture(_) => return Err("texture submissions cannot be written as JSON".into()),
+            Value::Functional(_) => return Err("a functional cannot be written as JSON".into()),
             Value::Str(s) => quote(s, out),
             Value::Array(a) => {
                 let values: Vec<f32> = a

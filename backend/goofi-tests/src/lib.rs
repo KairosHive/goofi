@@ -1151,7 +1151,7 @@ pub struct FirstVar {
 impl goofi_node::ExprEvaluator for FirstVar {
     fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
         self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(goofi_node::Compiled { id: 1 })
+        Ok(goofi_node::Compiled { id: 1, code: std::sync::Arc::from(&b""[..]) })
     }
     fn eval(&self, _id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
         while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1161,6 +1161,9 @@ impl goofi_node::ExprEvaluator for FirstVar {
         first_var(ctx)
     }
     fn release(&self, _id: goofi_node::BindingId) {}
+    fn run(&self, _code: &[u8], _ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+        Err(goofi_node::ExprError("the test evaluator runs no functional".into()))
+    }
 }
 
 /// The first variable's frame, whole — what every test evaluator answers with. A text with no

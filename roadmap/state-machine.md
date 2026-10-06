@@ -19,19 +19,16 @@ merged; it stays as reference for the feature specifications.
 - A playhead is in one of two states: **stationary** in a state, or **in flight** on a transition.
   Every change between them is one event at one logical instant, and each event produces one new
   `Data` per playhead variable. Nothing is published on a period.
-- Stationary, an attribute's variable is a plain value. In flight, it is a **functional**: a new
-  `Value::Functional { source, locals }`, a precompiled Python expression of `t` over bound
-  constants, evaluated against the global clock by whoever consumes it. Entered with a `t` past
-  the flight's end it yields the target state's value; before the start, the origin.
-- The machine builds the functional from the transition: `source` is the curve's closed form over
-  `(t - start) / (end - start)`, clamped, between `a` and `b`; `locals` hold `a` (the value held at
-  departure), `b` (the target state's value), `start` and `end` in patch seconds. `progress` is
-  the same functional from 0 to 1. A string or bool is not interpolated: it switches when the
-  arrival event lands. `state`, `prev` and `arrived` are plain values.
-- One source text per curve, so a consumer compiles each once and evaluates with new locals.
-  Equality of a functional is equality of source and locals; the codec carries both, the body a
-  table-like encoding of the locals behind the source. Shared-memory and wire changes land with
-  every consumer in one change.
+- Stationary, an attribute's variable is a plain value. In flight, it is a **functional**:
+  `Value::Functional`, the marshaled code of a compiled Python expression of `t`, run against the
+  global clock by whoever consumes it. The clamp is the code's own: entered with a `t` past the
+  flight's end it yields the target state's value; before the start, the origin. The data object
+  is clean: the code is the body, nothing else.
+- The machine writes the functional's source from the transition, its constants as literals: the
+  curve's closed form over `(t - start) / (end - start)`, clamped, between the value held at
+  departure and the target state's value; `progress` is the same from 0 to 1. A string or bool is
+  not interpolated: it switches when the arrival event lands. `state`, `prev` and `arrived` are
+  plain values.
 
 ### Logical instants, deadlines from deadlines
 
@@ -91,18 +88,19 @@ merged; it stays as reference for the feature specifications.
 ## Stages
 
 Shipped: expressions evaluated on the runtime thread before the run (the worker, `Cell`,
-`Bind::timed` and the 10 ms pace removed); the `triggers` flag gone and `common.trigger` added.
+`Bind::timed` and the 10 ms pace removed); the `triggers` flag gone and `common.trigger` added;
+`Value::Functional` (marshaled code of a compiled expression of `t`, dtype tag 4, the stamps
+frame moved to tag 255), `ExprEvaluator::run`, `goofi_node::at`, the compile cache by source,
+and the runtime, follower and reducer running a functional at their time.
 
-1. **Carrier** (`goofi-core`, `goofi-codec`, `goofi-node`): `Value::Functional`, codec tag and
-   golden, equality and hash, the functional-to-value call; the compile cache. About +110.
-2. **Stepper** (`goofi-graph/src/machine.rs`): the two playhead states; `advance` as above;
+1. **Stepper** (`goofi-graph/src/machine.rs`): the two playhead states; `advance` as above;
    stamped requests; `arrived`; the functional writer. The sampling loop, `HOPS` deferral and
    `blend` go. About +60 net.
-3. **Thread** (`goofi-bridge`): stamped messages, the deadline wait, the store's wake, the
+2. **Thread** (`goofi-bridge`): stamped messages, the deadline wait, the store's wake, the
    cap-paced loop removed. About +20 net.
-4. **Audio breakpoints** (`goofi-audio`): boundary evaluation in the control half, the callback
+3. **Audio breakpoints** (`goofi-audio`): boundary evaluation in the control half, the callback
    ramp. About +80.
-5. **Tests** (`goofi-tests`, Playwright): drive `Machines` directly on explicit instants, dense
+4. **Tests** (`goofi-tests`, Playwright): drive `Machines` directly on explicit instants, dense
    against sparse against one late catch-up, identical frames and `arrived`; a fire stamped before
    a due lands first; a 1/48000 s ping-pong. Through the session: the k-th hop's `arrived` equals
    the jump instant plus k dwells; a functional read at `end + 1` is the target and at `start`
