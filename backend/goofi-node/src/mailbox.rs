@@ -122,6 +122,11 @@ impl Expression {
         }
     }
 
+    /// Whether a value this reads is a function of the time, so the same arrival reads anew each time.
+    pub fn holds_functional(&self) -> bool {
+        self.vars.values().any(|m| matches!(m.value(), Some(Local::Frame(d)) if d.as_functional().is_some()))
+    }
+
     /// Land a producer's frame in the variable named `var`.
     pub fn deliver(&mut self, var: &str, frame: Data) {
         if let Some(mailbox) = self.vars.get_mut(var) {

@@ -1503,8 +1503,9 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                     }
                 }
             }
-            // A computed expression with no stream behind it follows the time, every interval.
-            touched.extend(held.iter().filter(|(_, e)| e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
+            // An expression of the time follows it every interval: one computed with no stream
+            // behind it, or one that reads a functional.
+            touched.extend(held.iter().filter(|(_, e)| e.holds_functional() || e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
             touched.sort();
             touched.dedup();
             let t = time.now();

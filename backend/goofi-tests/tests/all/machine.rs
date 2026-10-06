@@ -7,7 +7,7 @@ use goofi_core::indexmap::IndexMap;
 use goofi_core::Data;
 use goofi_graph::machine::Machines;
 use goofi_python::inproc::PyExprEvaluator;
-use goofi_tests::{f32s, hex, j, Goofi};
+use goofi_tests::{f32s, hex, j, Goofi, Viewer};
 use serde_json::Value;
 
 /// A playhead variable as text.
@@ -292,4 +292,59 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let w = m.advance(1.9 * period, &none);
     assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("A", "B"), "left B at 1.4 periods");
     assert!((value_at(&ev, written(&w, "p.progress"), 1.9 * period) - 0.5).abs() < 1e-9, "halfway through a one-period flight begun at 1.4");
+}
+
+/// The distinct values of `xs` strictly inside `(lo, hi)`.
+fn inside(xs: &[f32], lo: f32, hi: f32) -> Vec<f32> {
+    let mut found: Vec<f32> = xs.iter().copied().filter(|x| *x > lo && *x < hi).collect();
+    found.sort_by(f32::total_cmp);
+    found.dedup();
+    found
+}
+
+#[tokio::test]
+async fn a_flight_is_heard_between_its_frames_by_a_viewer_a_computation_and_an_alias() {
+    // One functional leaves the machine when a flight departs, and no frame follows until it
+    // lands. Every reader runs it at its own instant: a viewer each tick of its pace, a computed
+    // param before each run, an alias variable each follower interval — none sees two steps.
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
+    let base = g.serve().await;
+    for (op, payload) in [
+        ("machine add", j!({ "name": "m" })),
+        ("machine attribute add", j!({ "machine": "m", "name": "gain", "value": 0.0, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
+        ("machine state add", j!({ "machine": "m", "name": "A", "values": { "gain": 0.0 } })),
+        ("machine state add", j!({ "machine": "m", "name": "B", "values": { "gain": 1.0 } })),
+        ("machine transition add", j!({ "machine": "m", "from": "A", "to": "B", "triggers": [{ "kind": "manual" }], "duration": 1.5, "curve": "linear" })),
+        ("machine playhead add", j!({ "machine": "m", "name": "head", "start": "A" })),
+        ("variable entry add", j!({ "name": "desk.twice", "value": 0.0 })),
+        ("variable entry edit", j!({ "name": "desk.twice", "expression": "variables.head.gain * 2" })),
+    ] {
+        g.call(op, payload);
+    }
+    let reader = g.add("_TestScalar");
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "variables.head.gain + 1" }));
+    let probe = g.probe(reader, "out");
+    g.until("the reader to compute from the start value", |_| probe.latest().filter(|d| f32s(d) == [1.0]));
+    g.until("the alias to follow the start value", |g| (number(g, "desk.twice") == 0.0).then_some(()));
+    let mut viewer = Viewer::open(&base, "variables", "head.gain").await;
+    viewer.until(|d| f32s(d) == [0.0]).await;
+
+    g.call("machine fire", j!({ "machine": "m", "playhead": "head", "transition": "t1" }));
+    let (mut seen, mut computed, mut alias) = (Vec::new(), Vec::new(), Vec::new());
+    loop {
+        let value = f32s(&viewer.decoded().await)[0];
+        seen.push(value);
+        computed.extend(probe.latest().map(|d| f32s(&d)[0]));
+        alias.push(number(&g, "desk.twice") as f32);
+        if value >= 1.0 {
+            break;
+        }
+    }
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "the viewer hears the climb in order: {seen:?}");
+    assert!(inside(&seen, 0.0, 1.0).len() >= 2, "the viewer hears the move between its frames: {seen:?}");
+    assert!(inside(&computed, 1.0, 2.0).len() >= 2, "a computation reads the functional at each run: {computed:?}");
+    assert!(inside(&alias, 0.0, 2.0).len() >= 2, "an alias follows the functional in time: {alias:?}");
+    at_rest_in(&g, "head", "B");
+    g.until("the alias to land", |g| (number(g, "desk.twice") == 2.0).then_some(()));
 }

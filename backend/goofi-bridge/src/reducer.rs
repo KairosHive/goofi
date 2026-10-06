@@ -601,20 +601,6 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 continue;
             }
             let g_now = gen.load(Ordering::Acquire);
-            // What a frame says and its stamps go each when its own hash moved, so a repeat goes as
-            // stamps or not at all — unless a joiner, a leaver, a spec or a re-offer asked for it.
-            let (hash, stamps) = match &made {
-                Some(_) => (None, None),
-                None => {
-                    let held = latest.lock();
-                    (held.as_ref().and_then(|d| goofi_codec::content_hash(d).ok()), held.as_ref().and_then(|d| goofi_codec::stamp_hash(d).ok()))
-                }
-            };
-            let same = hash.is_some() && served == Some(g_now) && hash == sent;
-            if same && stamps == stamped {
-                pending = false;
-                continue;
-            }
             // The viewer rate, held here, where N viewers became one stream; a serve held back is
             // the duty the loop wakes to when the pace comes due. The rate is read again: the
             // viewer this serves may have joined during the wait.
@@ -623,24 +609,39 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if now < pace.due(interval, now) {
                 continue;
             }
+            // A functional is a function of the time: the viewers see its value now, and a serve
+            // stays owed each tick while one is held, because its value moves with no frame arriving.
+            let live = latest.lock().as_ref().is_some_and(|d| d.as_functional().is_some());
+            let held = match (&made, latest.lock().clone()) {
+                (Some(_), _) | (None, None) => None,
+                (None, Some(d)) if d.as_functional().is_none() => Some(d),
+                (None, Some(d)) => match graph.lock().evaluator().map(|ev| goofi_node::at(&*ev, &d, time.now(), (0.0, 1.0))) {
+                    Some(Ok(v)) => Some(v),
+                    Some(Err(e)) => {
+                        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: {}", e.0));
+                        pending = false;
+                        continue;
+                    }
+                    None => {
+                        pending = false;
+                        continue;
+                    }
+                },
+            };
+            // What a frame says and its stamps go each when its own hash moved, so a repeat goes as
+            // stamps or not at all — unless a joiner, a leaver, a spec or a re-offer asked for it.
+            let (hash, stamps) = (held.as_ref().and_then(|d| goofi_codec::content_hash(d).ok()), held.as_ref().and_then(|d| goofi_codec::stamp_hash(d).ok()));
+            let same = hash.is_some() && served == Some(g_now) && hash == sent;
+            if same && stamps == stamped {
+                pending = live;
+                continue;
+            }
             let bytes = match &made {
                 // Already exactly what the viewers asked for: one buffer, shared by every
                 // subscriber, and no pass over a texel anywhere in this process.
                 Some(ready) => ready.clone(),
                 None => {
-                    let Some(d) = latest.lock().clone() else { continue };
-                    // A functional is a function of the time; the viewers see its value now.
-                    let d = match (d.as_functional().is_some(), graph.lock().evaluator()) {
-                        (false, _) => d,
-                        (true, None) => continue,
-                        (true, Some(ev)) => match goofi_node::at(&*ev, &d, time.now(), (0.0, 1.0)) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: {}", e.0));
-                                continue;
-                            }
-                        },
-                    };
+                    let Some(d) = held else { continue };
                     let encoded = if same {
                         goofi_codec::encode_stamps(d.meta())
                     } else {
@@ -679,7 +680,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             sent = hash;
             stamped = stamps;
             served = Some(g_now);
-            pending = false;
+            pending = live;
         }
     }) {
         Ok(worker) => Some(worker),

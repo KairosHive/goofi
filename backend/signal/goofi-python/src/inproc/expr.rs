@@ -152,6 +152,11 @@ impl PyExprEvaluator {
             let locals = PyDict::new(py);
             for (name, local) in ctx.locals {
                 let val: Py<PyAny> = match local {
+                    // A functional among the locals is read at this evaluation's instant.
+                    Local::Frame(d) if d.as_functional().is_some() => {
+                        let now = goofi_node::at(self, d, ctx.t, ctx.range)?;
+                        data_to_py(py, &now).map_err(|e| ExprError(e.to_string()))?
+                    }
                     Local::Frame(d) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
                     Local::Value(p) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
                 };

@@ -566,7 +566,7 @@ struct Bind {
 impl Bind {
     /// Whether the run reads it: a computed expression, or a bare source holding a functional.
     fn timed(&self) -> bool {
-        self.expr.id.is_some() || matches!(self.expr.inputs(), Ok(Some(Inputs::Bare(f))) if f.as_functional().is_some())
+        self.expr.id.is_some() || self.expr.holds_functional()
     }
 }
 
