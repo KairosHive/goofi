@@ -631,6 +631,34 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     let why = g.refuse("node param request", j!({ "node": hex(n), "param": "common/max_frequency", "request": "pulse" }));
     assert!(why.contains("not a pulse"), "{why}");
 
+    // A param never runs a node. With `autotrigger` off and nothing wired in, the count stands;
+    // a param edit leaves it standing; the `common.trigger` pulse runs it once. An expression of
+    // the time on a param is read for a run, so it moves only when the node runs.
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.set_param(gate, "common", "autotrigger", false);
+    g.call("node param edit", j!({ "node": hex(gate), "param": "control/value", "expression": "lfo(freq=1000)" }));
+    let gate_probe = g.probe(gate, "out");
+    let runs = g.until("the gate to settle", |g| {
+        let c = gate_probe.count();
+        g.stays(|_| gate_probe.count() == c).then_some(c)
+    });
+    let mut ev = g.events();
+    let mut value = |_: &Goofi| ev.next("param_values")["nodes"][hex(gate)]["values"]["control"]["value"].as_f64();
+    g.set_param(gate, "common", "max_frequency", 60.0);
+    assert!(g.stays(|_| gate_probe.count() == runs), "a param edit ran the node");
+    g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
+    g.until("one run on the pulse", |_| (gate_probe.count() == runs + 1).then_some(()));
+    let read = g.until("the value read for that run", |g| value(g));
+    assert!(g.stays(|_| gate_probe.count() == runs + 1), "the pulse is one run");
+    g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
+    g.until("the next run", |_| (gate_probe.count() == runs + 2).then_some(()));
+    let next = g.until("the value read for the next run", |g| value(g).filter(|v| *v != read));
+    assert_ne!(next, read, "each run reads the time once");
+    assert!(g.stays(|g| value(g).is_none_or(|v| v == next)), "between runs the value stands");
+    g.call("node param edit", j!({ "node": hex(gate), "param": "control/value", "value": 0.0, "mode": "constant" }));
+    g.set_param(gate, "common", "autotrigger", true);
+    g.graph().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+
     // A reference on a pulse is a gate, and a low one fires nothing.
     let bound = g.call("node param edit",
                        j!({ "node": hex(n), "param": "count/reset",

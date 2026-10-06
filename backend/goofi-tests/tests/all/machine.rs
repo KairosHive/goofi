@@ -111,15 +111,19 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
                                                     "duration": 0.6, "curve": "smooth" }))["id"].clone();
     g.call("machine fire", j!({ "machine": "seq", "playhead": "head", "transition": t2 }));
     let mut samples: Vec<(f64, f64)> = Vec::new();
+    let mut heard: Vec<f32> = Vec::new();
     g.until("the eased move to land in C", |g| {
         let (state, progress) = (text(g, "head.state"), number(g, "head.progress"));
         if state == "C" {
             samples.push((progress, number(g, "head.gain")));
+            heard.extend(probe.latest().map(|d| f32s(&d)[0]));
         }
         (state == "C" && text(g, "head.prev").is_empty()).then_some(())
     });
     assert!(samples.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 >= w[1].1), "progress rises and gain falls: {samples:?}");
     assert!(samples.iter().any(|(p, _)| *p > 0.0 && *p < 1.0), "the move was seen in flight: {samples:?}");
+    // The reader's param holds the functional and reads it for each of its own runs.
+    assert!(heard.iter().any(|v| *v > 0.0 && *v < 1.0), "the reader heard the move on the way: {heard:?}");
     assert_eq!(number(&g, "head.gain"), 0.0);
     assert_eq!(g.variable("head.label"), j!("c"), "a string switches on arrival");
 
