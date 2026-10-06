@@ -256,7 +256,12 @@ pub fn node(
 
 /// One variable as `variable list` and `control list` answer it.
 pub(crate) fn variable_json(g: &Graph, store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
-    let mut e = json!({ "name": name, "value": v.value });
+    // A functional is read at this instant, as every reader reads it.
+    let value = match (v.value.as_functional().is_some(), g.evaluator()) {
+        (true, Some(ev)) => goofi_node::at(&*ev, &v.value, g.time().now(), (0.0, 1.0)).unwrap_or_else(|_| v.value.clone()),
+        _ => v.value.clone(),
+    };
+    let mut e = json!({ "name": name, "value": value });
     // What holds it, its own lock and its group's together — the answer a writer needs.
     e["lock"] = json!(store.lock_of(name));
     if let Some(c) = &v.control {

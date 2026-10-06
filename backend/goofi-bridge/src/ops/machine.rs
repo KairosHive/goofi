@@ -628,7 +628,8 @@ fn addressed(state: &AppState, machine: &str, playhead: &str, transition: Option
 impl EffectOp for Fire {
     fn run(state: &AppState, a: FireArgs, _: &Caller) -> Result<Value, String> {
         addressed(state, &a.machine, &a.playhead, Some(&a.transition), None)?;
-        state.machines.send(Msg::Fire { machine: a.machine, playhead: a.playhead, transition: a.transition });
+        let at = state.graph.lock().time().now();
+        state.machines.send(Msg::Fire { at, machine: a.machine, playhead: a.playhead, transition: a.transition });
         Ok(json!({ "ok": true }))
     }
 }
@@ -636,17 +637,22 @@ impl EffectOp for Fire {
 impl EffectOp for Jump {
     fn run(state: &AppState, a: JumpArgs, _: &Caller) -> Result<Value, String> {
         addressed(state, &a.machine, &a.playhead, None, Some(&a.state))?;
-        state.machines.send(Msg::Jump { machine: a.machine, playhead: a.playhead, state: a.state });
+        let at = state.graph.lock().time().now();
+        state.machines.send(Msg::Jump { at, machine: a.machine, playhead: a.playhead, state: a.state });
         Ok(json!({ "ok": true }))
     }
 }
 
 impl EffectOp for Reset {
     fn run(state: &AppState, a: ResetArgs, _: &Caller) -> Result<Value, String> {
-        if let Some(m) = &a.machine {
-            machine_of(&state.graph.lock(), m)?;
-        }
-        state.machines.send(Msg::Reset { machine: a.machine });
+        let at = {
+            let g = state.graph.lock();
+            if let Some(m) = &a.machine {
+                machine_of(&g, m)?;
+            }
+            g.time().now()
+        };
+        state.machines.send(Msg::Reset { at, machine: a.machine });
         Ok(json!({ "ok": true }))
     }
 }

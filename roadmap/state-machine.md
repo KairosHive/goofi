@@ -91,20 +91,16 @@ Shipped: expressions evaluated on the runtime thread before the run (the worker,
 `Bind::timed` and the 10 ms pace removed); the `triggers` flag gone and `common.trigger` added;
 `Value::Functional` (marshaled code of a compiled expression of `t`, dtype tag 4, the stamps
 frame moved to tag 255), `ExprEvaluator::run`, `goofi_node::at`, the compile cache by source,
-and the runtime, follower and reducer running a functional at their time.
+and the runtime, follower, reducer and `variable list` running a functional at their time; the
+stepper settling every instant it is owed in order (`Machines::advance`, `next_deadline`, stamped
+fire/jump/reset, `arrived`, functionals for attributes and `progress` in flight, the hop bound as
+an error); the thread waking for the next deadline, a stamped request, a replaced model or a
+watched write (`VariableStore::set_watch`), with no pace.
 
-1. **Stepper** (`goofi-graph/src/machine.rs`): the two playhead states; `advance` as above;
-   stamped requests; `arrived`; the functional writer. The sampling loop, `HOPS` deferral and
-   `blend` go. About +60 net.
-2. **Thread** (`goofi-bridge`): stamped messages, the deadline wait, the store's wake, the
-   cap-paced loop removed. About +20 net.
-3. **Audio breakpoints** (`goofi-audio`): boundary evaluation in the control half, the callback
+1. **Audio breakpoints** (`goofi-audio`): boundary evaluation in the control half, the callback
    ramp. About +80.
-4. **Tests** (`goofi-tests`, Playwright): drive `Machines` directly on explicit instants, dense
-   against sparse against one late catch-up, identical frames and `arrived`; a fire stamped before
-   a due lands first; a 1/48000 s ping-pong. Through the session: the k-th hop's `arrived` equals
-   the jump instant plus k dwells; a functional read at `end + 1` is the target and at `start`
-   the origin; an audio param bound to an interpolating attribute renders the ramp under the
+2. **Panel**: `PlayheadDots` orders residents by `arrived`.
+3. **Tests**: an audio param bound to an interpolating attribute renders the ramp under the
    external clock and never passes the target; a signal node reads the value for its run; a
    `common.trigger` pulse runs a node that nothing else runs; an `lfo()` param moves only when
    its node runs. No rate or latency assertion.

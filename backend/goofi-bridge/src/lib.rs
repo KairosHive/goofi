@@ -234,6 +234,7 @@ impl AppState {
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let (machines, machines_rx) = machines::Driver::new();
+        graph.lock().variable_store().lock().set_watch(machines.watch());
         let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
         let state = AppState {
             iox: iox.clone(),

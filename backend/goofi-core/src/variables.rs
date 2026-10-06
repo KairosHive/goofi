@@ -427,6 +427,9 @@ impl Variable {
     }
 }
 
+/// Told the name of every value that moved.
+pub type Watch = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
 /// the plane from here, under the store's own lock, so the order the plane sees is the store's.
@@ -435,6 +438,8 @@ pub struct VariableStore {
     entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Group>,
     plane: Option<std::sync::Arc<dyn Plane>>,
+    /// Told the name of every value that moved: the machines' reason to look again.
+    watch: Option<Watch>,
 }
 
 impl Default for VariableStore {
@@ -445,9 +450,14 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None };
         s.reassert_system();
         s
+    }
+
+    /// Have every moved value's name told to `watch`.
+    pub fn set_watch(&mut self, watch: Watch) {
+        self.watch = Some(watch);
     }
 
     /// Put the store on a plane: every frame it holds goes out now, and every write from here on.
@@ -555,6 +565,9 @@ impl VariableStore {
         }
         existing.value = value;
         self.emit(name, &self.entries[name].value);
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         true
     }
 

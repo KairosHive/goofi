@@ -16,10 +16,10 @@ use ts_rs::TS;
 use crate::expr_rewrite::{self, Target};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name.
-pub const OWN: [&str; 3] = ["state", "prev", "progress"];
+pub const OWN: [&str; 4] = ["state", "prev", "progress", "arrived"];
 
-/// How many instant transitions one playhead takes in one tick before the rest wait for the next.
-const HOPS: usize = 8;
+/// How many instant transitions the playheads take at one instant before the chain is an error.
+const HOPS: usize = 64;
 
 /// What a name has to be, said once.
 pub const NAME_RULE: &str = "a letter or underscore then letters, digits or underscores, and not a Python keyword";
@@ -283,12 +283,12 @@ impl Machine {
         Ok(())
     }
 
-    /// The variables a playhead's group holds: the machine's own three, then one per attribute,
+    /// The variables a playhead's group holds: the machine's own four, then one per attribute,
     /// each born as the start state has it — at rest there, before the machine has moved it.
     pub fn playhead_entries(&self, playhead: &str) -> Entries {
         let Some(p) = self.playheads.get(playhead) else { return Vec::new() };
         let start = self.states.get(&p.start);
-        let own = [(Data::text(p.start.as_str()), None), (Data::text(""), None), (Data::number(1.0), None)];
+        let own = [(Data::text(p.start.as_str()), None), (Data::text(""), None), (Data::number(1.0), None), (Data::number(0.0), None)];
         let held = |a: &str, attr: &Attribute| start.and_then(|s| s.values.get(a)).unwrap_or(&attr.default).clone();
         OWN.iter()
             .zip(own)
@@ -306,24 +306,31 @@ struct Expr {
     error: Option<String>,
 }
 
+/// A move under way: when it left and when it lands, and what it blends between.
 struct Flight {
     start: f64,
-    duration: f64,
+    end: f64,
     curve: Curve,
     origin: IndexMap<String, Data>,
     target: IndexMap<String, Data>,
 }
 
-/// One playhead's run: where it is, what it holds, and what is armed for it.
+/// A dwell armed: when it is due, and the interval it was armed with, which a retry keeps.
+#[derive(Clone, Copy)]
+struct Due {
+    at: f64,
+    interval: f64,
+}
+
+/// One playhead's run: at rest in `state` since `arrived`, or in flight toward it.
 struct Head {
     state: String,
     prev: String,
-    progress: f64,
-    held: IndexMap<String, Data>,
     arrived: f64,
+    held: IndexMap<String, Data>,
     flight: Option<Flight>,
-    /// Per `after` transition out of the state, when it is due.
-    due: HashMap<String, f64>,
+    /// Per `after` transition out of the state, its dwell.
+    due: HashMap<String, Due>,
     /// Per `when` transition out of the state, the gate as last read.
     gates: HashMap<String, bool>,
     fire: Option<String>,
@@ -335,10 +342,10 @@ struct Run {
     seed: u64,
 }
 
-/// What a tick found: who arrived where, and who left what.
+/// What a step found: who arrived where, and who left what.
 #[derive(Default)]
 struct Events {
-    arrived: Vec<(String, String)>,
+    arrived: Vec<String>,
     left: Vec<String>,
 }
 
@@ -349,15 +356,15 @@ enum Request {
 }
 
 /// The machines as they run: the model, each playhead's run, and the expressions compiled for
-/// them. Pure but for the evaluator: clocked by the time it is handed, reading the frames it is
-/// handed, answering the writes it owes.
+/// them. Pure but for the evaluator: clocked by the instants it is handed, reading the frames it
+/// is handed, answering the writes it owes. Every deadline is settled at its own instant.
 #[derive(Default)]
 pub struct Machines {
     config: IndexMap<String, Machine>,
     runs: IndexMap<String, Run>,
     evaluator: Option<Arc<dyn ExprEvaluator>>,
     compiled: HashMap<String, Expr>,
-    requests: Vec<Request>,
+    requests: Vec<(f64, Request)>,
     reconcile: bool,
     errors: Vec<String>,
 }
@@ -424,19 +431,19 @@ impl Machines {
         }
     }
 
-    /// Take a transition for a playhead on the next advance, the way a tap on it does.
-    pub fn fire(&mut self, machine: &str, playhead: &str, transition: &str) {
-        self.requests.push(Request::Fire { machine: machine.into(), playhead: playhead.into(), transition: transition.into() });
+    /// Take a transition for a playhead at `at`, the way a tap on it does.
+    pub fn fire(&mut self, at: f64, machine: &str, playhead: &str, transition: &str) {
+        self.requests.push((at, Request::Fire { machine: machine.into(), playhead: playhead.into(), transition: transition.into() }));
     }
 
-    /// Put a playhead in a state on the next advance: instant, no easing.
-    pub fn jump(&mut self, machine: &str, playhead: &str, state: &str) {
-        self.requests.push(Request::Jump { machine: machine.into(), playhead: playhead.into(), state: state.into() });
+    /// Put a playhead in a state at `at`: instant, no easing.
+    pub fn jump(&mut self, at: f64, machine: &str, playhead: &str, state: &str) {
+        self.requests.push((at, Request::Jump { machine: machine.into(), playhead: playhead.into(), state: state.into() }));
     }
 
-    /// Every playhead of a machine, or of all, back to its start state on the next advance.
-    pub fn reset(&mut self, machine: Option<&str>) {
-        self.requests.push(Request::Reset { machine: machine.map(str::to_string) });
+    /// Every playhead of a machine, or of all, back to its start state at `at`.
+    pub fn reset(&mut self, at: f64, machine: Option<&str>) {
+        self.requests.push((at, Request::Reset { machine: machine.map(str::to_string) }));
     }
 
     /// Every variable the machines' expressions read — what an advance wants handed to it.
@@ -455,11 +462,20 @@ impl Machines {
         out
     }
 
-    /// Step every machine to `now`, reading the variables through `read`, and answer every
-    /// playhead variable as it stands.
+    /// The next instant something is owed: a landing, a dwell's due, or a request — what the
+    /// thread sleeps toward. None while nothing is armed.
+    pub fn next_deadline(&self) -> Option<f64> {
+        let heads = self.runs.values().flat_map(|r| r.heads.values());
+        let owed = heads.flat_map(|h| h.flight.as_ref().map(|f| f.end).into_iter().chain(h.flight.is_none().then(|| h.due.values().map(|d| d.at)).into_iter().flatten()));
+        owed.chain(self.requests.iter().map(|(at, _)| *at)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
+    }
+
+    /// Step every machine to `now`: every landing, due and request before it is settled at its
+    /// own instant, in order, then the instant itself. Answers every playhead variable as it
+    /// stands, a functional for an attribute in flight.
     pub fn advance(&mut self, now: f64, read: &dyn Fn(&str) -> Option<Data>) -> Vec<(String, Data)> {
-        let ctx = Ctx { compiled: &self.compiled, evaluator: &self.evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()) };
         if std::mem::take(&mut self.reconcile) {
+            let ctx = Ctx::new(&self.compiled, &self.evaluator, read, now);
             self.runs.retain(|name, _| self.config.contains_key(name));
             for (name, machine) in &self.config {
                 let seed = machine.seed.unwrap_or(0);
@@ -470,9 +486,47 @@ impl Machines {
                 }
                 reconcile(machine, run, &ctx);
             }
+            self.errors.extend(ctx.errors.into_inner());
         }
+        self.requests.sort_by(|a, b| a.0.total_cmp(&b.0));
+        while let Some(at) = self.next_deadline().filter(|at| *at < now) {
+            self.settle(at, read);
+        }
+        self.settle(now, read);
         let mut out = Vec::new();
-        let requests = std::mem::take(&mut self.requests);
+        for run in self.runs.values() {
+            for (ph, head) in &run.heads {
+                out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
+                out.push((format!("{ph}.prev"), Data::text(head.prev.as_str())));
+                out.push((format!("{ph}.arrived"), Data::number(head.arrived)));
+                match &head.flight {
+                    None => {
+                        out.push((format!("{ph}.progress"), Data::number(1.0)));
+                        out.extend(head.held.iter().map(|(a, v)| (format!("{ph}.{a}"), v.clone())));
+                    }
+                    Some(f) => {
+                        out.push((format!("{ph}.progress"), self.functional(&progress_source(f))));
+                        for (a, origin) in &f.origin {
+                            let value = match f.target.get(a).and_then(|target| blend_source(origin, target, f)) {
+                                Some(source) => self.functional(&source),
+                                None => origin.clone(),
+                            };
+                            out.push((format!("{ph}.{a}"), value));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Everything owed at `at`: landings, requests, then the moves that follow.
+    fn settle(&mut self, at: f64, read: &dyn Fn(&str) -> Option<Data>) {
+        let ctx = Ctx::new(&self.compiled, &self.evaluator, read, at);
+        let requests: Vec<Request> = {
+            let split = self.requests.iter().position(|(t, _)| *t > at).unwrap_or(self.requests.len());
+            self.requests.drain(..split).map(|(_, r)| r).collect()
+        };
         for (name, machine) in &self.config {
             let Some(run) = self.runs.get_mut(name) else { continue };
             let mut events = Events::default();
@@ -496,17 +550,66 @@ impl Machines {
                     _ => {}
                 }
             }
-            step(machine, run, &ctx, events);
-            for (ph, head) in &run.heads {
-                out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
-                out.push((format!("{ph}.prev"), Data::text(head.prev.as_str())));
-                out.push((format!("{ph}.progress"), Data::number(head.progress)));
-                out.extend(head.held.iter().map(|(a, v)| (format!("{ph}.{a}"), v.clone())));
-            }
+            step(name, machine, run, &ctx, events);
         }
         self.errors.extend(ctx.errors.into_inner());
-        out
     }
+
+    /// A functional over `source`, compiled through the evaluator; with none, an empty one that
+    /// any reader reports.
+    fn functional(&self, source: &str) -> Data {
+        let code = match &self.evaluator {
+            Some(ev) => match ev.compile(source) {
+                Ok(c) => {
+                    ev.release(c.id);
+                    c.code
+                }
+                Err(_) => Arc::from(&b""[..]),
+            },
+            None => Arc::from(&b""[..]),
+        };
+        Data::functional(code, Meta::default())
+    }
+}
+
+/// A Python literal of a frame's numbers, for a functional's source.
+fn py_list(d: &Data) -> Option<String> {
+    match d.value() {
+        Value::Array(a) => Some(format!("[{}]", a.values().map(|v| format!("{:?}", f64::from(v))).collect::<Vec<_>>().join(", "))),
+        _ => None,
+    }
+}
+
+/// The curve's blend of `x` in 0..1 as Python.
+fn curve_source(curve: Curve) -> &'static str {
+    match curve {
+        Curve::Step => "(1.0 if x >= 1.0 else 0.0)",
+        Curve::Linear => "x",
+        Curve::In => "x * x",
+        Curve::Out => "1.0 - (1.0 - x) * (1.0 - x)",
+        Curve::InOut => "(2.0 * x * x if x < 0.5 else 1.0 - 2.0 * (1.0 - x) * (1.0 - x))",
+        Curve::Smooth => "x * x * (3.0 - 2.0 * x)",
+    }
+}
+
+/// The flight's progress in 0..1 at `t`, clamped at both ends: before the start it is 0, past the
+/// end it is 1.
+fn progress_source(f: &Flight) -> String {
+    format!("min(max((t - {:?}) / {:?}, 0.0), 1.0)", f.start, f.end - f.start)
+}
+
+/// `origin` toward `target` along the flight's curve, elementwise for arrays of one shape; past
+/// the end it is the target exactly. None for what switches on arrival instead.
+fn blend_source(origin: &Data, target: &Data, f: &Flight) -> Option<String> {
+    if origin.as_array().ok()?.shape() != target.as_array().ok()?.shape() {
+        return None;
+    }
+    let (a, b) = (py_list(origin)?, py_list(target)?);
+    Some(format!(
+        "(lambda x: np.array({a}) + (np.array({b}) - np.array({a})) * ({}))({})",
+        curve_source(f.curve),
+        progress_source(f)
+    ))
 }
 
 /// What a step reads and evaluates against.
@@ -518,7 +621,11 @@ struct Ctx<'a> {
     errors: std::cell::RefCell<Vec<String>>,
 }
 
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
+    fn new(compiled: &'a HashMap<String, Expr>, evaluator: &'a Option<Arc<dyn ExprEvaluator>>, read: &'a dyn Fn(&str) -> Option<Data>, now: f64) -> Ctx<'a> {
+        Ctx { compiled, evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()) }
+    }
+
     fn eval(&self, text: &str) -> Result<Data, String> {
         let Some(e) = self.compiled.get(text) else { return Err(format!("`{text}` is not compiled")) };
         if let Some(error) = &e.error {
@@ -527,6 +634,11 @@ impl Ctx<'_> {
         let mut locals: Vec<(String, Local)> = Vec::with_capacity(e.refs.len());
         for (var, key) in &e.refs {
             let frame = (self.read)(key).ok_or_else(|| format!("variable `{key}` is not defined"))?;
+            // A variable holding a functional is read at this instant, as any reader reads it.
+            let frame = match (frame.as_functional().is_some(), self.evaluator) {
+                (true, Some(ev)) => goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?,
+                _ => frame,
+            };
             locals.push((var.clone(), Local::Frame(frame)));
         }
         if expr_rewrite::is_bare(&e.rewritten) {
@@ -589,25 +701,23 @@ fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head 
     let mut head = Head {
         state: String::new(),
         prev: String::new(),
-        progress: 1.0,
-        held: machine.attributes.iter().map(|(a, attr)| (a.clone(), attr.default.clone())).collect(),
         arrived: ctx.now,
+        held: machine.attributes.iter().map(|(a, attr)| (a.clone(), attr.default.clone())).collect(),
         flight: None,
         due: HashMap::new(),
         gates: HashMap::new(),
         fire: None,
     };
-    arrive(&mut head, machine, state, ctx, events);
+    arrive(&mut head, machine, state, ctx.now, ctx, events);
     head
 }
 
-/// Put `head` in `state` now: the state's values land, the dwell starts, its triggers arm.
-fn arrive(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) {
+/// Put `head` in `state` at `at`: the state's values land, the dwell starts, its triggers arm.
+fn arrive(head: &mut Head, machine: &Machine, state: &str, at: f64, ctx: &Ctx, events: &mut Events) {
     head.state = state.to_string();
     head.prev.clear();
-    head.progress = 1.0;
     head.flight = None;
-    head.arrived = ctx.now;
+    head.arrived = at;
     head.fire = None;
     if let Some(s) = machine.states.get(state) {
         for (a, v) in &s.values {
@@ -617,7 +727,7 @@ fn arrive(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: &m
         }
     }
     arm(head, machine, ctx, true);
-    events.arrived.push((state.to_string(), String::new()));
+    events.arrived.push(state.to_string());
 }
 
 /// A jump: the head leaves where it rests and arrives at once, both seen by `meet` and `alone`.
@@ -625,11 +735,12 @@ fn relocate(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: 
     if head.flight.is_none() {
         events.left.push(head.state.clone());
     }
-    arrive(head, machine, state, ctx, events);
+    arrive(head, machine, state, ctx.now, ctx, events);
 }
 
-/// Arm what fires out of the head's state: a dwell's due time, a gate's baseline. With `fresh`,
-/// everything is re-armed; without, only what was not armed yet, so a model edit keeps a dwell.
+/// Arm what fires out of the head's state: a dwell's due from its arrival, a gate's baseline.
+/// With `fresh`, everything is re-armed; without, only what was not armed yet, so a model edit
+/// keeps a dwell.
 fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
     if fresh {
         head.due.clear();
@@ -642,7 +753,8 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
         for trigger in &t.triggers {
             match trigger {
                 Trigger::After { seconds, .. } if !head.due.contains_key(id) => {
-                    head.due.insert(id.clone(), head.arrived + ctx.seconds(seconds));
+                    let interval = ctx.seconds(seconds);
+                    head.due.insert(id.clone(), Due { at: head.arrived + interval, interval });
                 }
                 Trigger::When { expression, .. } if !head.gates.contains_key(id) => {
                     let gate = ctx.gate(expression);
@@ -676,7 +788,7 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
                     f.target.retain(|a, _| machine.attributes.contains_key(a));
                 }
                 if !machine.states.contains_key(&head.state) {
-                    arrive(head, machine, &p.start, ctx, &mut events);
+                    arrive(head, machine, &p.start, ctx.now, ctx, &mut events);
                 } else {
                     arm(head, machine, ctx, false);
                 }
@@ -685,60 +797,62 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
     }
 }
 
-/// `a` toward `b` by `t`: elementwise for arrays of one shape; anything else switches on arrival.
-fn blend(a: &Data, b: &Data, t: f64) -> Data {
-    match (a.value(), b.value()) {
-        (Value::Array(x), Value::Array(y)) if x.shape() == y.shape() => {
-            let bytes: Vec<u8> = x
-                .values()
-                .zip(y.values())
-                .flat_map(|(p, q)| ((f64::from(p) + (f64::from(q) - f64::from(p)) * t) as f32).to_le_bytes())
-                .collect();
-            Data::array_f32(x.shape().to_vec(), bytes, Meta::default()).unwrap_or_else(|_| b.clone())
-        }
-        _ if t >= 1.0 => b.clone(),
-        _ => a.clone(),
-    }
+/// Where a flight stands at `t`, for a redirection: the blend of its origin and target, so the
+/// next flight leaves from here and is continuous.
+fn sample(f: &Flight, t: f64) -> IndexMap<String, Data> {
+    let b = f.curve.at(((t - f.start) / (f.end - f.start)).clamp(0.0, 1.0));
+    f.origin
+        .iter()
+        .map(|(a, origin)| {
+            let value = match (origin.value(), f.target.get(a).map(Data::value)) {
+                (Value::Array(x), Some(Value::Array(y))) if x.shape() == y.shape() => {
+                    let bytes: Vec<u8> = x
+                        .values()
+                        .zip(y.values())
+                        .flat_map(|(p, q)| ((f64::from(p) + (f64::from(q) - f64::from(p)) * b) as f32).to_le_bytes())
+                        .collect();
+                    Data::array_f32(x.shape().to_vec(), bytes, Meta::default()).unwrap_or_else(|_| origin.clone())
+                }
+                _ => origin.clone(),
+            };
+            (a.clone(), value)
+        })
+        .collect()
 }
 
-/// Take `t` out of the head's state: instant when it has no duration, else a flight from what the
-/// head holds now, so a redirection mid-flight is continuous.
+/// Take `t` out of the head's state at `ctx.now`: instant when it has no duration, else a flight
+/// from what the head holds now, so a redirection mid-flight is continuous.
 fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut Events) {
     let t = &machine.transitions[id];
     let prev = head.state.clone();
     events.left.push(prev.clone());
+    if let Some(f) = &head.flight {
+        head.held = sample(f, ctx.now);
+    }
     let target: IndexMap<String, Data> =
         machine.states.get(&t.to).map(|s| s.values.iter().filter(|(a, _)| head.held.contains_key(*a)).map(|(a, v)| (a.clone(), v.clone())).collect()).unwrap_or_default();
     head.fire = None;
     if t.duration <= 0.0 {
-        return arrive(head, machine, &t.to, ctx, events);
+        return arrive(head, machine, &t.to, ctx.now, ctx, events);
     }
     head.prev = prev;
     head.state = t.to.clone();
-    head.progress = 0.0;
     head.due.clear();
     head.gates.clear();
-    head.flight = Some(Flight { start: ctx.now, duration: t.duration, curve: t.curve, origin: head.held.clone(), target });
+    head.flight = Some(Flight { start: ctx.now, end: ctx.now + t.duration, curve: t.curve, origin: head.held.clone(), target });
 }
 
-/// Move every flight on, land the ones that are done, then let what fires out of each rest state
-/// take its playhead, a bounded number of hops.
-fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
+/// Land the flights that are done by this instant, then let what fires out of each rest state
+/// take its playhead, a bounded number of hops; a chain still going past the bound is an error.
+fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
     for head in run.heads.values_mut() {
         let Some(f) = &head.flight else { continue };
-        let p = ((ctx.now - f.start) / f.duration).clamp(0.0, 1.0);
-        let b = f.curve.at(p);
-        for (a, target) in &f.target {
-            let origin = &f.origin[a];
-            head.held.insert(a.clone(), blend(origin, target, b));
-        }
-        head.progress = p;
-        if p >= 1.0 {
-            let state = head.state.clone();
-            arrive(head, machine, &state, ctx, &mut events);
+        if f.end <= ctx.now {
+            let (state, end) = (head.state.clone(), f.end);
+            arrive(head, machine, &state, end, ctx, &mut events);
         }
     }
-    for _ in 0..HOPS {
+    for hop in 0..=HOPS {
         let mut takes: Vec<(String, String)> = Vec::new();
         for (ph, head) in run.heads.iter_mut() {
             // A manual fire redirects a flight; nothing else reaches a playhead in the air.
@@ -751,14 +865,20 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
             if head.flight.is_some() {
                 continue;
             }
-            // Every trigger firing this tick, across the transitions out of here, is one draw by weight.
+            // Every trigger firing at this instant, across the transitions out of here, is one draw
+            // by weight. A dwell that fires is re-armed from its due, drawn or not.
             let mut fired: Vec<(String, f64)> = Vec::new();
             for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &head.state)) {
                 for trigger in &t.triggers {
                     match trigger {
                         Trigger::After { weight, .. } => {
-                            if head.due.get(id).is_some_and(|due| ctx.now >= *due) {
+                            if let Some(due) = head.due.get_mut(id).filter(|d| d.at <= ctx.now) {
                                 fired.push((id.clone(), *weight));
+                                if due.interval > 0.0 {
+                                    due.at += due.interval;
+                                } else {
+                                    head.due.remove(id);
+                                }
                             }
                         }
                         Trigger::When { expression, weight } => {
@@ -777,7 +897,7 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
             }
         }
         // A meeting or a lone stay, from what this hop's arrivals and departures left behind.
-        let arrivals: Vec<String> = std::mem::take(&mut events.arrived).into_iter().map(|(s, _)| s).collect();
+        let arrivals = std::mem::take(&mut events.arrived);
         let departures = std::mem::take(&mut events.left);
         for state in arrivals.iter().chain(&departures) {
             let residents: Vec<(String, f64)> =
@@ -802,6 +922,10 @@ fn step(machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
             }
         }
         if takes.is_empty() {
+            break;
+        }
+        if hop == HOPS {
+            ctx.errors.borrow_mut().push(format!("machine `{name}`: {HOPS} instant moves at one instant and still going; the chain was cut"));
             break;
         }
         for (ph, id) in takes {

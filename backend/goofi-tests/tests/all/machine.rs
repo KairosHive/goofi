@@ -1,8 +1,12 @@
 //! A state machine built through ops, read through its playheads' variables, and driven by every
-//! trigger kind, then saved, reopened and undone.
+//! trigger kind, then saved, reopened and undone; and the stepper itself on explicit instants.
 
 use std::sync::Arc;
 
+use goofi_core::indexmap::IndexMap;
+use goofi_core::Data;
+use goofi_graph::machine::Machines;
+use goofi_python::inproc::PyExprEvaluator;
 use goofi_tests::{f32s, hex, j, Goofi};
 use serde_json::Value;
 
@@ -15,18 +19,18 @@ fn number(g: &Goofi, name: &str) -> f64 {
     g.variable(name).as_f64().unwrap_or(f64::NAN)
 }
 
-/// Poll until the playhead is at rest in `state`.
+/// Poll until the playhead is at rest in `state`: `prev` is cleared by the arrival itself, where
+/// `progress` reads 1 the instant the flight ends, before the machine has landed it.
 fn at_rest_in(g: &Goofi, playhead: &str, state: &str) {
     g.until(&format!("{playhead} to rest in {state}"), |g| {
-        (text(g, &format!("{playhead}.state")) == state && number(g, &format!("{playhead}.progress")) == 1.0).then_some(())
+        (text(g, &format!("{playhead}.state")) == state && text(g, &format!("{playhead}.prev")).is_empty()).then_some(())
     });
 }
 
 #[test]
 fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables() {
     let g = Goofi::new();
-    let evaluator = Arc::new(goofi_tests::FirstVar::default());
-    g.graph().set_evaluator(evaluator.clone());
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
     let write = |op: &str, payload: Value| -> Value { g.call(op, payload) };
 
     assert_eq!(write("machine add", j!({ "name": "seq" }))["name"], "seq");
@@ -60,6 +64,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert_eq!(number(&g, "head.gain"), 0.2);
     assert_eq!(g.variable("head.label"), j!("a"));
     assert_eq!(g.variable("head.prev"), j!(""));
+    assert!(number(&g, "head.arrived") >= 0.0, "born at a patch second");
     let listed = g.call("variable list", j!({}));
     assert_eq!(listed["groups"]["head"]["machine"], j!("seq"), "{}", listed["groups"]);
     assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "a number attribute's variable wears a knob");
@@ -111,7 +116,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
         if state == "C" {
             samples.push((progress, number(g, "head.gain")));
         }
-        (state == "C" && progress == 1.0).then_some(())
+        (state == "C" && text(g, "head.prev").is_empty()).then_some(())
     });
     assert!(samples.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 >= w[1].1), "progress rises and gain falls: {samples:?}");
     assert!(samples.iter().any(|(p, _)| *p > 0.0 && *p < 1.0), "the move was seen in flight: {samples:?}");
@@ -135,7 +140,6 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a closed gate holds");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 1.0 }));
     at_rest_in(&g, "head", "A");
-    assert!(evaluator.evals.load(std::sync::atomic::Ordering::Relaxed) > 0, "the gate went through the evaluator");
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "C");
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a gate already open on arrival is no edge");
@@ -213,4 +217,75 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     while g.call("redo", j!({}))["changed"] == true {}
     assert!(g.doc()["machines"]["seq"]["playheads"]["lead"].is_object(), "{}", g.doc()["machines"]);
     at_rest_in(&g, "lead", "Start");
+}
+
+/// A playhead variable among an advance's writes.
+fn written<'a>(writes: &'a [(String, Data)], name: &str) -> &'a Data {
+    &writes.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no write of {name}: {writes:?}")).1
+}
+
+/// The number a write holds at `t`: a functional run, a plain frame as it is.
+fn value_at(ev: &PyExprEvaluator, d: &Data, t: f64) -> f64 {
+    goofi_core::control::number_of(&goofi_node::at(ev, d, t, (0.0, 1.0)).unwrap())
+}
+
+#[test]
+fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
+    // A two-state ping-pong with sample-length dwells and travel, driven on explicit instants: the
+    // same model advanced densely, sparsely, and with one long catch-up lands every deadline at the
+    // same instant and writes the same frames, because no wake time enters a stamp.
+    let ev = Arc::new(PyExprEvaluator::new().unwrap());
+    let period = 1.0 / 48_000.0;
+    let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "pp": {
+        "attributes": { "gain": { "default": 0.0, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } } },
+        "states": { "A": { "values": { "gain": 0.0 } }, "B": { "values": { "gain": 1.0 } } },
+        "transitions": {
+            "ab": { "from": "A", "to": "B", "triggers": [{ "kind": "after", "seconds": period }], "duration": period, "curve": "linear" },
+            "ba": { "from": "B", "to": "A", "triggers": [{ "kind": "after", "seconds": period }], "duration": period, "curve": "linear" }
+        },
+        "playheads": { "p": { "start": "A" } }
+    } })).unwrap();
+    let none = |_: &str| None;
+    let run = |instants: &[f64]| -> Vec<Vec<(String, Data)>> {
+        let mut m = Machines::default();
+        m.configure(model.clone(), Some(ev.clone()));
+        instants.iter().map(|t| m.advance(*t, &none)).collect()
+    };
+    let dense: Vec<f64> = (0..=2002).map(|i| i as f64 * period / 2.0).collect();
+    let sparse: Vec<f64> = (0..=2002).filter(|i| i % 73 == 0 || *i == 2002).map(|i| i as f64 * period / 2.0).collect();
+    let (d, s) = (run(&dense), run(&sparse));
+    assert_eq!(d.last(), s.last(), "the same instant reached by 2002 steps and by 29 says the same");
+    assert_eq!(run(&[0.0, dense[2002]]).last(), d.last(), "or by one");
+    // Deadlines compose from deadlines: born at 0, each hop dwells a period from its arrival and
+    // lands a period after it leaves, so the 500th arrival is that chain of additions and nothing
+    // of the grid it was looked at on. The write rides the f32 carrier.
+    let chained = (0..1000).fold(0.0f64, |t, _| t + period);
+    let last = d.last().unwrap();
+    assert_eq!(written(last, "p.arrived"), &Data::number(chained));
+    assert_eq!(written(last, "p.state").as_str().unwrap(), "A");
+    // Mid-flight the attribute is a functional: the origin at departure, the target at the end,
+    // the linear blend between, and clamped past either end. The write is one frame, not samples.
+    let mid = &d[3]; // 1.5 periods in: dwelt one, now halfway through the flight to B
+    let gain = written(mid, "p.gain");
+    assert!(gain.as_functional().is_some(), "{gain:?}");
+    assert_eq!(value_at(&ev, gain, period), 0.0);
+    assert!((value_at(&ev, gain, 1.5 * period) - 0.5).abs() < 1e-9);
+    assert_eq!(value_at(&ev, gain, 2.0 * period), 1.0);
+    assert_eq!(value_at(&ev, gain, 7.0), 1.0, "past the end the target holds");
+    assert_eq!(value_at(&ev, gain, 0.0), 0.0, "before the start the origin holds");
+    let progress = written(mid, "p.progress");
+    assert!((value_at(&ev, progress, 1.75 * period) - 0.75).abs() < 1e-9);
+    assert_eq!(d[2].iter().filter(|(n, _)| n == "p.gain").count(), 1);
+    // A request is stamped where it is made and lands in order with the deadlines: a jump at
+    // 0.4 periods, before the first dwell is due, puts the head in B then; the dwell out of B is
+    // due a period after THAT instant, not after the advance that carried it.
+    let mut m = Machines::default();
+    m.configure(model.clone(), Some(ev.clone()));
+    m.advance(0.0, &none);
+    m.jump(0.4 * period, "pp", "p", "B");
+    let w = m.advance(1.3 * period, &none);
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.arrived")), ("B", &Data::number(0.4 * period)));
+    let w = m.advance(1.9 * period, &none);
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("A", "B"), "left B at 1.4 periods");
+    assert!((value_at(&ev, written(&w, "p.progress"), 1.9 * period) - 0.5).abs() < 1e-9, "halfway through a one-period flight begun at 1.4");
 }
