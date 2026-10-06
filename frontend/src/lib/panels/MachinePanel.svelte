@@ -162,22 +162,28 @@
 		const pos = [Math.round(p.x - CARD_W / 2), Math.round(p.y - FALLBACK_H / 2)];
 		void call('machine state add', { pos });
 	}
-	const DOUBLE_CLICK_MS = 350;
-	let lastPaneClick = { at: 0, x: 0, y: 0 };
+	// A double click adds a box: the browser counts a mouse's clicks; a touch's taps are counted
+	// here, and only a tap that follows one that left nothing selected is the second of a pair.
+	const DOUBLE_TAP_MS = 350;
+	let lastTap = { at: 0, x: 0, y: 0 };
+	let touching = false;
 	function onPaneClick({ event }: { event: MouseEvent }): void {
 		const now = performance.now();
-		if (now - lastPaneClick.at < DOUBLE_CLICK_MS && Math.hypot(event.clientX - lastPaneClick.x, event.clientY - lastPaneClick.y) < 30) {
-			lastPaneClick.at = 0;
+		const bare = !sel.nodes(panelId).size && !sel.edges(panelId).size;
+		const doubleTap = touching && bare && now - lastTap.at < DOUBLE_TAP_MS && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 30;
+		if (event.detail >= 2 || doubleTap) {
+			lastTap.at = 0;
 			addState({ x: event.clientX, y: event.clientY });
 			return;
 		}
-		lastPaneClick = { at: now, x: event.clientX, y: event.clientY };
+		lastTap = { at: now, x: event.clientX, y: event.clientY };
 		sel.clickPane(panelId, event.shiftKey);
 		if (sel.nodes(panelId).size || sel.edges(panelId).size) void tick().then(reassertSelection);
 	}
 	const panePress = createLongPress((at) => addState({ x: at.clientX, y: at.clientY }));
 	function onPanePointerDown(e: PointerEvent): void {
-		if (e.pointerType === 'touch' && onBarePane(e.target)) panePress.start(e);
+		touching = e.pointerType === 'touch';
+		if (touching && onBarePane(e.target)) panePress.start(e);
 	}
 
 	// ---- a connection drawn from one box's band onto any part of another is a transition, fired by
