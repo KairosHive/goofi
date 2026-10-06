@@ -97,7 +97,6 @@ pub struct BindingView<'a> {
     pub key: &'a ParamKey,
     pub rewritten: &'a str,
     pub vars: &'a [BoundVar],
-    pub trigger: bool,
     pub id: Option<BindingId>,
     /// Whether the graph ships it — a disabled or unbindable binding leaves the literal standing.
     pub live: bool,

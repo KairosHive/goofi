@@ -485,8 +485,7 @@ export class GraphStore {
 						param: `${group}/${base}_${to}`,
 						value: d.value,
 						expression: d.expression ?? '',
-						mode: d.mode ?? 'constant',
-						triggers: d.triggers ?? false
+						mode: d.mode ?? 'constant'
 					}
 				});
 			});
@@ -655,7 +654,7 @@ export class GraphStore {
 		this._refreshing = rest;
 	}
 
-	/** Edit a param's source record: any subset of mode, expression and triggers. A text
+	/** Edit a param's source record: any subset of mode and expression. A text
 	 * given implies its mode; an empty text clears it. The manager's rules are the op's. */
 	async setSource(node: string, group: string, name: string, source: SourcePatch): Promise<void> {
 		await this._paramCall('node param edit', node, group, name, { ...source });

@@ -22,7 +22,6 @@ const base: ParamBase = {
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	triggers: false,
 	error: null,
 	section: 0,
 	show: null,
@@ -159,7 +158,7 @@ describe('rowPlan', () => {
 	it('disables the list face while an entry has a source of its own', () => {
 		const d: ParamDescriptor = {
 			...colour(),
-			elements: [{ mode: 'expression', expression: '0', triggers: false, error: null, value: 0 }]
+			elements: [{ mode: 'expression', expression: '0', error: null, value: 0 }]
 		};
 		expect(rowPlan(d, list).disabled).toBe(true);
 		expect(rowPlan(d, entries).disabled).toBe(false);

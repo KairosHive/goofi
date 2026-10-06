@@ -44,7 +44,6 @@ function catalog(): NodeTypeInfo[] {
 						refreshable: false,
 						expression: null,
 						mode: 'constant',
-						triggers: false,
 						error: null,
 						section: 0,
 						show: null,

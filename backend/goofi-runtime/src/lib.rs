@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use goofi_core::{Data, Param, SlotType};
 use goofi_node::mailbox::Inputs;
 use goofi_node::{
-    BindingId, BindingView, DrainWaker, EventId, Expression, GraphView, NodeFault, NodeManifest,
+    BindingId, BindingView, DrainWaker, EvalCtx, EventId, ExprEvaluator, Expression, GraphView, NodeFault, NodeManifest,
     NodeStage, NodeView, ParamDecl, ParamGroups, ParamKey, Status, Uid, Var,
 };
 use goofi_supervisor::sync::Mutex;
@@ -22,7 +22,6 @@ use goofi_transport::{
 use indexmap::IndexMap;
 
 mod common;
-pub mod expr;
 pub mod host;
 pub mod hosted;
 
@@ -60,7 +59,7 @@ pub enum Sub {
     Slot { inbox: usize, wire: usize, service: String, source: String },
     /// A binding this runtime evaluates: everything the engine's own plan does not carry. `elem`
     /// names ONE dimension of a vector param, which is all that binding writes.
-    Bind { param: usize, elem: Option<usize>, key: ParamKey, source: String, id: Option<BindingId>, vars: Vec<(String, Var)>, trigger: bool },
+    Bind { param: usize, elem: Option<usize>, key: ParamKey, source: String, id: Option<BindingId>, vars: Vec<(String, Var)> },
 }
 
 /// What an engine's own plan carries, so the runtime subscribes to the rest: the input kind whose
@@ -113,7 +112,7 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
                 continue;
             }
             let vars = b.vars.iter().map(|v| goofi_transport::var_of(view, v)).collect();
-            subs.push(Sub::Bind { param, elem, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars, trigger: b.trigger });
+            subs.push(Sub::Bind { param, elem, key: b.key.clone(), source: b.rewritten.to_string(), id: b.id, vars });
         }
     }
     // A ring would wake a same-engine consumer for what its plan already carries; a consumer on
@@ -138,10 +137,10 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
 
 /// What every runtime of one engine shares. An engine's own additions live beside it, in a
 /// struct of its own that only its [`Executor`] sees.
+pub type SharedEvaluator = Arc<Mutex<Option<Arc<dyn ExprEvaluator>>>>;
+
 pub struct Shared {
-    pub evaluator: expr::SharedEvaluator,
-    /// The engine's expression worker: a computed binding is evaluated there and nowhere else.
-    pub worker: expr::Worker,
+    pub evaluator: SharedEvaluator,
     pub reports: Mutex<Vec<(Uid, Status)>>,
     pub waker: Arc<DrainWaker>,
     /// A runtime saw something only a settle can act on — a shape moved, a file opened.
@@ -149,10 +148,8 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new(engine: &str, iox: &Iox, waker: Arc<DrainWaker>) -> Result<Shared, String> {
-        let evaluator: expr::SharedEvaluator = Arc::new(Mutex::new(None));
-        let worker = expr::Worker::start(engine, iox, evaluator.clone())?;
-        Ok(Shared { evaluator, worker, reports: Mutex::new(Vec::new()), waker, replan: AtomicBool::new(false) })
+    pub fn new(waker: Arc<DrainWaker>) -> Shared {
+        Shared { evaluator: Arc::new(Mutex::new(None)), reports: Mutex::new(Vec::new()), waker, replan: AtomicBool::new(false) }
     }
 
     fn report(&self, uid: Uid, status: Status) {
@@ -316,8 +313,9 @@ pub trait Executor {
     }
     /// The wires into Array input `inbox` moved: the full set, as `(service, node.slot)`.
     fn rewire(&mut self, _inbox: usize, _wires: &[(ServiceName, String)]) {}
-    /// The live values moved, or an arrival on a triggering binding asks for a run.
-    fn params_changed(&mut self, _values: &[Param], _trigger: bool) -> Ticked {
+    /// The live values moved. A param never asks for a run: `process` runs on the executor's
+    /// own cause — its clock, a slot's arrival, or a pulse.
+    fn params_changed(&mut self, _values: &[Param]) -> Ticked {
         Ticked::default()
     }
     /// A computed binding on the whole of `param` evaluated to `frame`, read as a param beside;
@@ -509,7 +507,6 @@ pub fn spawn<E: Executor + 'static>(
                     pulsed: Vec::new(),
                     shared,
                     mail: thread_mail,
-                    last_tick: Instant::now(),
                     last_run: Instant::now(),
                     last_ufreq: None,
                     listener,
@@ -559,21 +556,8 @@ struct Bind {
     elem: Option<usize>,
     key: ParamKey,
     expr: Expression,
-    /// The worker's handover for a computed expression; a bare one is read on this thread.
-    cell: Option<Arc<expr::Cell>>,
-    /// What the engine sent, so a re-send that moved nothing is told from one that did.
-    sent: (String, Vec<(String, Var)>),
-    trigger: bool,
     /// Per stream variable: its name, the service, and this runtime's subscriber on it.
     streams: Vec<(String, String, ByteSubscriber)>,
-}
-
-impl Bind {
-    /// Whether the pace re-evaluates it: an expression with no stream can still follow the time,
-    /// where a bare variable moves only when it is re-sent.
-    fn timed(&self) -> bool {
-        self.streams.is_empty() && self.expr.id.is_some()
-    }
 }
 
 struct Runtime<E: Executor> {
@@ -607,7 +591,6 @@ struct Runtime<E: Executor> {
     pulsed: Vec<(usize, Instant)>,
     shared: Arc<Shared>,
     mail: Arc<Mutex<Mail>>,
-    last_tick: Instant,
     last_run: Instant,
     /// When the rate was last REPORTED, which is not when it was last measured.
     last_ufreq: Option<Instant>,
@@ -661,18 +644,16 @@ impl<E: Executor> Runtime<E> {
             self.retired.retain(|port| !port.spent());
             let now = Instant::now();
             let due = !mail.flush.is_empty() || self.exec.next_wake(self.last_run).is_some_and(|t| t <= now);
-            if due || self.last_tick + TICK <= now {
-                self.last_tick = now;
+            if due {
+                // Every computed expression is read right before the run, at the run's time.
                 let mut pass = Pass::default();
                 for i in 0..self.binds.len() {
-                    if self.binds[i].timed() {
+                    if self.binds[i].expr.id.is_some() {
                         self.evaluate(i, &mut pass);
                     }
                 }
                 self.report(pass);
-                self.sync(false);
-            }
-            if due {
+                self.sync();
                 self.last_run = now;
                 self.tick();
             }
@@ -691,11 +672,10 @@ impl<E: Executor> Runtime<E> {
         }
     }
 
-    /// Park until something rings or a duty is due: the executor's run, or a paced one of this
-    /// runtime's own. With neither, park until a ring — the halt's included.
+    /// Park until something rings or a duty is due: the executor's run, or a raised pulse to
+    /// lower. With neither, park until a ring — the halt's included.
     fn park(&mut self) {
-        let paced = !self.pulsed.is_empty() || self.binds.iter().any(Bind::timed);
-        let own = paced.then(|| self.last_tick + TICK);
+        let own = self.pulsed.iter().map(|(_, raised)| *raised + TICK).min();
         let due = match (self.exec.next_wake(self.last_run), own) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -722,7 +702,7 @@ impl<E: Executor> Runtime<E> {
         let (slots, binds): (Vec<Sub>, Vec<Sub>) = d.subs.into_iter().partition(|s| matches!(s, Sub::Slot { .. }));
         let opened = self.apply_slots(slots) & self.apply_bells(d.targets);
         self.reopen = (!opened).then_some(wanted);
-        let trigger = self.apply_binds(binds);
+        self.apply_binds(binds);
         self.apply_records(&d.record);
         // Every literal goes in first, then each binding writes what it owns over it: a whole
         // param, or one dimension of it, which leaves the literal in the dimensions nobody drives.
@@ -737,7 +717,7 @@ impl<E: Executor> Runtime<E> {
             self.evaluate(i, &mut pass);
         }
         self.report(pass);
-        self.sync(trigger);
+        self.sync();
     }
 
     /// Answers whether every wire opened; one that did not is logged and tried again next tick.
@@ -767,19 +747,12 @@ impl<E: Executor> Runtime<E> {
         opened
     }
 
-    /// Answers whether a binding re-sent with a resolved value asks for a run: a variables edit
-    /// reaching a triggering binding is an arrival, where binding a bare reference only subscribes.
-    fn apply_binds(&mut self, subs: Vec<Sub>) -> bool {
+    /// Replace the bindings, keeping the subscriptions and arrivals of one re-sent unchanged.
+    fn apply_binds(&mut self, subs: Vec<Sub>) {
         let mut old = std::mem::take(&mut self.binds);
-        let mut triggering = false;
         for sub in subs {
-            let Sub::Bind { param, elem, key, source, id, vars, trigger } = sub else { continue };
+            let Sub::Bind { param, elem, key, source, id, vars } = sub else { continue };
             let mut previous = take_where(&mut old, |b| b.key == key);
-            let moved = previous.as_ref().is_none_or(|p| p.sent.0 != source || p.sent.1 != vars);
-            if moved && trigger && key.group != COMMON && vars.iter().any(|(_, v)| matches!(v, Var::Value(_))) {
-                triggering = true;
-            }
-            let sent = (source.clone(), vars.clone());
             let mut streams = Vec::new();
             let mut kept_names = Vec::new();
             let mut resolved = Vec::with_capacity(vars.len());
@@ -813,9 +786,7 @@ impl<E: Executor> Runtime<E> {
             if let Some(p) = &previous {
                 expr.carry(&p.expr, |name| kept_names.iter().any(|n| n == name));
             }
-            let kept_cell = previous.as_mut().and_then(|p| p.cell.take());
-            let cell = id.map(|_| kept_cell.unwrap_or_else(|| Arc::new(expr::Cell::new(door_service(&self.base)))));
-            self.binds.push(Bind { param, elem, key, expr, cell, sent, trigger, streams });
+            self.binds.push(Bind { param, elem, key, expr, streams });
         }
         let mut pass = Pass::default();
         for dropped in old {
@@ -825,7 +796,6 @@ impl<E: Executor> Runtime<E> {
             }
         }
         self.report(pass);
-        triggering
     }
 
     /// Ring a producer's door for the frame it holds, through this node's one bell on it.
@@ -965,8 +935,8 @@ impl<E: Executor> Runtime<E> {
         }
     }
 
-    /// The live values, and the executor told when they moved — or when an arrival asks for a run.
-    fn sync(&mut self, trigger: bool) {
+    /// The live values, and the executor told when they moved.
+    fn sync(&mut self) {
         let values: Vec<Param> = self.consts.iter().enumerate().map(|(i, value)| {
             let whole = self.binds.iter().find(|b| b.param == i && b.elem.is_none()).and_then(|b| self.evaluated.get(&b.key));
             let held = whole.unwrap_or(value).clone();
@@ -977,9 +947,9 @@ impl<E: Executor> Runtime<E> {
                 held
             }
         }).collect();
-        if values != self.values || trigger {
+        if values != self.values {
             self.values = values;
-            let ticked = self.exec.params_changed(&self.values, trigger);
+            let ticked = self.exec.params_changed(&self.values);
             self.absorb(ticked);
         }
     }
@@ -1038,33 +1008,19 @@ impl<E: Executor> Runtime<E> {
             }
         }
         touched.dedup();
-        // A bare source moves on arrival; a computed one when its result lands.
-        let fires = |b: &Bind| b.trigger && b.key.group != COMMON;
-        let mut trigger = touched.iter().any(|i| fires(&self.binds[*i]) && self.binds[*i].expr.id.is_none());
+        // A bare source moves on arrival; a computed one is read before the next run.
         let mut pass = Pass::default();
         for i in touched {
-            self.evaluate(i, &mut pass);
-        }
-        for i in 0..self.binds.len() {
-            let Some(result) = self.binds[i].cell.as_ref().and_then(|c| c.take()) else { continue };
-            trigger |= fires(&self.binds[i]);
-            let (param, whole) = (self.binds[i].param, self.binds[i].elem.is_none());
-            let mut replan = false;
-            let outcome = result.map(|frame| {
-                replan = whole && self.exec.frame(param, &frame);
-                Some(goofi_core::control::read(&frame, &self.target(i)))
-            });
-            if replan {
-                self.shared.ask_settle();
+            if self.binds[i].expr.id.is_none() {
+                self.evaluate(i, &mut pass);
             }
-            self.land(i, outcome, &mut pass);
         }
         for (key, why) in undecodable {
             self.record_error(key, Some(why), &mut pass);
         }
         self.report(pass);
-        if trigger || moved || !self.binds.is_empty() {
-            self.sync(trigger);
+        if moved || !self.binds.is_empty() {
+            self.sync();
         }
     }
 
@@ -1185,8 +1141,8 @@ impl<E: Executor> Runtime<E> {
         }
     }
 
-    /// Read one binding: a bare source lands now, a computed one goes to the worker and lands when
-    /// its result comes back, and a source with nothing arrived leaves the literal standing.
+    /// Read one binding now: a bare source as its frame, a computed one through the evaluator at
+    /// this instant, and a source with nothing arrived leaves the literal standing.
     fn evaluate(&mut self, i: usize, pass: &mut Pass) {
         let target = self.target(i);
         let outcome = match self.binds[i].expr.inputs() {
@@ -1199,9 +1155,18 @@ impl<E: Executor> Runtime<E> {
                     Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
                     _ => (0.0, 1.0),
                 };
-                let job = expr::Job { id: b.expr.id.expect("computed"), locals, t: self.time.now(), range };
-                self.shared.worker.submit(b.cell.as_ref().expect("a computed binding has a cell"), job);
-                return;
+                let ctx = EvalCtx { locals: &locals, t: self.time.now(), range };
+                let evaluated = match self.shared.evaluator.lock().clone() {
+                    Some(ev) => ev.eval(b.expr.id.expect("computed"), &ctx).map_err(|e| e.0),
+                    None => Err("no expression evaluator available".to_string()),
+                };
+                let (param, whole) = (b.param, b.elem.is_none());
+                evaluated.map(|frame| {
+                    if whole && self.exec.frame(param, &frame) {
+                        self.shared.ask_settle();
+                    }
+                    Some(goofi_core::control::read(&frame, &target))
+                })
             }
         };
         self.land(i, outcome, pass);

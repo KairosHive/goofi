@@ -352,21 +352,6 @@
 					/>
 				</div>
 			{/if}
-			{#if driven && plan.foot}
-				<Segmented
-					value={descriptor.triggers ? 'trig' : null}
-					segments={[
-						{
-							id: 'trig',
-							label: 'trig',
-							name: 'Trigger',
-							title: "Trigger — wake the node's process() each time this source changes",
-							testid: 'param-triggers'
-						}
-					]}
-					onChange={() => onSetSource?.({ triggers: !descriptor.triggers })}
-				/>
-			{/if}
 			{#if plan.foot}
 			<Segmented
 				value={descriptor.mode}

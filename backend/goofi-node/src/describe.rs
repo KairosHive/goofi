@@ -370,7 +370,6 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
         expression: p.expression.as_deref().map(|src| crate::ExprDecl {
             source: leak_str(src),
             mode: crate::ExprMode::On,
-            trigger: false,
         }),
         doc: p.doc.as_deref().map(leak_str),
         section: p.section,

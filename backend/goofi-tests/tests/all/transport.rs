@@ -79,7 +79,7 @@ impl Executor for Probe {
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
         self.log.lock().wired.push((inbox, wires.to_vec()));
     }
-    fn params_changed(&mut self, values: &[Param], _: bool) -> Ticked {
+    fn params_changed(&mut self, values: &[Param]) -> Ticked {
         self.log.lock().values.push(values.to_vec());
         Ticked::default()
     }
@@ -114,7 +114,7 @@ struct Fleet {
 impl Fleet {
     fn new() -> Fleet {
         let iox = goofi_tests::iox();
-        Fleet { shared: Arc::new(Shared::new("signal", &iox, Arc::new(DrainWaker::default())).unwrap()), bells: iox.node().unwrap() }
+        Fleet { shared: Arc::new(Shared::new(Arc::new(DrainWaker::default()))), bells: iox.node().unwrap() }
     }
 
     fn spawn(&self, uid: Uid) -> Node {

@@ -6,7 +6,7 @@
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
 export type Literal = number | string | boolean | Literal[];
 export type Mode = "constant" | "expression";
-export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, triggers?: boolean, };
+export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, };
 export type VideoQuality = "small" | "high" | "very_high";
 export type RecordedOutput = { slot: string, quality: VideoQuality, };
 export type NodeRecord = { type: string, name: string, pos: [number, number], 
@@ -85,10 +85,6 @@ role: ParamRole | null,
  * True when the node declared a refresh method for this param.
  */
 refreshable: boolean, mode: Mode, expression: string | null, 
-/**
- * When true, an arrival that changes the value wakes the node's `process()`.
- */
-triggers: boolean, 
 /**
  * The active source's bind, compile or arrival error.
  */

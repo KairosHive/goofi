@@ -935,8 +935,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
         let p = ev.next("state_update");
         (p["node"] == hex(consumer)).then(|| p["params"]["common"]["max_frequency"].clone())
     });
-    assert_eq!((&d["expression"], &d["mode"], &d["triggers"]),
-               (&j!("nd('src') * 1"), &j!("expression"), &j!(false)));
+    assert_eq!((&d["expression"], &d["mode"]), (&j!("nd('src') * 1"), &j!("expression")));
     assert!(d["error"].is_string(), "got {:?}", d["error"]);
     assert!(d.get("expression_autoeval").is_none(), "auto-eval is always on, so it is not on the wire");
 

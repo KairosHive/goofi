@@ -177,14 +177,12 @@ impl Show {
     }
 }
 
-/// A declared param expression: its source, whether it starts live, and whether it wakes the node.
+/// A declared param expression: its source, and whether it starts live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExprDecl {
     pub source: &'static str,
     /// Whether this expression starts live; `Off` merely retains it as the param's expression text.
     pub mode: ExprMode,
-    /// Whether re-evaluating it also wakes `process()`.
-    pub trigger: bool,
 }
 
 /// Whether a declared [`ExprDecl`] is live or merely carried.

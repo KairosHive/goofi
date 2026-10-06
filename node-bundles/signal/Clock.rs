@@ -128,7 +128,7 @@ static PARAMS: &[ParamDecl] = &[
         group: "common",
         name: "max_frequency",
         spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
-        expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On, trigger: true }),
+        expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",

@@ -51,8 +51,6 @@ pub struct ParamBase {
     pub refreshable: bool,
     pub mode: Mode,
     pub expression: Option<String>,
-    /// When true, an arrival that changes the value wakes the node's `process()`.
-    pub triggers: bool,
     /// The active source's bind, compile or arrival error.
     pub error: Option<String>,
 }
@@ -123,7 +121,6 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: source.map(|s| s.state.mode).unwrap_or_default(),
         expression: source.and_then(|s| text(&s.state.expression)),
-        triggers: source.is_some_and(|s| s.state.triggers),
         error: source.and_then(|s| s.error.clone()),
     };
     let kind = match p {

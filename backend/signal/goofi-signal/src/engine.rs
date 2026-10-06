@@ -48,7 +48,7 @@ impl SignalEngine {
 
     pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
         Ok(SignalEngine {
-            shared: Arc::new(Shared::new("signal", &iox, waker)?),
+            shared: Arc::new(Shared::new(waker)),
             iox,
             instance,
             time,

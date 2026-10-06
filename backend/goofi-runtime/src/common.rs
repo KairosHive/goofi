@@ -35,9 +35,12 @@ impl RunPolicy {
     }
 }
 
-/// The universal `common` scheduling group; a fourth param is added here and nowhere else. It may
+/// The name of the pulse that runs a signal node once.
+pub const TRIGGER: &str = "trigger";
+
+/// The universal `common` scheduling group; a fifth param is added here and nowhere else. It may
 /// read the manifest's static shape, but never `m.params` for a `common` key.
-pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 3] {
+pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 4] {
     let decl = |name, spec, expression, doc| ParamDecl { group: COMMON, name, spec, expression, doc: Some(doc), section: 0, show: None, role: None };
     [
         decl(
@@ -47,15 +50,10 @@ pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 3] {
             "Run on the node's own schedule, instead of waiting for an input frame. \
              Turn this on for sources; leave it off for transforms driven by their input.",
         ),
-        // Live on a producer; `trigger: true` is inert, as a `common.*` arrival never triggers a run.
         decl(
             "max_frequency",
             ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
-            Some(ExprDecl {
-                source: "variables.system.default_ufreq",
-                mode: if m.producer { ExprMode::On } else { ExprMode::Off },
-                trigger: true,
-            }),
+            Some(ExprDecl { source: "variables.system.default_ufreq", mode: if m.producer { ExprMode::On } else { ExprMode::Off } }),
             "Rate cap for this node, read through `frequency_mode`. 0 means uncapped — the node \
              runs as often as the scheduler and its inputs allow.",
         ),
@@ -69,6 +67,13 @@ pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 3] {
             None,
             "How to read `max_frequency`: as a rate in Hz (updates per second), or as a period \
              in seconds between updates — convenient for very slow nodes.",
+        ),
+        decl(
+            TRIGGER,
+            ParamSpec::Pulse,
+            None,
+            "Run the node once, now. A param edit never runs a node; its causes are `autotrigger`, \
+             a frame on a triggering input, and this pulse.",
         ),
     ]
 }

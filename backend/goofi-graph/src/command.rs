@@ -49,7 +49,6 @@ impl Applied {
 pub struct SourceState {
     pub mode: Mode,
     pub expression: String,
-    pub triggers: bool,
 }
 
 impl SourceState {

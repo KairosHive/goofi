@@ -386,7 +386,7 @@ impl AudioEngine {
             device: None,
             tried: None,
             stats: Arc::new(Stats::default()),
-            shared: Arc::new(Shared::new("audio", &iox, waker.clone())?),
+            shared: Arc::new(Shared::new(waker.clone())),
             audio: Arc::new(AudioShared {
                 rate: AtomicU64::new(RATE.to_bits()),
                 clock,

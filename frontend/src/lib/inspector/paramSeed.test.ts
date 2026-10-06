@@ -7,7 +7,6 @@ const base = {
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	triggers: false,
 	error: null
 } as const;
 

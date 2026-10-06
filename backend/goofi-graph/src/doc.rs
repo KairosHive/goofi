@@ -87,8 +87,6 @@ pub struct ParamEntry {
     pub mode: Option<Mode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub triggers: Option<bool>,
 }
 
 impl ParamEntry {
@@ -97,14 +95,12 @@ impl ParamEntry {
         Some(SourceState {
             mode: self.mode?,
             expression: self.expression.clone().unwrap_or_default(),
-            triggers: self.triggers.unwrap_or(false),
         })
     }
 
     pub fn with_source(mut self, s: &SourceState) -> ParamEntry {
         self.mode = Some(s.mode);
         self.expression = (!s.expression.is_empty()).then(|| s.expression.clone());
-        self.triggers = s.triggers.then_some(true);
         self
     }
 }

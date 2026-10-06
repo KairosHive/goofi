@@ -102,7 +102,7 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
         assert!(doc.contains(word), "`{word}` is not offered by node edit's doc: {doc}");
     }
     let doc = find("node param edit").expect("registered").doc();
-    for word in ["`triggers` defaults false", "triggers: true"] {
+    for word in ["never runs a node", "`common.trigger`"] {
         assert!(doc.contains(word), "`{word}` is not offered by node param edit's doc: {doc}");
     }
 
@@ -321,7 +321,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let pages: Vec<&str> = got["params"].as_object().expect("pages").keys().map(String::as_str).collect();
     assert_eq!(pages, ["own", "common"], "{got}");
     let common: Vec<&str> = got["params"]["common"].as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode"], "the engine's order: {common:?}");
+    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode", "trigger"], "the engine's order: {common:?}");
     assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5), "the author's default: {got}");
 
     // The two fixtures differ only in the `producer` flag, and it decides who paces the node.

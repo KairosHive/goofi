@@ -90,9 +90,9 @@ impl Executor for GraphicsHalf {
             self.cells.uploaded.store(0, Ordering::Relaxed);
         }
     }
-    fn params_changed(&mut self, values: &[goofi_core::Param], trigger: bool) -> Ticked {
+    fn params_changed(&mut self, values: &[goofi_core::Param]) -> Ticked {
         match &mut self.producer {
-            Some((producer, _)) => producer.params_changed(values, trigger),
+            Some((producer, _)) => producer.params_changed(values),
             None => Ticked::default(),
         }
     }

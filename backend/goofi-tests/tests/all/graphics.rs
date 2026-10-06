@@ -795,12 +795,12 @@ fn shaders_render_on_the_gpu() {
     let why = g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]", "mode": "invalid" }));
     assert!(why.contains("mode"), "a list source validates its mode: {why}");
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]",
-                                   "value": [0.25, 0.5, 0.75, 1.0], "mode": "constant", "triggers": true }));
+                                   "value": [0.25, 0.5, 0.75, 1.0], "mode": "constant" }));
     let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
     assert_eq!(params["ink"]["value"], j!([0.25, 0.5, 0.75, 1]), "the whole literal lands beside the list");
     for k in 0..4 {
         let element = &params[format!("ink[{k}]")];
-        assert_eq!((&element["mode"], &element["triggers"]), (&j!("constant"), &j!(true)), "the list keeps each supplied source field: {element}");
+        assert_eq!((&element["mode"], &element["expression"]), (&j!("constant"), &j!(if k == 3 { "1" } else { "0" })), "the list keeps each supplied source field: {element}");
     }
     drawn(&g, inked, "inactive list elements keep the supplied literal", |d| close(px(d, 0, 0), [0.25, 0.5, 0.75, 1.0]));
     g.call("undo", j!({}));

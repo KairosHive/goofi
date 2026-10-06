@@ -16,7 +16,6 @@ function param(doc: string | null = null): ParamDescriptor {
 		refreshable: false,
 		mode: 'constant',
 		expression: null,
-		triggers: false,
 		error: null,
 		section: 0,
 		show: null,

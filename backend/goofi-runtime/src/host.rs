@@ -330,7 +330,7 @@ impl Executor for HostExecutor {
 
     /// A moved `common.*` value re-paces; any other reaches the node's hook — through the retry's
     /// replay on an uninitialized node, which hears nothing else.
-    fn params_changed(&mut self, values: &[Param], trigger: bool) -> Ticked {
+    fn params_changed(&mut self, values: &[Param]) -> Ticked {
         let mut ticked = Ticked::default();
         let mut moved = Vec::new();
         let mut repace = false;
@@ -348,9 +348,6 @@ impl Executor for HostExecutor {
         self.values = values.to_vec();
         if repace {
             self.policy = RunPolicy::from_params(&self.effective);
-        }
-        if trigger {
-            self.trigger_pending = true;
         }
         if moved.is_empty() {
             return ticked;
@@ -370,6 +367,10 @@ impl Executor for HostExecutor {
         let mut ticked = Ticked::default();
         let Some(d) = self.decls.get(param) else { return ticked };
         let key = ParamKey::new(d.group, d.name);
+        if d.group == COMMON && d.name == crate::common::TRIGGER {
+            self.trigger_pending = true;
+            return ticked;
+        }
         if self.ensure_initialized() {
             let params = Params::new(&self.effective);
             let node = self.node.as_mut().expect("initialized");

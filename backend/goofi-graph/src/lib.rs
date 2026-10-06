@@ -184,7 +184,7 @@ pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
     }
 }
 
-/// The one params bag, `{group: {param: value | {value, expression, mode, triggers}}}`,
+/// The one params bag, `{group: {param: value | {value, expression, mode}}}`,
 /// as one [`Command::EditParam`] per entry, typed against the params the node holds NOW.
 pub fn param_commands(
     g: &Graph,
@@ -303,8 +303,8 @@ fn param_change(
         }
         return Ok((Some(coerced_value(existing, spec)), None));
     };
-    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "value" | "expression" | "mode" | "triggers")) {
-        return Err(format!("unknown field `{k}` — value, expression, mode, triggers"));
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "value" | "expression" | "mode")) {
+        return Err(format!("unknown field `{k}` — value, expression, mode"));
     }
     let field = |k: &str| o.get(k).filter(|v| !v.is_null());
     if pulse && field("value").is_some() {
@@ -324,10 +324,7 @@ fn param_change(
                 .ok_or_else(|| format!("mode is `constant` or `expression`, not {v}"))
         })
         .transpose()?;
-    let triggers = field("triggers")
-        .map(|v| v.as_bool().ok_or_else(|| format!("triggers is a bool, not {v}")))
-        .transpose()?;
-    if expression.is_none() && mode.is_none() && triggers.is_none() {
+    if expression.is_none() && mode.is_none() {
         return Ok((value, None));
     }
     let cur = cur.unwrap_or_default();
@@ -337,7 +334,7 @@ fn param_change(
         (None, Some(_)) => Mode::Expression,
         (None, None) => cur.mode,
     };
-    let state = SourceState { mode, expression: expression.unwrap_or(cur.expression), triggers: triggers.unwrap_or(cur.triggers) };
+    let state = SourceState { mode, expression: expression.unwrap_or(cur.expression) };
     if state.mode == Mode::Expression && state.expression.is_empty() {
         return Err("mode `expression` with no expression to evaluate".to_string());
     }
@@ -713,7 +710,7 @@ impl Graph {
             }
         }
         for (name, expression) in wanted {
-            let state = SourceState { mode: Mode::Expression, expression, triggers: false };
+            let state = SourceState { mode: Mode::Expression, expression };
             let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| ParamSource::fresh(state.clone()));
             let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
             let (id, error) = self.compiled(&prior, &derived);
@@ -1617,7 +1614,6 @@ impl Graph {
                 let state = SourceState {
                     mode: if enabled { Mode::Expression } else { Mode::Constant },
                     expression: e.source.to_string(),
-                    triggers: e.trigger,
                 };
                 let _ = self.set_source(uid, group, name, state);
             }
@@ -3740,7 +3736,6 @@ fn build_view<'a>(
                     key,
                     rewritten: &b.rewritten,
                     vars: &b.vars,
-                    trigger: b.state.triggers,
                     id: b.id,
                     live: b.live(),
                 })

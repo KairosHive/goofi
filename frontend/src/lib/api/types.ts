@@ -29,7 +29,6 @@ export type UnknownParam = ParamBase & { type: 'unknown'; value: unknown };
 export interface ElementSource {
 	mode: ParamMode;
 	expression: string | null;
-	triggers: boolean;
 	error: string | null;
 	value: number | undefined;
 }

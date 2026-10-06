@@ -115,7 +115,6 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         expression: Some(ExprDecl {
             source,
             mode: if m.producer { ExprMode::On } else { ExprMode::Off },
-            trigger: false,
         }),
         doc: Some(
             "Texture size in pixels; 0 follows the first wired texture input, or the frame \
@@ -151,7 +150,7 @@ impl GraphicsEngine {
         recorder: Arc<goofi_record::Recorder>,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
-        let shared = Arc::new(Shared::new("graphics", &iox, waker)?);
+        let shared = Arc::new(Shared::new(waker));
         let stats = Arc::new(Stats::default());
         let troubles = runtime::Troubles::default();
         let runtime = Arc::new(Mutex::new(Runtime::new(
