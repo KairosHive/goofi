@@ -167,6 +167,7 @@ impl Preset {
         self.output(&mut command, fps, quality);
         // A trial that fails is the expected answer for most candidates, not something to log.
         let mut child = goofi_supervisor::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
+            .windowless()
             .stdout(Out::Null)
             .stderr(Out::Null)
             .spawn()
@@ -182,12 +183,6 @@ fn ffmpeg_bare() -> Command {
 
 fn ffmpeg() -> Command {
     let mut command = ffmpeg_bare();
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     command
 }
@@ -225,6 +220,7 @@ impl Ffmpeg {
         preset.output(&mut command, self.fps, self.quality);
         // stderr is read by the owner: an encoder's last words are the error the recording reports.
         let mut child = goofi_supervisor::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
+            .windowless()
             .stdin_piped()
             .stdout(Out::Null)
             .stderr(Out::Pipe)

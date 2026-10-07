@@ -192,6 +192,20 @@ pub fn capture_stdio() -> Result<(), String> {
     static CAPTURE: OnceLock<Result<(), String>> = OnceLock::new();
     CAPTURE.get_or_init(|| {
         let terminal = FileDescriptor::dup(&std::io::stdout()).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            // The startup screen moves the cursor with ANSI escapes; a classic console reads them
+            // only in this mode.
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::Console::{GetConsoleMode, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING};
+            let mut mode = 0;
+            // SAFETY: mode calls on a handle this process holds.
+            unsafe {
+                if GetConsoleMode(terminal.as_raw_handle(), &mut mode) != 0 {
+                    SetConsoleMode(terminal.as_raw_handle(), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
+            }
+        }
         let _ = TERMINAL.set(Mutex::new(terminal));
         for (stream, descriptor) in [("stdout", StdioDescriptor::Stdout), ("stderr", StdioDescriptor::Stderr)] {
             let pipe = Pipe::new().map_err(|e| e.to_string())?;
@@ -213,12 +227,40 @@ pub fn capture_stdio() -> Result<(), String> {
 
 static TERMINAL: OnceLock<Mutex<filedescriptor::FileDescriptor>> = OnceLock::new();
 
-/// Write raw bytes to the saved terminal, or to stdout before the capture.
-pub fn terminal_write(bytes: &[u8]) -> std::io::Result<()> {
+/// Write text to the saved terminal, or to stdout before the capture.
+pub fn terminal_write(text: &str) -> std::io::Result<()> {
     match TERMINAL.get() {
-        Some(out) => out.lock().unwrap_or_else(|e| e.into_inner()).write_all(bytes),
-        None => std::io::stdout().lock().write_all(bytes),
+        Some(out) => write_text(&mut out.lock().unwrap_or_else(|e| e.into_inner()), text),
+        None => std::io::stdout().lock().write_all(text.as_bytes()),
     }
+}
+
+#[cfg(not(windows))]
+fn write_text(out: &mut filedescriptor::FileDescriptor, text: &str) -> std::io::Result<()> {
+    out.write_all(text.as_bytes())
+}
+
+/// A console reads raw bytes in its own code page, rarely UTF-8, so it is given UTF-16.
+#[cfg(windows)]
+fn write_text(out: &mut filedescriptor::FileDescriptor, text: &str) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Console::{GetConsoleMode, WriteConsoleW};
+    let handle = out.as_raw_handle();
+    let mut mode = 0;
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return out.write_all(text.as_bytes());
+    }
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut rest = &wide[..];
+    while !rest.is_empty() {
+        let mut written = 0;
+        // SAFETY: a console handle this process holds, and a buffer of the length given.
+        if unsafe { WriteConsoleW(handle, rest.as_ptr(), rest.len() as u32, &mut written, std::ptr::null()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        rest = &rest[written as usize..];
+    }
+    Ok(())
 }
 
 /// Whether the terminal is one, and how wide: `None` when output goes to a file or a pipe.
@@ -235,18 +277,23 @@ pub fn terminal_width() -> Option<u16> {
         (unsafe { libc::isatty(fd) == 1 && libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) == 0 })
             .then_some(size.ws_col.max(40))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        use std::io::IsTerminal;
-        std::io::stdout().is_terminal().then_some(100)
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{GetConsoleScreenBufferInfo, CONSOLE_SCREEN_BUFFER_INFO};
+        let handle = match TERMINAL.get() {
+            Some(out) => out.lock().unwrap_or_else(|e| e.into_inner()).as_raw_handle(),
+            None => std::io::stdout().as_raw_handle(),
+        };
+        let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
+        // SAFETY: a query on a handle this process holds, into a struct of the size it expects.
+        (unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0)
+            .then(|| ((info.srWindow.Right - info.srWindow.Left + 1) as u16).max(40))
     }
 }
 
 pub fn terminal_line(text: &str) -> std::io::Result<()> {
-    match TERMINAL.get() {
-        Some(out) => writeln!(out.lock().unwrap_or_else(|e| e.into_inner()), "{text}"),
-        None => { println!("{text}"); Ok(()) }
-    }
+    terminal_write(&format!("{text}\n"))
 }
 
 pub fn print_url(url: &str) -> std::io::Result<()> { terminal_line(&format!("goofi → {url}")) }
