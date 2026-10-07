@@ -167,6 +167,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
     assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
+    assert!(g.doc()["variable_groups"]["control0"].is_object(), "and recorded, so it outlives a switch away");
     // The `control` door is ONE undo step each; the manager mints the element and the cell where
     // none is given.
     let born = g.call("control add", j!({ "group": "control0", "kind": "knob" }));
@@ -186,6 +187,13 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
+    // A group removed while a panel draws it is EMPTIED, its record kept under the panel; one step back
+    // brings its widgets back.
+    g.call("variable group remove", j!({ "group": "control0" }));
+    assert!(g.doc()["variables"].get("control0.level").is_none());
+    assert!(g.doc()["variable_groups"]["control0"].is_object(), "the drawn group keeps its record");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the widgets are back as they were");
     // A `paint` widget holds an `[h, w, 4]` RGBA sheet in 0..1. `control paint` draws a script of
     // timed ops onto it as ONE undoable edit, and a raw snapshot of the variable reads the sheet.
     g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad", "resolution": 100 }));
@@ -314,6 +322,17 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3]] }));
     g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": { "no": "object" } }));
     g.call("undo", j!({}));
+    // A group goes whole — its record and every entry — as ONE step, and undo brings the lot back.
+    g.call("variable group remove", j!({ "group": "bench" }));
+    assert!(g.doc()["variable_groups"].get("bench").is_none());
+    assert!(g.call("variable list", j!({}))["variables"].as_array().unwrap().iter().all(|e| e["name"] != "bench.entry0"));
+    g.call("undo", j!({}));
+    assert!(g.doc()["variable_groups"]["bench"].is_object());
+    assert_eq!(g.variable("bench.entry1"), 1);
+    let why = g.refuse("variable group remove", j!({ "group": "nobody" }));
+    assert!(why.contains("no variable group"), "{why}");
+    let why = g.refuse("variable group remove", j!({ "group": "system" }));
+    assert!(why.contains("system"), "{why}");
     assert_eq!(g.variable("bench.entry1"), 1);
     g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "no" }));
     g.call("variable entry add", j!({ "name": "bench.knob", "value": 1.0,

@@ -71,6 +71,12 @@ op!(GroupRename, "variable group rename", 2, GroupRenameArgs {
     "Rename a group, moving every member with it and rewriting every expression that reads one. A config-locked group refuses, and the system group always does.",
     "{group} — the group as stored");
 
+op!(GroupRemove, "variable group remove", 1, GroupRemoveArgs {
+    pub group: String,
+},
+    "Delete a group with every variable in it, as ONE undo step. A locked group refuses, and the system group always does. While a control panel draws the group, the group itself stays, emptied.",
+    "{removed: true}");
+
 op!(GroupLock, "variable group lock", 1, GroupLockArgs {
     pub group: String,
     pub config: Option<bool>,
@@ -278,6 +284,29 @@ impl WriteOp for GroupRename {
 
     fn label(a: &GroupRenameArgs, _: &Value) -> String {
         format!("Rename variable group {} → {}", a.from, a.to)
+    }
+}
+
+impl WriteOp for GroupRemove {
+    fn run(tx: &mut Txn, a: GroupRemoveArgs) -> Result<Value, String> {
+        let mut cmds: Vec<Command> = tx.g.variables()
+            .entries()
+            .filter(|(n, _)| n.rsplit_once('.').is_some_and(|(g, _)| g == a.group))
+            .map(|(n, _)| Command::RemoveVariable { name: n.to_string() })
+            .collect();
+        let drawn = tx.g.arrangement().control_panels().iter().any(|(_, held)| *held == a.group);
+        if !drawn && tx.g.variables().groups().any(|(g, _)| g == a.group) {
+            cmds.push(Command::RemoveVariableGroup { group: a.group.clone() });
+        }
+        if cmds.is_empty() {
+            return Err(format!("no variable group `{}`", a.group));
+        }
+        tx.apply(compound(cmds))?;
+        Ok(json!({ "removed": true }))
+    }
+
+    fn label(a: &GroupRemoveArgs, _: &Value) -> String {
+        format!("Remove variable group {}", a.group)
     }
 }
 

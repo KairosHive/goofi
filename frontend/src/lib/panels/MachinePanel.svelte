@@ -2,6 +2,10 @@
      its playheads as dots that move as the manager moves them — with the editor's inspector pane
      beside it. Every change is a `machine` op, so the manager owns the model and this panel owns the
      drawing and the gesture in flight. -->
+<script module lang="ts">
+	let minting: Promise<void> | null = null;
+</script>
+
 <script lang="ts">
 	import {
 		ConnectionLineType,
@@ -18,6 +22,7 @@
 	} from '@xyflow/svelte';
 	import { asStateObject, createLongPress, type PanelProps } from 'panelty';
 	import { tick, untrack } from 'svelte';
+	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { on } from 'svelte/events';
 	import { camera } from '$lib/editor/camera';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
@@ -32,8 +37,8 @@
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { Chip, EmptyState, Icon, IconButton, Select } from '$lib/ui';
-	import PanelBar from './PanelBar.svelte';
+	import { EmptyState, Icon, IconButton } from '$lib/ui';
+	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
 
 	interface MachineState {
@@ -45,11 +50,14 @@
 	const sel = selection();
 
 	const name = $derived((asStateObject(panelState) as MachineState).machine ?? '');
-	// A machine the document no longer holds leaves the panel on its chooser, as a removed one does.
 	const machine = $derived(name ? g.machines[name] : undefined);
+	const tabs = $derived(Object.keys(g.machines).map((id) => ({ id, label: id })));
 
 	function choose(machine: string): void {
 		setState({ machine }, 'authored', `Show machine ${machine}`);
+	}
+	function call(op: MachineOp, payload: Record<string, unknown>): Promise<unknown> {
+		return g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
 	}
 	async function create(): Promise<void> {
 		try {
@@ -59,9 +67,17 @@
 			notify().failure('Add machine', e);
 		}
 	}
-	function call(op: MachineOp, payload: Record<string, unknown>): Promise<unknown> {
-		return g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
+	function rename(machine: string, to: string): void {
+		if (to !== machine && isValidIdentifier(to)) void call('machine rename', { machine, to });
 	}
+	// The panel always shows a machine: a name the document no longer holds takes the first it has,
+	// and a document without one is given one — once, however many panels ask at the same instant.
+	$effect(() => {
+		if (machine || !g.loadSettled) return;
+		const first = Object.keys(g.machines)[0];
+		if (first) choose(first);
+		else if (!minting) minting = create().finally(() => (minting = null));
+	});
 
 	// ---- the selection and the inspector: the editor's store, so a dismissed pane re-arms the same way.
 	const inspectorOn = $derived(sel.inspectorVisibleFor(panelId));
@@ -244,7 +260,7 @@
 		}
 	}
 
-	// The canvas mounts with the machine, after the chooser, so its gestures bind as it appears.
+	// The canvas mounts with the machine, so its gestures bind as it appears.
 	$effect(() => {
 		const root = rootEl;
 		if (!root) return;
@@ -272,30 +288,14 @@
 </script>
 
 <div class="wrap" data-testid="machine-panel" data-machine={name}>
-	{#if !machine}
-		<div class="chooser" data-testid="machine-chooser">
-			<EmptyState>
-				{#snippet title()}{name ? `No machine ${name}` : 'No machine shown'}{/snippet}
-				{#snippet hint()}Pick one, or start a new one.{/snippet}
-			</EmptyState>
-			<div class="choices">
-				{#each Object.keys(g.machines) as m (m)}
-					<Chip data-testid="machine-pick" onclick={() => choose(m)}>{m}</Chip>
-				{/each}
-				<Chip tone="accent" data-testid="machine-new" onclick={() => void create()}><Icon name="plus" /> new machine</Chip>
-			</div>
-		</div>
-	{:else}
-		<PanelBar>
-			{#snippet start()}
-				<Select aria-label="Machine" data-testid="machine-switch" value={name} options={Object.keys(g.machines)} onChange={choose} />
-			{/snippet}
-			{#snippet end()}
-				<IconButton variant="ghost" size="sm" label="New machine" title="Start a new machine here" data-testid="machine-new" onclick={() => void create()}><Icon name="plus" /></IconButton>
-				<IconButton variant="ghost" size="sm" label="Reset the playheads" title="Put every playhead back in its start state" data-testid="machine-reset"
-					onclick={() => void call('machine reset', {})}><Icon name="refresh-cw" /></IconButton>
-			{/snippet}
-		</PanelBar>
+	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}
+		onClose={(m) => void call('machine remove', { machine: m })}>
+		{#snippet end()}
+			<IconButton variant="ghost" size="sm" label="Reset the playheads" title="Put every playhead back in its start state" data-testid="machine-reset"
+				onclick={() => void call('machine reset', {})}><Icon name="refresh-cw" /></IconButton>
+		{/snippet}
+	</InstanceBar>
+	{#if machine}
 		<SvelteFlowProvider>
 			<div class="canvas canvas-wrap" bind:this={rootEl}>
 				<SvelteFlow
@@ -361,21 +361,6 @@
 		display: grid;
 		grid-template-rows: auto minmax(0, 1fr);
 		height: 100%;
-	}
-	.chooser {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: var(--space-4);
-		height: 100%;
-		padding: var(--space-4);
-	}
-	.choices {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: center;
-		gap: var(--space-2);
 	}
 	/* The pane's host: `.canvas` is what it slides in over. */
 	.canvas {

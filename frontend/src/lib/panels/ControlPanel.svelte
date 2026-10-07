@@ -6,6 +6,7 @@
 	import { asStateObject, ContextMenu, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { notify } from '$lib/stores/notify.svelte';
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { ui } from '$lib/stores/ui.svelte';
@@ -31,7 +32,7 @@
 	import { variableForm, variableImage, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { KIND, bornValue, cellAt, kindFits, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 	import ControlWidget from './ControlWidget.svelte';
-	import PanelBar from './PanelBar.svelte';
+	import InstanceBar from './InstanceBar.svelte';
 	import VariableGhost from './VariableGhost.svelte';
 	import { createVariableLift } from './variableLift.svelte';
 
@@ -48,6 +49,8 @@
 	const st = $derived(asStateObject(props.state) as ControlState);
 	const group = $derived(st.group ?? '');
 	const named = $derived(group !== '');
+	// Every group a control panel may draw, this one's own among them even before the doc lists it.
+	const tabs = $derived((g.controlGroups.includes(group) ? g.controlGroups : [...g.controlGroups, group]).map((id) => ({ id, label: id })));
 	const groupLock = $derived<LockView>(g.variableGroups[group] ?? { config: false, value: false });
 	const elements = $derived(g.variables.filter((gv) => gv.group === group && gv.control));
 	// Values come over the data plane, one stream per widget drawn.
@@ -142,10 +145,32 @@
 		return { at: { x: e.clientX - w / 2, y: e.clientY - h / 2 }, snapped: false };
 	}
 
-	function nameGroup(raw: string): void {
+	function pick(group: string): void {
+		props.setState({ group }, 'authored', `Show group ${group}`);
+	}
+	function nameGroup(from: string, raw: string): void {
 		const to = raw.trim();
-		if (to === group || !isValidIdentifier(to)) return;
-		void g.renameVariableGroup(group, to).catch(() => {});
+		if (to === from || !isValidIdentifier(to)) return;
+		void g.renameVariableGroup(from, to).catch((e) => notify().failure('Rename group', e));
+	}
+	/** A fresh `controlN`, as a new panel is born naming one, made a group so a tab outlives its pick. */
+	async function addGroup(): Promise<void> {
+		const taken = new Set([...g.variables.map((v) => v.group), ...Object.keys(g.variableGroups), ...tabs.map((t) => t.id)]);
+		let n = 0;
+		while (taken.has(`control${n}`)) n++;
+		try {
+			pick(await g.addVariableGroup(`control${n}`));
+		} catch (e) {
+			notify().failure('Add group', e);
+		}
+	}
+	/** The group goes with its variables; this panel moves to the tab beside it, or stays over the emptied one. */
+	function removeGroup(target: string): void {
+		const i = tabs.findIndex((t) => t.id === target);
+		const next = tabs[i - 1] ?? tabs[i + 1];
+		if (target === group && next) pick(next.id);
+		if (g.variables.some((v) => v.group === target) || target in g.variableGroups)
+			void g.removeVariableGroup(target).catch((e) => notify().failure('Remove group', e));
 	}
 
 	function setEdit(on: boolean): void {
@@ -317,7 +342,7 @@
 {/if}
 
 <div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
-	<PanelBar title={group}>
+	<InstanceBar testid="control-tabs" items={tabs} active={group} onSelect={pick} onAdd={() => void addGroup()} onRename={nameGroup} onClose={removeGroup}>
 		{#snippet end()}
 			<IconButton
 				variant={edit ? 'primary' : 'ghost'}
@@ -329,20 +354,10 @@
 				onclick={() => setEdit(!edit)}><Icon name={edit ? 'check' : 'pencil'} /></IconButton
 			>
 		{/snippet}
-	</PanelBar>
+	</InstanceBar>
 
 	{#if edit}
 		<div class="strip">
-			<div class="grow">
-				<TextInput
-					inputmode="search"
-					data-testid="control-group-name"
-					title="The group its variables live in: variables.name.element"
-					value={group}
-					autocomplete="off"
-					onChange={nameGroup}
-				/>
-			</div>
 			<div class="palette" data-testid="control-palette">
 				{#each CONTROL_KINDS as { id: kind } (kind)}
 					<Chip
@@ -616,10 +631,6 @@
 		gap: var(--space-2) var(--space-4);
 		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px dashed var(--border);
-	}
-	.grow {
-		flex: 1 1 10rem;
-		min-width: 0;
 	}
 	.palette {
 		display: flex;

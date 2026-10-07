@@ -309,6 +309,18 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await page.getByTestId('control-edit-toggle').tap();
 			// The strip opening above the board is the sign the mode landed, and it moves the board.
 			await expect(page.getByTestId('control-palette'), 'edit mode opened the palette').toBeVisible();
+			// The bar's tabs are the groups — `desk`, and `control0` the panel was born over: ＋ makes
+			// a fresh `controlN` and shows it, its ✕ takes the group away, and a tap on a tab shows it.
+			const tabs = page.getByTestId('control-tabs');
+			await tabs.locator('.ui-tab-add').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			await tabs.locator('.ui-tab.active .ui-tab-close').tap();
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			// The label, not the pill's centre: under a finger the rested-open ✕ spans most of a short pill.
+			await tabs.getByRole('tab', { name: 'desk' }).locator('.ui-tab-label').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'desk');
+			await expect(knob).toBeVisible();
 			const before = (await knob.boundingBox())!;
 			const held = await level();
 			const grip = { x: Math.round(before.x + 6), y: Math.round(before.y + 6) };

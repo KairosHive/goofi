@@ -732,11 +732,8 @@ impl Graph {
         self.variables().add_group(group, at)
     }
 
-    /// Remove an empty group that no panel uses.
+    /// Remove an empty group's record. A control panel naming it keeps the name, over nothing.
     pub fn remove_variable_group(&mut self, group: &str) -> Result<(), String> {
-        if self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group) {
-            return Err(format!("variable group `{group}` is used by a control panel"));
-        }
         self.variables().remove_group(group)
     }
 

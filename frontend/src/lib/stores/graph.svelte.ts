@@ -30,6 +30,7 @@ import {
 	recordedSlots,
 	variableViews,
 	variableGroupLocks,
+	controlGroups,
 	machineGroups,
 	midiGroups,
 	machineViews,
@@ -142,6 +143,8 @@ export class GraphStore {
 	variables: VariableView[] = $derived(variableViews(this.doc));
 	/** Every variable group that carries a lock, by name. */
 	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
+	/** The groups a control panel may draw, in document order. */
+	controlGroups: string[] = $derived(controlGroups(this.doc));
 	/** Every group that reads a MIDI device, by name. */
 	midiGroups: Record<string, Midi> = $derived(midiGroups(this.doc));
 	machineGroups: Record<string, string> = $derived(machineGroups(this.doc));
@@ -535,9 +538,14 @@ export class GraphStore {
 		return result.name;
 	}
 
-	async addVariableGroup(): Promise<string> {
-		const result = await this.ctl.call('variable group add', {}) as { group: string };
+	async addVariableGroup(group?: string): Promise<string> {
+		const result = await this.ctl.call('variable group add', group ? { group } : {}) as { group: string };
 		return result.group;
+	}
+
+	/** Delete a group with every variable in it, as one step. */
+	async removeVariableGroup(group: string): Promise<void> {
+		await this.ctl.call('variable group remove', { group });
 	}
 
 	async removeVariable(name: string): Promise<void> {

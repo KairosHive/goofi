@@ -41,6 +41,7 @@ export type OpName =
 	| 'variable entry rename'
 	| 'variable group add'
 	| 'variable group rename'
+	| 'variable group remove'
 	| 'variable group lock'
 	| 'machine list'
 	| 'machine add'
@@ -142,6 +143,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'variable entry rename': 'write',
 	'variable group add': 'write',
 	'variable group rename': 'write',
+	'variable group remove': 'write',
 	'variable group lock': 'write',
 	'machine list': 'read',
 	'machine add': 'write',

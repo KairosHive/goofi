@@ -162,19 +162,23 @@ impl WriteOp for PanelEdit {
             })
             .and_then(Uid::from_hex);
         vocab::check_panel(&tx.state.plugins, &tx.g, ty.as_deref(), panel_state.as_ref(), bound)?;
-        // A control panel is born naming a group of its own, `control0`, `control1`, … — the first
-        // that nothing holds — so no panel ever waits on a name.
-        let panel_state = match (ty.as_deref(), panel_state) {
+        // A control panel is born over a group of its own, `control0`, `control1`, … — the first
+        // that nothing holds — recorded with the panel, so the group outlives a switch away from it.
+        let (panel_state, born) = match (ty.as_deref(), panel_state) {
             (Some("control"), state) if state.as_ref().and_then(|s| s.get("group")).is_none() => {
                 let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
                 let mut s = state.and_then(|s| s.as_object().cloned()).unwrap_or_default();
                 s.insert("group".into(), json!(fresh));
-                Some(Value::Object(s))
+                (Some(Value::Object(s)), Some(fresh))
             }
-            (_, state) => state,
+            (_, state) => (state, None),
         };
         let writes = tx.g.arrangement().set_panel(&a.panel, ty.as_deref(), panel_state)?;
-        apply_layout(tx, goofi_graph::Command::LayoutContents { writes })
+        let layout = goofi_graph::Command::LayoutContents { writes };
+        apply_layout(tx, match born {
+            Some(group) => goofi_graph::Command::Compound(vec![goofi_graph::Command::AddVariableGroup { group, at: None }, layout]),
+            None => layout,
+        })
     }
 
     fn label(a: &PanelEditArgs, _: &Value) -> String {

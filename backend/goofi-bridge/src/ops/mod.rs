@@ -444,6 +444,7 @@ pub static TREE: &[Entry] = &[
         Group("group", "a whole group of variables — a control panel is one", &[
             Leaf(write::<variable::GroupAdd>()),
             Leaf(write::<variable::GroupRename>()),
+            Leaf(write::<variable::GroupRemove>()),
             Leaf(write::<variable::GroupLock>()),
         ]),
     ]),

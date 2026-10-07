@@ -6,7 +6,8 @@
 	import { graph } from '$lib/stores/graph.svelte';
 	import { harnesses, harnessLabel } from '$lib/stores/harness.svelte';
 	import { termSession, type TerminalLike } from '$lib/stores/termSession';
-	import { Bar, ChoiceGrid, EmptyState, Icon, IconButton, Select, type Choice } from '$lib/ui';
+	import { ChoiceGrid, EmptyState, type Choice } from '$lib/ui';
+	import InstanceBar from './InstanceBar.svelte';
 	import { untrack } from 'svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 
@@ -89,27 +90,9 @@
 
 <div class="agent">
 	{#if id}
-		<Bar>
-			{#snippet start()}
-				<Select
-					density="chrome"
-					value={id}
-					options={hs.instances.map((i) => i.id)}
-					labels={Object.fromEntries(hs.instances.map((i) => [i.id, harnessLabel(i)]))}
-					onChange={(v) => hs.show(panelId, v)}
-					data-testid="agent-switcher"
-				/>
-			{/snippet}
-			{#snippet end()}
-				<IconButton
-					variant="ghost"
-					density="chrome"
-					label="Close agent view"
-					data-testid="agent-close"
-					onclick={() => hs.requestClose(id)}><Icon name="x" /></IconButton
-				>
-			{/snippet}
-		</Bar>
+		<!-- Its ＋ is the launcher: an agent is started from there, never blind. A ✕ asks detach or kill. -->
+		<InstanceBar testid="agent-switcher" items={hs.instances.map((i) => ({ id: i.id, label: harnessLabel(i) }))} active={id}
+			onSelect={(v) => hs.show(panelId, v)} onAdd={() => hs.show(panelId, null)} onClose={(v) => hs.requestClose(v)} />
 		<div class="host" bind:this={host} data-testid="agent-terminal"></div>
 	{:else}
 		<div class="launcher" data-testid="agent-launcher">

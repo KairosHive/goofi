@@ -55,13 +55,12 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		});
 		await expect(page.getByTestId('control-desk-vec').locator('input')).toHaveCount(3);
 
-		// The machine panel starts on its chooser; a new machine is one tap.
+		// A machine panel on a patch without a machine starts one, and shows it.
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
 			g.commands.setPanelType(g.query.panels()[0].panelId, 'machine');
 		});
 		const panel = page.getByTestId('machine-panel');
-		await press(panel.getByTestId('machine-new'));
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 
 		// Two states, each from a double-click or a held finger on the bare canvas.
@@ -125,10 +124,11 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		else await page.mouse.click(corner.x, corner.y);
 		await expect(page.getByTestId('playhead-state')).toHaveText('state1');
 
-		// The machine's name and seed are the inspector's; the bar's select is the switch between machines.
+		// The machine's name and seed are the inspector's; the bar's tabs are the switch between machines.
 		await expect(inspector.getByTestId('machine-name')).toHaveText('machine0');
 		await expect(inspector.getByTestId('machine-seed')).toHaveValue('0');
-		await expect(panel.getByTestId('machine-switch').locator('select')).toHaveValue('machine0');
+		const tabs = panel.getByTestId('machine-tabs');
+		await expect(tabs.locator('[role=tab][aria-selected="true"]')).toHaveText('machine0');
 
 		// An attribute is drawn as a param: a number's slider, and the kind select offers the faces.
 		await press(inspector.getByTestId('machine-add-attribute'));
@@ -166,6 +166,19 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		// The playhead's group is the machine's: listed locked whole, like a device's.
 		const groups = (await rawCall(page, 'session state')).result.variable_groups;
 		expect(groups.playhead0.machine).toBe('machine0');
+
+		// The tabs' ＋ starts a second machine and shows it; its ✕ removes it and the first comes back.
+		// The last tab's ✕ leaves a fresh empty machine, as a new panel on a new patch gets one.
+		await press(tabs.locator('.ui-tab-add'));
+		await expect(panel).toHaveAttribute('data-machine', 'machine1');
+		await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+		await press(tabs.locator('.ui-tab.active .ui-tab-close'));
+		await expect(panel).toHaveAttribute('data-machine', 'machine0');
+		await expect(card0).toBeVisible();
+		await press(tabs.locator('.ui-tab.active .ui-tab-close'));
+		await expect(card0).toHaveCount(0);
+		await expect(tabs.locator('[role=tab]')).toHaveCount(1);
+		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 
 		await expectIntact(page, 'the machine panel');
 	} finally {
