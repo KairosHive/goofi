@@ -107,6 +107,7 @@
 			return;
 		}
 		const selected = sel.edges(panelId);
+		const boxes = sel.nodes(panelId);
 		// A `*` transition has no box to leave from; it is listed under every state and fired there.
 		const drawn = Object.entries(m.transitions).filter(([, t]) => t.from in m.states && t.to in m.states);
 		// The transitions between one pair of boxes, either way, take lanes side by side.
@@ -121,7 +122,14 @@
 				target: t.to,
 				type: 'transition',
 				selected: selected.has(id),
-				data: { summary: summary(t), k: siblings.indexOf(id), n: siblings.length, onPick: () => sel.setSelection(panelId, [], [id]) }
+				data: {
+					summary: summary(t),
+					k: siblings.indexOf(id),
+					n: siblings.length,
+					// The label shows while the transition or either of its boxes is selected.
+					labelled: selected.has(id) || boxes.has(t.from) || boxes.has(t.to),
+					onPick: () => sel.setSelection(panelId, [], [id])
+				}
 			};
 		});
 	});

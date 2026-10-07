@@ -1,14 +1,15 @@
 <!-- A transition on the machine canvas: a line from box to box, or a loop off the side when it
      re-enters its own state, with chevrons along it for the way it goes — one stroke, so hover and
      selection reach the whole of it. Two between one pair of boxes run side by side. A click on the
-     line or on its label, which carries the trigger summary, selects it. -->
+     line or on its label selects it; the label, the trigger summary, shows only while the transition
+     or one of its boxes is selected. -->
 <script lang="ts">
 	import { BaseEdge, EdgeLabel, useStore, type EdgeProps, type InternalNode } from '@xyflow/svelte';
 	import { course, labelAt, lane, marked, type Box } from './geometry';
 	import { CARD_W, FALLBACK_H } from './layout';
 
 	let { id, source, target, selected, data }: EdgeProps = $props();
-	const d = $derived(data as { summary: string; k: number; n: number; onPick: () => void });
+	const d = $derived(data as { summary: string; k: number; n: number; labelled: boolean; onPick: () => void });
 
 	const store = useStore();
 	const boxOf = (n: InternalNode | undefined): Box | null =>
@@ -27,20 +28,22 @@
 
 {#if geometry}
 	<BaseEdge {id} path={geometry.d} class="transition" interactionWidth={24} />
-	<EdgeLabel x={geometry.label.x} y={geometry.label.y} transparent>
-		<button
-			type="button"
-			class="label nodrag nopan"
-			class:picked={selected}
-			data-testid={`transition-${id}`}
-			title="Select the transition"
-			onclick={(e) => {
-				// Stopped here: the label sits in the pane, and Flow would read the click as the pane's.
-				e.stopPropagation();
-				d.onPick();
-			}}>{d.summary}</button
-		>
-	</EdgeLabel>
+	{#if d.labelled}
+		<EdgeLabel x={geometry.label.x} y={geometry.label.y} transparent>
+			<button
+				type="button"
+				class="label nodrag nopan"
+				class:picked={selected}
+				data-testid={`transition-${id}`}
+				title="Select the transition"
+				onclick={(e) => {
+					// Stopped here: the label sits in the pane, and Flow would read the click as the pane's.
+					e.stopPropagation();
+					d.onPick();
+				}}>{d.summary}</button
+			>
+		</EdgeLabel>
+	{/if}
 {/if}
 
 <style>

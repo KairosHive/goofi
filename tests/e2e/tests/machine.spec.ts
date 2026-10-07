@@ -110,8 +110,11 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(() => onTopEdge(dot, card0)).toBe(true);
 		await expect(page.getByTestId('playhead-state')).toHaveText('state0');
 
-		// A tap on the label selects it; the inspector's fire button moves the playhead, and the dot
-		// comes to rest on the target box.
+		// The label is gone while nothing of it is selected; a box of the transition brings it back, and
+		// a tap on it selects it. The inspector's fire button moves the playhead, and the dot comes to
+		// rest on the target box.
+		await expect(label).toHaveCount(0);
+		await press(card1);
 		await press(label);
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await press(inspector.getByTestId('transition-fire'));
@@ -139,9 +142,11 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await page.screenshot({ path: testInfo.outputPath('machine.png') });
 
 		// A transition back the other way runs beside the first, its label apart from the first's, and
-		// either label selects its own.
+		// either label selects its own. The labels show once a box of theirs is selected.
 		await rawCall(page, 'machine transition add', { machine: 'machine0', from: 'state1', to: 'state0', triggers: [{ kind: 'manual' }] });
 		const back = page.getByTestId('transition-t2');
+		await expect(back).toHaveCount(0);
+		await press(card0);
 		await expect(back).toBeVisible();
 		const [l1, l2] = await Promise.all([label.boundingBox(), back.boundingBox()]);
 		expect(l1!.x + l1!.width <= l2!.x || l2!.x + l2!.width <= l1!.x || l1!.y + l1!.height <= l2!.y || l2!.y + l2!.height <= l1!.y, `the two labels do not overlap: ${JSON.stringify(l1)} ${JSON.stringify(l2)}`).toBe(true);
@@ -151,6 +156,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(back).toHaveCount(0);
 
 		// The first goes with the Delete key too, picked from its label; the box's ✕ is gone with it.
+		await press(card0);
 		await press(label);
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await page.keyboard.press('Delete');
