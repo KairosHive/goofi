@@ -2,10 +2,6 @@
      its playheads as dots that move as the manager moves them — with the editor's inspector pane
      beside it. Every change is a `machine` op, so the manager owns the model and this panel owns the
      drawing and the gesture in flight. -->
-<script module lang="ts">
-	let minting: Promise<void> | null = null;
-</script>
-
 <script lang="ts">
 	import {
 		ConnectionLineType,
@@ -35,6 +31,7 @@
 	import { CARD_W, FALLBACK_H } from '$lib/machine/layout';
 	import { summary } from '$lib/machine/triggers';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { EmptyState, Icon, IconButton } from '$lib/ui';
@@ -59,10 +56,13 @@
 	function call(op: MachineOp, payload: Record<string, unknown>): Promise<unknown> {
 		return g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
 	}
+	/** A new machine, shown here, as ONE step. */
 	async function create(): Promise<void> {
 		try {
-			const r = await g.machine<{ name: string }>('machine add', {});
-			choose(r.name);
+			await history().transaction('Add machine', async (step) => {
+				const r = await g.machine<{ name: string }>('machine add', {}, step);
+				await g.setPanelState(panelId, { machine: r.name }, step);
+			});
 		} catch (e) {
 			notify().failure('Add machine', e);
 		}
@@ -70,14 +70,18 @@
 	function rename(machine: string, to: string): void {
 		if (to !== machine && isValidIdentifier(to)) void call('machine rename', { machine, to });
 	}
-	// The panel always shows a machine: a name the document no longer holds takes the first it has,
-	// and a document without one is given one — once, however many panels ask at the same instant.
-	$effect(() => {
-		if (machine || !g.loadSettled) return;
-		const first = Object.keys(g.machines)[0];
-		if (first) choose(first);
-		else if (!minting) minting = create().finally(() => (minting = null));
-	});
+	/** ONE step: the last machine's successor is born first, so the removal re-aims this panel at it
+	 * and one undo brings the old one back whole. The manager, never a reaction here, picks the next. */
+	async function remove(machine: string): Promise<void> {
+		try {
+			await history().transaction(`Remove machine ${machine}`, async (step) => {
+				if (tabs.length === 1) await g.machine('machine add', {}, step);
+				await g.machine('machine remove', { machine }, step);
+			});
+		} catch (e) {
+			notify().failure('Remove machine', e);
+		}
+	}
 
 	// ---- the selection and the inspector: the editor's store, so a dismissed pane re-arms the same way.
 	const inspectorOn = $derived(sel.inspectorVisibleFor(panelId));
@@ -289,7 +293,7 @@
 
 <div class="wrap" data-testid="machine-panel" data-machine={name}>
 	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}
-		onClose={(m) => void call('machine remove', { machine: m })}>
+		onClose={(m) => void remove(m)}>
 		{#snippet end()}
 			<IconButton variant="ghost" size="sm" label="Reset the playheads" title="Put every playhead back in its start state" data-testid="machine-reset"
 				onclick={() => void call('machine reset', {})}><Icon name="refresh-cw" /></IconButton>
@@ -347,7 +351,7 @@
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} />
+						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} onRemove={() => void remove(name)} />
 					{/snippet}
 				</SidePane>
 			</div>

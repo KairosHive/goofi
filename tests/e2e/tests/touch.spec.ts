@@ -315,13 +315,28 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await tabs.locator('.ui-tab-add').tap();
 			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
 			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			// The ＋ was one step: undo takes the group and the panel's place on it back together.
+			await page.getByTestId('topbar-undo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'desk');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			await page.getByTestId('topbar-redo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
 			await tabs.locator('.ui-tab.active .ui-tab-close').tap();
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			// The ✕ was one step: undo puts the group and the panel's place on it back together.
+			await page.getByTestId('topbar-undo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			await page.getByTestId('topbar-redo').tap();
 			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
 			// The label, not the pill's centre: under a finger the rested-open ✕ spans most of a short pill.
 			await tabs.getByRole('tab', { name: 'desk' }).locator('.ui-tab-label').tap();
 			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'desk');
 			await expect(knob).toBeVisible();
 			const before = (await knob.boundingBox())!;
+			// The panel was away from `desk` for the undo, so its value stream is reopening.
+			await expect.poll(level).not.toBeNull();
 			const held = await level();
 			const grip = { x: Math.round(before.x + 6), y: Math.round(before.y + 6) };
 			await swipe(page, grip, { x: grip.x + Math.round(before.width), y: grip.y });

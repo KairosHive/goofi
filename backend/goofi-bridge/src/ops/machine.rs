@@ -25,7 +25,7 @@ op!(Add, "machine add", 1, AddArgs {
 op!(Remove, "machine remove", 1, RemoveArgs {
     pub machine: String,
 },
-    "Delete a machine, its playheads and their variable groups.",
+    "Delete a machine, its playheads and their variable groups. A panel showing it shows the first machine left.",
     "{removed: true}");
 
 op!(Rename, "machine rename", 2, RenameArgs {
@@ -269,7 +269,14 @@ impl WriteOp for Add {
 impl WriteOp for Remove {
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
         machine_of(&tx.g, &a.machine)?;
-        tx.apply(Command::SetMachine { name: a.machine, machine: None, at: None })?;
+        let mut cmds = vec![Command::SetMachine { name: a.machine.clone(), machine: None, at: None }];
+        if let Some(next) = tx.g.machines().keys().find(|n| **n != a.machine) {
+            let writes = tx.g.arrangement().retarget("machine", "machine", &a.machine, next);
+            if !writes.is_empty() {
+                cmds.push(Command::LayoutContents { writes });
+            }
+        }
+        tx.apply(if cmds.len() == 1 { cmds.remove(0) } else { Command::Compound(cmds) })?;
         Ok(json!({ "removed": true }))
     }
 

@@ -24,12 +24,15 @@
 		name,
 		m,
 		subject,
-		onClose
+		onClose,
+		onRemove
 	}: {
 		name: string;
 		m: Machine;
 		subject: Subject;
 		onClose: () => void;
+		/** The panel's own removal, so the machine's successor is its concern. */
+		onRemove: () => void;
 	} = $props();
 
 	const g = graph();
@@ -256,7 +259,7 @@
 
 				<hr class="rule" />
 				<div class="actions">
-					<Button variant="danger" size="sm" data-testid="machine-remove" onclick={() => call('machine remove', {})}>delete machine</Button>
+					<Button variant="danger" size="sm" data-testid="machine-remove" onclick={onRemove}>delete machine</Button>
 				</div>
 			</div>
 		</ScrollArea>

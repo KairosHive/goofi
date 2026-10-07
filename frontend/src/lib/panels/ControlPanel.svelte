@@ -6,6 +6,7 @@
 	import { asStateObject, ContextMenu, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
@@ -153,24 +154,34 @@
 		if (to === from || !isValidIdentifier(to)) return;
 		void g.renameVariableGroup(from, to).catch((e) => notify().failure('Rename group', e));
 	}
-	/** A fresh `controlN`, as a new panel is born naming one, made a group so a tab outlives its pick. */
+	/** A fresh `controlN`, as a new panel is born over one, recorded and shown here as ONE step. */
 	async function addGroup(): Promise<void> {
 		const taken = new Set([...g.variables.map((v) => v.group), ...Object.keys(g.variableGroups), ...tabs.map((t) => t.id)]);
 		let n = 0;
 		while (taken.has(`control${n}`)) n++;
 		try {
-			pick(await g.addVariableGroup(`control${n}`));
+			await history().transaction('Add group', async (step) => {
+				const group = await g.addVariableGroup(`control${n}`, step);
+				await g.setPanelState(props.panelId, { group }, step);
+			});
 		} catch (e) {
 			notify().failure('Add group', e);
 		}
 	}
-	/** The group goes with its variables; this panel moves to the tab beside it, or stays over the emptied one. */
-	function removeGroup(target: string): void {
+	/** The group goes with its variables, and this panel moves to the tab beside it — or stays over
+	 * the emptied one — as ONE step, so one undo puts both back. */
+	async function removeGroup(target: string): Promise<void> {
 		const i = tabs.findIndex((t) => t.id === target);
 		const next = tabs[i - 1] ?? tabs[i + 1];
-		if (target === group && next) pick(next.id);
-		if (g.variables.some((v) => v.group === target) || target in g.variableGroups)
-			void g.removeVariableGroup(target).catch((e) => notify().failure('Remove group', e));
+		const held = g.variables.some((v) => v.group === target) || target in g.variableGroups;
+		try {
+			await history().transaction(`Remove group ${target}`, async (step) => {
+				if (target === group && next) await g.setPanelState(props.panelId, { group: next.id }, step);
+				if (held) await g.removeVariableGroup(target, step);
+			});
+		} catch (e) {
+			notify().failure('Remove group', e);
+		}
 	}
 
 	function setEdit(on: boolean): void {
@@ -342,7 +353,7 @@
 {/if}
 
 <div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
-	<InstanceBar testid="control-tabs" items={tabs} active={group} onSelect={pick} onAdd={() => void addGroup()} onRename={nameGroup} onClose={removeGroup}>
+	<InstanceBar testid="control-tabs" items={tabs} active={group} onSelect={pick} onAdd={() => void addGroup()} onRename={nameGroup} onClose={(t) => void removeGroup(t)}>
 		{#snippet end()}
 			<IconButton
 				variant={edit ? 'primary' : 'ghost'}

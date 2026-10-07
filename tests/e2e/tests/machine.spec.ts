@@ -172,13 +172,28 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await press(tabs.locator('.ui-tab-add'));
 		await expect(panel).toHaveAttribute('data-machine', 'machine1');
 		await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+		// The ＋ was one step too: undo takes the machine and the panel's place on it back together.
+		await press(page.getByTestId('topbar-undo'));
+		await expect(panel).toHaveAttribute('data-machine', 'machine0');
+		await expect(tabs.locator('[role=tab]')).toHaveCount(1);
+		await press(page.getByTestId('topbar-redo'));
+		await expect(panel).toHaveAttribute('data-machine', 'machine1');
+		await expect(tabs.locator('[role=tab]')).toHaveCount(2);
 		await press(tabs.locator('.ui-tab.active .ui-tab-close'));
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		await expect(card0).toBeVisible();
 		await press(tabs.locator('.ui-tab.active .ui-tab-close'));
 		await expect(card0).toHaveCount(0);
 		await expect(tabs.locator('[role=tab]')).toHaveCount(1);
+		await expect(panel).toHaveAttribute('data-machine', 'machine1');
+		// That was ONE step: undo brings the old machine back whole and the fresh one goes; redo repeats it.
+		await press(page.getByTestId('topbar-undo'));
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
+		await expect(card0).toBeVisible();
+		await expect(tabs.locator('[role=tab]')).toHaveCount(1);
+		await press(page.getByTestId('topbar-redo'));
+		await expect(panel).toHaveAttribute('data-machine', 'machine1');
+		await expect(card0).toHaveCount(0);
 
 		await expectIntact(page, 'the machine panel');
 	} finally {

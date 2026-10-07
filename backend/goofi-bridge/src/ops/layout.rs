@@ -4,7 +4,8 @@ use serde_json::{json, Value};
 
 use super::{op, EffectOp, PanelType, ReadOp, WriteOp};
 use crate::{inspect, vocab, AppState, Caller, Txn};
-use goofi_graph::{Graph, Uid};
+use goofi_graph::machine::Machine;
+use goofi_graph::{Command, Graph, Uid};
 
 op!(Inspect, "layout inspect", 1, InspectArgs {
     pub tab: Option<String>,
@@ -162,21 +163,40 @@ impl WriteOp for PanelEdit {
             })
             .and_then(Uid::from_hex);
         vocab::check_panel(&tx.state.plugins, &tx.g, ty.as_deref(), panel_state.as_ref(), bound)?;
-        // A control panel is born over a group of its own, `control0`, `control1`, … — the first
-        // that nothing holds — recorded with the panel, so the group outlives a switch away from it.
-        let (panel_state, born) = match (ty.as_deref(), panel_state) {
-            (Some("control"), state) if state.as_ref().and_then(|s| s.get("group")).is_none() => {
+        // A panel over one of many instances is born over one, in the step that makes it, so no
+        // panel ever waits on a name and no client has to mint one — which would fight undo.
+        let named = |key: &str| panel_state.as_ref().and_then(|s| s.get(key)).is_some();
+        let mut born: Option<Command> = None;
+        let instance: Option<(&str, String)> = match ty.as_deref() {
+            // A control panel: a group of its own, `control0`, `control1`, … recorded with it.
+            Some("control") if !named("group") => {
                 let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
-                let mut s = state.and_then(|s| s.as_object().cloned()).unwrap_or_default();
-                s.insert("group".into(), json!(fresh));
-                (Some(Value::Object(s)), Some(fresh))
+                born = Some(Command::AddVariableGroup { group: fresh.clone(), at: None });
+                Some(("group", fresh))
             }
-            (_, state) => (state, None),
+            // A machine panel: the first machine the patch has, or a fresh empty one.
+            Some("machine") if !named("machine") => Some(("machine", match tx.g.machines().keys().next() {
+                Some(first) => first.clone(),
+                None => {
+                    let fresh = goofi_core::fresh_name("machine", 0, |n| tx.g.machines().contains_key(n));
+                    born = Some(Command::SetMachine { name: fresh.clone(), machine: Some(Box::new(Machine::default())), at: None });
+                    fresh
+                }
+            })),
+            _ => None,
+        };
+        let panel_state = match instance {
+            Some((key, value)) => {
+                let mut s = panel_state.and_then(|s| s.as_object().cloned()).unwrap_or_default();
+                s.insert(key.into(), json!(value));
+                Some(Value::Object(s))
+            }
+            None => panel_state,
         };
         let writes = tx.g.arrangement().set_panel(&a.panel, ty.as_deref(), panel_state)?;
-        let layout = goofi_graph::Command::LayoutContents { writes };
+        let layout = Command::LayoutContents { writes };
         apply_layout(tx, match born {
-            Some(group) => goofi_graph::Command::Compound(vec![goofi_graph::Command::AddVariableGroup { group, at: None }, layout]),
+            Some(first) => Command::Compound(vec![first, layout]),
             None => layout,
         })
     }

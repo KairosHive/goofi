@@ -538,14 +538,14 @@ export class GraphStore {
 		return result.name;
 	}
 
-	async addVariableGroup(group?: string): Promise<string> {
-		const result = await this.ctl.call('variable group add', group ? { group } : {}) as { group: string };
+	async addVariableGroup(group?: string, step?: Step): Promise<string> {
+		const result = await this.ctl.call('variable group add', group ? { group } : {}, step) as { group: string };
 		return result.group;
 	}
 
-	/** Delete a group with every variable in it, as one step. */
-	async removeVariableGroup(group: string): Promise<void> {
-		await this.ctl.call('variable group remove', { group });
+	/** Delete a group with every variable in it, as one step — or part of `step`. */
+	async removeVariableGroup(group: string, step?: Step): Promise<void> {
+		await this.ctl.call('variable group remove', { group }, step);
 	}
 
 	async removeVariable(name: string): Promise<void> {
@@ -615,8 +615,13 @@ export class GraphStore {
 
 	/** One `machine …` op, as the panel speaks them: the op vocabulary is the interface, so the
 	 * panel names the op and the manager answers. */
-	machine<T = Record<string, unknown>>(op: MachineOp, payload: Record<string, unknown>): Promise<T> {
-		return this.ctl.call(op, payload) as Promise<T>;
+	machine<T = Record<string, unknown>>(op: MachineOp, payload: Record<string, unknown>, step?: Step): Promise<T> {
+		return this.ctl.call(op, payload, step) as Promise<T>;
+	}
+
+	/** Write into a panel's state as an edit — with `step`, as part of a grouped one. */
+	async setPanelState(panel: string, state: Record<string, unknown>, step?: Step): Promise<void> {
+		await this.ctl.call('layout panel edit', { panel, state }, step);
 	}
 
 	/** A card drag or a widget turn in flight: the state's place or values, previewed under the

@@ -168,6 +168,38 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
     assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
     assert!(g.doc()["variable_groups"]["control0"].is_object(), "and recorded, so it outlives a switch away");
+    // The birth is ONE step: undone, neither the panel's type nor the group remains; redone, both do.
+    g.call("undo", j!({}));
+    assert!(g.doc()["variable_groups"].get("control0").is_none(), "the birth's group went with the birth");
+    assert_eq!(entries(&g)[&first_panel(&g)]["panel_type"], j!("viewer"));
+    g.call("redo", j!({}));
+    assert_eq!(group_of(&g), j!("control0"));
+    assert!(g.doc()["variable_groups"]["control0"].is_object());
+    // A machine panel is born over a machine the same way: the first the patch has, else a fresh
+    // one born in the step. A removal re-aims the panels that showed the machine at the first left,
+    // in its own step, so a client never has to react — a reaction that edits would fight undo.
+    let machine_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["machine"].clone();
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
+    assert_eq!(machine_of(&g), j!("machine0"), "an empty patch is given a machine with the panel");
+    assert!(g.doc()["machines"]["machine0"].is_object());
+    g.call("undo", j!({}));
+    assert!(g.doc()["machines"].get("machine0").is_none(), "the birth's machine went with the birth");
+    g.call("machine add", j!({ "name": "seq" }));
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
+    assert_eq!(machine_of(&g), j!("seq"), "a patch with a machine shows it, and mints none");
+    assert_eq!(g.doc()["machines"].as_object().unwrap().len(), 1);
+    g.call("machine add", j!({ "name": "aux" }));
+    g.call("machine remove", j!({ "machine": "seq" }));
+    assert_eq!(machine_of(&g), j!("aux"), "the panel moved to the machine left");
+    g.call("undo", j!({}));
+    assert_eq!(machine_of(&g), j!("seq"), "and back, with the machine");
+    assert!(g.doc()["machines"]["seq"].is_object());
+    // Three steps back — aux, the machine panel, seq — and the control panel stands as it was born.
+    for _ in 0..3 {
+        g.call("undo", j!({}));
+    }
+    assert!(g.doc()["machines"].as_object().unwrap().is_empty());
+    assert_eq!(group_of(&g), j!("control0"));
     // The `control` door is ONE undo step each; the manager mints the element and the cell where
     // none is given.
     let born = g.call("control add", j!({ "group": "control0", "kind": "knob" }));
