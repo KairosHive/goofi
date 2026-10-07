@@ -188,11 +188,15 @@
 
 	// ---- a connection drawn from one box's band onto any part of another is a transition, fired by
 	// a tap until it is edited. The radius reaches a box's corners, since Flow measures from its centre.
-	async function onConnect(c: Connection): Promise<void> {
-		if (!c.source || !c.target) return;
+	// The document is the one owner of edges: `false` keeps Flow from drawing a provisional one.
+	function onConnect(c: Connection): false {
+		if (c.source && c.target) void addTransition(c.source, c.target);
+		return false;
+	}
+	async function addTransition(from: string, to: string): Promise<void> {
 		try {
 			const r = await g.machine<{ id: string }>('machine transition add', {
-				machine: name, from: c.source, to: c.target, triggers: [{ kind: 'manual' }]
+				machine: name, from, to, triggers: [{ kind: 'manual' }]
 			});
 			sel.setSelection(panelId, [], [r.id]);
 		} catch (e) {
@@ -296,7 +300,7 @@
 					connectionRadius={CARD_W / 2 + 20}
 					deleteKey={['Delete', 'Backspace']}
 					ondelete={deleteElements}
-					onconnect={onConnect}
+					onbeforeconnect={onConnect}
 					onnodedrag={onNodeDrag}
 					onnodedragstop={onNodeDragStop}
 					onnodeclick={({ node, event }) => {

@@ -120,7 +120,7 @@ function loop(b: Box): Course {
 
 /** The course's path with its direction marks IN it: a chevron every `step`, clear of both ends,
  * as subpaths of the one stroke — so the line and its marks are one object to hover and select. */
-export function marked(c: Course, step = 72, margin = 24, size = 5): string {
+export function marked(c: Course, step = 36, margin = 24, size = 5): string {
 	let d = c.d;
 	for (let along = step; along < c.length - margin; along += step) {
 		const { x, y, angle } = c.at(along / c.length);
