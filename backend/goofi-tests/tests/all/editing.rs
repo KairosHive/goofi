@@ -1316,3 +1316,72 @@ fn a_deleted_node_hands_its_wires_through() {
     g.call("node remove", j!({ "node": hex(json) }));
     assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "a String cannot feed a Table consumer, so nothing bridges");
 }
+
+/// Where the document has a node.
+fn pos_of(g: &Goofi, uid: &str) -> [f64; 2] {
+    let p = &g.doc()["nodes"][uid]["pos"];
+    [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()]
+}
+
+#[test]
+fn a_node_without_a_place_is_packed_clear_and_arrange_lays_a_scope_out_by_dataflow() {
+    let g = Goofi::new();
+    const GRID: f64 = goofi_graph::canvas::GRID;
+    let on_grid = |p: [f64; 2]| p[0] % GRID == 0.0 && p[1] % GRID == 0.0;
+
+    // No `pos`: the manager packs each node after the others, on the grid, never on top of one.
+    let src = g.call("node add", j!({ "type": "LFO" }))["uid"].as_str().unwrap().to_string();
+    let win = g.call("node add", j!({ "type": "Buffer" }))["uid"].as_str().unwrap().to_string();
+    let tap = g.call("node add", j!({ "type": "Buffer" }))["uid"].as_str().unwrap().to_string();
+    let (a, b, c) = (pos_of(&g, &src), pos_of(&g, &win), pos_of(&g, &tap));
+    assert!(on_grid(a) && on_grid(b) && on_grid(c), "packed onto the grid: {a:?} {b:?} {c:?}");
+    assert!(a != b && b != c && a != c, "each in its own cells: {a:?} {b:?} {c:?}");
+    assert!(b[0] > a[0] && c[0] > b[0], "each right of the one added before it: {a:?} {b:?} {c:?}");
+    assert!(a[1] == b[1] && b[1] == c[1], "…in its row: {a:?} {b:?} {c:?}");
+    // A named place is the caller's, grid or not — a hand may put a node anywhere.
+    let free = g.call("node add", j!({ "type": "LFO", "pos": [5.0, 7.0] }))["uid"].as_str().unwrap().to_string();
+    assert_eq!(pos_of(&g, &free), [5.0, 7.0]);
+    // One history entry for an add, with or without a place.
+    g.call("undo", j!({}));
+    assert!(g.doc()["nodes"][&free].is_null(), "the add is one step");
+    g.call("undo", j!({}));
+    assert!(g.doc()["nodes"][&tap].is_null(), "the packed add is one step too");
+    g.call("redo", j!({}));
+    assert_eq!(pos_of(&g, &tap), c, "redo puts it back where it was packed");
+    // The cell right of the last add is taken by hand: the next add stacks under it.
+    let hand = g.call("node add", j!({ "type": "LFO", "pos": [c[0] + 288.0, c[1]] }))["uid"].as_str().unwrap().to_string();
+    let next = g.call("node add", j!({ "type": "LFO" }))["uid"].as_str().unwrap().to_string();
+    let (h, n) = (pos_of(&g, &hand), pos_of(&g, &next));
+    assert!(n[0] > h[0] && n[1] == h[1], "right of the hand-placed one, which was added last: {h:?} {n:?}");
+    g.call("node remove", j!({ "node": &hand }));
+    g.call("node remove", j!({ "node": &next }));
+
+    // `arrange` lays the scope out by dataflow: a source left of what it feeds, on the grid.
+    g.call("link add", j!({ "from": ep(&src, "out"), "to": ep(&win, "input") }));
+    g.call("link add", j!({ "from": ep(&src, "out"), "to": ep(&tap, "input") }));
+    let moved = g.call("nodes arrange", j!({}))["moved"].as_u64().unwrap();
+    assert!(moved >= 1, "the shelf is not a flow");
+    let shelf = c;
+    let (a, b, c) = (pos_of(&g, &src), pos_of(&g, &win), pos_of(&g, &tap));
+    assert!(on_grid(a) && on_grid(b) && on_grid(c), "arranged onto the grid: {a:?} {b:?} {c:?}");
+    assert!(b[0] > a[0] && c[0] > a[0], "the source sits left of both sinks: {a:?} {b:?} {c:?}");
+    assert_eq!(b[0], c[0], "the two sinks share a column: {b:?} {c:?}");
+    assert_ne!(b[1], c[1], "…and not a row");
+    assert_eq!(g.call("nodes arrange", j!({}))["moved"], 0, "arrange is idempotent");
+    // One step, taken back whole.
+    g.call("undo", j!({}));
+    assert_eq!(pos_of(&g, &tap), shelf, "undo restores the shelf");
+
+    // A sub-patch is its own canvas: its members pack among themselves, from the origin.
+    let inst = g.call("nodes group", j!({ "nodes": [&win, &tap] }))["inst_id"].as_str().unwrap().to_string();
+    let inner = g.call("node add", j!({ "type": "Buffer", "inst_id": &inst }))["uid"].as_str().unwrap().to_string();
+    let members: Vec<[f64; 2]> = [&win, &tap, &inner].iter().map(|u| pos_of(&g, u)).collect();
+    assert!(members.iter().all(|p| on_grid(*p)) && members[2] != members[0] && members[2] != members[1], "{members:?}");
+    // Its ports are members too, so they are laid out with it; the root is untouched.
+    let moved = g.call("nodes arrange", j!({ "inst_id": &inst }))["moved"].as_u64().unwrap();
+    assert!(moved >= 1, "{moved}");
+    assert_eq!(pos_of(&g, &src), a, "the root is untouched by the sub-patch's arrange");
+    let inside: Vec<[f64; 2]> = [&win, &tap, &inner].iter().map(|u| pos_of(&g, u)).collect();
+    assert!(inside.iter().all(|p| on_grid(*p)), "{inside:?}");
+    assert!(inside[0][0] > 0.0 && inside[1][0] > 0.0, "the wired members sit right of the ports that feed them: {inside:?}");
+}

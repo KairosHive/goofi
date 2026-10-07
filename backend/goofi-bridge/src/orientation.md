@@ -70,7 +70,7 @@ panel, so mind the one the human watches you through.
 
 ## Building
 
-    goofi node add LFO --pos 0,0
+    goofi node add LFO
     → {"name": "lfo0", "uid": "000000000001", "input_slots": {},
        "output_slots": {"out": "ARRAY"}, "params": {…}}
 
@@ -79,7 +79,10 @@ panel, so mind the one the human watches you through.
     goofi node param edit lfo0 lfo/frequency --value 7.5
     → {"value": 7.5, "error": null}
 
-A NAME is what every op takes and what `nd()` addresses — unique across the patch, minted if you
+Give no `--pos`: the manager packs each node onto the canvas grid right of the one you added
+before it, clear of the others, and
+`nodes arrange` (`machine arrange` for a state machine) lays the whole scope out by dataflow once
+the wires are in. A NAME is what every op takes and what `nd()` addresses — unique across the patch, minted if you
 give none, and yours to set with `--name`. The uid beside it is for keying records of your own.
 `node param edit`
 answers the param **as stored** — coerced to its declared type, so a fraction into an int comes

@@ -15,18 +15,20 @@
 	import { ContextMenu } from 'panelty';
 	import PerfHud from './PerfHud.svelte';
 	import { createWidthCache, planOverflow, type OverflowItem } from 'panelty';
-	import { IconButton, Badge, Button, Icon } from '$lib/ui';
+	import { IconButton, Badge, Button, Icon, StatusDot } from '$lib/ui';
 
 	// The header holds APP-GLOBAL actions only; anything acting on one panel belongs to that panel.
 	type Props = {
 		onSave: () => void;
 		onSaveAs: () => void;
 		onLoad: () => void;
+		/** Select a node in the active editor: where the errors indicator sends a click. */
+		onFocusNode: (uid: string) => void;
 		/** Workspace tab strip, rendered in the header's central gap. */
 		tabs?: Snippet;
 	};
 
-	const { onSave, onSaveAs, onLoad, tabs }: Props = $props();
+	const { onSave, onSaveAs, onLoad, onFocusNode, tabs }: Props = $props();
 
 	const g = graph();
 	const h = history();
@@ -79,6 +81,17 @@
 		hs.show(panel, id);
 		ws.exitMaximize();
 		ws.setActive(panel);
+	}
+
+	// The nodes in error right now, as the manager last reported them.
+	const errored = $derived(g.nodes.filter((n) => n.error));
+
+	function openErrors(e: MouseEvent): void {
+		const items: MenuItem[] = errored.map((n) => ({
+			label: `${n.name}: ${(n.error ?? '').replace(/\s+/g, ' ').slice(0, 80)}`,
+			action: () => onFocusNode(n.uid)
+		}));
+		openMenu(e, 'errors', items, 320);
 	}
 
 	function openAgents(e: MouseEvent): void {
@@ -178,6 +191,7 @@
 		const residents =
 			unplanned('topbar-connection') +
 			unplanned('topbar-agents') +
+			unplanned('topbar-errors') +
 			unplanned('topbar-examples');
 		const budget =
 			bar.clientWidth -
@@ -362,6 +376,18 @@
 				aria-expanded={menu?.key === 'agents'}
 				title="Running agents"
 				onclick={openAgents}><Icon name="bot" />{hs.instances.length}</Button
+			>
+		{/if}
+		<!-- The nodes in error: a count that opens their list, each row selecting its node. -->
+		{#if errored.length > 0}
+			<Button
+				variant="ghost"
+				size="sm"
+				style="--panelty-btn-ink: var(--danger)"
+				data-testid="topbar-errors"
+				aria-expanded={menu?.key === 'errors'}
+				title={errored.length === 1 ? 'One node in error' : `${errored.length} nodes in error`}
+				onclick={openErrors}><StatusDot tone="danger" size="sm" />{errored.length}</Button
 			>
 		{/if}
 		<div class="actions" bind:this={actionsEl}>

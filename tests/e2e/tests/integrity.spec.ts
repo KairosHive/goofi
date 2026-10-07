@@ -271,6 +271,8 @@ test('a patch under construction holds together at every stage', async ({ page }
 							g.commands.setPanelState(g.query.panels()[0].panelId, { machine: 'sweep' });
 						});
 						await expect(page.getByTestId('state-card-A')).toBeVisible();
+						// The label shows once a box of the transition is selected.
+						await page.getByTestId('state-card-A').click();
 						await page.getByTestId('transition-t1').click();
 						await expect(page.getByTestId('machine-transition')).toBeVisible();
 					}

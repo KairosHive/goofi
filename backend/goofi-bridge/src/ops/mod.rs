@@ -427,6 +427,7 @@ pub static TREE: &[Entry] = &[
         Leaf(write::<node::NodesPaste>()),
         Leaf(write::<node::NodesGroup>()),
         Leaf(write::<node::NodesUngroup>()),
+        Leaf(write::<node::NodesArrange>()),
     ]),
     Group("link", "one wire between an output and an input", &[
         Leaf(write::<node::LinkAdd>()),
@@ -454,6 +455,7 @@ pub static TREE: &[Entry] = &[
         Leaf(write::<machine::Remove>()),
         Leaf(write::<machine::Rename>()),
         Leaf(write::<machine::Edit>()),
+        Leaf(write::<machine::Arrange>()),
         Group("attribute", "one attribute — a value every state may set, carried by every playhead as `variables.<playhead>.<attribute>`", &[
             Leaf(write::<machine::AttributeAdd>()),
             Leaf(write::<machine::AttributeEdit>()),

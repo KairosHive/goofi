@@ -348,3 +348,51 @@ async fn a_flight_is_heard_between_its_frames_by_a_viewer_a_computation_and_an_a
     at_rest_in(&g, "head", "B");
     g.until("the alias to land", |g| (number(g, "desk.twice") == 2.0).then_some(()));
 }
+
+#[test]
+fn a_state_without_a_place_lands_clear_of_the_others_and_arrange_rings_them() {
+    let g = Goofi::new();
+    const GRID: f64 = goofi_graph::canvas::GRID;
+    let pos = |name: &str| -> [f64; 2] {
+        let p = &g.doc()["machines"]["m"]["states"][name]["pos"];
+        [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()]
+    };
+    let on_grid = |p: [f64; 2]| p[0] % GRID == 0.0 && p[1] % GRID == 0.0;
+    g.call("machine add", j!({ "name": "m" }));
+
+    // No `pos`: each card goes to the clear cells nearest the others, on the grid.
+    for _ in 0..4 {
+        g.call("machine state add", j!({ "machine": "m" }));
+    }
+    let cards: Vec<[f64; 2]> = (0..4).map(|i| pos(&format!("state{i}"))).collect();
+    assert!(cards.iter().all(|p| on_grid(*p)), "{cards:?}");
+    for i in 0..4 {
+        for k in 0..i {
+            let (a, b) = (cards[i], cards[k]);
+            assert!((a[0] - b[0]).abs() >= 200.0 || (a[1] - b[1]).abs() >= 44.0, "cards clear each other: {a:?} {b:?}");
+        }
+    }
+    // A named place is the caller's.
+    g.call("machine state add", j!({ "machine": "m", "name": "free", "pos": [3.0, 3.0] }));
+    assert_eq!(pos("free"), [3.0, 3.0]);
+
+    // `arrange` is a ring in the order a playhead walks them, on the grid, as one undo step.
+    for (a, b) in [("state0", "state2"), ("state2", "state1"), ("state1", "free"), ("free", "state0")] {
+        g.call("machine transition add", j!({ "machine": "m", "from": a, "to": b, "triggers": [{ "kind": "manual" }] }));
+    }
+    g.call("machine playhead add", j!({ "machine": "m", "name": "p", "start": "state2" }));
+    let moved = g.call("machine arrange", j!({ "machine": "m" }))["moved"].as_u64().unwrap();
+    assert!(moved >= 4, "{moved}");
+    let names = ["state0", "state1", "state2", "state3", "free"];
+    let ring: Vec<[f64; 2]> = names.iter().map(|n| pos(n)).collect();
+    assert!(ring.iter().all(|p| on_grid(*p)), "{ring:?}");
+    let cx = ring.iter().map(|p| p[0]).sum::<f64>() / 5.0;
+    let cy = ring.iter().map(|p| p[1]).sum::<f64>() / 5.0;
+    let radii: Vec<f64> = ring.iter().map(|p| ((p[0] - cx) / 1.0).hypot((p[1] - cy) / 0.72)).collect();
+    let (lo, hi) = radii.iter().fold((f64::MAX, 0.0f64), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
+    assert!(hi - lo < 2.0 * GRID, "every card sits on one ring: {radii:?}");
+    assert_eq!(pos("state2")[1], ring.iter().map(|p| p[1]).fold(f64::MAX, f64::min), "the start state sits at the top");
+    assert_eq!(g.call("machine arrange", j!({ "machine": "m" }))["moved"], 0, "arrange is idempotent");
+    g.call("undo", j!({}));
+    assert_eq!(pos("free"), [3.0, 3.0], "one step back restores every card");
+}

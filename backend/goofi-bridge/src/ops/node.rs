@@ -31,7 +31,7 @@ op!(Add, "node add", 1, AddArgs {
     pub member_uid: Option<NodeRef>,
     pub param: Option<Vec<Value>>,
 },
-    "Create a node of `type`. `inst_id` births it inside that sub-patch; absent = root. `name` is a letter then letters or digits and not a Python keyword — one that is taken or illegal is refused, never silently swapped — and an omitted one is minted. Each `--param` is one birth param, self-addressed: `{\"name\": \"group/param\", …}` carrying `node param edit`'s fields — inside a JSON flag under bash, spell nested strings with ESCAPED double quotes (`\"nd(\\\"other\\\").out.sfreq\"`); a single-quoted `nd('x')` inside a single-quoted shell token loses its quotes silently. `member_uid` asks for a CHOSEN uid, so a caller rebuilding a graph it already knows — or wiring a batch it is still building — keeps its uid-keyed bindings; naming one the patch already holds answers with that node rather than a second one.\n\n\
+    "Create a node of `type`. `inst_id` births it inside that sub-patch; absent = root. `pos` is flow px on the 24 px grid the canvas draws; leave it out and the manager packs the node right of the one added before it, in its row, so a chain of adds runs left to right and nothing overlaps — `nodes arrange` then lays the whole scope out by dataflow. `name` is a letter then letters or digits and not a Python keyword — one that is taken or illegal is refused, never silently swapped — and an omitted one is minted. Each `--param` is one birth param, self-addressed: `{\"name\": \"group/param\", …}` carrying `node param edit`'s fields — inside a JSON flag under bash, spell nested strings with ESCAPED double quotes (`\"nd(\\\"other\\\").out.sfreq\"`); a single-quoted `nd('x')` inside a single-quoted shell token loses its quotes silently. `member_uid` asks for a CHOSEN uid, so a caller rebuilding a graph it already knows — or wiring a batch it is still building — keeps its uid-keyed bindings; naming one the patch already holds answers with that node rather than a second one.\n\n\
                    The boundary types ({boundary_types}) create a PORT of the sub-patch named by `inst_id`, which is required for them. A port is a node in every way an op can see — it is named, moved, wired and removed by the same ops — but it never runs, so it takes no params. To COPY a node rather than build one, read it with `nodes copy` and put it back with `nodes paste`.",
     "{name, uid, input_slots, output_slots, params} — the node as born, so it can be wired and tuned without a follow-up read. `name` is what every op and nd() address it by; the uid is for a caller keying its own records.");
 
@@ -115,6 +115,12 @@ op!(NodesGroup, "nodes group", 1, NodesGroupArgs {
 },
     "Collapse nodes into a new sub-patch, returning it. `nodes` must share one scope, and one of them may itself be a sub-patch. Every wire that ends up CROSSING the new boundary mints a port to carry it, so nothing is disconnected and nothing stops running; a wire buried in a nested member mints a port there too, so it can reach the new boundary.",
     "{name, inst_id} — the sub-patch as born; `name` is what every op takes, `inst_id` the uid behind it");
+
+op!(NodesArrange, "nodes arrange", 0, NodesArrangeArgs {
+    pub inst_id: Option<NodeRef>,
+},
+    "Lay out every node of one scope by dataflow: a column per depth, left to right, each ordered by where its sources landed, on the canvas's 24 px grid with clear cells between. `inst_id` names the sub-patch; absent = root. The ◇ button on the canvas is this op. One undo step.",
+    "{moved: n} — how many nodes changed place");
 
 op!(NodesUngroup, "nodes ungroup", 1, NodesUngroupArgs {
     pub subpatch: NodeRef,
@@ -254,6 +260,12 @@ impl WriteOp for Add {
             goofi_graph::Outcome::Uid(u) => u,
             _ => return Err("no uid returned".into()),
         };
+        // No place named: the manager packs the node as born, so its footprint is read. One
+        // transaction, so the add and the move are one history entry.
+        if a.pos.is_none() {
+            let pos = Some(goofi_graph::canvas::place_node(&tx.g, scope, uid));
+            tx.apply(goofi_graph::Command::EditNode { uid, name: None, pos, viewers: None })?;
+        }
         // Applied UNDER THE GRAPH LOCK, so the node is born configured before the resync mirrors it
         // into the doc.
         if let Some(entries) = a.param {
@@ -558,6 +570,23 @@ impl WriteOp for NodesGroup {
             _ => return Err("no scope uid returned".into()),
         };
         Ok(json!({ "name": named(&tx.g, inst), "inst_id": inst.to_hex() }))
+    }
+}
+
+impl WriteOp for NodesArrange {
+    const LABEL: &str = "Arrange";
+    fn run(tx: &mut Txn, a: NodesArrangeArgs) -> Result<Value, String> {
+        let scope = a.inst_id.map(|s| s.resolve(&tx.g)).transpose()?;
+        let moves: Vec<goofi_graph::Command> = goofi_graph::canvas::arrange_scope(&tx.g, scope)
+            .into_iter()
+            .filter(|(uid, pos)| tx.g.pos(*uid) != Some(*pos))
+            .map(|(uid, pos)| goofi_graph::Command::EditNode { uid, name: None, pos: Some(pos), viewers: None })
+            .collect();
+        let moved = moves.len();
+        if moved > 0 {
+            tx.apply(goofi_graph::Command::Compound(moves))?;
+        }
+        Ok(json!({ "moved": moved }))
     }
 }
 

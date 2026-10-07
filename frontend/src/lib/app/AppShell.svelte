@@ -3,7 +3,6 @@
 	import TopBar from '$lib/editor/TopBar.svelte';
 	import FsBrowser from '$lib/fs/FsBrowser.svelte';
 	import { patchName, patchStem, uploadPatch } from '$lib/api/patchFile';
-	import ErrorPanel from '$lib/editor/ErrorPanel.svelte';
 	import Toast from '$lib/app/Toast.svelte';
 	import AgentClose from '$lib/app/AgentClose.svelte';
 	import RecoverDialog from '$lib/app/RecoverDialog.svelte';
@@ -164,7 +163,7 @@
 			<Button size="sm" onclick={() => location.reload()}>Reload</Button>
 		</div>
 	{/if}
-	<TopBar onSave={triggerSave} onSaveAs={() => (fsMode = 'save')} onLoad={triggerLoad}>
+	<TopBar onSave={triggerSave} onSaveAs={() => (fsMode = 'save')} onLoad={triggerLoad} onFocusNode={focusError}>
 		{#snippet tabs()}
 			<WorkspaceTabs />
 		{/snippet}
@@ -172,7 +171,6 @@
 	<PresenceOverlay />
 	<div class="main">
 		<WorkspaceView />
-		<ErrorPanel onFocus={focusError} />
 	</div>
 	{#if fsMode}
 		<FsBrowser

@@ -83,7 +83,7 @@ op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
 },
-    "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it.",
+    "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas, in flow px on its 24 px grid; leave it out and the card goes to the clear cells nearest the machine's others. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it.",
     "{name} — the state as stored");
 
 op!(StateEdit, "machine state edit", 2, StateEditArgs {
@@ -94,6 +94,12 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
 },
     "Change a state's place and/or what it sets. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
+
+op!(Arrange, "machine arrange", 1, ArrangeArgs {
+    pub machine: String,
+},
+    "Put every state's card on a ring, in the order a playhead reaches them from its start, on the canvas's 24 px grid. A machine is all-to-all, so a ring keeps every transition short and readable. The ◇ button on the canvas is this op. One undo step.",
+    "{moved: n} — how many states changed place");
 
 op!(StateRemove, "machine state remove", 2, StateRemoveArgs {
     pub machine: String,
@@ -399,7 +405,8 @@ impl WriteOp for StateAdd {
             return Err(format!("state `{name}` already exists — `machine state edit` changes it"));
         }
         let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
-        m.states.insert(name.clone(), State { pos: a.pos.unwrap_or_default(), values });
+        let pos = a.pos.unwrap_or_else(|| goofi_graph::canvas::place_state(&m));
+        m.states.insert(name.clone(), State { pos, values });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": name }))
     }
@@ -439,6 +446,19 @@ impl WriteOp for StateEdit {
             (Some(_), None) => format!("Move state {}", a.name),
             _ => format!("Edit state {}", a.name),
         }
+    }
+}
+
+impl WriteOp for Arrange {
+    const LABEL: &str = "Arrange";
+    fn run(tx: &mut Txn, a: ArrangeArgs) -> Result<Value, String> {
+        let m = machine_of(&tx.g, &a.machine)?;
+        let next = goofi_graph::canvas::arrange_machine(&m);
+        let moved = next.states.iter().filter(|(k, s)| m.states.get(*k).map(|o| o.pos) != Some(s.pos)).count();
+        if moved > 0 {
+            set(tx, &a.machine, next)?;
+        }
+        Ok(json!({ "moved": moved }))
     }
 }
 

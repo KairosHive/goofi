@@ -413,7 +413,8 @@ export class GraphStore {
 		return r?.folder ?? '';
 	}
 
-	async addNode(type: string, pos: [number, number], instId?: string, step?: Step): Promise<string> {
+	/** No `pos`: the manager packs the node onto the grid after the scope's others. */
+	async addNode(type: string, pos: [number, number] | undefined, instId?: string, step?: Step): Promise<string> {
 		const born = await this.ctl.call<{ uid: string }>('node add', { type, pos, inst_id: instId }, step);
 		return born?.uid ?? '';
 	}
@@ -722,6 +723,11 @@ export class GraphStore {
 	 * `save_path_changed`, so the `graph_replaced` snapshot is the sole carrier of the null path. */
 	async newPatch(): Promise<void> {
 		await this.ctl.call('session new', {});
+	}
+
+	/** The manager lays a scope out by dataflow; absent = root. */
+	async arrange(instId?: string): Promise<void> {
+		await this.ctl.call('nodes arrange', { inst_id: instId });
 	}
 
 	async groupNodes(members: string[], pos?: [number, number]): Promise<string> {

@@ -2,8 +2,10 @@
      its keyboard shortcuts act only while it is the active panel; app-global ones live in AppShell. -->
 <script lang="ts">
 	import {
-		SvelteFlow,
+		Background,
+		ControlButton,
 		Controls,
+		SvelteFlow,
 		SvelteFlowProvider,
 		ViewportPortal,
 		type Connection,
@@ -22,9 +24,7 @@
 	import { provideSurface } from '$lib/viewers/plotHost';
 	import type { SurfaceHandle } from '$lib/api/drawings';
 	import SubpatchZoomExit from '$lib/editor/SubpatchZoomExit.svelte';
-	import SnapGuides from '$lib/editor/SnapGuides.svelte';
 	import ReferenceEdges from '$lib/editor/ReferenceEdges.svelte';
-	import { computeSnapDelta, makeBounds, type Bounds, type Guide } from '$lib/editor/snap';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -43,7 +43,7 @@
 		type Step
 	} from '$lib/api/control';
 	import { ROOT_ID, childrenOfScope, drawEndpoint as sceneDrawEndpoint } from '$lib/editor/subpatchScene';
-	import { nodeSurfaceSize, inputUnits } from '$lib/editor/nodeMetrics';
+	import { GRID, nodeSurfaceSize, inputUnits } from '$lib/editor/nodeMetrics';
 	import { isSlotExpanded } from '$lib/viewers/inlineView';
 	import {
 		inputAnchors,
@@ -61,7 +61,7 @@
 	import SidePane from './SidePane.svelte';
 	import Inspector from '$lib/inspector/Inspector.svelte';
 	import { arrayToPath, asStateObject, pathToArray } from 'panelty';
-	import { Button, IconButton, EmptyState, isTextEditingTarget } from '$lib/ui';
+	import { Button, EmptyState, Icon, IconButton, isTextEditingTarget } from '$lib/ui';
 	import { clampToViewport, overlayViewport } from 'panelty';
 	import { onMount, tick, untrack } from 'svelte';
 	import { on } from 'svelte/events';
@@ -213,7 +213,6 @@
 		);
 	});
 
-	let snapGuides = $state<Guide[]>([]);
 	let pendingPlacement = $state<{
 		typeInfo: NodeTypeInfo;
 		seed: SlotClickSeed | null;
@@ -453,35 +452,12 @@
 		publishCableNear(new Set());
 	}
 
-	/** A node's snap footprint when Svelte Flow has not measured it yet. */
+	/** The ghost's footprint before Svelte Flow has measured it: what a touch holds by the centre. */
 	function nodeFallbackSize(node: NodeInstanceInfo): { width: number; height: number } {
 		return nodeSurfaceSize(
 			inputUnits(Object.keys(node.input_slots ?? {})),
 			Object.keys(node.output_slots ?? {}).map((s) => isSlotExpanded(node, s))
 		);
-	}
-
-	function nodeBoundsFromFlow(n: Node): Bounds {
-		const { width, height } = n.measured ?? {};
-		if (width != null && height != null) return makeBounds(n.position.x, n.position.y, width, height);
-		const fb = nodeFallbackSize(n.data.node as NodeInstanceInfo);
-		return makeBounds(n.position.x, n.position.y, width ?? fb.width, height ?? fb.height);
-	}
-
-	/** Snap-target bounds for every node on screen in THIS editor, shared by the node drag and the
-	 * placement preview. Only `flowNodes` — `g.nodes` would include what this scope does not draw. */
-	function snapTargetBounds(exclude: Set<string>): Bounds[] {
-		const targets: Bounds[] = [];
-		for (const n of flowNodes) {
-			if (exclude.has(n.id)) continue;
-			targets.push(nodeBoundsFromFlow(n));
-		}
-		return targets;
-	}
-
-	function dragSnapDelta(nodes: Node[], altKey: boolean): { dx: number; dy: number; guides: Guide[] } {
-		const draggedBounds = nodes.map(nodeBoundsFromFlow);
-		return computeSnapDelta(draggedBounds, snapTargetBounds(new Set(nodes.map((n) => n.id))), altKey);
 	}
 
 	// Positions at drag start, so a node snaps back when the drag turns into a panel-link.
@@ -551,26 +527,29 @@
 		});
 	}
 
-	/** Snap the dragged nodes to their neighbours, and pin and draw them where the snap puts them. */
-	function snapDragged(nodes: Node[], event: MouseEvent | TouchEvent): { dx: number; dy: number; guides: Guide[] } {
-		const snap = dragSnapDelta(nodes, (event as MouseEvent).altKey === true);
-		const at = new Map(nodes.map((n) => [n.id, { x: n.position.x + snap.dx, y: n.position.y + snap.dy }]));
+	/** Snap the dragged nodes to the grid once they have moved — a hold that never moves leaves a
+	 * node where it was — and pin and draw them there. */
+	function snapDragged(nodes: Node[]): Map<string, { x: number; y: number }> {
+		const at = new Map<string, { x: number; y: number }>();
+		for (const n of nodes) {
+			const o = dragOrigin.get(n.id);
+			const moved = !o || o.x !== n.position.x || o.y !== n.position.y;
+			at.set(n.id, moved ? { x: Math.round(n.position.x / GRID) * GRID, y: Math.round(n.position.y / GRID) * GRID } : { x: n.position.x, y: n.position.y });
+		}
 		for (const [id, p] of at) pinned.set(id, { ...p });
-		if (!snap.dx && !snap.dy) return snap;
 		flowNodes = flowNodes.map((n) => {
 			const p = at.get(n.id);
-			return p ? { ...n, position: p } : n;
+			return p && (p.x !== n.position.x || p.y !== n.position.y) ? { ...n, position: p } : n;
 		});
-		return snap;
+		return at;
 	}
 
-	/** Release what a node drag holds: its scroll listener, the shared drag fields and the overlays. */
+	/** Release what a node drag holds: its scroll listener, the shared drag fields and the ghost. */
 	function endNodeDrag(): void {
 		document.removeEventListener('scroll', measureTargets, { capture: true });
 		uiStore.nodeDrag = null;
 		uiStore.nodeDragOver = null;
 		linkGhost = null;
-		snapGuides = [];
 	}
 
 	function onNodeDragStart(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -595,13 +574,12 @@
 			// `eventPoint`, because a TouchEvent carries no `clientX` of its own.
 			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
 			linkGhost = { x: p.clientX, y: p.clientY, name: g.nodeById(args.nodes[0]?.id ?? '')?.name ?? '' };
-			snapGuides = [];
 			revertDragged(args.nodes);
 			return;
 		}
 		uiStore.nodeDragOver = null;
 		linkGhost = null;
-		snapGuides = snapDragged(args.nodes, args.event).guides;
+		snapDragged(args.nodes);
 	}
 
 	function onNodeDragStop(args: {
@@ -621,11 +599,11 @@
 				ws.linkNodeToPanel(target.panel, uid);
 			}
 		} else {
-			const { dx, dy } = snapDragged(args.nodes, args.event);
-			const moves = args.nodes.map(
-				(n) => [n.id, [Math.round(n.position.x + dx), Math.round(n.position.y + dy)]] as [string, [number, number]]
-			);
-			for (const [id, [x, y]] of moves) pinned.set(id, { x, y });
+			const at = snapDragged(args.nodes);
+			const moves = args.nodes.map((n) => {
+				const p = at.get(n.id) ?? n.position;
+				return [n.id, [Math.round(p.x), Math.round(p.y)]] as [string, [number, number]];
+			});
 			void g.setNodePositions(moves).finally(() => {
 				for (const [id] of moves) pinned.delete(id);
 			});
@@ -977,6 +955,12 @@
 		void flowFit?.();
 	}
 
+	/** The ◇ button: the manager lays the entered scope out by dataflow. The camera stays; the fit
+	 * button is the one that frames. */
+	function arrange(): Promise<void> {
+		return g.arrange(entered ?? undefined);
+	}
+
 	/** Select a node in this editor — the shared handle for focusing one from elsewhere. */
 	function focusNode(uid: string): void {
 		sel.selectNodes(panelId, [uid]);
@@ -1079,8 +1063,13 @@
 			zoomOnDoubleClick={false}
 			autoPanOnNodeDrag={false}
 		>
+			<Background gap={GRID} size={1} patternColor="var(--border)" />
 			<!-- `showLock` off: goofi has no read-only mode, so Flow's lock reads as breakage. -->
-			<Controls showLock={false} />
+			<Controls showLock={false}>
+				<ControlButton title="Arrange the nodes by dataflow" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
+					<Icon name="workflow" />
+				</ControlButton>
+			</Controls>
 			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 			<FlowSurface bind:surface={plotSurface} />
 			<SubpatchZoomExit {entered} options={FIT_OPTIONS} minZoom={MIN_ZOOM} onExit={() => exitToDepth(enteredPath.length - 1)} />
@@ -1088,7 +1077,6 @@
 				<PlacementPreview
 					initialClient={pendingPlacement.initialClient}
 					size={nodeFallbackSize(ghost)}
-					targets={snapTargetBounds(new Set([GHOST_UID]))}
 					onMove={(pos) => (ghostPos = pos)}
 					onCommit={(pos) => void commitPlacement(pos)}
 					onCancel={() => {
@@ -1100,11 +1088,6 @@
 			<ViewportPortal target="back">
 				<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
 			</ViewportPortal>
-			{#if snapGuides.length > 0}
-				<ViewportPortal target="front">
-					<SnapGuides guides={snapGuides} testid="snap-guides" />
-				</ViewportPortal>
-			{/if}
 		</SvelteFlow>
 
 		{#if flowNodes.length === 0 && !pendingPlacement && !menuOpen}
@@ -1161,19 +1144,41 @@
 {/if}
 
 <style>
+	/* The canvas and the inspector pane side by side: the pane takes its width from the canvas, so
+	   the zoom cluster in the canvas's corner is never under it. */
 	.editor-panel {
 		position: relative;
+		display: flex;
 		width: 100%;
 		height: 100%;
 		min-width: 0;
 		min-height: 0;
 	}
+	.editor-panel > :global(.svelte-flow) {
+		flex: 1 1 0;
+		min-width: 0;
+		min-height: 0;
+	}
+	@media all {
+		@container (orientation: portrait) {
+			.editor-panel {
+				flex-direction: column;
+			}
+		}
+	}
 	/* The inset keeps the 16px corner grips reachable. `margin: 0` is load-bearing: Flow's own
-	   `.svelte-flow__panel` sets `margin: 15px`, which STACKS on these offsets. */
+	   `.svelte-flow__panel` sets `margin: 15px`, which STACKS on these offsets. The cluster shows
+	   while the pointer is in the panel; a touch screen, with no pointer to wait for, shows it always. */
 	.editor-panel :global(.svelte-flow__controls) {
 		margin: 0;
 		bottom: var(--space-8);
 		left: var(--space-8);
+		opacity: 0;
+		transition: opacity var(--dur-fast) var(--ease);
+	}
+	.editor-panel:hover :global(.svelte-flow__controls),
+	.editor-panel :global(.svelte-flow__controls:focus-within) {
+		opacity: 1;
 	}
 	/* On touch each button is floored to --hit in both axes, so the cluster is a slab and needs a
 	   smaller inset — still clear of the grip, whose 16px box is clipped to a triangle. */
@@ -1181,6 +1186,13 @@
 		.editor-panel :global(.svelte-flow__controls) {
 			bottom: var(--space-6);
 			left: var(--space-6);
+			opacity: 1;
+		}
+		/* A portrait sheet's grab band leans --hit over the canvas's bottom edge; the cluster sits above it. */
+		@container (orientation: portrait) {
+			.editor-panel:has(> :global(.side-panel.open)) :global(.svelte-flow__controls) {
+				bottom: calc(var(--space-6) + var(--hit));
+			}
 		}
 	}
 	/* Non-interactive, so it never eats the double-click that opens the add-node menu under it. */

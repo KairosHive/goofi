@@ -1,7 +1,8 @@
 <!-- An inspector on a drag-resizable pane at the host's right or (portrait) bottom edge: the node
-     editor's and the state machine's, each filling it with its own content. It stays mounted and
-     parked when closed, so open and close are the same visible slide; while parked, the ◧ over the
-     canvas is the switch that brings it back. -->
+     editor's and the state machine's, each filling it with its own content. It sits IN the host's
+     flow, so the canvas beside it shrinks rather than being covered. It stays mounted and parked at
+     zero size when closed, so open and close are the same visible slide; while parked, the ◧ over
+     the canvas is the switch that brings it back. -->
 <script lang="ts" generics="T">
 	import { beginDrag } from 'panelty';
 	import { onDestroy, type Snippet } from 'svelte';
@@ -51,7 +52,7 @@
 	let paneEl = $state<HTMLElement | null>(null);
 
 	function finishTransition(e: TransitionEvent): void {
-		if (e.target !== e.currentTarget || e.propertyName !== 'transform' || open) return;
+		if (e.target !== e.currentTarget || !['width', 'height'].includes(e.propertyName) || open) return;
 		rendered = null;
 	}
 
@@ -139,15 +140,15 @@
 
 <style>
 	.side-panel {
-		position: absolute;
-		right: 0;
-		top: 0;
-		bottom: 0;
+		position: relative;
+		flex: 0 0 auto;
+		order: 1;
 		/* Which axis the grip drags; the container query below decides it and JS reads it back. */
 		--pane-axis: x;
 		/* Floor, resting size and ceiling in ONE declaration, so the bounds cannot cross. They are
 		   HOST-relative, never `vw`/`vh`: the pane answers to its panel, not to the screen. */
-		width: clamp(10%, var(--pane-w, min(40%, 30rem)), 90%);
+		--pane-size: clamp(10%, var(--pane-w, min(40%, 30rem)), 90%);
+		width: var(--pane-size);
 		/* `inline-size`, never `size`: an (orientation:) query needs the block axis uncontained, or
 		   the portrait branch below would answer against the pane instead of `.panel-body`. */
 		container-type: inline-size;
@@ -156,24 +157,25 @@
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		transform: translateX(100%);
 		transition:
-			transform var(--dur-slow) var(--ease),
+			width var(--dur-slow) var(--ease),
+			height var(--dur-slow) var(--ease),
 			visibility 0s;
 		box-shadow: var(--shadow-side);
 		z-index: var(--z-side-panel);
 	}
-	.side-panel.open {
-		transform: translateX(0);
-	}
-	/* A host rotation swaps the park transform from X to Y, so an unpainted park is what stops a
-	   ghost flying diagonally across it. */
+	/* Parked: no width, so the canvas has the whole host; the border goes with it, and the content
+	   is clipped as the pane slides shut rather than spilling over the canvas. */
 	.side-panel:not(.open) {
+		width: 0;
+		border-width: 0;
+		overflow: hidden;
 		visibility: hidden;
 		pointer-events: none;
-		/* Hold visibility through the outgoing transform, then hide on its final frame. */
+		/* Hold visibility through the outgoing slide, then hide on its final frame. */
 		transition:
-			transform var(--dur-slow) var(--ease),
+			width var(--dur-slow) var(--ease),
+			height var(--dur-slow) var(--ease),
 			visibility var(--dur-slow) step-end;
 	}
 	.side-panel.resizing {
@@ -182,7 +184,9 @@
 	.side-panel.resizing * {
 		user-select: none;
 	}
-	:global(.inspector-toggle) {
+	/* The pane's sibling, named so: the primitive's own `position: relative` loads after this
+	   stylesheet, and one class alone would lose to it. */
+	.side-panel + :global(.inspector-toggle) {
 		position: absolute;
 		top: 10px;
 		right: 10px;
@@ -244,20 +248,20 @@
 		@container (orientation: portrait) {
 			.side-panel {
 				--pane-axis: y;
-				top: auto;
-				left: 0;
-				/* `--kb-inset` is the soft keyboard's overlap, which CSS cannot see. */
-				bottom: var(--kb-inset, 0px);
+				--pane-size: clamp(10%, var(--pane-h, 60%), 90%);
 				width: auto;
-				height: clamp(10%, var(--pane-h, 60%), 90%);
+				height: var(--pane-size);
+				/* `--kb-inset` is the soft keyboard's overlap, which CSS cannot see. */
+				margin-bottom: var(--kb-inset, 0px);
 				padding-bottom: var(--safe-bottom);
 				border-left: none;
 				border-top: 1px solid var(--border);
 				box-shadow: var(--shadow-sheet);
-				transform: translateY(100%);
 			}
-			.side-panel.open {
-				transform: translateY(0);
+			.side-panel:not(.open) {
+				width: auto;
+				height: 0;
+				padding-bottom: 0;
 			}
 			.resize-handle {
 				left: 0;

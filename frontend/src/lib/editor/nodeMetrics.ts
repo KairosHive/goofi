@@ -8,6 +8,9 @@ export const NODE = {
 	border: 1
 } as const;
 
+/** The grid both canvases draw and snap to: one slot unit. `goofi_graph::canvas::GRID` is the same. */
+export const GRID = NODE.unit;
+
 /** An output slot's height in px, with its inline viewer open or closed. */
 const slotHeight = (open: boolean): number => (open ? NODE.unit + NODE.viewer : NODE.unit);
 

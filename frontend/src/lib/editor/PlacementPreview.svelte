@@ -1,50 +1,40 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { on } from 'svelte/events';
-	import { ViewportPortal, useSvelteFlow } from '@xyflow/svelte';
-	import SnapGuides from './SnapGuides.svelte';
-	import { computeSnapDelta, makeBounds, type Bounds } from './snap';
+	import { useSvelteFlow } from '@xyflow/svelte';
+	import { GRID } from './nodeMetrics';
 	import { createTouchPlacement, ghostOrigin, type GhostAnchor } from './touchPlacement';
 
-	/** The pointer side of a placement: where the ghost goes, snapped, and when it is committed.
+	/** The pointer side of a placement: where the ghost goes, on the grid, and when it is committed.
 	 *  The ghost itself is a flow node the editor draws with the same card as every other. */
 	interface Props {
 		/** Mouse position in client coords, used until the first mousemove. */
 		initialClient: { x: number; y: number };
-		/** The ghost's footprint, which the snap holds against `targets`. */
+		/** The ghost's footprint, which a touch holds by its centre. */
 		size: { width: number; height: number };
-		/** Snap-target bounds in flow coords: the same set the node drag snaps against. */
-		targets: Bounds[];
 		onMove: (pos: [number, number]) => void;
 		onCommit: (pos: [number, number]) => void;
 		onCancel: () => void;
 	}
 
-	let { initialClient, size, targets, onMove, onCommit, onCancel }: Props = $props();
+	let { initialClient, size, onMove, onCommit, onCancel }: Props = $props();
 
 	const { screenToFlowPosition } = useSvelteFlow();
 
 	let mouseClient = $state<{ x: number; y: number }>(untrack(() => ({ x: initialClient.x, y: initialClient.y })));
-	let altKey = $state(false);
 	/** Which point of the ghost the input holds; asked of the EVENT, so a hybrid device stays right. */
 	let anchor = $state<GhostAnchor>('top-left');
 
 	const flowPos = $derived(screenToFlowPosition({ x: mouseClient.x, y: mouseClient.y }));
-	// Spend the anchor once, here, so the snap bounds, the transform and the commit cannot disagree.
+	// Spend the anchor once, here, so the transform and the commit cannot disagree.
 	const origin = $derived(ghostOrigin(flowPos, { w: size.width, h: size.height }, anchor));
-
-	const snap = $derived.by(() => {
-		const dragged = [makeBounds(origin.x, origin.y, size.width, size.height)];
-		return computeSnapDelta(dragged, targets, altKey);
-	});
-
-	const snappedX = $derived(origin.x + snap.dx);
-	const snappedY = $derived(origin.y + snap.dy);
-	$effect(() => onMove([Math.round(snappedX), Math.round(snappedY)]));
+	// The one magnet: the grid cell under the ghost's corner, as a drag lands too.
+	const snappedX = $derived(Math.round(origin.x / GRID) * GRID);
+	const snappedY = $derived(Math.round(origin.y / GRID) * GRID);
+	$effect(() => onMove([snappedX, snappedY]));
 
 	function onMouseMove(e: MouseEvent): void {
 		mouseClient = { x: e.clientX, y: e.clientY };
-		altKey = e.altKey;
 		anchor = 'top-left';
 	}
 
@@ -69,7 +59,7 @@
 		// Block SF's pane-click / node-click from also firing.
 		e.stopPropagation();
 		e.preventDefault();
-		onCommit([Math.round(snappedX), Math.round(snappedY)]);
+		onCommit([snappedX, snappedY]);
 	}
 
 	function onWindowMouseDown(e: MouseEvent): void {
@@ -99,7 +89,7 @@
 		const at = touch.up(e);
 		if (!at) return;
 		mouseClient = at;
-		onCommit([Math.round(snappedX), Math.round(snappedY)]);
+		onCommit([snappedX, snappedY]);
 	}
 
 	/** The pan block and the synthetic-click suppression: SvelteFlow pans off `touchstart`, and
@@ -128,9 +118,3 @@
 		return () => offs.forEach((off) => off());
 	});
 </script>
-
-<ViewportPortal target="front">
-	{#if snap.guides.length > 0}
-		<SnapGuides guides={snap.guides} testid="placement-snap-guides" />
-	{/if}
-</ViewportPortal>

@@ -59,6 +59,10 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		const body = card.locator('.slot-viewer .body');
+		// The pane is not blank: its grid dots are the texture "nothing painted" is judged against.
+		const first = (await card.boundingBox())!;
+		const bare = { x: first.x, y: first.y + first.height + 40, width: first.width, height: 60 };
+		const flatPane = (await inspect(page, bare)).contrast + 10;
 		let flat = '';
 		let ramp = '';
 		await expect(body).toBeVisible();
@@ -82,7 +86,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect(below.height, 'the card shrank away from where the plot was').toBeGreaterThan(20);
 			await expect
 				.poll(async () => (await inspect(page, below)).contrast, { message: 'the freed room is flat pane' })
-				.toBeLessThan(10);
+				.toBeLessThan(flatPane);
 			await card.getByLabel('toggle viewer').first().click();
 			await expect(body).toBeVisible();
 		});
@@ -104,7 +108,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const right = { x: cardBox.x + cardBox.width + 48, y: box.y, width: 24, height: box.height };
 			await expect
 				.poll(async () => (await inspect(page, right)).contrast)
-				.toBeLessThan(10);
+				.toBeLessThan(flatPane);
 			await page.mouse.wheel(0, 400);
 			await expect
 				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width))
@@ -132,8 +136,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 				.toBeGreaterThan(40);
 			const above = { x: cardBox.x + 20, y: cardBox.y - 30, width: cardBox.width - 40, height: 20 };
 			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
-			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(10);
-			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(10);
+			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(flatPane);
+			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(flatPane);
 		});
 
 		await test.step('four docked viewers beside the editor leave the card its plot, and it still pans', async () => {

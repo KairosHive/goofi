@@ -31,6 +31,7 @@ export type OpName =
 	| 'nodes paste'
 	| 'nodes group'
 	| 'nodes ungroup'
+	| 'nodes arrange'
 	| 'link add'
 	| 'link remove'
 	| 'variable list'
@@ -48,6 +49,7 @@ export type OpName =
 	| 'machine remove'
 	| 'machine rename'
 	| 'machine edit'
+	| 'machine arrange'
 	| 'machine attribute add'
 	| 'machine attribute edit'
 	| 'machine attribute remove'
@@ -133,6 +135,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'nodes paste': 'write',
 	'nodes group': 'write',
 	'nodes ungroup': 'write',
+	'nodes arrange': 'write',
 	'link add': 'write',
 	'link remove': 'write',
 	'variable list': 'read',
@@ -150,6 +153,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'machine remove': 'write',
 	'machine rename': 'write',
 	'machine edit': 'write',
+	'machine arrange': 'write',
 	'machine attribute add': 'write',
 	'machine attribute edit': 'write',
 	'machine attribute remove': 'write',

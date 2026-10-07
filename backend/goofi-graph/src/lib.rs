@@ -15,6 +15,7 @@ use goofi_node::{
 use indexmap::IndexMap;
 
 pub mod archive;
+pub mod canvas;
 pub mod doc;
 pub use doc::MANIFEST_VERSION;
 

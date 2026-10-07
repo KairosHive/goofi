@@ -80,8 +80,9 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		const card0 = page.getByTestId('state-card-state0');
 		const card1 = page.getByTestId('state-card-state1');
 		// In the canvas the inspector leaves bare: its pane takes the right side, or the bottom on a phone.
-		await addState({ x: box.x + box.width * 0.2, y: box.y + box.height * 0.12 }, card0);
-		await addState({ x: box.x + box.width * 0.5, y: box.y + box.height * 0.3 }, card1);
+		// Apart enough that the cards clear each other on a phone's short canvas once on the grid.
+		await addState({ x: box.x + box.width * 0.2, y: box.y + box.height * 0.1 }, card0);
+		await addState({ x: box.x + box.width * 0.7, y: box.y + box.height * 0.45 }, card1);
 
 		// A transition dragged from one box's edge into the other; the inspector shows it, selected.
 		await drag(page, hasTouch, card0, card1);
@@ -162,6 +163,26 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await page.keyboard.press('Delete');
 		await expect(label).toHaveCount(0);
 		await expect(card0.getByTestId('state-remove')).toHaveCount(0);
+
+		// The zoom cluster is never under the inspector pane: the pane takes its room from the canvas.
+		// The cluster shows while the pointer is in the panel, and always on a touch screen.
+		await press(card1);
+		await expect(inspector).toHaveAttribute('data-subject', 'state');
+		const cluster = panel.locator('.svelte-flow__controls');
+		if (!hasTouch) await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5);
+		await expect(cluster).toHaveCSS('opacity', '1');
+		const [c, p] = await Promise.all([cluster.boundingBox(), page.getByTestId('auto-side-panel').boundingBox()]);
+		expect(c!.x + c!.width <= p!.x || c!.y + c!.height <= p!.y, `the cluster sits clear of the pane: ${JSON.stringify(c)} ${JSON.stringify(p)}`).toBe(true);
+		// Its ◇ is `machine arrange`: every card lands on the grid, clear of the others, as one step.
+		const states = async (): Promise<Record<string, { pos: [number, number] }>> =>
+			(await rawCall(page, 'session state')).result.machines.machine0.states;
+		const before = await states();
+		await press(cluster.getByTestId('arrange'));
+		await expect.poll(async () => Object.values(await states()).every((s) => s.pos[0] % 24 === 0 && s.pos[1] % 24 === 0)).toBe(true);
+		const ringed = await states();
+		expect(ringed.state0.pos).not.toEqual(ringed.state1.pos);
+		await press(page.getByTestId('topbar-undo'));
+		await expect.poll(async () => (await states()).state0.pos).toEqual(before.state0.pos);
 
 		// The playhead's group is the machine's: listed locked whole, like a device's.
 		const groups = (await rawCall(page, 'session state')).result.variable_groups;

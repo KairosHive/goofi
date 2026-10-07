@@ -4,8 +4,10 @@
      drawing and the gesture in flight. -->
 <script lang="ts">
 	import {
+		Background,
 		ConnectionLineType,
 		ConnectionMode,
+		ControlButton,
 		Controls,
 		SvelteFlow,
 		SvelteFlowProvider,
@@ -28,6 +30,7 @@
 	import StateCard from '$lib/machine/StateCard.svelte';
 	import type { Subject } from '$lib/machine/subject';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
+	import { GRID } from '$lib/editor/nodeMetrics';
 	import { CARD_W, FALLBACK_H } from '$lib/machine/layout';
 	import { summary } from '$lib/machine/triggers';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
@@ -141,6 +144,8 @@
 				source: t.from,
 				target: t.to,
 				type: 'transition',
+				// Above every card, the selected one included: a label over a box is still a control.
+				zIndex: 1001,
 				selected: selected.has(id),
 				data: {
 					summary: summary(t),
@@ -187,7 +192,8 @@
 		Boolean((target as HTMLElement | null)?.classList.contains('svelte-flow__pane'));
 	function addState(at: { x: number; y: number }): void {
 		const p = screenToFlow?.(at) ?? { x: 0, y: 0 };
-		const pos = [Math.round(p.x - CARD_W / 2), Math.round(p.y - FALLBACK_H / 2)];
+		// Centred on the gesture, then on the grid, as a dragged card lands.
+		const pos = [p.x - CARD_W / 2, p.y - FALLBACK_H / 2].map((v) => Math.round(v / GRID) * GRID);
 		void call('machine state add', { pos });
 	}
 	// A double click adds a box: the browser counts a mouse's clicks; a touch's taps are counted
@@ -242,19 +248,39 @@
 		for (const n of nodes) void call('machine state remove', { name: n.id });
 	}
 
-	// ---- a box drag previews the state's place and lands it as one edit.
+	// ---- a box drag previews the state's place and lands it, on the grid, as one edit. A hold
+	// that never moves leaves the box where it was.
+	const dragOrigin = new Map<string, { x: number; y: number }>();
+	function onNodeDragStart(args: { nodes: Node[] }): void {
+		for (const n of args.nodes) dragOrigin.set(n.id, { x: n.position.x, y: n.position.y });
+	}
+	function snapped(n: Node): [number, number] {
+		const o = dragOrigin.get(n.id);
+		if (o && o.x === n.position.x && o.y === n.position.y) return [o.x, o.y];
+		return [Math.round(n.position.x / GRID) * GRID, Math.round(n.position.y / GRID) * GRID];
+	}
 	function onNodeDrag(args: { nodes: Node[] }): void {
 		for (const n of args.nodes) {
-			pinned.set(n.id, n.position);
-			g.previewState(name, n.id, { pos: [Math.round(n.position.x), Math.round(n.position.y)] });
+			const [x, y] = snapped(n);
+			pinned.set(n.id, { x, y });
+			g.previewState(name, n.id, { pos: [x, y] });
 		}
+		flowNodes = flowNodes.map((n) => {
+			const p = pinned.get(n.id);
+			return p && args.nodes.some((d) => d.id === n.id) ? { ...n, position: p } : n;
+		});
 	}
 	function onNodeDragStop(args: { nodes: Node[] }): void {
 		for (const n of args.nodes) {
-			pinned.set(n.id, n.position);
-			const pos = [Math.round(n.position.x), Math.round(n.position.y)];
+			const pos = snapped(n);
+			pinned.set(n.id, { x: pos[0], y: pos[1] });
 			void call('machine state edit', { name: n.id, pos }).finally(() => pinned.delete(n.id));
 		}
+	}
+
+	/** The ◇ button: the manager puts the states on a ring. The camera stays; the fit button frames. */
+	function arrange(): Promise<unknown> {
+		return call('machine arrange', {});
 	}
 
 	function onKeydown(e: KeyboardEvent): void {
@@ -313,6 +339,7 @@
 					deleteKey={['Delete', 'Backspace']}
 					ondelete={deleteElements}
 					onbeforeconnect={onConnect}
+					onnodedragstart={onNodeDragStart}
 					onnodedrag={onNodeDrag}
 					onnodedragstop={onNodeDragStop}
 					onnodeclick={({ node, event }) => {
@@ -334,7 +361,12 @@
 					zoomOnDoubleClick={false}
 					autoPanOnNodeDrag={false}
 				>
-					<Controls showLock={false} />
+					<Background gap={GRID} size={1} patternColor="var(--border)" />
+					<Controls showLock={false}>
+						<ControlButton title="Arrange the states on a ring" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
+							<Icon name="workflow" />
+						</ControlButton>
+					</Controls>
 					<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 					<ViewportPortal target="front">
 						<PlayheadDots m={machine} nodes={flowNodes} />
@@ -366,16 +398,47 @@
 		grid-template-rows: auto minmax(0, 1fr);
 		height: 100%;
 	}
-	/* The pane's host: `.canvas` is what it slides in over. */
+	/* The pane's host: the canvas and the pane side by side, so the pane never covers the cluster. */
 	.canvas {
 		position: relative;
+		display: flex;
 		min-width: 0;
 		min-height: 0;
 	}
+	.canvas > :global(.svelte-flow) {
+		flex: 1 1 0;
+		min-width: 0;
+		min-height: 0;
+	}
+	@media all {
+		@container (orientation: portrait) {
+			.canvas {
+				flex-direction: column;
+			}
+		}
+	}
+	/* Shown while the pointer is in the panel; a touch screen, with no pointer, shows it always. */
 	.canvas :global(.svelte-flow__controls) {
 		margin: 0;
 		bottom: var(--space-6);
 		left: var(--space-6);
+		opacity: 0;
+		transition: opacity var(--dur-fast) var(--ease);
+	}
+	.canvas:hover :global(.svelte-flow__controls),
+	.canvas :global(.svelte-flow__controls:focus-within) {
+		opacity: 1;
+	}
+	@media (hover: none) and (pointer: coarse) {
+		.canvas :global(.svelte-flow__controls) {
+			opacity: 1;
+		}
+		/* A portrait sheet's grab band leans --hit over the canvas's bottom edge; the cluster sits above it. */
+		@container (orientation: portrait) {
+			.canvas:has(> :global(.side-panel.open)) :global(.svelte-flow__controls) {
+				bottom: calc(var(--space-6) + var(--hit));
+			}
+		}
 	}
 	.empty-hint {
 		position: absolute;
