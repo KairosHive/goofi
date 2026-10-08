@@ -99,8 +99,9 @@ outside the repo the same way. A bundle with Python nodes names the packages the
 root's against both interpreters. A development build asks the terminal before it installs, and
 stops when there is no terminal or the answer is no; a distribution build installs without asking.
 
-MIDI comes in as variables, not as a node: `goofi midi learn` turns a controller into a variable
-group, and the `Variable` node of each engine puts a variable on a cable.
+A MIDI controller comes in as variables: `goofi midi learn` turns it into a variable group, and
+the `Variable` node of each engine puts a variable on a cable. Notes for playing stay a node: the
+audio engine's `MidiIn` opens a port and deals its notes out as voices, gate, pitch and velocity.
 
 ## Nodes
 
