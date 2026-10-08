@@ -66,9 +66,10 @@ before the first production deployment.
 - Rust uses four spaces; frontend code uses tabs and single quotes. Do not run Prettier.
 - The version is `[workspace.package].version`; the toolchain is in `rust-toolchain.toml`.
 - One binary serves the app and acts as its CLI. It prints the URL without opening a browser;
-  `--headless` serves only the API. `goofi help` lists commands. The app shell in
-  `frontend/electron` runs the binary with `--shell`, holds its stdin, shows the app it serves
-  and performs `update start`; `goofi update` is that op from the CLI.
+  `--headless` serves only the API; `--demo` is the public mode, with the host-touching ops
+  withheld. `goofi help` lists commands. The app shell in `frontend/electron` runs the binary
+  with `--shell`, holds its stdin, shows the app it serves and installs the update that the
+  `update start` op requests; `goofi update` is that op from the CLI.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated
   with versioned path operations (`put` a value at a path, `del` a path).
 - Mutations are commands with inverses and per-actor undo. Fresh calls are strict;
@@ -90,7 +91,7 @@ before the first production deployment.
 - Each frame counts in full, including a Buffer window. Never infer sample overlap. Resample
   handles independent windows; Epoch captures supplied windows. Input clearing takes effect
   after a successful process call and before the next input drain.
-- Params have one active source: constant, expression, or reference. Values use `/params/<node>`;
+- Params have one active source: constant or expression. Values use `/params/<node>`;
   errors use `/control`. Viewer demand must not change engine scheduling.
 - A `.gfi` patch is an archive of its document and workspace. Recordings use native data files
   with metadata sidecars. Shared-memory and wire-format changes require matching consumers.
@@ -112,7 +113,9 @@ before the first production deployment.
   provisions at start, a development build is provisioned by `goofi-init`.
 - `goofi-init` also removes build artifacts under `target/` untouched for three days, so a moved
   hash does not leave its output behind for good.
-- `plugins/` holds the plugins goofi ships as source; `sdk/README.md` is the plugin interface.
+- `plugins/` holds the plugins goofi ships as source, loaded from `~/.goofi/plugins/<id>`;
+  `sdk/README.md` is the plugin interface. `skills/` holds the guides an agent reads first; they
+  are embedded at build and seeded into a patch's workspace where the patch has none of its own.
 - Rebuild both installed Python wheels after changing the Python API. Do not canonicalize venv
   interpreter paths; use the paths provided by setup.
 - A session (`goofi_supervisor::session`) owns every ephemeral resource; its lock is the one aliveness
@@ -144,8 +147,8 @@ npm --prefix frontend run check
 npm --prefix frontend run test
 ```
 
-The situations share one binary, `tests/all` (`cargo test -p goofi-tests <situation>::`); one that
-sets process-wide environment keeps a binary of its own (`--test <situation>`).
+The situations share one binary, `tests/all` (`cargo test -p goofi-tests <situation>::`); situations
+that set process-wide environment keep binaries of their own (`--test <situation>`).
 For browser tests:
 
 ```sh

@@ -63,9 +63,10 @@ which is what a CI job runs to prove the build; it has no flag.
 | --- | --- | --- |
 | `--port N` | `8000` | The port to serve on. |
 | `--bind HOST` | `127.0.0.1` | The address to serve on. Anything beyond this machine warns: there is no auth, and `/term` is a real shell. |
-| `--extra-nodes ROOT` | — | A folder of node files, scanned after the shipped bundles and before the open patch's own workspace. Repeatable; a later root wins a type name it shares with an earlier one. |
-| `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, `/mcp`. The app's routes are never mounted. |
-| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, session save/load/recover and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs and no plugin loads. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
+| `--extra-nodes ROOT` | — | A folder of node files, scanned after the shipped bundles. Repeatable; a later root wins a type name it shares with an earlier one. The plugins' nodes, the private library `~/.goofi/custom/` and the open patch's own workspace are scanned after it, and each beats the roots before it. |
+| `--load PATCH` | — | Open this `.gfi` at start. `GOOFI_LOAD` is the same. |
+| `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, `/mcp`. The app's routes are never mounted and the `layout` ops leave the op table. |
+| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `update`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs and no plugin loads. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |
 
 The Save and Open dialogs each carry a second door — *Download a copy* and *Upload…* — which pass
@@ -80,23 +81,26 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 
 | Engine | Frames of | Runs on |
 | --- | --- | --- |
-| `signal` | Array data, at whatever rate the source runs. LSL, MIDI and OSC in and out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
-| `audio` | The same node interface at audio rate. Live in and out, MIDI, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
+| `signal` | Array data, at whatever rate the source runs. LSL and OSC in and out, MIDI out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
+| `audio` | The same node interface at audio rate. Live in and out, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
 | `graphics` | Pixels from WGSL shaders or Rust/Python sources, with shared GPU textures. Noise and shapes generate images; Camera captures them; blur, displacement, and feedback process them. | The GPU. |
 
 VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its nodes come off the
 machine the patch is open on, so goofi supports VST3 and ships none.
 
 The nodes goofi does ship live in `node-bundles/`, one directory per bundle: `signal` and `audio`
-(the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, LSL, band power, FOOOF),
+(the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, preprocessing, band power, FOOOF, connectivity),
 `complexity` (the antropy measures), `biotuner` (harmonicity, microtonal keys, rhythm),
 `simulation` (attractors, Kuramoto, Hopfield, neural mass), `ml`, `image`, `image-generation`,
 `computer-vision`, `harmonic-geometry` and `inception`. Every bundle is built at
 goofi's build time and embedded, so `cargo run` carries them all; `--extra-nodes` adds a root
 outside the repo the same way. A bundle with Python nodes names the packages they import in a
 `requirements.txt`; `goofi-init` installs every bundle's, and at startup goofi checks every scanned
-root's against both interpreters — a terminal is asked before anything is installed, and without
-one the nodes are simply unavailable.
+root's against both interpreters. A development build asks the terminal before it installs, and
+stops when there is no terminal or the answer is no; a distribution build installs without asking.
+
+MIDI comes in as variables, not as a node: `goofi midi learn` turns a controller into a variable
+group, and the `Variable` node of each engine puts a variable on a cable.
 
 ## Nodes
 
@@ -153,7 +157,7 @@ command history, and Tab for completion. Commands use the browser tab's undo his
 
 `goofi log list` reads the groups, `goofi log write "message" --level warning --component my-tool`
 adds a message. Log history cannot be cleared from the app or command interface. Host Rust components can
-write through `goofi_core::log::record`. Python node text keeps its node identity; native writes
+write through `goofi_supervisor::log::record`. Python node text keeps its node identity; native writes
 without an identity appear under `goofi`.
 
 The backend retains up to 10,000 groups and 16 MiB of message text. A message is limited to 64 KiB.
@@ -165,12 +169,13 @@ only their identity, count, sequence, and last timestamp. Agent PTYs keep their 
 goofi launches the coding harness you already use — `claude`, `codex` and `opencode` out of the
 box, any command you name in `config.toml`. It comes up on a PTY with the patch workspace as its
 working directory, reads that workspace's `AGENTS.md` to orient itself, and its terminal is a panel
-beside the canvas.
+beside the canvas. The guides under `skills/` ride into every workspace that has none of its own:
+patching a biosignal chain, designing biofeedback, designing an emergent shader.
 
 ```bash
 goofi agent start --name claude
 goofi node add signal:Psd
-goofi link add lslin/out psd/data
+goofi link add lslin/out psd/input
 ```
 
 Over `/mcp` an agent reaches the same ops the editor does, so there is nothing you can do that it
@@ -178,6 +183,16 @@ cannot. Every edit it makes arrives as the delta every client gets, so you watch
 itself and take the mouse back whenever you like — its work lands on the same undo stack as yours.
 Everything goofi can do, it does through that one op vocabulary: `/control`, `/mcp`, the CLI and a
 test are transports over one entry point, never four surfaces with four sets of behaviour.
+
+A node added without a position lands on the canvas grid right of the one added before it, and
+`goofi nodes arrange` lays a patch out by its dataflow in one undo step, so an agent's patch reads
+as well as a hand-built one.
+
+## State machines
+
+A patch can carry state machines beside its graph: boxes on a second canvas, transitions between
+them, and playheads that step through them and set the patch's variables as they go. `goofi machine add`, `machine
+state add` and `machine arrange` build one from the CLI or an agent; the same ops drive the panel.
 
 ## Testing
 
