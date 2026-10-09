@@ -14,10 +14,21 @@ pub enum Op {
 }
 
 /// The ops that take `before` to `after`, as deep as the maps go: a map whose kept keys stay in
-/// order is descended, so a moved literal rides alone; any other value is re-sent whole.
+/// order is descended, so a moved literal rides alone; any other value is re-sent whole. The roots
+/// are named, not ordered, so every op has a root in its path.
 pub fn diff_ops(before: &Value, after: &Value) -> Vec<Op> {
+    let empty = Map::new();
+    let (b, a) = (before.as_object().unwrap_or(&empty), after.as_object().unwrap_or(&empty));
     let mut ops = Vec::new();
-    diff_into(&mut ops, Vec::new(), before, after);
+    for (root, av) in a {
+        match b.get(root) {
+            Some(bv) => diff_into(&mut ops, vec![root.clone()], bv, av),
+            None => ops.push(Op::Put { path: vec![root.clone()], value: av.clone() }),
+        }
+    }
+    for root in b.keys().filter(|k| !a.contains_key(*k)) {
+        ops.push(Op::Del { path: vec![root.clone()] });
+    }
     ops
 }
 

@@ -578,6 +578,19 @@ async fn a_delta_names_the_leaf_it_moved_and_lands_a_replica_equal_to_the_docume
     let patch = tab.event("doc_patch").await;
     assert!(patch["ops"].as_array().unwrap().iter().any(|op| op["path"] == j!(["nodes", hex(buf)])), "{patch}");
     assert_eq!(tab.doc().to_json(), g.doc());
+    // A root that fills moves in the projection's order; the roots are named, so the delta still
+    // names one, and never re-sends the whole document at the empty path.
+    g.link(osc, "out", buf, "input");
+    let patch = tab.event("doc_patch").await;
+    for op in patch["ops"].as_array().unwrap() {
+        assert!(op["path"].as_array().is_some_and(|p| !p.is_empty()), "every op names a root: {patch}");
+    }
+    assert_eq!(tab.doc().to_json(), g.doc());
+    // A replaced patch empties every root, and the replica follows it there.
+    g.call("session new", j!({}));
+    let want = g.doc();
+    assert!(want["nodes"].as_object().is_some_and(|n| n.is_empty()), "{want}");
+    tab.until_doc(|d| d.to_json() == want).await;
 }
 
 fn panel_id(g: &Goofi) -> String {
