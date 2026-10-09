@@ -1,8 +1,8 @@
 use goofi_audio_sdk::goofi_core::SlotType;
 use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
 
-const WAVEFORM: Option<Show> = Some(Show { param: "mode", any_of: &["waveform"] });
-const OSCILLATOR: Option<Show> = Some(Show { param: "mode", any_of: &["oscillator"] });
+const WAVEFORM: &[Show] = &[Show { param: "mode", any_of: &["waveform"] }];
+const OSCILLATOR: &[Show] = &[Show { param: "mode", any_of: &["oscillator"] }];
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -12,7 +12,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     PITCH = ParamDecl {

@@ -251,7 +251,7 @@ static PARAMS: &[ParamDecl] = &[
              everything except between the two.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -269,7 +269,7 @@ static PARAMS: &[ParamDecl] = &[
              grows towards the band edges.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -279,7 +279,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -289,7 +289,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -299,7 +299,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -309,7 +309,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -319,7 +319,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

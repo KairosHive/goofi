@@ -71,8 +71,9 @@ pub struct Param {
     /// The index of the param's section inside its group; the inspector draws a line between two.
     #[serde(default)]
     pub section: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show: Option<Show>,
+    /// The rules that must all hold for the inspector to show the param; one rule may stand bare.
+    #[serde(default, deserialize_with = "one_or_many_shows", skip_serializing_if = "Vec::is_empty")]
+    pub show: Vec<Show>,
     /// The part the param plays in a declared section; `None` for a row of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
@@ -96,12 +97,26 @@ pub enum Role {
     Feed { slot: String, group: String },
 }
 
-/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
-/// holds one of `any_of`, compared as text.
+/// One rule of a param's `show`: it holds while `param` (`name` in the same group, or
+/// `group.name`) holds one of `any_of`, compared as text, or is itself hidden.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Show {
     pub param: String,
     pub any_of: Vec<String>,
+}
+
+/// A rule on its own or a list of them, both read as the list.
+fn one_or_many_shows<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Show>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(Show),
+        Many(Vec<Show>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
 }
 
 /// The kind-specific fields, tagged by `kind` — exhaustive, so neither side has an unknown kind.

@@ -209,7 +209,7 @@ static PARAMS: &[ParamDecl] = &[
              is a softmax over the memories.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -219,7 +219,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How wide a memory is, when none is wired. A wired `patterns` matrix decides instead."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -229,7 +229,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many memories to draw, when none is wired."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -239,7 +239,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How sharply the network commits. High makes it snap to one memory; low leaves it between them."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -249,7 +249,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How hard the `cue` holds the state. 1 pins it to the cue; 0 lets the network run free."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -259,7 +259,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Jitter on the state, which shakes it out of a shallow memory."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -269,7 +269,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seeds the drawn memories and the starting state. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -279,7 +279,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Draw the memories again and start over."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -289,7 +289,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Updates per second of real time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

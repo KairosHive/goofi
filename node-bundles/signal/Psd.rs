@@ -138,7 +138,7 @@ static PARAMS: &[ParamDecl] = &[
              the whole run as one segment, which is sharper and noisier.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -155,7 +155,7 @@ static PARAMS: &[ParamDecl] = &[
              `rectangular` keeps the samples as they are.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -165,7 +165,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -179,7 +179,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What `segment` and `overlap` count in. `fraction` is a share of the frame."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -189,7 +189,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -202,7 +202,7 @@ static PARAMS: &[ParamDecl] = &[
              slower; at a full segment the hop is one sample.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -212,7 +212,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The lowest frequency to keep, in Hz."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -222,7 +222,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -232,7 +232,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Whether the power comes out as it is, or as its logarithm."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

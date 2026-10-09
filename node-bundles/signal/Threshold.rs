@@ -75,7 +75,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Whether the decision is true above the level or below it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -85,7 +85,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The value the signal is compared against."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -98,7 +98,7 @@ static PARAMS: &[ParamDecl] = &[
              level cannot rattle the decision.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -108,7 +108,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Emit one only on the update where the decision turns true, rather than while it holds."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -122,7 +122,7 @@ static PARAMS: &[ParamDecl] = &[
              the release as well as the onset.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -132,7 +132,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How long in seconds a decision stays before it is allowed to switch again."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

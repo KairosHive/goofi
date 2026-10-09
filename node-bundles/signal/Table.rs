@@ -54,7 +54,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
          with no key here takes the name of the node it comes from.",
     ),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static INPUTS: &[SlotDecl] = &[

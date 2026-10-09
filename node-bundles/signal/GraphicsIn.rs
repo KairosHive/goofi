@@ -102,7 +102,7 @@ static PARAMS: &[ParamDecl] = &[
              down the frame or across it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -115,7 +115,7 @@ static PARAMS: &[ParamDecl] = &[
              frame as it was rendered, which is every texel of it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

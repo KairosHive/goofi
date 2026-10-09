@@ -76,7 +76,7 @@ pub const fn device(doc: &'static str) -> goofi_audio_sdk::ParamDecl {
         expression: None,
         doc: Some(doc),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     }
 }

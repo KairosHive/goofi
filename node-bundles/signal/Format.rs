@@ -113,7 +113,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("`concat` joins the wires in order; `template` places each one where it is named."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -123,7 +123,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What goes between two wires in `concat` mode."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -136,7 +136,7 @@ static PARAMS: &[ParamDecl] = &[
              it right in a field eight wide. A wire that is not there is empty.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

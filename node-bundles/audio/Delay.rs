@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds behind the input; move it while it sounds and the echoes bend with it"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     FEEDBACK = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how much of each echo goes back in; at 1 it repeats without fading"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     MIX = ParamDecl {
@@ -29,7 +29,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how much of what leaves is the echo rather than the input"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

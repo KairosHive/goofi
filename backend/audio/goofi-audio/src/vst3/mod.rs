@@ -403,7 +403,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
         doc: Some(doc.into()),
         expression: None,
         section: 0,
-        show: None,
+        show: Vec::new(),
         role: None,
         spec,
     };
@@ -443,7 +443,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 let default = (p.default * p.steps as f64).round() as i64;
                 (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], color: false }, p.steps as f64, p.title.clone())
             };
-            (p.id, steps, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: None, role: None, spec })
+            (p.id, steps, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: Vec::new(), role: None, spec })
         })
         .collect();
     // `chosen` bounds the KINDS too, which is what keeps a param's index and the id it writes back

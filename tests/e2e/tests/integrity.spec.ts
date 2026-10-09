@@ -380,7 +380,7 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 			'    PARAMS = {',
 			'        "filter": [',
 			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.NumParam(64, 1, 512, int=True, show=("mode", ["fir"]))},',
-			'            {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},',
+			'            {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=[("mode", ["iir"]), ("order", [4, 8])])},',
 			'            {"gain": goofi.NumParam(1.0, 0.0, 2.0)},',
 			'        ],',
 			'        "iir": {"q": goofi.NumParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
@@ -399,7 +399,7 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 		await expect(tabs).toHaveText(['filter', 'common']);
 		await expect(row('filter/taps')).toBeVisible();
 		await expect(row('filter/order')).toHaveCount(0);
-		await expect(row('filter/ripple'), 'a param shown by a hidden one hides with it').toHaveCount(0);
+		await expect(row('filter/ripple'), 'a param hides while any of its rules fails').toHaveCount(0);
 		await expect(lines).toHaveCount(1);
 
 		await page.getByTestId('param-field-mode').locator('select').selectOption('iir');

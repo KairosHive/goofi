@@ -180,7 +180,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many units."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -190,7 +190,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many units each one reads. 1 freezes, 3 and up is chaos, and 2 is the edge between them."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -200,7 +200,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How often a drawn rule answers on. Away from 0.5 the network freezes even at high `connections`."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -210,7 +210,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Chance a unit flips against its rule, which is what shakes a frozen network."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -220,7 +220,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seeds the wiring, the rules and the starting state. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -230,7 +230,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Draw the network again from the seed."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -240,7 +240,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a raster."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -250,7 +250,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Updates per second of real time, and the sample rate of an emitted block."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

@@ -46,7 +46,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Which field to take. `a.b.c` reaches through a table inside a table."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

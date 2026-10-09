@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("`white` is level across the spectrum; `pink` falls with frequency, as most natural sound does"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     CHANNELS = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

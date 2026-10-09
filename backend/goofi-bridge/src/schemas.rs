@@ -43,8 +43,8 @@ pub struct ParamBase {
     pub default: Option<Data>,
     /// The index of the param's section inside its group; the inspector draws a line between two.
     pub section: u8,
-    /// The inspector shows the param only while this holds; `None` shows it always.
-    pub show: Option<ParamShow>,
+    /// The inspector shows the param only while every rule holds; none shows it always.
+    pub show: Vec<ParamShow>,
     /// The part the param plays in a declared section; `None` for a row of its own.
     pub role: Option<ParamRole>,
     /// True when the node declared a refresh method for this param.
@@ -55,7 +55,7 @@ pub struct ParamBase {
     pub error: Option<String>,
 }
 
-/// Holds while the param `group.name` has one of `any_of`, compared as text.
+/// Holds while the param `group.name` has one of `any_of`, compared as text, or is hidden itself.
 #[derive(Serialize, TS)]
 pub struct ParamShow {
     pub group: String,
@@ -109,9 +109,14 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
         doc: decl.and_then(|d| d.doc).map(str::to_string),
         default: decl.and_then(|d| control::data_of(&d.spec.to_param())),
         section: decl.map_or(0, |d| d.section),
-        show: decl.and_then(|d| Some((d.group, d.show?))).map(|(group, s)| {
-            let (group, name) = s.controller(group);
-            ParamShow { group: group.into(), name: name.into(), any_of: s.any_of.iter().map(|a| a.to_string()).collect() }
+        show: decl.map_or_else(Vec::new, |d| {
+            d.show
+                .iter()
+                .map(|s| {
+                    let (group, name) = s.controller(d.group);
+                    ParamShow { group: group.into(), name: name.into(), any_of: s.any_of.iter().map(|a| a.to_string()).collect() }
+                })
+                .collect()
         }),
         role: decl.and_then(|d| d.role).map(|r| match r {
             goofi_node::Role::Count { section } => ParamRole::Count { section: section.into() },

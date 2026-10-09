@@ -251,7 +251,7 @@ fn every_param_kind_carries_its_doc_section_and_show_across_the_probe() {
     assert_eq!(doc("mode"), Some("which mode"));
     assert_eq!(doc("reset"), Some("start over"));
     let layout: Vec<_> = d.manifest.params.iter()
-        .map(|p| (p.name, p.section, p.show.map(|s| (s.param, s.any_of))))
+        .map(|p| (p.name, p.section, p.show.first().map(|s| (s.param, s.any_of))))
         .collect();
     assert_eq!(layout, [
         ("count", 0, None),

@@ -12,7 +12,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("what each band is worth; an audio reference is one band per channel, and one number opens them all"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     PITCH = ParamDecl {
@@ -22,7 +22,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     GATE = ParamDecl {
@@ -32,7 +32,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     BANDS = ParamDecl {
@@ -42,7 +42,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how many bands the input is split into, while nothing drives `gains`; a shape that does is as wide as it is"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     LOW = ParamDecl {
@@ -52,7 +52,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     HIGH = ParamDecl {
@@ -62,7 +62,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     Q = ParamDecl {
@@ -72,7 +72,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     LAYOUT = ParamDecl {
@@ -82,7 +82,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

@@ -24,7 +24,7 @@ const base: ParamBase = {
 	mode: 'constant',
 	error: null,
 	section: 0,
-	show: null,
+	show: [],
 	role: null
 };
 

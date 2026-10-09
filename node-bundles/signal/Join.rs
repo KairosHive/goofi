@@ -97,7 +97,7 @@ static PARAMS: &[ParamDecl] = &[
              puts them side by side on a new axis, named after the nodes they came from.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -107,7 +107,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

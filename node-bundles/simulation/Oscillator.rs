@@ -188,7 +188,7 @@ static PARAMS: &[ParamDecl] = &[
              Hopf normal form, `duffing` a double well, `pendulum` the driven damped pendulum.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -198,7 +198,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Roughly how many cycles a second. It scales the whole model's time, not one term."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -212,7 +212,7 @@ static PARAMS: &[ParamDecl] = &[
              fixed point, positive for a cycle, and the bifurcation at zero.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -222,7 +222,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Friction. `duffing` and `pendulum` read it; the others set their own."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -232,7 +232,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Amplitude of a periodic forcing, added to whatever the `drive` input carries."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -242,7 +242,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Frequency of that forcing, relative to the oscillator's own."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -252,7 +252,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Jitter on both state variables, which is what makes an excitable model fire on its own."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -262,7 +262,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Model seconds per step. Too large and the integration leaves the cycle."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -272,7 +272,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Nudges the start and seeds the noise. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -282,7 +282,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Start over from the seed."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -292,7 +292,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -302,7 +302,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

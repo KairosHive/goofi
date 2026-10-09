@@ -74,9 +74,9 @@ default: Literal | null,
  */
 section: number, 
 /**
- * The inspector shows the param only while this holds; `None` shows it always.
+ * The inspector shows the param only while every rule holds; none shows it always.
  */
-show: ParamShow | null, 
+show: Array<ParamShow>, 
 /**
  * The part the param plays in a declared section; `None` for a row of its own.
  */

@@ -305,7 +305,7 @@ goofi_audio_sdk::params! {
         doc: Some("the block's level"),
         expression: None,
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

@@ -189,7 +189,7 @@ static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static DOCUMENTED: NodeManifest = manifest("DocumentedThing", &[], DOCUMENTED_PARAMS, true);
@@ -197,7 +197,7 @@ static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "common", name: "autotrigger", spec: ParamSpec::Bool { default: true },
     expression: None, doc: Some("On by default: this node is a source."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static OVERRIDES_COMMON: NodeManifest = manifest("OverridesCommon", &[], OVERRIDE_PARAMS, false);
@@ -205,25 +205,22 @@ static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "count", name: "reset", spec: ParamSpec::Pulse,
     expression: None, doc: Some("Start the count over."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static PULSING: NodeManifest = manifest("PulsingThing", &[], PULSE_PARAMS, true);
-const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: Option<Show>) -> ParamDecl {
+const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: &'static [Show]) -> ParamDecl {
     ParamDecl { group, name, spec, expression: None, doc: None, section, show, role: None }
-}
-const fn when(param: &'static str, any_of: &'static [&'static str]) -> Option<Show> {
-    Some(Show { param, any_of })
 }
 const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
 const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false };
 /// Three sections of `filter`, each shown for its own mode, and a page shown only for `iir`.
 static SECTIONED_PARAMS: &[ParamDecl] = &[
-    decl("filter", "mode", MODE, 0, None),
-    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], color: false }, 1, when("mode", &["fir"])),
-    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], color: false }, 2, when("mode", &["iir"])),
-    decl("filter", "ripple", LEVEL, 2, when("order", &["4", "8"])),
-    decl("shape", "gate", ParamSpec::Bool { default: false }, 0, when("filter.mode", &["iir"])),
+    decl("filter", "mode", MODE, 0, &[]),
+    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], color: false }, 1, &[Show { param: "mode", any_of: &["fir"] }]),
+    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], color: false }, 2, &[Show { param: "mode", any_of: &["iir"] }]),
+    decl("filter", "ripple", LEVEL, 2, &[Show { param: "order", any_of: &["4", "8"] }]),
+    decl("shape", "gate", ParamSpec::Bool { default: false }, 0, &[Show { param: "filter.mode", any_of: &["iir"] }]),
 ];
 static SECTIONED: NodeManifest = manifest("SectionedThing", &[], SECTIONED_PARAMS, false);
 
@@ -349,14 +346,14 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let pulse = &row("signal:PulsingThing")["params"]["count"]["reset"];
     assert_eq!((&pulse["type"], &pulse["value"]), (&j!("pulse"), &j!(null)), "{pulse}");
 
-    // A row names its section and the one param that shows it, resolved to `group` and `name`.
+    // A row names its section and the params that show it, each resolved to `group` and `name`.
     let params = &row("signal:SectionedThing")["params"];
     let layout = |g: &str, n: &str| (params[g][n]["section"].clone(), params[g][n]["show"].clone());
-    assert_eq!(layout("filter", "mode"), (j!(0), j!(null)));
-    assert_eq!(layout("filter", "taps"), (j!(1), j!({ "group": "filter", "name": "mode", "any_of": ["fir"] })));
-    assert_eq!(layout("filter", "ripple"), (j!(2), j!({ "group": "filter", "name": "order", "any_of": ["4", "8"] })));
-    assert_eq!(layout("shape", "gate").1["group"], "filter", "a page may show by another page's param");
-    assert_eq!(layout("common", "autotrigger"), (j!(0), j!(null)), "the engine's own params always show");
+    assert_eq!(layout("filter", "mode"), (j!(0), j!([])));
+    assert_eq!(layout("filter", "taps"), (j!(1), j!([{ "group": "filter", "name": "mode", "any_of": ["fir"] }])));
+    assert_eq!(layout("filter", "ripple"), (j!(2), j!([{ "group": "filter", "name": "order", "any_of": ["4", "8"] }])));
+    assert_eq!(layout("shape", "gate").1[0]["group"], "filter", "a page may show by another page's param");
+    assert_eq!(layout("common", "autotrigger"), (j!(0), j!([])), "the engine's own params always show");
 }
 
 #[test]
@@ -374,16 +371,16 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
         let reason = read(params).err().unwrap_or_else(|| panic!("loaded, not refused for `{why}`"));
         assert!(reason.contains(why), "{reason}");
     };
-    let mode = decl("filter", "mode", MODE, 0, None);
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("shape", &["fir"]))], "`shape`, which this node does not declare");
-    refused(&[decl("filter", "gain", LEVEL, 0, None), decl("filter", "q", LEVEL, 0, when("gain", &["1"]))],
+    let mode = decl("filter", "mode", MODE, 0, &[]);
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "shape", any_of: &["fir"] }])], "`shape`, which this node does not declare");
+    refused(&[decl("filter", "gain", LEVEL, 0, &[]), decl("filter", "q", LEVEL, 0, &[Show { param: "gain", any_of: &["1"] }])],
             "`gain`, which has no fixed set of values");
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &["fft"]))], "`fft`, which `mode` does not offer: fir, iir");
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &[]))], "shows for no value");
-    refused(&[decl("filter", "mode", MODE, 0, when("mode", &["fir"]))], "leads back to it");
-    refused(&[decl("filter", "a", MODE, 0, when("b", &["fir"])), decl("filter", "b", MODE, 0, when("a", &["iir"]))],
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "mode", any_of: &["fft"] }])], "`fft`, which `mode` does not offer: fir, iir");
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "mode", any_of: &[] }])], "shows for no value");
+    refused(&[decl("filter", "mode", MODE, 0, &[Show { param: "mode", any_of: &["fir"] }])], "leads back to it");
+    refused(&[decl("filter", "a", MODE, 0, &[Show { param: "b", any_of: &["fir"] }]), decl("filter", "b", MODE, 0, &[Show { param: "a", any_of: &["iir"] }])],
             "leads back to it");
-    refused(&[mode, decl("filter", "mode", MODE, 1, None)], "`filter.mode` is declared twice");
+    refused(&[mode, decl("filter", "mode", MODE, 1, &[])], "`filter.mode` is declared twice");
 
     // The declarations a fresh goofi carries in its own binary pass the same rule.
     let g = Goofi::new();

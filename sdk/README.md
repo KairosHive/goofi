@@ -202,11 +202,12 @@ One ELEMENT of a vector is addressed `name[i]`: its literal is that dimension of
 source on it — an expression or a reference — drives that dimension alone, over whatever the whole
 param's source gives the others. The inspector's vector view shows one row per element.
 
-A param can show only while one other param of the same node has one of a list of values. That
-param must have a fixed set of values: a string or int param with options, or a bool. Name it
-`name` in the same group or `group.name`. An int compares as decimal text and a bool as `true` or
-`false`. A param that a hidden param controls is also hidden. The inspector omits hidden params
-and a group tab with no shown param. A hidden param keeps its value and source, and the node runs
+A param can show only while other params of the same node hold given values: one rule names a
+param and the values it may hold, and a param with several rules shows while all of them hold.
+A controller must have a fixed set of values: a string or int param with options, or a bool. Name
+it `name` in the same group or `group.name`. An int compares as decimal text and a bool as `true`
+or `false`. A hidden param is absent, so a rule about it holds whatever its value. The inspector
+omits hidden params and a group tab with no shown param. A hidden param keeps its value and source, and the node runs
 as before. A group can have sections, and the inspector draws a line between two shown sections.
 Discovery refuses an unknown controller, a controller without a fixed set of values, a value that
 is not an option, a chain that returns to its param, and a name used twice in one group.
@@ -230,14 +231,14 @@ default, and the last carries on. The shader reads a list as `p.name[i]` and the
 PARAMS = {"filter": [
     {"mode": goofi.StringParam("fir", options=["fir", "iir"])},
     {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])),
-     "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},
+     "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=[("mode", ["iir"]), ("order", [4, 8])])},
 ]}
 ```
 
 A group that is a list of dicts has one section for each dict. In Rust, a `ParamDecl` sets
-`section: 1` and `show: Some(Show { param: "mode", any_of: &["iir"] })`, or `section: 0` and
-`show: None`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, and sits in
-a section through a section entry.
+`section: 1` and `show: &[Show { param: "mode", any_of: &["iir"] }]`, or `section: 0` and
+`show: &[]`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, or a list
+of such rules, and sits in a section through a section entry.
 
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and
 database access must stay outside audio callbacks and other time-critical processing. Prefer stable

@@ -76,9 +76,16 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
                     m.as_object_mut().expect("a param object").remove("defaults");
                 }
                 // A member shown by another member of the list is shown by the one in ITS slot.
-                if let Some(controller) = m.get("show").and_then(|s| text(s, "param")).map(str::to_string) {
-                    if bases.contains(&controller) {
-                        m["show"]["param"] = json!(format!("{controller}_{slot}"));
+                let rules: Vec<&mut Value> = match m.get_mut("show") {
+                    Some(Value::Array(rules)) => rules.iter_mut().collect(),
+                    Some(rule) => vec![rule],
+                    None => Vec::new(),
+                };
+                for rule in rules {
+                    if let Some(controller) = text(rule, "param").map(str::to_string) {
+                        if bases.contains(&controller) {
+                            rule["param"] = json!(format!("{controller}_{slot}"));
+                        }
                     }
                 }
                 out.push(m);

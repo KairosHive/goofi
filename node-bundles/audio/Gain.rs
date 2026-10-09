@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("what every sample is multiplied by; 1 leaves the signal as it is"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

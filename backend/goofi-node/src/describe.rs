@@ -163,10 +163,10 @@ pub fn describe(
                 doc: p.doc.map(str::to_string),
                 expression: p.expression.map(|e| e.source.to_string()),
                 section: p.section,
-                show: p.show.map(|s| probe::Show {
+                show: p.show.iter().map(|s| probe::Show {
                     param: s.param.to_string(),
                     any_of: s.any_of.iter().map(|v| v.to_string()).collect(),
-                }),
+                }).collect(),
                 role: p.role.map(|r| match r {
                     crate::Role::Count { section } => probe::Role::Count { section: section.to_string() },
                     crate::Role::Member { section, base, slot } => {
@@ -224,7 +224,7 @@ pub fn manifest_of(type_name: &str, intro: &probe::Introspection, own: Option<go
 }
 
 /// The first param declaration the inspector cannot draw, phrased for the palette: a name declared
-/// twice in a group, or a `show` whose controller is missing, has no fixed values, or loops.
+/// twice in a group, or a `show` rule whose controller is missing, has no fixed values, or loops.
 pub fn illegal_param(params: &[ParamDecl]) -> Option<String> {
     let find = |group: &str, name: &str| params.iter().find(|d| d.group == group && d.name == name);
     params.iter().enumerate().find_map(|(i, d)| {
@@ -232,29 +232,36 @@ pub fn illegal_param(params: &[ParamDecl]) -> Option<String> {
         if params[..i].iter().any(|e| e.group == d.group && e.name == d.name) {
             return Some(format!("{at} is declared twice"));
         }
-        let show = d.show?;
-        let (group, name) = show.controller(d.group);
-        let Some(controller) = find(group, name) else {
-            return Some(format!("{at} shows by `{}`, which this node does not declare", show.param));
-        };
-        let Some(choices) = choices(controller.spec) else {
-            return Some(format!("{at} shows by `{}`, which has no fixed set of values", show.param));
-        };
-        if show.any_of.is_empty() {
-            return Some(format!("{at} shows for no value of `{}`", show.param));
-        }
-        if let Some(v) = show.any_of.iter().find(|v| !choices.iter().any(|c| c == *v)) {
-            return Some(format!("{at} shows for `{v}`, which `{}` does not offer: {}", show.param, choices.join(", ")));
-        }
-        let mut cur = d;
-        for _ in 0..params.len() {
-            let Some(s) = cur.show else { break };
-            let (g, n) = s.controller(cur.group);
-            if (g, n) == (d.group, d.name) {
-                return Some(format!("{at} shows by a chain of params that leads back to it"));
+        for show in d.show {
+            let (group, name) = show.controller(d.group);
+            let Some(controller) = find(group, name) else {
+                return Some(format!("{at} shows by `{}`, which this node does not declare", show.param));
+            };
+            let Some(choices) = choices(controller.spec) else {
+                return Some(format!("{at} shows by `{}`, which has no fixed set of values", show.param));
+            };
+            if show.any_of.is_empty() {
+                return Some(format!("{at} shows for no value of `{}`", show.param));
             }
-            let Some(next) = find(g, n) else { break };
-            cur = next;
+            if let Some(v) = show.any_of.iter().find(|v| !choices.iter().any(|c| c == *v)) {
+                return Some(format!("{at} shows for `{v}`, which `{}` does not offer: {}", show.param, choices.join(", ")));
+            }
+        }
+        // Every chain of controllers out of `d`, walked to its end or back to `d`.
+        let mut frontier = vec![(d, 0usize)];
+        while let Some((cur, depth)) = frontier.pop() {
+            if depth > params.len() {
+                break;
+            }
+            for s in cur.show {
+                let (g, n) = s.controller(cur.group);
+                if (g, n) == (d.group, d.name) {
+                    return Some(format!("{at} shows by a chain of params that leads back to it"));
+                }
+                if let Some(next) = find(g, n) {
+                    frontier.push((next, depth + 1));
+                }
+            }
         }
         None
     })
@@ -373,10 +380,16 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
         }),
         doc: p.doc.as_deref().map(leak_str),
         section: p.section,
-        show: p.show.as_ref().map(|s| crate::Show {
-            param: leak_str(&s.param),
-            any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
-        }),
+        show: Box::leak(
+            p.show
+                .iter()
+                .map(|s| crate::Show {
+                    param: leak_str(&s.param),
+                    any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
         role: p.role.as_ref().map(|r| match r {
             probe::Role::Count { section } => crate::Role::Count { section: leak_str(section) },
             probe::Role::Member { section, base, slot } => {

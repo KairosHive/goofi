@@ -212,7 +212,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many oscillators, when neither input says. A wired input decides instead."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -222,7 +222,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How hard the oscillators pull on each other. Past a threshold set by `spread`, they lock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -232,7 +232,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Mean natural frequency in Hz. The `frequencies` input replaces this and `spread`."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -242,7 +242,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Standard deviation of the natural frequencies. A wider set needs stronger coupling to lock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -252,7 +252,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Phase diffusion, which fights the coupling."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -262,7 +262,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Model seconds per step. The model runs at `output.sfreq` times this, relative to real time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -272,7 +272,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seeds the phases and the drawn frequencies. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -282,7 +282,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Draw the model again from the seed."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -295,7 +295,7 @@ static PARAMS: &[ParamDecl] = &[
              `block` emits every step since the last frame, which is a signal.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -305,7 +305,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Integration steps per second of real time, and the sample rate of an emitted block."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

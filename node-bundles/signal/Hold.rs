@@ -85,7 +85,7 @@ static PARAMS: &[ParamDecl] = &[
              so a Clock's pulse or a Threshold's decision drives the latch.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

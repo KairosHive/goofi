@@ -28,7 +28,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("The text to emit; in expression mode it is an f-string over the rest of the patch."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::String }];

@@ -38,7 +38,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
          node's output chooses the route.",
     ),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

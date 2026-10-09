@@ -138,7 +138,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Keep training. Turn it off to freeze what it learned and watch the prediction run on alone."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -148,7 +148,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -158,7 +158,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the weights and start training again."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

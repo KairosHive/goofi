@@ -49,7 +49,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The number every entry carries; in reference mode it follows another node's output."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -59,7 +59,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The shape to fill, as lengths separated by commas: `1` is one number, `4,64` a grid."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

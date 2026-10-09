@@ -104,7 +104,7 @@ static PARAMS: &[ParamDecl] = &[
              one. Unlike a pitch change, the speed of the signal does not change with it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -117,7 +117,7 @@ static PARAMS: &[ParamDecl] = &[
              which is the harsher, older sound.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -127,7 +127,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past and start the shift's own phase again."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how much of what leaves is the room rather than the sound that entered it"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     DECAY = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds for the tail to fall away"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     SIZE = ParamDecl {
@@ -29,7 +29,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how far apart the walls are; small rooms ring, large ones wash"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     DAMPING = ParamDecl {
@@ -39,7 +39,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how fast the top of the tail is lost, as it is in a room with soft walls"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     PREDELAY = ParamDecl {
@@ -49,7 +49,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds of silence before the room answers, which is what sets the listener back from the source"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     MODULATION = ParamDecl {
@@ -59,7 +59,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how much the walls move; a little of it stops the tail from ringing on one note"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

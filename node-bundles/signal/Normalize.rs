@@ -12,10 +12,12 @@ const BUFFERED: &str = "sample (buffered)";
 const INSTANT: &str = "sample (instant)";
 const BUFFER: &str = "buffer";
 
-const ZSCORE: Option<Show> = Some(Show { param: "strategy", any_of: &["zscore"] });
-const ROBUST: Option<Show> = Some(Show { param: "strategy", any_of: &["robust"] });
-const MINMAX: Option<Show> = Some(Show { param: "strategy", any_of: &["minmax"] });
-const KEPT: Option<Show> = Some(Show { param: "mode", any_of: &[BUFFERED] });
+const ZSCORE: &[Show] = &[Show { param: "strategy", any_of: &["zscore"] }];
+const ROBUST: &[Show] = &[Show { param: "strategy", any_of: &["robust"] }];
+const RANGED: &[Show] = &[Show { param: "strategy", any_of: &["minmax", "robust"] }];
+const KEPT: &[Show] = &[Show { param: "mode", any_of: &[BUFFERED] }];
+const TIMED: &[Show] = &[Show { param: "mode", any_of: &[BUFFERED, BUFFER] }];
+const BY_AXES: &[Show] = &[Show { param: "elementwise", any_of: &["false"] }];
 
 #[derive(Default)]
 struct Normalize {
@@ -65,11 +67,11 @@ fn scales(array: &[f32], group: &[usize], count: usize, p: &Params<'_>) -> Vec<S
     members.iter().map(|m| scale_with(strategy, m, quantile)).collect()
 }
 
-/// `x` on its group's scale, then onto the strategy's own range.
+/// `x` on its group's scale, then onto the strategy's own range: `range` is where 0 and 1 land.
 fn place(x: f32, scale: Scale, p: &Params<'_>) -> f32 {
     let z = apply(scale, x);
     match p.str("normalization", "strategy").unwrap_or("zscore") {
-        "minmax" => match p.vec("normalization", "range") {
+        "minmax" | "robust" => match p.vec("normalization", "range") {
             Some([low, high, ..]) => (*low + z as f64 * (high - low)) as f32,
             _ => z,
         },
@@ -117,13 +119,17 @@ impl Node for Normalize {
             (a.shape().to_vec(), frame.clone(), 0)
         };
 
-        // Empty `axes` is the whole array, except that a buffer's statistics run along its time.
-        let mut all = vec![true; shape.len()];
-        if mode == BUFFER {
-            all = vec![false; shape.len()];
-            all[shape.len() - 1] = true;
-        }
-        let over = axes(spec, shape.len(), &all)?;
+        // Time is axis 0 of the kept buffer and the last axis of a buffer frame. Elementwise
+        // statistics run along time alone; otherwise empty `axes` is the whole array, except that
+        // a buffer frame's statistics run along its time.
+        let mut time = vec![false; shape.len()];
+        time[if mode == BUFFERED { 0 } else { shape.len() - 1 }] = true;
+        let elementwise = mode != INSTANT && p.bool("window", "elementwise").unwrap_or(true);
+        let over = if elementwise {
+            time
+        } else {
+            axes(spec, shape.len(), &if mode == BUFFER { time } else { vec![true; shape.len()] })?
+        };
         let (group, count) = groups(&shape, &over);
         let scales = match &self.held {
             Some(held) if held.len() == count => held.clone(),
@@ -155,11 +161,11 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some(
             "`zscore` measures in standard deviations from the mean, `robust` in quantile spreads \
-             from the median, which an outlier cannot move, and `minmax` maps the extremes onto \
-             `range`.",
+             from the median, which an outlier cannot move, and `minmax` in the distance between \
+             the extremes.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -190,9 +196,12 @@ static PARAMS: &[ParamDecl] = &[
         name: "range",
         spec: ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], color: false },
         expression: None,
-        doc: Some("Where the minimum and the maximum land."),
+        doc: Some(
+            "Where 0 and 1 of the measure land: for `minmax` the minimum and the maximum, for \
+             `robust` the median and one spread above it.",
+        ),
         section: 0,
-        show: MINMAX,
+        show: RANGED,
         role: None,
     },
     ParamDecl {
@@ -207,7 +216,17 @@ static PARAMS: &[ParamDecl] = &[
              and measures it along its own time.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
+    },
+    ParamDecl {
+        group: "window",
+        name: "elementwise",
+        spec: ParamSpec::Bool { default: true },
+        expression: None,
+        doc: Some("Give every element its own statistics, over time alone."),
+        section: 0,
+        show: TIMED,
         role: None,
     },
     ParamDecl {
@@ -221,7 +240,7 @@ static PARAMS: &[ParamDecl] = &[
              last axis. `-1` is the last axis; `0,1` the first two.",
         ),
         section: 0,
-        show: None,
+        show: BY_AXES,
         role: None,
     },
     ParamDecl {
@@ -251,7 +270,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Freeze the statistics where they are, so later data is measured against them."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -261,7 +280,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the buffer and any frozen statistics."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];
@@ -276,7 +295,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
-    doc: "Put a signal on a common scale, from statistics over its own past, over the frame, or over a buffer.",
+    doc: "Put a signal on a common scale from its past, its frame, or a buffer.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,

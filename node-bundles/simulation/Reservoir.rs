@@ -242,7 +242,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many units. A wired `connectivity` matrix decides instead. Cost grows with the square."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -252,7 +252,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How long the pool remembers. Below 1 it forgets; near 1 is the edge of chaos; above 1 it runs away."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -262,7 +262,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How much of each update is new. Lower makes the pool slower than its input."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -272,7 +272,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Fraction of the drawn connections that are not zero."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -282,7 +282,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How hard the wired input drives the pool."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -292,7 +292,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Scale of the per-unit constant offset, which keeps an undriven pool from settling flat."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -302,7 +302,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The unit's nonlinearity."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -312,7 +312,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Noise added to every unit before the nonlinearity."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -322,7 +322,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seeds the weights and the biases. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -332,7 +332,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Draw the pool again from the seed."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -342,7 +342,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -352,7 +352,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Updates per second of real time, and the sample rate of an emitted block."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

@@ -49,7 +49,7 @@ const UNKNOWN: ParamDescriptor = {
 	expression: null,
 	error: null,
 	section: 0,
-	show: null,
+	show: [],
 	role: null
 };
 

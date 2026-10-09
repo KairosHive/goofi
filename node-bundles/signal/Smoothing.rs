@@ -7,14 +7,14 @@ use goofi_signal_sdk::{
     SlotDecl, Tag,
 };
 
-const SAMPLE: Option<Show> = Some(Show { param: "smoothing.mode", any_of: &["sample"] });
-const BUFFER: Option<Show> = Some(Show { param: "smoothing.mode", any_of: &["buffer"] });
-const EXPONENTIAL: Option<Show> = Some(Show { param: "method", any_of: &["exponential"] });
-const SIMPLE: Option<Show> = Some(Show { param: "method", any_of: &["simple"] });
-const SPAN: Option<Show> = Some(Show { param: "method", any_of: &["simple", "convolution"] });
-const AVERAGE: Option<Show> = Some(Show { param: "method", any_of: &["exponential", "simple"] });
-const CONVOLUTION: Option<Show> = Some(Show { param: "method", any_of: &["convolution"] });
-const GAUSSIAN: Option<Show> = Some(Show { param: "kernel", any_of: &["gaussian"] });
+const G: &str = "smoothing";
+const SAMPLE: Show = Show { param: "mode", any_of: &["sample"] };
+const BUFFER: Show = Show { param: "mode", any_of: &["buffer"] };
+const EXPONENTIAL: Show = Show { param: "method", any_of: &["exponential"] };
+const SPAN: Show = Show { param: "method", any_of: &["simple", "convolution"] };
+const AVERAGE: Show = Show { param: "method", any_of: &["exponential", "simple"] };
+const CONVOLUTION: Show = Show { param: "method", any_of: &["convolution"] };
+const GAUSSIAN: Show = Show { param: "kernel", any_of: &["gaussian"] };
 
 #[derive(Default)]
 struct Smoothing {
@@ -124,31 +124,32 @@ fn convolve(lane: &[f32], taps: &[f32], edge: &str) -> Result<Vec<f32>, String> 
 }
 
 impl Smoothing {
-    fn across_ticks(&mut self, x: Vec<f32>, p: &Params<'_>) -> Vec<f32> {
+    fn across_ticks(&mut self, x: Vec<f32>, p: &Params<'_>) -> Result<Vec<f32>, String> {
         let stale = |held: usize| held != 0 && held != x.len();
         if stale(self.level.len()) || stale(self.frames.front().map_or(0, Vec::len)) {
             self.reset();
         }
-        match p.str("sample", "method").unwrap_or("exponential") {
+        match p.str(G, "method").unwrap_or("exponential") {
             "simple" => {
-                let size = p.i64("sample", "size").unwrap_or(10).max(1) as usize;
+                let size = p.i64(G, "size").unwrap_or(10).max(1) as usize;
                 self.frames.push_back(x);
                 while self.frames.len() > size {
                     self.frames.pop_front();
                 }
                 let n = self.frames.len() as f32;
-                (0..self.frames[0].len()).map(|i| self.frames.iter().map(|f| f[i]).sum::<f32>() / n).collect()
+                Ok((0..self.frames[0].len()).map(|i| self.frames.iter().map(|f| f[i]).sum::<f32>() / n).collect())
             }
-            _ => {
-                let alpha = p.f64("sample", "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
+            "exponential" => {
+                let alpha = p.f64(G, "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
                 if self.level.is_empty() {
                     self.level = x.clone();
                 }
                 for (y, v) in self.level.iter_mut().zip(&x) {
                     *y += alpha * (v - *y);
                 }
-                self.level.clone()
+                Ok(self.level.clone())
             }
+            other => Err(format!("`{other}` smooths along an axis: it needs `buffer` mode")),
         }
     }
 
@@ -159,18 +160,18 @@ impl Smoothing {
 }
 
 fn along_axis(lane: &[f32], p: &Params<'_>) -> Result<Vec<f32>, String> {
-    let both = p.bool("buffer", "bidirectional").unwrap_or(false);
-    let size = p.i64("buffer", "size").unwrap_or(5).max(1) as usize;
-    match p.str("buffer", "method").unwrap_or("exponential") {
+    let both = p.bool(G, "bidirectional").unwrap_or(false);
+    let size = p.i64(G, "size").unwrap_or(5).max(1) as usize;
+    match p.str(G, "method").unwrap_or("exponential") {
         "exponential" => {
-            let alpha = p.f64("buffer", "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
+            let alpha = p.f64(G, "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
             Ok(average(lane, both, |l| exponential(l, alpha)))
         }
         "simple" => Ok(average(lane, both, |l| simple(l, size))),
         "convolution" => {
-            let sigma = p.f64("buffer", "sigma").unwrap_or(1.0).max(1e-3) as f32;
-            let taps = kernel(p.str("buffer", "kernel").unwrap_or("gaussian"), size, sigma)?;
-            convolve(lane, &taps, p.str("buffer", "edge").unwrap_or("reflect"))
+            let sigma = p.f64(G, "sigma").unwrap_or(1.0).max(1e-3) as f32;
+            let taps = kernel(p.str(G, "kernel").unwrap_or("gaussian"), size, sigma)?;
+            convolve(lane, &taps, p.str(G, "edge").unwrap_or("reflect"))
         }
         other => Err(format!("unknown method: {other}")),
     }
@@ -186,16 +187,16 @@ impl Node for Smoothing {
     ) -> NodeResult {
         let d = inp.get("input").ok_or("`input` is required")?;
         let a = d.assert_ndims().at_least(1)?;
-        let buf = if p.str("smoothing", "mode").unwrap_or("sample") == "buffer" {
+        let buf = if p.str(G, "mode").unwrap_or("sample") == "buffer" {
             self.reset();
-            let dim = resolve_axis(p.i64("buffer", "axis").unwrap_or(-1), a.shape().len())?;
+            let dim = resolve_axis(p.i64(G, "axis").unwrap_or(-1), a.shape().len())?;
             let lanes = stream::lanes(a.shape(), dim, a.as_bytes())
                 .iter()
                 .map(|lane| along_axis(lane, p))
                 .collect::<Result<Vec<_>, _>>()?;
             stream::unlanes(a.shape(), dim, &lanes)
         } else {
-            bytes(&self.across_ticks(values(a.as_bytes()), p))
+            bytes(&self.across_ticks(values(a.as_bytes()), p)?)
         };
         out.set("out", Data::array_f32(a.shape().to_vec(), buf, d.meta().clone()).map_err(|e| e.to_string())?);
         Ok(())
@@ -207,13 +208,9 @@ impl Node for Smoothing {
     }
 }
 
-const ALPHA: ParamSpec = ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], color: false };
-const ALPHA_DOC: &str = "How far each new value pulls the average towards itself: 1 follows the input exactly, \
-                         and a small value changes slowly.";
-
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "smoothing",
+        group: G,
         name: "mode",
         spec: ParamSpec::Str { default: "sample", options: &["sample", "buffer"], refresh: false },
         expression: None,
@@ -222,54 +219,11 @@ static PARAMS: &[ParamDecl] = &[
              `buffer` smooths along one axis inside each frame, and keeps nothing between frames.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
-        group: "sample",
-        name: "method",
-        spec: ParamSpec::Str { default: "exponential", options: &["exponential", "simple"], refresh: false },
-        expression: None,
-        doc: Some(
-            "`exponential` lets an old value fade away, by `alpha` per tick. `simple` is the mean of \
-             the last `size` frames.",
-        ),
-        section: 0,
-        show: SAMPLE,
-        role: None,
-    },
-    ParamDecl {
-        group: "sample",
-        name: "alpha",
-        spec: ALPHA,
-        expression: None,
-        doc: Some(ALPHA_DOC),
-        section: 0,
-        show: EXPONENTIAL,
-        role: None,
-    },
-    ParamDecl {
-        group: "sample",
-        name: "size",
-        spec: ParamSpec::Num { default: &[10.0], min: 1.0, max: 1000.0, int: true, options: &[], color: false },
-        expression: None,
-        doc: Some("How many frames the mean spans."),
-        section: 0,
-        show: SIMPLE,
-        role: None,
-    },
-    ParamDecl {
-        group: "sample",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the past, so the node starts again from the next frame."),
-        section: 0,
-        show: SAMPLE,
-        role: None,
-    },
-    ParamDecl {
-        group: "buffer",
+        group: G,
         name: "method",
         spec: ParamSpec::Str {
             default: "exponential",
@@ -278,46 +232,52 @@ static PARAMS: &[ParamDecl] = &[
         },
         expression: None,
         doc: Some(
-            "`exponential` lets an old sample fade away, by `alpha` per sample. `simple` is the mean \
-             of the last `size` samples. `convolution` weighs the `size` samples around each one by \
-             a `kernel`, centred, so it shifts nothing in time.",
+            "`exponential` lets an old value fade away, by `alpha` a step. `simple` is the mean of \
+             the last `size` steps. `convolution`, in `buffer` mode only, weighs the `size` samples \
+             around each one by a `kernel`, centred, so it shifts nothing in time.",
         ),
-        section: 0,
-        show: BUFFER,
+        section: 1,
+        show: &[],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "axis",
         spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
         expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
-        section: 0,
-        show: BUFFER,
+        section: 1,
+        show: &[BUFFER],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "alpha",
-        spec: ALPHA,
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], color: false },
         expression: None,
-        doc: Some(ALPHA_DOC),
-        section: 0,
-        show: EXPONENTIAL,
+        doc: Some(
+            "How far each new value pulls the average towards itself: 1 follows the input exactly, \
+             and a small value changes slowly.",
+        ),
+        section: 1,
+        show: &[EXPONENTIAL],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "size",
         spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 1001.0, int: true, options: &[], color: false },
         expression: None,
-        doc: Some("How many samples the mean, or the kernel, spans. An odd kernel sits on its sample."),
-        section: 0,
-        show: SPAN,
+        doc: Some(
+            "How many steps the mean, or the kernel, spans: frames across ticks, samples along an \
+             axis. An odd kernel sits on its sample.",
+        ),
+        section: 1,
+        show: &[SPAN],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "bidirectional",
         spec: ParamSpec::Bool { default: false },
         expression: None,
@@ -325,32 +285,32 @@ static PARAMS: &[ParamDecl] = &[
             "Run the average forward and then backward over its own answer, so nothing comes out \
              shifted in time. Off, it lags like a live stream would.",
         ),
-        section: 0,
-        show: AVERAGE,
+        section: 1,
+        show: &[BUFFER, AVERAGE],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "kernel",
         spec: ParamSpec::Str { default: "gaussian", options: &["box", "triangle", "gaussian", "hann"], refresh: false },
         expression: None,
         doc: Some("The shape of the weights: flat, a tent, a bell of width `sigma`, or a raised cosine."),
-        section: 0,
-        show: CONVOLUTION,
+        section: 1,
+        show: &[CONVOLUTION],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "sigma",
         spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], color: false },
         expression: None,
         doc: Some("The width of the gaussian bell, in samples."),
-        section: 0,
-        show: GAUSSIAN,
+        section: 1,
+        show: &[CONVOLUTION, GAUSSIAN],
         role: None,
     },
     ParamDecl {
-        group: "buffer",
+        group: G,
         name: "edge",
         spec: ParamSpec::Str { default: "reflect", options: &["reflect", "hold", "zero"], refresh: false },
         expression: None,
@@ -358,8 +318,18 @@ static PARAMS: &[ParamDecl] = &[
             "What the kernel reads past either end: the lane mirrored back on itself, its end \
              sample held, or zeros.",
         ),
-        section: 0,
-        show: CONVOLUTION,
+        section: 1,
+        show: &[CONVOLUTION],
+        role: None,
+    },
+    ParamDecl {
+        group: G,
+        name: "reset",
+        spec: ParamSpec::Pulse,
+        expression: None,
+        doc: Some("Forget the past, so the node starts again from the next frame."),
+        section: 1,
+        show: &[SAMPLE],
         role: None,
     },
 ];
@@ -374,7 +344,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
-    doc: "Take the edge off a signal: across ticks, or along an axis of each frame, as a moving average or a kernel.",
+    doc: "Take the edge off a signal across ticks or along an axis.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,

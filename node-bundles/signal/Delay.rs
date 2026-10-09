@@ -65,7 +65,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How far back to read, in the unit below. Never a sleep: the node answers at once."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -75,7 +75,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Samples counts along the axis. Seconds uses sfreq, or delays whole frames at ufreq if no sample rate is set. Updates and seconds (ufreq) delay whole frames."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -85,7 +85,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis the delay runs along when it counts samples. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

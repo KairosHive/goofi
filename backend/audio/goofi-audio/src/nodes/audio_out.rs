@@ -13,7 +13,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

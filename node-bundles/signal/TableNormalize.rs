@@ -78,7 +78,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
              0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -104,7 +104,7 @@ static PARAMS: &[ParamDecl] = &[
              instead. Robust mode needs a positive size.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -114,7 +114,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Stop taking in new values and keep scaling by what is already known."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -124,7 +124,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget every member's statistics and start again."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

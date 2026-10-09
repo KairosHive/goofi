@@ -544,6 +544,10 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     g.until("the robust scale of a ramp", |_| {
         pn.latest().filter(|d| shape(d) == vec![1] && (f32s(d)[0] - 1.0).abs() < 0.02)
     });
+    set(norm, "normalization", "range", j!([0.0, 10.0]));
+    g.until("one spread above the median lands on the range's top", |_| {
+        pn.latest().filter(|d| (f32s(d)[0] - 10.0).abs() < 0.2)
+    });
     set(norm, "window", "size", j!(0));
     g.until("an empty buffer is refused", |_| g.error(norm).filter(|e| e.contains("positive length")));
     set(norm, "window", "size", j!(8));
@@ -697,15 +701,15 @@ fn a_smoothing_node_averages_across_ticks_or_along_an_axis() {
     // `alpha` 1 is the count itself.
     let counter = g.add("_TestCounter");
     let across = g.add("Smoothing");
-    set(across, "sample", "method", j!("simple"));
-    set(across, "sample", "size", j!(4));
+    set(across, "smoothing", "method", j!("simple"));
+    set(across, "smoothing", "size", j!(4));
     let pa = g.probe(across, "out");
     g.link(counter, "out", across, "input");
     g.until("the mean of the last four counts", |_| {
         pa.latest().filter(|d| shape(d) == vec![1] && f32s(d)[0] >= 2.5 && (f32s(d)[0] + 1.5).fract() == 0.0)
     });
-    set(across, "sample", "method", j!("exponential"));
-    set(across, "sample", "alpha", j!(1.0));
+    set(across, "smoothing", "method", j!("exponential"));
+    set(across, "smoothing", "alpha", j!(1.0));
     g.until("an average that follows the count exactly", |_| {
         pa.latest().filter(|d| shape(d) == vec![1] && f32s(d)[0] >= 5.0 && f32s(d)[0].fract() == 0.0)
     });
@@ -716,8 +720,8 @@ fn a_smoothing_node_averages_across_ticks_or_along_an_axis() {
     let ramp = g.add("_TestRamp");
     let along = g.add("Smoothing");
     set(along, "smoothing", "mode", j!("buffer"));
-    set(along, "buffer", "method", j!("simple"));
-    set(along, "buffer", "size", j!(4));
+    set(along, "smoothing", "method", j!("simple"));
+    set(along, "smoothing", "size", j!(4));
     let pl = g.probe(along, "out");
     g.link(ramp, "out", along, "input");
     let step = 1.0 / 512.0;
@@ -725,7 +729,7 @@ fn a_smoothing_node_averages_across_ticks_or_along_an_axis() {
     g.until("a mean that lags the ramp by a sample and a half", |_| {
         pl.latest().filter(|d| shape(d) == vec![1, 512] && (3..512).all(|i| close(f32s(d)[i], (i as f32 - 1.5) * step)))
     });
-    set(along, "buffer", "bidirectional", j!(true));
+    set(along, "smoothing", "bidirectional", j!(true));
     g.until("the ramp back, both ways", |_| {
         pl.latest().filter(|d| (3..509).all(|i| close(f32s(d)[i], i as f32 * step)))
     });
@@ -737,16 +741,16 @@ fn a_smoothing_node_averages_across_ticks_or_along_an_axis() {
     set(level, "constant", "shape", j!("16"));
     let kernel = g.add("Smoothing");
     set(kernel, "smoothing", "mode", j!("buffer"));
-    set(kernel, "buffer", "method", j!("convolution"));
-    set(kernel, "buffer", "kernel", j!("gaussian"));
-    set(kernel, "buffer", "size", j!(5));
-    set(kernel, "buffer", "edge", j!("hold"));
+    set(kernel, "smoothing", "method", j!("convolution"));
+    set(kernel, "smoothing", "kernel", j!("gaussian"));
+    set(kernel, "smoothing", "size", j!(5));
+    set(kernel, "smoothing", "edge", j!("hold"));
     let pk = g.probe(kernel, "out");
     g.link(level, "out", kernel, "input");
     g.until("a steady level under a held edge", |_| {
         pk.latest().filter(|d| shape(d) == vec![16] && f32s(d).iter().all(|v| close(*v, 6.0)))
     });
-    set(kernel, "buffer", "edge", j!("zero"));
+    set(kernel, "smoothing", "edge", j!("zero"));
     g.until("the two samples at each end fall, the rest stay", |_| {
         pk.latest().filter(|d| {
             let v = f32s(d);

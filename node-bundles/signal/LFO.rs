@@ -129,7 +129,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Shape of one cycle."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -139,7 +139,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Cycles per second."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -149,7 +149,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -159,7 +159,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -169,7 +169,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Where in the cycle the wave reads, in cycles; 0.25 is a quarter turn ahead."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -179,7 +179,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Fraction of the cycle a square wave spends high; the other waveforms ignore it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -189,7 +189,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Put the phase back to the start of the cycle."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -202,7 +202,7 @@ static PARAMS: &[ParamDecl] = &[
              `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -212,7 +212,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
@@ -227,7 +227,7 @@ static PARAMS: &[ParamDecl] = &[
              editing that variable re-rates every generator at once.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

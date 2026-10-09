@@ -89,7 +89,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seconds uses the incoming audio sample rate."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -102,7 +102,7 @@ static PARAMS: &[ParamDecl] = &[
              every `size` of them.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -112,7 +112,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Window length, or length behind each level, in the selected unit."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

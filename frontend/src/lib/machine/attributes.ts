@@ -29,7 +29,7 @@ const constant = (fallback: Literal | null) => ({
 	doc: null,
 	default: fallback,
 	section: 0,
-	show: null,
+	show: [],
 	role: null,
 	refreshable: false,
 	mode: 'constant' as const,

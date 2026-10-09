@@ -118,7 +118,7 @@ static PARAMS: &[ParamDecl] = &[
              `mexican_hat` reads a sudden one.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -131,7 +131,7 @@ static PARAMS: &[ParamDecl] = &[
              tell moments apart worse.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -141,7 +141,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -151,7 +151,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The lowest frequency to look for, in Hz."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -161,7 +161,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The highest frequency to look for, in Hz."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -171,7 +171,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -181,7 +181,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Whether the strength comes out as it is, or as its logarithm."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

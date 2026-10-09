@@ -82,7 +82,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many lags to answer, from zero up. 0 is every lag the axis has."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
              `unbiased` by the overlap the lag leaves.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -105,7 +105,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Take the mean out first, so an offset does not read as resemblance."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -115,7 +115,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis to correlate along. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

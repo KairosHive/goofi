@@ -38,7 +38,7 @@ function catalog(): NodeTypeInfo[] {
 						mode: 'constant',
 						error: null,
 						section: 0,
-						show: null,
+						show: [],
 						role: null
 					}
 				},
@@ -53,7 +53,7 @@ function catalog(): NodeTypeInfo[] {
 						mode: 'constant',
 						error: null,
 						section: 0,
-						show: null,
+						show: [],
 						role: null
 					}
 				}

@@ -52,9 +52,9 @@ impl InputSlot {
     }
 }
 
-/// `show=("mode", ["iir", "fir"])`: the inspector shows the param only while the param `mode`
-/// (or `group.mode`) holds one of the values, compared as text.
-pub type Show = Option<(String, Vec<String>)>;
+/// `show=("mode", ["iir", "fir"])`, or a list of such rules that must all hold: the inspector
+/// shows the param only while the param `mode` (or `group.mode`) holds one of the values.
+pub type Show = Vec<(String, Vec<String>)>;
 
 /// A `show=` value as Python writes it: `True` and `4` compare as `"true"` and `"4"`.
 #[derive(FromPyObject)]
@@ -64,15 +64,24 @@ enum ShowValue {
     Str(String),
 }
 
-type ShowArg = Option<(String, Vec<ShowValue>)>;
+#[derive(FromPyObject)]
+enum ShowArg {
+    One((String, Vec<ShowValue>)),
+    Many(Vec<(String, Vec<ShowValue>)>),
+}
 
-fn show_text(show: ShowArg) -> Show {
+fn show_text(show: Option<ShowArg>) -> Show {
     let text = |v: ShowValue| match v {
         ShowValue::Bool(b) => b.to_string(),
         ShowValue::Int(i) => i.to_string(),
         ShowValue::Str(s) => s,
     };
-    show.map(|(param, values)| (param, values.into_iter().map(text).collect()))
+    let rules = match show {
+        None => Vec::new(),
+        Some(ShowArg::One(rule)) => vec![rule],
+        Some(ShowArg::Many(rules)) => rules,
+    };
+    rules.into_iter().map(|(param, values)| (param, values.into_iter().map(text).collect())).collect()
 }
 
 /// A number as Python writes it: one, or one per dimension.
@@ -121,7 +130,7 @@ impl NumParam {
     #[pyo3(signature = (default, min, max, int=false, options=Vec::new(), doc=None, expression=None, show=None))]
     // The arguments ARE the Python signature, each a keyword an author writes.
     #[allow(clippy::too_many_arguments)]
-    fn new(default: NumDefault, min: f64, max: f64, int: bool, options: Vec<i64>, doc: Option<String>, expression: Option<String>, show: ShowArg) -> PyResult<NumParam> {
+    fn new(default: NumDefault, min: f64, max: f64, int: bool, options: Vec<i64>, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<NumParam> {
         let default = default.values();
         if default.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err("a NumParam default is a number or a sequence of them"));
@@ -148,7 +157,7 @@ pub struct ColorParam {
 impl ColorParam {
     #[new]
     #[pyo3(signature = (default=vec![1.0, 1.0, 1.0, 1.0], doc=None, expression=None, show=None))]
-    fn new(default: Vec<f64>, doc: Option<String>, expression: Option<String>, show: ShowArg) -> PyResult<ColorParam> {
+    fn new(default: Vec<f64>, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<ColorParam> {
         if default.len() != 4 {
             return Err(pyo3::exceptions::PyValueError::new_err("a ColorParam default is four numbers, RGBA"));
         }
@@ -172,7 +181,7 @@ pub struct BoolParam {
 impl BoolParam {
     #[new]
     #[pyo3(signature = (default, doc=None, expression=None, show=None))]
-    fn new(default: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> BoolParam {
+    fn new(default: bool, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> BoolParam {
         BoolParam { default, doc, expression, show: show_text(show) }
     }
 }
@@ -197,7 +206,7 @@ pub struct StringParam {
 impl StringParam {
     #[new]
     #[pyo3(signature = (default, options=None, refresh=false, doc=None, expression=None, show=None))]
-    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> StringParam {
+    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> StringParam {
         StringParam { default, options: options.unwrap_or_default(), refresh, doc, expression, show: show_text(show) }
     }
 }
@@ -215,7 +224,7 @@ pub struct PulseParam {
 impl PulseParam {
     #[new]
     #[pyo3(signature = (doc=None, show=None))]
-    fn new(doc: Option<String>, show: ShowArg) -> PulseParam {
+    fn new(doc: Option<String>, show: Option<ShowArg>) -> PulseParam {
         PulseParam { doc, show: show_text(show) }
     }
 }

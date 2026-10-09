@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("hertz to move every partial by, up or down; it is an addition, so harmony does not survive it"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     MODE = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("`single` moves the spectrum one way; `ring` keeps both sides and is the harsher of the two"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

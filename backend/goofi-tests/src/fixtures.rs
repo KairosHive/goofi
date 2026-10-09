@@ -265,7 +265,7 @@ static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: None,
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 
@@ -293,7 +293,7 @@ static IMAGE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Emit one bipolar channel instead of three colour ones."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 
@@ -369,8 +369,8 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: None, role: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: None, role: None },
+    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: &[], role: None },
+    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: &[], role: None },
 ];
 
 static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -380,7 +380,7 @@ static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Start the count over."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 
@@ -473,7 +473,7 @@ static PICKER_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: None,
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 
@@ -523,7 +523,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The value every element of the emitted array carries."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -533,7 +533,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many elements the emitted array has."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -543,7 +543,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Emit NaN in place of the value."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];
@@ -575,7 +575,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -585,7 +585,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -595,7 +595,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("volts per octave, 0 at C4 (0.75 is A4); an audio reference is one voice per channel"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     WAVEFORM = ParamDecl {
@@ -23,7 +23,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the shape one cycle traces, from the roundest to the brightest"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

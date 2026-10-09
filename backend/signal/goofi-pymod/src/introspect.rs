@@ -95,7 +95,7 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
                 .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("group `{group}` has more than 256 sections")))?;
             for (name, descr) in names.cast::<PyDict>()?.iter() {
                 let (spec, doc, expression, show) = param_spec(&descr)?;
-                let show = show.map(|(param, any_of)| Show { param, any_of });
+                let show = show.into_iter().map(|(param, any_of)| Show { param, any_of }).collect();
                 out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, role: None, spec });
             }
         }

@@ -47,7 +47,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -60,7 +60,7 @@ static PARAMS: &[ParamDecl] = &[
              Empty keeps the labels the frame arrived with.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -70,7 +70,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

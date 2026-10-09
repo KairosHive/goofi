@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("HIGH above zero; an audio reference is one voice per channel"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ATTACK = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds to full"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     DECAY = ParamDecl {
@@ -29,7 +29,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds from full to `sustain`"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     SUSTAIN = ParamDecl {
@@ -39,7 +39,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the level held while the gate stays HIGH"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     RELEASE = ParamDecl {
@@ -49,7 +49,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds from full to silence once the gate drops"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Which axis holds the samples. -1 is time."),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

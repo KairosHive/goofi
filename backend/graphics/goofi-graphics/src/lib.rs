@@ -122,7 +122,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
              patch's default instead.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     }
 }

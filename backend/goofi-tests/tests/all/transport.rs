@@ -31,7 +31,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: None,
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static MANIFEST: NodeManifest = NodeManifest {

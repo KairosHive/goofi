@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds to climb one unit"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     FALL = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("seconds to fall one unit"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

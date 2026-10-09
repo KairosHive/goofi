@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     SPREAD = ParamDecl {
@@ -19,7 +19,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("how far apart the voices sit; at 0 every one of them is in the middle"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 }

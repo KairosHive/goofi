@@ -177,7 +177,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("`forward` turns samples into bins; `inverse` turns the same bins back into samples."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -190,7 +190,7 @@ static PARAMS: &[ParamDecl] = &[
              real and an imaginary part. An inverse must be told the same form the forward wrote.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -203,7 +203,7 @@ static PARAMS: &[ParamDecl] = &[
              spectrum. An inverse ignores it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -213,7 +213,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis holds the samples going forward, or the bins coming back. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

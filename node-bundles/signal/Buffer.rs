@@ -85,7 +85,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How much recent data to keep, in the selected unit."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -109,7 +109,7 @@ static PARAMS: &[ParamDecl] = &[
              new one, so a 1-D frame buffered along axis 1 becomes channels by time.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

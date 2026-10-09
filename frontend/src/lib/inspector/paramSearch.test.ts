@@ -18,7 +18,7 @@ function param(doc: string | null = null): ParamDescriptor {
 		expression: null,
 		error: null,
 		section: 0,
-		show: null,
+		show: [],
 		role: null
 	};
 }

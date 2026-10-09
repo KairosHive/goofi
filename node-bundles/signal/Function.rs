@@ -75,7 +75,7 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
          negative under `sqrt`, comes out as not-a-number rather than as an error.",
     ),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

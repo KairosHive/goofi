@@ -12,7 +12,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the variable's group; the list is the patch's groups"),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ELEMENT = ParamDecl {
@@ -22,7 +22,7 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the variable in that group; the list follows the group chosen"),
         section: 0,
-        show: None,
+        show: &[],
         role: Some(Role::Feed { slot: "value", group: "group" }),
     },
 }

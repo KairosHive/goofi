@@ -129,8 +129,8 @@ pub struct ParamDecl {
     pub doc: Option<&'static str>,
     /// The index of the param's section inside its group; the inspector draws a line between two.
     pub section: u8,
-    /// Presentation only: the inspector hides the param unless this holds.
-    pub show: Option<Show>,
+    /// Presentation only: the inspector hides the param unless every rule holds.
+    pub show: &'static [Show],
     /// The part the param plays in a declared section; `None` for a row of its own.
     pub role: Option<Role>,
 }
@@ -163,8 +163,9 @@ pub fn feed_name(params: &ParamGroups, group_param: &str, element: &ParamDecl) -
     Some(format!("{}.{}", text(group_param)?, text(element.name)?))
 }
 
-/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
-/// holds one of `any_of`: an option's text, an int option in decimal, or `true`/`false`.
+/// One rule of a param's `show`: it holds while `param` (`name` in the same group, or `group.name`)
+/// holds one of `any_of` — an option's text, an int option in decimal, or `true`/`false` — or is
+/// itself hidden, as a hidden param is absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Show {
     pub param: &'static str,

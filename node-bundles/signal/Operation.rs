@@ -309,7 +309,7 @@ static PARAMS: &[ParamDecl] = &[
              a length of one to fit; the correlations measure the first wire against each other one.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -319,7 +319,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis the correlations run along; the other modes ignore it. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -329,7 +329,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How far either way a lagged correlation reaches, in samples; 0 reaches as far as it can."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

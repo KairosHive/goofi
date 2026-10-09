@@ -22,7 +22,7 @@ const base = {
 } as const;
 
 const float = (value: number, dflt: number): ParamDescriptor =>
-	({ ...base, type: 'num', value, default: dflt, vmin: 0, vmax: 1, int: false, options: [], color: false, section: 0, show: null, role: null }) as ParamDescriptor;
+	({ ...base, type: 'num', value, default: dflt, vmin: 0, vmax: 1, int: false, options: [], color: false, section: 0, show: [], role: null }) as ParamDescriptor;
 
 const expr = (text: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 	({ ...float(value, dflt), mode: 'expression', expression: text }) as ParamDescriptor;
@@ -220,9 +220,9 @@ describe('settleNonDefault', () => {
 
 describe('shown', () => {
 	const count = (value: number): ParamDescriptor =>
-		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], color: false, section: 0, show: null, role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
+		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], color: false, section: 0, show: [], role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
 	const slot = (n: number): ParamDescriptor =>
-		({ ...float(0, 0), section: 0, show: null, role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
+		({ ...float(0, 0), section: 0, show: [], role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
 	const groups = { ramp: { stops: count(2), at_0: slot(0), at_1: slot(1), at_2: slot(2) } };
 
 	it('shows the slots the count has opened and hides the rest', () => {
@@ -230,5 +230,28 @@ describe('shown', () => {
 		expect(shown(groups, 'ramp', 'at_1')).toBe(true);
 		expect(shown(groups, 'ramp', 'at_2')).toBe(false);
 		expect(shown({ ramp: { ...groups.ramp, stops: count(3) } }, 'ramp', 'at_2')).toBe(true);
+	});
+
+	// A normalizer: `elementwise` exists outside instant mode, and `axes` goes while it is on. In
+	// instant mode `elementwise` is absent, so its rule about `axes` cannot hide it.
+	const str = (value: string): ParamDescriptor =>
+		({ ...base, type: 'string', value, default: value, options: [], refresh: false, section: 0, show: [], role: null }) as ParamDescriptor;
+	const rule = (name: string, ...any_of: string[]) => ({ group: 'window', name, any_of });
+	const norm = (mode: string, elementwise: boolean) => ({
+		window: {
+			mode: str(mode),
+			elementwise: { ...str(String(elementwise)), type: 'bool', value: elementwise, show: [rule('mode', 'buffered', 'buffer')] } as ParamDescriptor,
+			axes: { ...str(''), show: [rule('elementwise', 'false')] },
+			both: { ...str(''), show: [rule('mode', 'buffer'), rule('elementwise', 'false')] }
+		}
+	});
+
+	it('needs every rule, and lets a hidden controller through', () => {
+		expect(shown(norm('buffered', true), 'window', 'axes')).toBe(false);
+		expect(shown(norm('buffered', false), 'window', 'axes')).toBe(true);
+		expect(shown(norm('instant', true), 'window', 'elementwise')).toBe(false);
+		expect(shown(norm('instant', true), 'window', 'axes'), 'the hidden toggle cannot hide it').toBe(true);
+		expect(shown(norm('buffered', false), 'window', 'both'), 'one failing rule hides').toBe(false);
+		expect(shown(norm('buffer', false), 'window', 'both')).toBe(true);
 	});
 });

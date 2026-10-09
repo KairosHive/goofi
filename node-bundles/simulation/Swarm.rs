@@ -330,7 +330,7 @@ static PARAMS: &[ParamDecl] = &[
              couples position to phase, `particlelife` reads a matrix of attractions between colours.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -340,7 +340,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many particles. Every pair is considered, so the cost grows with the square."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -350,7 +350,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Two dimensions or three. Positions always live in the unit box."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -360,7 +360,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How far a particle sees, as a fraction of the box. `gravity` reads it as its softening length."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -370,7 +370,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How hard a particle pushes off its neighbours. `particlelife` reads it as the size of the repelling core."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -380,7 +380,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How much a particle matches its neighbours' heading. `boids` and `vicsek` read it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -390,7 +390,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Pull towards the neighbours' centre. `swarmalators` reads it as how much phase decides attraction."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -400,7 +400,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Phase coupling for `swarmalators` — negative splits them by phase — and the gravitational constant for `gravity`."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -410,7 +410,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many colours `particlelife` deals out. A wired `attraction` matrix decides instead."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -420,7 +420,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Speed limit, and the fixed speed `vicsek` moves at."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -430,7 +430,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How much of the velocity is lost each step. `particlelife` needs some to settle."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -440,7 +440,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Jitter on the motion. In `vicsek` this is the knob the order-disorder transition sits on."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -450,7 +450,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Model seconds per step."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -460,7 +460,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seeds the layout, the colours and the drawn attraction matrix. Negative takes a fresh one from the clock."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -470,7 +470,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Scatter the particles again from the seed."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -480,7 +480,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Steps per second of real time. Particle state is a snapshot, so there is no block mode."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

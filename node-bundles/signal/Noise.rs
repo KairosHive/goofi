@@ -152,7 +152,7 @@ static PARAMS: &[ParamDecl] = &[
              around the offset, `pink` weights the low frequencies as living signals do.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -162,7 +162,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Scales every sample, so the noise spans minus this to plus this."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -172,7 +172,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Added to every sample, so the noise sits around a value other than zero."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -182,7 +182,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -195,7 +195,7 @@ static PARAMS: &[ParamDecl] = &[
              number; `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -205,7 +205,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -215,7 +215,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many independent noise streams to emit, one per channel."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
@@ -230,7 +230,7 @@ static PARAMS: &[ParamDecl] = &[
              editing that variable re-rates every generator at once.",
         ),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

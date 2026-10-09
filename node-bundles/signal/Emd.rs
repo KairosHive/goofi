@@ -129,7 +129,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many oscillations to pull out, fastest first. What is left over is dropped."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -139,7 +139,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How many passes each oscillation is refined by. More is cleaner and slower."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -149,7 +149,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];

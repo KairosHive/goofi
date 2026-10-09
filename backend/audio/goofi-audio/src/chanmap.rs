@@ -73,6 +73,6 @@ channel 4 then channel 3 — and the order written is the order used. WASAPI pub
 stereo endpoints, so a selection past `1-2` usually means naming the card's `ASIO: ` device.",
     ),
     section: 0,
-    show: None,
+    show: &[],
     role: None,
 };

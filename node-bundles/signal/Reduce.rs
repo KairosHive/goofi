@@ -85,7 +85,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("How the values along the axis become one: an average, a spread, an extreme or a total."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
     ParamDecl {
@@ -95,7 +95,7 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Which axis to collapse, negative from the end. -1 is time, -2 is channels."),
         section: 0,
-        show: None,
+        show: &[],
         role: None,
     },
 ];
