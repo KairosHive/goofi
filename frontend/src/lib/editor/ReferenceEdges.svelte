@@ -1,11 +1,11 @@
 <!-- The dashed lines between the selected node and the nodes whose expressions read an output of
-     it, or that it reads, in either direction. Drawn from the graph store; not cables, and not
-     interactive. -->
+     it, or that it reads, in either direction: one straight line, centre to centre, per pair.
+     Drawn from the graph store; not cables, and not interactive. -->
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { isSlotExpanded } from '$lib/viewers/inlineView';
-	import { NODE, outputTops } from './nodeMetrics';
+	import { nodeSurfaceSize } from './nodeMetrics';
 
 	let { nodes, selected }: { nodes: Node[]; selected: string | null } = $props();
 	const g = graph();
@@ -24,6 +24,16 @@
 			if (label === undefined) return keys.length === 1 ? keys[0] : undefined;
 			return keys.find((k) => (info?.slot_labels?.[k] ?? k) === label);
 		};
+		const centre = (n: Node): [number, number] => {
+			const info = g.nodeById(n.id);
+			const fallback = nodeSurfaceSize(
+				Object.keys(info?.input_slots ?? {}).length,
+				Object.keys(info?.output_slots ?? {}).map((k) => (info ? isSlotExpanded(info, k) : false))
+			);
+			const w = n.measured?.width ?? fallback.width;
+			const h = n.measured?.height ?? fallback.height;
+			return [n.position.x + w / 2, n.position.y + h / 2];
+		};
 		const out = new Map<string, string>();
 		for (const n of nodes) {
 			for (const group of Object.values(g.nodeById(n.id)?.params ?? {})) {
@@ -34,14 +44,10 @@
 							const uid = byName.get(m[2]);
 							const slot = uid === undefined ? undefined : slotOf(uid, m[3]);
 							if (!uid || !slot || uid === n.id || (uid !== selected && n.id !== selected)) continue;
-							const key = `${uid}/${slot}>${n.id}`;
-							const a = drawn.get(uid)!;
-							const info = g.nodeById(uid)!;
-							const top = outputTops(Object.keys(info.output_slots), (k) => isSlotExpanded(info, k)).find((p) => p.slot === slot)!.top;
-							const [x1, y1] = [a.position.x + (a.measured?.width ?? NODE.width), a.position.y + top];
-							const [x2, y2] = [n.position.x, n.position.y + NODE.header / 2];
-							const bend = Math.max(40, Math.abs(x2 - x1) / 2);
-							out.set(key, `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`);
+							const key = `${uid}>${n.id}`;
+							const [x1, y1] = centre(drawn.get(uid)!);
+							const [x2, y2] = centre(n);
+							out.set(key, `M${x1},${y1} L${x2},${y2}`);
 						}
 					}
 				}
