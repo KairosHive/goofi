@@ -142,7 +142,7 @@ fn a_patch_sounds_under_the_external_clock() {
                        "audio:BioFilter", "audio:Delay", "audio:Env", "audio:Feedback",
                        "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:GraphicsIn", "audio:Limiter",
                        "audio:MidiIn",
-                       "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
+                       "audio:Mixdown", "audio:Noise", "audio:Null", "audio:Osc", "audio:Quantize", "audio:Reverb",
                        "audio:SignalIn", "audio:Slew", "audio:Variable"]);
     let osc = g.add("Osc");
     let gain = g.add("Gain");
@@ -240,6 +240,11 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(shift, "freq_shift", "frequency", 200.0);
     // A shifter leaves a little of the other sideband behind, so the count is close, not exact.
     heard(&g, shift, "the same tone moved up two hundred hertz", |x| per_tenth(x).abs_diff(128) <= 6);
+
+    // A null passes the tone through whole: a fixed point to name, nothing changed.
+    let fixed = g.add("audio:Null");
+    g.link(tone, "out", fixed, "input");
+    heard(&g, fixed, "the same A4 through a null", |x| near(per_tenth(x), 88) && (peak(x) - 1.0).abs() < 0.01);
 
     // A limiter is a promise about the ceiling, so it is given far more than it can pass.
     let loud = g.add("Gain");

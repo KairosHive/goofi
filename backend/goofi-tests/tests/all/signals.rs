@@ -843,6 +843,20 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
         ps.latest().filter(|d| text(d) == Some("beta:  alpha"))
     });
 
+    // A null is a fixed point to name: each kind passes through whole, members and metadata kept.
+    let (na, ns, nt) = (g.add("signal:Null"), g.add("NullString"), g.add("NullTable"));
+    let (qa, qs, qt) = (g.probe(na, "out"), g.probe(ns, "out"), g.probe(nt, "out"));
+    g.link(level, "out", na, "input");
+    g.link(fmt, "out", ns, "input");
+    g.link(table, "out", nt, "input");
+    let through = g.until("the array through its null", |_| qa.latest().filter(|d| shape(d) == vec![2]));
+    assert_eq!(f32s(&through), vec![2.5, 2.5], "a null changes nothing");
+    g.until("the string through its null", |_| qs.latest().filter(|d| text(d) == Some("beta:  alpha")));
+    let whole = g.until("the table through its null", |_| {
+        qt.latest().filter(|d| d.as_table().is_ok_and(|t| t.len() == 2))
+    });
+    assert_eq!(text(whole.as_table().unwrap().get("name").unwrap()), Some("beta:  alpha"));
+
     // A table's members are features in unrelated units, so the only axis a normalizer can use is
     // TIME: each member is scaled against its own past, not against its neighbours in the frame.
     // A constant one has never varied, and a spread of zero is what puts it at its own centre.
