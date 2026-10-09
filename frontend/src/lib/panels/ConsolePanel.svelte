@@ -12,7 +12,7 @@
 	import NodeSelect from './NodeSelect.svelte';
 	import NodeDropHint from './NodeDropHint.svelte';
 	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
-	import { onDestroy, tick } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
 
 	let { panelId, state: linkState }: PanelProps = $props();
 	const sel = selection();
@@ -143,8 +143,10 @@
 		return cs.view(filterName, levels, query);
 	});
 
+	// A measured height outlives its row only until the log evicts it; a row a filter hides keeps its.
 	$effect(() => {
-		const ids = new Set(Array.from({ length: view.total() }, (_, i) => view.get(i).uid));
+		cs.evicted;
+		const ids = untrack(() => new Set(cs.since(-1).map((e) => e.uid)));
 		const kept = new Map([...measured].filter(([id]) => ids.has(id)));
 		if (kept.size !== measured.size) measured = kept;
 	});

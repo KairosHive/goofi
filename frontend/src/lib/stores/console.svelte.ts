@@ -23,6 +23,8 @@ export interface LogBatch {
 export interface ConsoleEntry extends LogGroup {
 	uid: number;
 	lines: number;
+	/** The searchable text, lowercased once on arrival: what a query's words are matched against. */
+	haystack: string;
 }
 
 export interface ConsoleView {
@@ -36,6 +38,8 @@ export class ConsoleStore {
 	private oldest = -1;
 	private nextUid = 0;
 	version = $state(0);
+	/** Bumped when the floor moved and groups left: what a reader keyed by uid prunes on. */
+	evicted = $state(0);
 	private scheduled = false;
 
 	apply(batch: LogBatch): void {
@@ -47,14 +51,17 @@ export class ConsoleStore {
 			if (!previous && update.text === undefined) continue;
 			const group = { ...previous, ...update } as LogGroup;
 			this.groups.delete(group.id);
-			this.groups.set(group.id, { ...group, uid: previous?.uid ?? this.nextUid++, lines: group.text.split('\n').length });
+			const haystack = `${group.component} ${group.node ?? ''} ${group.stream ?? ''} ${group.text}`.toLocaleLowerCase();
+			this.groups.set(group.id, { ...group, uid: previous?.uid ?? this.nextUid++, lines: group.text.split('\n').length, haystack });
 		}
 		// The eviction scan is O(groups); it runs only when the floor moved.
 		if (batch.oldest > this.oldest || batch.reset) {
 			this.oldest = batch.oldest;
+			const held = this.groups.size;
 			for (const [id, group] of this.groups) {
 				if (group.seq < batch.oldest) this.groups.delete(id);
 			}
+			if (this.groups.size < held || batch.reset) this.evicted += 1;
 		}
 		this.cursor = batch.cursor;
 		this.scheduleBump();
@@ -62,12 +69,9 @@ export class ConsoleStore {
 
 	view(node: string | null, levels: Set<LogLevel>, query: string): ConsoleView {
 		const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-		const rows = [...this.groups.values()].filter((g) => {
-			if (node !== null && g.node !== node) return false;
-			if (!levels.has(g.level)) return false;
-			const haystack = `${g.component} ${g.node ?? ''} ${g.stream ?? ''} ${g.text}`.toLocaleLowerCase();
-			return words.every((word) => haystack.includes(word));
-		});
+		const rows = [...this.groups.values()].filter(
+			(g) => (node === null || g.node === node) && levels.has(g.level) && words.every((word) => g.haystack.includes(word))
+		);
 		return { total: () => rows.length, get: (i) => rows[i] };
 	}
 
