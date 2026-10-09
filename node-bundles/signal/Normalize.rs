@@ -1,15 +1,84 @@
-//! Scale a signal from windowed or running statistics.
+//! Normalize — put a signal on a common scale from statistics over a set of axes: of a buffer
+//! the node keeps across ticks, of the frame itself, or of a buffer the frame already is.
 
-use goofi_core::normalize::{apply, scale_of, validate, Running, Scale};
-use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_core::normalize::{apply, scale_with, Scale};
+use goofi_core::{resolve_axis, Data, SlotType};
+use goofi_signal_sdk::{
+    Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
+    SlotDecl, Tag,
+};
+
+const BUFFERED: &str = "sample (buffered)";
+const INSTANT: &str = "sample (instant)";
+const BUFFER: &str = "buffer";
+
+const ZSCORE: Option<Show> = Some(Show { param: "strategy", any_of: &["zscore"] });
+const ROBUST: Option<Show> = Some(Show { param: "strategy", any_of: &["robust"] });
+const MINMAX: Option<Show> = Some(Show { param: "strategy", any_of: &["minmax"] });
+const KEPT: Option<Show> = Some(Show { param: "mode", any_of: &[BUFFERED] });
 
 #[derive(Default)]
 struct Normalize {
-    past: Stream,
-    running: Vec<Running>,
+    /// The frames kept for `sample (buffered)`, oldest first, all of one shape.
+    frames: std::collections::VecDeque<Vec<f32>>,
     /// The statistics `hold` froze, kept so the freeze survives the next frame.
     held: Option<Vec<Scale>>,
+}
+
+fn values(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4).map(|x| f32::from_le_bytes(x.try_into().expect("four bytes"))).collect()
+}
+
+/// Which of `ndim` axes `spec` names, as comma-separated numbers; empty names `all` of them.
+fn axes(spec: &str, ndim: usize, all: &[bool]) -> Result<Vec<bool>, String> {
+    let parts: Vec<&str> = spec.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return Ok(all.to_vec());
+    }
+    let mut over = vec![false; ndim];
+    for part in parts {
+        let axis: i64 = part.parse().map_err(|_| format!("`axes` takes axis numbers, not `{part}`"))?;
+        over[resolve_axis(axis, ndim)?] = true;
+    }
+    Ok(over)
+}
+
+/// Each element's group — its position on the axes NOT in `over`, flattened — and the group count.
+fn groups(shape: &[usize], over: &[bool]) -> (Vec<usize>, usize) {
+    let len: usize = shape.iter().product();
+    let strides: Vec<usize> = (0..shape.len()).map(|d| shape[d + 1..].iter().product()).collect();
+    let count = (0..shape.len()).filter(|&d| !over[d]).map(|d| shape[d]).product::<usize>().max(1);
+    let of = |i: usize| {
+        (0..shape.len()).filter(|&d| !over[d]).fold(0, |key, d| key * shape[d] + (i / strides[d]) % shape[d])
+    };
+    ((0..len).map(of).collect(), count)
+}
+
+/// The scale of every group of `array`, by the strategy and its own params.
+fn scales(array: &[f32], group: &[usize], count: usize, p: &Params<'_>) -> Vec<Scale> {
+    let strategy = p.str("normalization", "strategy").unwrap_or("zscore");
+    let quantile = p.f64("normalization", "quantile").unwrap_or(0.25);
+    let mut members = vec![Vec::new(); count];
+    for (x, g) in array.iter().zip(group) {
+        members[*g].push(*x);
+    }
+    members.iter().map(|m| scale_with(strategy, m, quantile)).collect()
+}
+
+/// `x` on its group's scale, then onto the strategy's own range.
+fn place(x: f32, scale: Scale, p: &Params<'_>) -> f32 {
+    let z = apply(scale, x);
+    match p.str("normalization", "strategy").unwrap_or("zscore") {
+        "minmax" => match p.vec("normalization", "range") {
+            Some([low, high, ..]) => (*low + z as f64 * (high - low)) as f32,
+            _ => z,
+        },
+        "zscore" => match p.f64("normalization", "clip").unwrap_or(0.0) as f32 {
+            c if c > 0.0 => z.clamp(-c, c),
+            _ => z,
+        },
+        _ => z,
+    }
 }
 
 impl Node for Normalize {
@@ -22,60 +91,57 @@ impl Node for Normalize {
     ) -> NodeResult {
         let d = inp.get("input").ok_or("`input` is required")?;
         let a = d.assert_ndims().at_least(1)?;
-        let mode = p.str("normalize", "mode").unwrap_or("zscore");
-        let dim = resolve_axis(p.i64("window", "axis").unwrap_or(-1), a.shape().len())?;
-        let size = p.f64("window", "size").unwrap_or(1000.0);
-        let unit = p.str("window", "unit").unwrap_or("samples");
-        let hold = p.bool("window", "hold").unwrap_or(false);
-        let n = a.shape()[dim];
+        let frame = values(a.as_bytes());
+        let mode = p.str("window", "mode").unwrap_or(BUFFERED);
+        let spec = p.str("window", "axes").unwrap_or("");
 
-        let width = goofi_core::stream::window_count(size, unit, d.meta())?;
-
-        validate(mode, width)?;
-
-        let (shape, stitched, at) = if width == 0 {
-            (a.shape().to_vec(), a.as_bytes().to_vec(), 0usize)
-        } else {
-            self.past.push(a.shape(), dim, a.as_bytes(), width)
-        };
-        let lanes = stream::lanes(&shape, dim, &stitched);
-
-        let scales: Vec<Scale> = match &self.held {
-            Some(held) if held.len() == lanes.len() => held.clone(),
-            _ => {
-                if width == 0 {
-                    if self.running.len() != lanes.len() {
-                        self.running = vec![Running::default(); lanes.len()];
-                    }
-                    for (lane, run) in lanes.iter().zip(&mut self.running) {
-                        for x in lane {
-                            run.push(*x as f64);
-                        }
-                    }
-                    self.running.iter().map(|r| r.scale(mode)).collect::<Result<_, _>>()?
-                } else {
-                    lanes
-                        .iter()
-                        .map(|lane| scale_of(mode, &lane[lane.len().saturating_sub(width)..]))
-                        .collect()
-                }
+        // The array the statistics are taken over, and where the frame sits inside it.
+        let (shape, array, at): (Vec<usize>, Vec<f32>, usize) = if mode == BUFFERED {
+            let unit = if p.str("window", "unit").unwrap_or("seconds") == "seconds" { "seconds (ufreq)" } else { "samples" };
+            let keep = goofi_core::stream::window_count(p.f64("window", "size").unwrap_or(10.0), unit, d.meta())?;
+            if keep == 0 {
+                return Err("the buffer needs a positive length".to_string().into());
             }
+            if self.frames.front().is_some_and(|f| f.len() != frame.len()) {
+                self.frames.clear();
+            }
+            self.frames.push_back(frame.clone());
+            while self.frames.len() > keep {
+                self.frames.pop_front();
+            }
+            let mut shape = vec![self.frames.len()];
+            shape.extend_from_slice(a.shape());
+            (shape, self.frames.iter().flatten().copied().collect(), (self.frames.len() - 1) * frame.len())
+        } else {
+            self.frames.clear();
+            (a.shape().to_vec(), frame.clone(), 0)
         };
-        self.held = hold.then(|| scales.clone());
 
-        let scaled: Vec<Vec<f32>> = lanes
+        // Empty `axes` is the whole array, except that a buffer's statistics run along its time.
+        let mut all = vec![true; shape.len()];
+        if mode == BUFFER {
+            all = vec![false; shape.len()];
+            all[shape.len() - 1] = true;
+        }
+        let over = axes(spec, shape.len(), &all)?;
+        let (group, count) = groups(&shape, &over);
+        let scales = match &self.held {
+            Some(held) if held.len() == count => held.clone(),
+            _ => scales(&array, &group, count, p),
+        };
+        self.held = p.bool("window", "hold").unwrap_or(false).then(|| scales.clone());
+
+        let buf: Vec<u8> = frame
             .iter()
-            .zip(&scales)
-            .map(|(lane, scale)| lane[at..at + n].iter().map(|x| apply(*scale, *x)).collect())
+            .enumerate()
+            .flat_map(|(j, x)| place(*x, scales[group[at + j]], p).to_le_bytes())
             .collect();
-        let buf = stream::unlanes(a.shape(), dim, &scaled);
         out.set("out", Data::array_f32(a.shape().to_vec(), buf, d.meta().clone()).map_err(|e| e.to_string())?);
         Ok(())
     }
 
     fn on_pulse(&mut self, _key: &ParamKey, _p: &Params<'_>) -> NodeResult {
-        self.past.reset();
-        self.running.clear();
+        self.frames.clear();
         self.held = None;
         Ok(())
     }
@@ -83,13 +149,76 @@ impl Node for Normalize {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "normalize",
-        name: "mode",
-        spec: ParamSpec::Str { default: "zscore", options: &["zscore", "minmax", "robust"], refresh: false },
+        group: "normalization",
+        name: "strategy",
+        spec: ParamSpec::Str { default: "zscore", options: &["zscore", "robust", "minmax"], refresh: false },
         expression: None,
         doc: Some(
-            "`zscore` measures in standard deviations from the mean, `minmax` maps the window onto \
-             0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
+            "`zscore` measures in standard deviations from the mean, `robust` in quantile spreads \
+             from the median, which an outlier cannot move, and `minmax` maps the extremes onto \
+             `range`.",
+        ),
+        section: 0,
+        show: None,
+        role: None,
+    },
+    ParamDecl {
+        group: "normalization",
+        name: "clip",
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
+        expression: None,
+        doc: Some("Limit the result to this many standard deviations either side of zero. 0 is no limit."),
+        section: 0,
+        show: ZSCORE,
+        role: None,
+    },
+    ParamDecl {
+        group: "normalization",
+        name: "quantile",
+        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 0.5, int: false, options: &[], color: false },
+        expression: None,
+        doc: Some(
+            "The spread is the distance between this quantile and its mirror above the median: 0.25 \
+             is the middle half, 0 the full range.",
+        ),
+        section: 0,
+        show: ROBUST,
+        role: None,
+    },
+    ParamDecl {
+        group: "normalization",
+        name: "range",
+        spec: ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], color: false },
+        expression: None,
+        doc: Some("Where the minimum and the maximum land."),
+        section: 0,
+        show: MINMAX,
+        role: None,
+    },
+    ParamDecl {
+        group: "window",
+        name: "mode",
+        spec: ParamSpec::Str { default: BUFFERED, options: &[BUFFERED, INSTANT, BUFFER], refresh: false },
+        expression: None,
+        doc: Some(
+            "Where the statistics come from. `sample (buffered)` keeps the last `size` of input and \
+             measures each frame against that buffer, time as its axis 0. `sample (instant)` \
+             measures each frame against itself. `buffer` takes a frame that is a buffer already \
+             and measures it along its own time.",
+        ),
+        section: 0,
+        show: None,
+        role: None,
+    },
+    ParamDecl {
+        group: "window",
+        name: "axes",
+        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
+        expression: None,
+        doc: Some(
+            "The axes the statistics are taken over, as numbers separated by commas; every other \
+             axis gets statistics of its own. Empty is the whole array, or in `buffer` mode its \
+             last axis. `-1` is the last axis; `0,1` the first two.",
         ),
         section: 0,
         show: None,
@@ -98,34 +227,21 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "window",
         name: "size",
-        spec: ParamSpec::Num { default: &[1000.0], min: 0.0, max: 1.0e7, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e6, int: false, options: &[], color: false },
         expression: None,
-        doc: Some(
-            "How much of the past the statistics are taken over. 0 keeps running statistics over \
-             everything the node has seen. Robust mode needs a positive size.",
-        ),
+        doc: Some("How much of the past the buffer keeps, in `unit`."),
         section: 0,
-        show: None,
+        show: KEPT,
         role: None,
     },
     ParamDecl {
         group: "window",
         name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
+        spec: ParamSpec::Str { default: "seconds", options: &["seconds", "samples"], refresh: false },
         expression: None,
-        doc: Some("What `size` counts."),
+        doc: Some("What `size` counts: seconds at the input's update rate, or whole frames."),
         section: 0,
-        show: None,
-        role: None,
-    },
-    ParamDecl {
-        group: "window",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
-        expression: None,
-        doc: Some("Which axis the statistics are taken along. -1 is time."),
-        section: 0,
-        show: None,
+        show: KEPT,
         role: None,
     },
     ParamDecl {
@@ -143,7 +259,7 @@ static PARAMS: &[ParamDecl] = &[
         name: "reset",
         spec: ParamSpec::Pulse,
         expression: None,
-        doc: Some("Forget the past and any frozen statistics."),
+        doc: Some("Forget the buffer and any frozen statistics."),
         section: 0,
         show: None,
         role: None,
@@ -160,7 +276,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
-    doc: "Put a signal on a common scale, from statistics over a window of its own past.",
+    doc: "Put a signal on a common scale, from statistics over its own past, over the frame, or over a buffer.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,

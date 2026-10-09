@@ -531,6 +531,7 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     // the newest sample is 3.5 above the mean, and the spread of that window is the square root
     // of 5.25.
     let norm = g.add("Normalize");
+    set(norm, "window", "unit", j!("samples"));
     set(norm, "window", "size", j!(8));
     let pn = g.probe(norm, "out");
     g.link(counter, "out", norm, "input");
@@ -539,18 +540,49 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
         pn.latest().filter(|d| shape(d) == vec![1] && (f32s(d)[0] - want).abs() < 0.02)
     });
 
-    set(norm, "normalize", "mode", j!("robust"));
+    set(norm, "normalization", "strategy", j!("robust"));
     g.until("the robust scale of a ramp", |_| {
         pn.latest().filter(|d| shape(d) == vec![1] && (f32s(d)[0] - 1.0).abs() < 0.02)
     });
     set(norm, "window", "size", j!(0));
-    g.until("running robust normalization is refused", |_| {
-        g.error(norm).filter(|e| e.contains("positive window size"))
-    });
+    g.until("an empty buffer is refused", |_| g.error(norm).filter(|e| e.contains("positive length")));
     set(norm, "window", "size", j!(8));
-    g.until("windowed robust normalization recovers", |_| {
-        g.error(norm).is_none().then_some(())
+    g.until("the buffer recovers", |_| g.error(norm).is_none().then_some(()));
+
+    // The other two windows read the frame on its own. A ramp's channel runs 0 to 1 - 1/512, so
+    // `minmax` over the whole frame puts its ends there; statistics over axis 0 alone see the two
+    // channels, a unit apart, so the lower one is the low end at every sample. In `buffer` mode an
+    // empty `axes` is the time axis, so each channel of the ramp grid gets a mean of zero.
+    let ramp = g.add("_TestRamp");
+    set(ramp, "ramp", "channels", j!(2));
+    let instant = g.add("Normalize");
+    set(instant, "window", "mode", j!("sample (instant)"));
+    set(instant, "normalization", "strategy", j!("minmax"));
+    let pi = g.probe(instant, "out");
+    g.link(ramp, "out", instant, "input");
+    let close = |v: f32, want: f32| (v - want).abs() < 1e-5;
+    g.until("the grid's extremes on 0 and 1", |_| {
+        pi.latest().filter(|d| shape(d) == vec![2, 512] && close(f32s(d)[0], 0.0) && close(f32s(d)[1023], 1.0))
     });
+    set(instant, "normalization", "range", j!([-1.0, 1.0]));
+    g.until("the extremes on a range of its own", |_| {
+        pi.latest().filter(|d| close(f32s(d)[0], -1.0) && close(f32s(d)[1023], 1.0))
+    });
+    set(instant, "window", "axes", j!("0"));
+    g.until("the lower channel on the low end, the upper on the high", |_| {
+        pi.latest().filter(|d| f32s(d).iter().enumerate().all(|(i, v)| *v == if i < 512 { -1.0 } else { 1.0 }))
+    });
+    set(instant, "window", "mode", j!("buffer"));
+    set(instant, "window", "axes", j!(""));
+    set(instant, "normalization", "strategy", j!("zscore"));
+    g.until("each channel centred along its own time", |_| {
+        pi.latest().filter(|d| {
+            let v = f32s(d);
+            let mean = |c: usize| v[c * 512..(c + 1) * 512].iter().sum::<f32>() / 512.0;
+            mean(0).abs() < 1e-4 && mean(1).abs() < 1e-4 && (v[0] - v[512]).abs() < 1e-4
+        })
+    });
+    assert!(g.error(instant).is_none(), "a frame-wise normalizer carries no error: {:?}", g.error(instant));
 
     // A delay keeps the shape and the level it was given, at any reach: it moves the stream along
     // its own axis and invents nothing. What the reach itself buys is the past proven above.

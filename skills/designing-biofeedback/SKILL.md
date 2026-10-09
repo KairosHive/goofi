@@ -30,7 +30,8 @@ twitches is read as noise, not as feedback. Take the edge off with a light `sign
 `sample` mode — a simple or an exponential moving average over about half a second to a second
 of updates, no more. Smoothing
 longer than the buffer only adds lag; it does not add information. Then put the feature on a
-known range with `signal:Normalize` over a window of its own past (tens of seconds) so the
+known range with `signal:Normalize` in its buffered sample mode, statistics over axis 0 of a
+buffer of its own past (tens of seconds), so the
 stimulus spans its full range for this person, today, and `hold` the statistics once a baseline
 is in.
 

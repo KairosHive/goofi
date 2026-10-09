@@ -45,6 +45,11 @@ fn median(sorted: &[f64], at: f64) -> f64 {
 }
 
 pub fn scale_of(mode: &str, window: &[f32]) -> Scale {
+    scale_with(mode, window, 0.25)
+}
+
+/// As [`scale_of`], with `robust` spreading between the `quantile` and its mirror above the median.
+pub fn scale_with(mode: &str, window: &[f32], quantile: f64) -> Scale {
     match mode {
         "minmax" => {
             let low = window.iter().copied().fold(f32::INFINITY, f32::min) as f64;
@@ -54,7 +59,8 @@ pub fn scale_of(mode: &str, window: &[f32]) -> Scale {
         "robust" => {
             let mut v: Vec<f64> = window.iter().map(|x| *x as f64).collect();
             v.sort_by(f64::total_cmp);
-            Scale { centre: median(&v, 0.5), spread: median(&v, 0.75) - median(&v, 0.25) }
+            let q = quantile.clamp(0.0, 0.5);
+            Scale { centre: median(&v, 0.5), spread: median(&v, 1.0 - q) - median(&v, q) }
         }
         _ => {
             let n = window.len().max(1) as f64;
