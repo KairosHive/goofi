@@ -26,6 +26,9 @@ rtrb = "0.3"
 # both. The native PipeWire host links libpipewire and is left out. cpal target-gates each one,
 # so a feature named here that the platform has no host for costs nothing.
 cpal = { version = "0.18", features = ["pulseaudio", "jack", "realtime", "realtime-dbus"] }
+# cpal promotes its callback thread to real time under ALSA and WASAPI alone; every other host's
+# callback is promoted here, on its first run.
+audio_thread_priority = "0.35"
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"

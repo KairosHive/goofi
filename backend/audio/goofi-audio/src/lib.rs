@@ -186,6 +186,28 @@ impl Drop for DeviceClock {
 /// The host default is what a `default` name means.
 pub(crate) const DEFAULT_DEVICE: &str = "default";
 
+/// The callback thread's real-time grant, asked for on its first run: cpal asks only under ALSA
+/// and WASAPI, and a callback left at ordinary priority loses its deadline to any busy thread.
+pub(crate) enum Realtime {
+    Unasked,
+    /// Granted or refused once: the grant outlives its handle, and a refusal is logged once.
+    Asked,
+}
+
+impl Realtime {
+    /// Promote the calling thread once, for `frames` per callback at `rate`; a refusal is logged
+    /// once and the stream plays on at ordinary priority, which is the deadline lost.
+    pub(crate) fn claim(&mut self, frames: usize, rate: u32) {
+        if matches!(self, Realtime::Asked) {
+            return;
+        }
+        if let Err(e) = audio_thread_priority::promote_current_thread_to_real_time(frames as u32, rate) {
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: the callback thread was refused real-time priority: {e}"));
+        }
+        *self = Realtime::Asked;
+    }
+}
+
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
@@ -224,10 +246,13 @@ where
 {
     let died = stats.clone();
     let mut scratch: Vec<f32> = Vec::new();
+    let (rate, channels) = (config.sample_rate, config.channels as usize);
+    let mut realtime = Realtime::Unasked;
     device
         .build_output_stream::<T, _, _>(
             config,
             move |data: &mut [T], _| {
+                realtime.claim(data.len() / channels, rate);
                 stats.callbacks.fetch_add(1, Ordering::Relaxed);
                 let started = Instant::now();
                 scratch.resize(data.len(), 0.0);

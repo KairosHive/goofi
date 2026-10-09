@@ -847,12 +847,15 @@ where
     // The width the node emits: the selection's length, or the whole stream. A new selection is a
     // new stream, as the callback holds this one by value.
     let emitted = sel.as_ref().map_or(opened, |s| s.len() as u16);
+    let rate = config.sample_rate;
+    let mut realtime = crate::Realtime::Unasked;
     device
         .build_input_stream::<T, _, _>(
             config,
             move |data: &[T], _| {
-                let Some(mut inbox) = producer.try_lock() else { return };
                 let frames = data.len() / opened as usize;
+                realtime.claim(frames, rate);
+                let Some(mut inbox) = producer.try_lock() else { return };
                 let len = frames * emitted as usize;
                 if let Ok(chunk) = inbox.write_chunk_uninit(2 + len) {
                     let header = [f32::from(emitted), frames as f32].into_iter();
