@@ -238,12 +238,19 @@ export class GraphStore {
 		// the stash. A new session's nodes are all still to come, so its whole overlay is stashed.
 		const freshSession = snap.instance_id !== this._lastInstanceId;
 		this._stash = {};
+		const target = (uid: string) => (!freshSession && this._views.has(uid) ? (this._rt[uid] ??= {}) : (this._stash[uid] ??= {}));
 		for (const [uid, rt] of Object.entries(snap.runtime ?? {})) {
-			const own = !freshSession && this._views.has(uid) ? (this._rt[uid] ??= {}) : (this._stash[uid] ??= {});
+			const own = target(uid);
 			own.stage = rt.stage;
 			own.error = rt.error ?? null;
 			own.runtime = rt.runtime;
 		}
+		for (const [uid, live] of Object.entries(snap.param_values ?? {})) {
+			const t = target(uid);
+			t.values = follow(t.values ?? {}, live.values);
+			t.errors = follow(t.errors ?? {}, live.errors);
+		}
+		for (const [uid, stats] of Object.entries(snap.node_stats ?? {})) target(uid).stats = stats;
 		this._setRecord(snap.record);
 		this.savePath = snap.save_path;
 		this.unsavedChanges = snap.unsaved_changes;

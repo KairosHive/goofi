@@ -774,9 +774,12 @@ fn shaders_render_on_the_gpu() {
     g.set_param(full, "control", "value", 1.0);
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("nd('{}')", g.name(&hex(full))) }));
     drawn(&g, inked, "the element over the whole", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 0.5]));
-    let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
-    assert!(text.contains(&format!("look.ink = expr: nd('{}') → [1, 1, 1, 0.5]", g.name(&hex(full)))), "{text}");
-    assert!(text.contains(&format!("look.ink[3] = expr: nd('{dial_name}') → 0.5")), "{text}");
+    // The evaluated values reach the state on the status drain's pace, after the frame.
+    let (whole, element) = (format!("look.ink = expr: nd('{}') → [1, 1, 1, 0.5]", g.name(&hex(full))), format!("look.ink[3] = expr: nd('{dial_name}') → 0.5"));
+    g.until("the state to show both sources' values", |g| {
+        let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+        (text.contains(&whole) && text.contains(&element)).then_some(())
+    });
     let copied = g.call("nodes copy", j!({ "nodes": [hex(inked)] }));
     assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["expression"], j!(format!("nd('{dial_name}')")));
     assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0, 0.75, 1, 1]));

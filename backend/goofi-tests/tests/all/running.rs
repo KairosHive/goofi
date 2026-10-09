@@ -642,13 +642,17 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
         let c = gate_probe.count();
         g.stays(|_| gate_probe.count() == c).then_some(c)
     });
-    let mut ev = g.events();
-    let mut value = |_: &Goofi| ev.next("param_values")["nodes"][hex(gate)]["values"]["control"]["value"].as_f64();
+    // The value each run read, as the state shows it.
+    let value = |g: &Goofi| {
+        let text = g.call("node state", j!({ "node": hex(gate) }))["text"].as_str().unwrap_or_default().to_string();
+        text.lines().find(|l| l.contains("control.value = expr:"))?.rsplit("→ ").next()?.trim().parse::<f64>().ok()
+    };
     g.set_param(gate, "common", "max_frequency", 60.0);
     assert!(g.stays(|_| gate_probe.count() == runs), "a param edit ran the node");
+    let before = g.until("the value of the runs so far", |g| value(g));
     g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
     g.until("one run on the pulse", |_| (gate_probe.count() == runs + 1).then_some(()));
-    let read = g.until("the value read for that run", |g| value(g));
+    let read = g.until("the value read for that run", |g| value(g).filter(|v| *v != before));
     assert!(g.stays(|_| gate_probe.count() == runs + 1), "the pulse is one run");
     g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
     g.until("the next run", |_| (gate_probe.count() == runs + 2).then_some(()));

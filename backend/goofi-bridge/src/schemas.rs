@@ -365,6 +365,9 @@ pub fn snapshot(
         "unsaved_changes": unsaved,
         "viewpoint": g.viewpoint().clone(),
     });
+    let (live, stats) = state.beat.lock().snapshot();
+    snap["param_values"] = live;
+    snap["node_stats"] = stats;
     if with_protocol {
         snap["protocol_version"] = json!(PROTOCOL_VERSION);
         // The palette rides along, so the first render needs no `list_nodes` round-trip.

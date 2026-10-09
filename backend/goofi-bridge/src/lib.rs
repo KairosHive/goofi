@@ -137,6 +137,9 @@ pub struct AppState {
     /// The live pairs the `/params` sockets read, filled off the graph lock by the status drain
     /// and the op tail, so a readout never takes it.
     live: Arc<LiveHub>,
+    /// What the status beat last broadcast: each node's live pair and rate. A beat sends what
+    /// moved since; a seed hands a new client this whole, so it is current at once.
+    pub(crate) beat: Arc<Mutex<Readings>>,
     /// The central per-session command history. Locked AFTER `graph`, BEFORE `doc`.
     pub history: Arc<Mutex<goofi_graph::CommandHistory>>,
     /// Liveness policy for `/data` sockets, injectable so a test need not sit through a
@@ -254,6 +257,7 @@ impl AppState {
             machines: Arc::new(machines),
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
+            beat: Arc::new(Mutex::new(Readings::default())),
             history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
@@ -572,6 +576,46 @@ const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
 /// on the health period a slider following an expression moved twice a second.
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
 
+/// The runtime readings a status beat broadcasts, as last sent.
+#[derive(Default)]
+pub(crate) struct Readings {
+    pub(crate) live: HashMap<String, Value>,
+    pub(crate) rates: HashMap<String, f64>,
+}
+
+impl Readings {
+    /// Take on `live` and `rates`, answering the entries that moved: a node whose pair left the
+    /// set goes as an empty pair, and a rate moves when it differs by more than a percent.
+    fn advance(&mut self, live: HashMap<String, Value>, rates: HashMap<String, f64>) -> (serde_json::Map<String, Value>, serde_json::Map<String, Value>) {
+        let mut pairs = serde_json::Map::new();
+        for (node, pair) in &live {
+            if self.live.get(node) != Some(pair) {
+                pairs.insert(node.clone(), pair.clone());
+            }
+        }
+        for node in self.live.keys().filter(|n| !live.contains_key(*n)) {
+            pairs.insert(node.clone(), json!({ "values": {}, "errors": {} }));
+        }
+        let mut stats = serde_json::Map::new();
+        for (node, hz) in &rates {
+            let held = self.rates.get(node).copied();
+            if held.is_none_or(|h| (hz - h).abs() > 0.01 * h.abs().max(f64::EPSILON)) {
+                stats.insert(node.clone(), json!({ "updates_per_second": hz }));
+                self.rates.insert(node.clone(), *hz);
+            }
+        }
+        self.rates.retain(|n, _| rates.contains_key(n));
+        self.live = live;
+        (pairs, stats)
+    }
+
+    /// The whole beat as a seed carries it.
+    pub(crate) fn snapshot(&self) -> (Value, Value) {
+        let stats = self.rates.iter().map(|(n, hz)| (n.clone(), json!({ "updates_per_second": hz }))).collect();
+        (Value::Object(self.live.clone().into_iter().collect()), Value::Object(stats))
+    }
+}
+
 /// One watch per node a `/params` socket displays, holding the node's last pair as the wire
 /// carries it. A pair equal to the held one wakes nobody; a watch nobody reads is dropped.
 #[derive(Default)]
@@ -695,14 +739,12 @@ pub fn spawn_workers(state: &AppState) {
             if state.recorder.running() {
                 events.send(ops::record::record_changed(&state));
             }
-            // Every source's values and errors, whole, in ONE message: a client that just connected
-            // is current within one period, and none of this is a delta it had to have heard.
-            if !live.is_empty() {
-                let nodes: serde_json::Map<String, Value> = live.into_iter().collect();
-                events.send(Event::ParamValues { nodes: Value::Object(nodes) });
+            // What moved since the last beat, each node's pair whole; a new client is seeded with
+            // the beat itself, so nothing here is a delta it had to have heard.
+            let (pairs, stats) = state.beat.lock().advance(live.into_iter().collect(), rates.into_iter().collect());
+            if !pairs.is_empty() {
+                events.send(Event::ParamValues { nodes: Value::Object(pairs) });
             }
-            let stats: serde_json::Map<String, Value> =
-                rates.into_iter().map(|(node, ufreq)| (node, json!({ "updates_per_second": ufreq }))).collect();
             if !stats.is_empty() {
                 events.send(Event::NodeStats { stats: Value::Object(stats) });
             }

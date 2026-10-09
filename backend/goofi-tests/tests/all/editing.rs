@@ -1121,9 +1121,8 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
         (l.contains("expr: nd('gain')") && !l.contains("[error")).then_some(())
     });
     let value_of = |p: &serde_json::Value| p["values"]["common"].get("max_frequency").cloned();
-    g.until("…and its value lands again", |_| {
-        (value_of(&fresh.next("param_values")["nodes"][hex(consumer)]) == Some(j!(0.25))).then_some(())
-    });
+    // A beat sends only what moved: a removal and its undo inside one beat move nothing on the wire.
+    g.until("…and its value lands again", |g| line(g).contains("→ 0.25").then_some(()));
     // Re-pointing a bare read at a SILENT producer must not hand it the old producer's last frame:
     // the mailbox starts empty, the literal stands, and the preview is withdrawn.
     let quiet = g.add("_TestEcho");

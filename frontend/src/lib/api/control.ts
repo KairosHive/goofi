@@ -131,6 +131,9 @@ export interface GraphSnapshot {
 	history?: HistoryLabels;
 	/** Per-node runtime state, seeded here because its live stream pushes only transitions. */
 	runtime: Record<string, { stage?: NodeStage; error?: string | null; runtime?: NodeRuntime }>;
+	/** The last status beat's readings, whole; `param_values` and `node_stats` then send what moved. */
+	param_values?: Record<string, LiveSource>;
+	node_stats?: Record<string, NodeStats>;
 	/** The node palette, carried on `hello`/`graph_replaced`. */
 	node_types?: NodeTypeInfo[];
 	save_path: string | null;

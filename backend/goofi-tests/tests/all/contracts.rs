@@ -423,8 +423,16 @@ async fn the_palette_rides_the_snapshot_and_the_graph_never_does() {
     g.call("node param edit", j!({ "node": hex(a), "param": "common/max_frequency",
                                    "expression": "@@@ not an expression @@@" }));
     g.ready(b);
+    // The beat carries the bad source's error; a tab that connects after it is seeded with it,
+    // because a beat sends only what moved.
+    let mut ev = g.events();
+    g.until("the beat to carry the error", |_| {
+        ev.next("param_values")["nodes"][hex(a)]["errors"]["common"]["max_frequency"].is_string().then_some(())
+    });
 
     let (_c, hello) = Client::connect(&g.serve().await).await;
+    assert!(hello["param_values"][hex(a)]["errors"]["common"]["max_frequency"].is_string(),
+            "the seed carries the beat's readings: {}", hello["param_values"]);
     assert_eq!(hello["node_types"], g.call("library list", j!({ "full": true }))["types"],
                "hello embeds the same palette `library list --full` answers");
     for dead in ["nodes", "links", "instances"] {
