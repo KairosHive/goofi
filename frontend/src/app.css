@@ -96,6 +96,7 @@
 	--fs-body: 0.92rem;
 	--fs-strong: 1rem;
 	--fs-title: 1.15rem;
+	--fs-display: 1.5rem;
 	/* Chrome text — the header bar's one text size, --fs-small snapped to whole CSS pixels.
 	   The fluid html clamp makes the rem sizes fractional (0.82rem ≈ 11.48px), and a bar
 	   full of separately-laid-out text elements snaps each fractional baseline to the device

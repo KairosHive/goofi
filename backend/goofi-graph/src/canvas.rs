@@ -258,15 +258,20 @@ pub fn arrange_machine(m: &Machine) -> Machine {
         next.states[names[0]].pos = px(0, 0);
         return next;
     }
-    let step = (w.max(h) + GAP) as f64;
-    let rx = (n as f64 * step * 1.15 / std::f64::consts::TAU).max(step);
-    let ry = (rx * 0.72).max((h + GAP) as f64);
-    let cells: Vec<(i64, i64)> = (0..n)
-        .map(|k| {
-            let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * k as f64 / n as f64;
-            ((rx + a.cos() * rx).round() as i64, (ry + a.sin() * ry).round() as i64)
-        })
-        .collect();
+    // The smallest ring, grown a cell at a time, on which no two cards meet.
+    let ring = |rx: f64| -> Vec<(i64, i64)> {
+        let ry = rx * 0.72;
+        (0..n)
+            .map(|k| {
+                let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * k as f64 / n as f64;
+                ((rx + a.cos() * rx).round() as i64, (ry + a.sin() * ry).round() as i64)
+            })
+            .collect()
+    };
+    let clear = |c: &[(i64, i64)]| {
+        c.iter().enumerate().all(|(i, a)| c[..i].iter().all(|b| (a.0 - b.0).abs() >= w + GAP || (a.1 - b.1).abs() >= h + GAP))
+    };
+    let cells = (1..).map(|r| ring(r as f64)).find(|c| clear(c)).unwrap_or_default();
     let min_x = cells.iter().map(|c| c.0).min().unwrap_or(0);
     let min_y = cells.iter().map(|c| c.1).min().unwrap_or(0);
     for (k, &i) in order.iter().enumerate() {
