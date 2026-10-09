@@ -101,7 +101,7 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
 
     // A frame also says when it LEFT and which input frames it was made from, so a latency sums
     // hop by hop: a chain run in one sweep shares its `time` and still tells its hops apart.
-    let smooth = g.add("Smooth");
+    let smooth = g.add("Smoothing");
     g.link(late, "out", smooth, "input");
     let sp = g.probe(smooth, "out");
     let (d, up) = g.until("a smoothed frame", |_| Some((sp.latest()?, lp.latest()?)));

@@ -527,19 +527,6 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     };
     let counter = g.add("_TestCounter");
 
-    // A level held steady comes out at the same level: the mean is exact, and the clamped head of
-    // the window does not pull it. A node that averaged in a zero it had never been sent would.
-    let level = g.add("signal:Constant");
-    set(level, "constant", "value", j!(6.0));
-    set(level, "constant", "shape", j!("16"));
-    let smooth = g.add("Smooth");
-    set(smooth, "smooth", "size", j!(4));
-    let ps = g.probe(smooth, "out");
-    g.link(level, "out", smooth, "input");
-    let held = g.until("the smoothed level", |_| ps.latest().filter(|d| shape(d) == vec![16]));
-    assert!(f32s(&held).iter().all(|v| (v - 6.0).abs() < 1e-4),
-            "a steady level smooths to itself: {:?}", f32s(&held));
-
     // A z-score over a window of eight consecutive whole numbers is the same number every time:
     // the newest sample is 3.5 above the mean, and the spread of that window is the square root
     // of 5.25.
@@ -567,6 +554,9 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
 
     // A delay keeps the shape and the level it was given, at any reach: it moves the stream along
     // its own axis and invents nothing. What the reach itself buys is the past proven above.
+    let level = g.add("signal:Constant");
+    set(level, "constant", "value", j!(6.0));
+    set(level, "constant", "shape", j!("16"));
     let delay = g.add("signal:Delay");
     set(delay, "delay", "size", j!(4));
     let pd = g.probe(delay, "out");
@@ -657,8 +647,83 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     });
     assert_eq!(again.meta().sfreq(), Some(256.0), "the rate came back out of the bin spacing");
 
-    for n in [smooth, norm, delay, fwd, back] {
+    for n in [norm, delay, fwd, back] {
         assert!(g.error(n).is_none(), "a stitching node carries no error: {:?}", g.error(n));
+    }
+}
+
+#[test]
+fn a_smoothing_node_averages_across_ticks_or_along_an_axis() {
+    // Every assertion is a closed form of the input, never a property of whatever arrived.
+    let g = Goofi::new();
+    let set = |n, group: &str, name: &str, v: serde_json::Value| {
+        g.set_param(n, group, name, v);
+    };
+
+    // `sample` mode reads one position across ticks. The counter sends 1, 2, 3, …, so the simple
+    // mean of its last four frames is the count less 1.5, and an exponential average with
+    // `alpha` 1 is the count itself.
+    let counter = g.add("_TestCounter");
+    let across = g.add("Smoothing");
+    set(across, "sample", "method", j!("simple"));
+    set(across, "sample", "size", j!(4));
+    let pa = g.probe(across, "out");
+    g.link(counter, "out", across, "input");
+    g.until("the mean of the last four counts", |_| {
+        pa.latest().filter(|d| shape(d) == vec![1] && f32s(d)[0] >= 2.5 && (f32s(d)[0] + 1.5).fract() == 0.0)
+    });
+    set(across, "sample", "method", j!("exponential"));
+    set(across, "sample", "alpha", j!(1.0));
+    g.until("an average that follows the count exactly", |_| {
+        pa.latest().filter(|d| shape(d) == vec![1] && f32s(d)[0] >= 5.0 && f32s(d)[0].fract() == 0.0)
+    });
+
+    // `buffer` mode reads along an axis of each frame and keeps nothing between frames. The ramp's
+    // channel rises by 1/512 a sample, so a simple mean of four lags it by 1.5 samples, and the
+    // same mean run both ways gives the ramp back wherever both passes had their four.
+    let ramp = g.add("_TestRamp");
+    let along = g.add("Smoothing");
+    set(along, "smoothing", "mode", j!("buffer"));
+    set(along, "buffer", "method", j!("simple"));
+    set(along, "buffer", "size", j!(4));
+    let pl = g.probe(along, "out");
+    g.link(ramp, "out", along, "input");
+    let step = 1.0 / 512.0;
+    let close = |v: f32, want: f32| (v - want).abs() < 1e-5;
+    g.until("a mean that lags the ramp by a sample and a half", |_| {
+        pl.latest().filter(|d| shape(d) == vec![1, 512] && (3..512).all(|i| close(f32s(d)[i], (i as f32 - 1.5) * step)))
+    });
+    set(along, "buffer", "bidirectional", j!(true));
+    g.until("the ramp back, both ways", |_| {
+        pl.latest().filter(|d| (3..509).all(|i| close(f32s(d)[i], i as f32 * step)))
+    });
+
+    // A kernel over a steady level is the level, until it reads zeros past the end: then only the
+    // samples the kernel reaches past the edge fall, and the middle stays.
+    let level = g.add("signal:Constant");
+    set(level, "constant", "value", j!(6.0));
+    set(level, "constant", "shape", j!("16"));
+    let kernel = g.add("Smoothing");
+    set(kernel, "smoothing", "mode", j!("buffer"));
+    set(kernel, "buffer", "method", j!("convolution"));
+    set(kernel, "buffer", "kernel", j!("gaussian"));
+    set(kernel, "buffer", "size", j!(5));
+    set(kernel, "buffer", "edge", j!("hold"));
+    let pk = g.probe(kernel, "out");
+    g.link(level, "out", kernel, "input");
+    g.until("a steady level under a held edge", |_| {
+        pk.latest().filter(|d| shape(d) == vec![16] && f32s(d).iter().all(|v| close(*v, 6.0)))
+    });
+    set(kernel, "buffer", "edge", j!("zero"));
+    g.until("the two samples at each end fall, the rest stay", |_| {
+        pk.latest().filter(|d| {
+            let v = f32s(d);
+            v[0] < v[1] && v[1] < 6.0 && v[15] < v[14] && v[14] < 6.0 && (2..14).all(|i| close(v[i], 6.0))
+        })
+    });
+
+    for n in [across, along, kernel] {
+        assert!(g.error(n).is_none(), "a smoothing node carries no error: {:?}", g.error(n));
     }
 }
 

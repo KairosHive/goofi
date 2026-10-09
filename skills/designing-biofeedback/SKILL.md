@@ -26,8 +26,9 @@ connect a change in the stimulus to what they just did. Use the short end of the
 (2–3 s) and nothing slower in the chain than it needs.
 
 **Steady.** A short buffer makes the feature jitter from chunk to chunk, and a stimulus that
-twitches is read as noise, not as feedback. Take the edge off with a light `signal:Smooth` —
-a running mean or an exponential decay over about half a second to a second, no more. Smoothing
+twitches is read as noise, not as feedback. Take the edge off with a light `signal:Smoothing` in
+`sample` mode — a simple or an exponential moving average over about half a second to a second
+of updates, no more. Smoothing
 longer than the buffer only adds lag; it does not add information. Then put the feature on a
 known range with `signal:Normalize` over a window of its own past (tens of seconds) so the
 stimulus spans its full range for this person, today, and `hold` the statistics once a baseline

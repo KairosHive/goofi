@@ -1284,7 +1284,7 @@ fn a_deleted_node_hands_its_wires_through() {
     // A chain stays a chain: what fed the deleted node feeds whatever it fed, by the first wired
     // input whose kind fits, and one undo brings the node and its own wires back.
     let g = Goofi::new();
-    let (src, mid, sink) = (g.add("signal:Constant"), g.add("Smooth"), g.add("Smooth"));
+    let (src, mid, sink) = (g.add("signal:Constant"), g.add("Smoothing"), g.add("Smoothing"));
     g.link(src, "out", mid, "input");
     g.link(mid, "out", sink, "input");
     let wires = |g: &Goofi| -> Vec<(String, String)> {
