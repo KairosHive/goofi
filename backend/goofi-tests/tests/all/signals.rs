@@ -368,8 +368,10 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     g.until("the middle one dropped", |_| pp.latest().filter(|d| shape(d) == vec![2, 4] && labels(d)[1] == Coord::Str("O1".into())));
     set(pick, "select", "keep", j!("O*,\"Fp1\""));
     set(pick, "select", "drop", j!(""));
-    let by_label = g.until("a glob and a quoted label, in the order given", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
-    assert_eq!(labels(&by_label), vec![Coord::Str("O1".into()), Coord::Str("Fp1".into())]);
+    // The shape is the one before, so the frame that answers has to carry the new order.
+    g.until("a glob and a quoted label, in the order given", |_| {
+        pp.latest().filter(|d| shape(d) == vec![2, 4] && labels(d) == vec![Coord::Str("O1".into()), Coord::Str("Fp1".into())])
+    });
     set(pick, "select", "keep", j!("<eeg-left>"));
     set(pick, "select", "drop", j!("<eeg-occipital>"));
     let left = g.until("the left channels less the occipital one", |_| pp.latest().filter(|d| shape(d) == vec![1, 4]));

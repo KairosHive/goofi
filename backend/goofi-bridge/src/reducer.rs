@@ -474,9 +474,12 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             ];
             let mut poked = false;
             let mut note = |id: goofi_transport::WakeId| poked |= id.as_value() == goofi_transport::VIEW_POKE_ID as usize;
-            match duties.into_iter().flatten().min() {
-                Some(at) => goofi_transport::wait_within(&listener, at.saturating_duration_since(now), &mut note),
-                None => {
+            // A fresh loop reads its address before it parks: the poke its first subscriber sent
+            // may have rung before this listener existed.
+            match (homed.is_some(), duties.into_iter().flatten().min()) {
+                (false, _) => poked = true,
+                (true, Some(at)) => goofi_transport::wait_within(&listener, at.saturating_duration_since(now), &mut note),
+                (true, None) => {
                     let _ = listener.blocking_wait_all(&mut note);
                 }
             }

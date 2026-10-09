@@ -634,8 +634,13 @@ pub fn spawn_workers(state: &AppState) {
             let due = Instant::now() >= next_broadcast;
             let (edits, collected) = {
                 let mut g = graph.lock();
-                g.drain_status();
-                state.settled_now();
+                // Readers derive from settled state: a drain that moved none owes them no wake.
+                let epoch = g.epoch();
+                let was = epoch.load(std::sync::atomic::Ordering::Acquire);
+                let drained = g.drain_status();
+                if drained.staged || epoch.load(std::sync::atomic::Ordering::Acquire) != was {
+                    state.settled_now();
+                }
                 if Instant::now() >= next_live {
                     state.live.fill(&g);
                     next_live = Instant::now() + LIVE_PERIOD;

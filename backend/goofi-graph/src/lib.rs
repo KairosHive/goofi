@@ -91,6 +91,14 @@ struct Instance {
     health: Health,
 }
 
+/// What one drain of the engines' reports landed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Drained {
+    pub reports: usize,
+    /// Whether a node's stage moved: what a reader waiting on a node's start re-reads for.
+    pub staged: bool,
+}
+
 /// What a batch did to a node's instance and `settle` has not yet delivered to its engine.
 #[derive(Clone, Copy, PartialEq)]
 enum Change {
@@ -3151,22 +3159,26 @@ impl Graph {
     }
 
     /// Take every engine's waiting reports and apply the health plane. Answers how many landed,
-    /// so a caller can tell a quiet graph from one it stopped hearing.
-    pub fn drain_status(&mut self) -> usize {
-        let mut applied = 0;
+    /// so a caller can tell a quiet graph from one it stopped hearing, and whether a node's
+    /// stage moved — what a reader of the health plane re-reads for.
+    pub fn drain_status(&mut self) -> Drained {
+        let mut drained = Drained::default();
         {
             let Runtime { instances, refreshed, engines, .. } = &mut self.runtime;
             let nodes = &self.patch.nodes;
-            let mut apply =
-                |uid: Uid, status: Status| apply_status_to(nodes, instances, refreshed, uid, status);
+            let staged = &mut drained.staged;
+            let mut apply = |uid: Uid, status: Status| {
+                *staged |= matches!(status, Status::Stage { .. });
+                apply_status_to(nodes, instances, refreshed, uid, status)
+            };
             for e in engines.iter_mut() {
-                applied += e.drain(&mut apply);
+                drained.reports += e.drain(&mut apply);
             }
         }
         // A direct driver has no bridge to settle for it, and the drain-side settle lands what
         // the drain marked pending.
         self.settle();
-        applied
+        drained
     }
 
     /// The params whose options were re-enumerated since the last call — the worker's cue to echo

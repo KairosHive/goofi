@@ -153,8 +153,12 @@ impl Shared {
     }
 
     fn report(&self, uid: Uid, status: Status) {
+        // Values and rates are read on the drain's own paces; the rest are transitions it hears now.
+        let paced = matches!(status, Status::ParamValues { .. } | Status::Ufreq { .. });
         self.reports.lock().push((uid, status));
-        self.waker.notify();
+        if !paced {
+            self.waker.notify();
+        }
     }
 
     /// Ask the engine for a settle, and wake the drain that runs one.
