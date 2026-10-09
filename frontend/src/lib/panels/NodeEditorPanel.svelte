@@ -300,14 +300,30 @@
 			if (!n) continue;
 			const was = previous.get(uid);
 			const handles = handlesOf(n);
+			const position = pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 };
+			// A live marquee's flags are Flow's, on these very objects: re-deriving them from
+			// the store mid-drag hands the release an empty selection.
+			const selected = boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid);
+			// The same object where nothing a card draws from moved: Flow keeps its internals and
+			// its measure, and the card's props stay asleep.
+			if (
+				was &&
+				was.data.node === n &&
+				was.data.label === n.name &&
+				was.data.handles === handles &&
+				was.selected === selected &&
+				was.position.x === position.x &&
+				was.position.y === position.y
+			) {
+				next.push(was);
+				continue;
+			}
 			next.push({
 				id: uid,
 				type: 'goofi',
-				position: pinned.get(uid) ?? { x: n.pos?.[0] ?? 0, y: n.pos?.[1] ?? 0 },
+				position,
 				data: { node: n, label: n.name, handles },
-				// A live marquee's flags are Flow's, on these very objects: re-deriving them from
-				// the store mid-drag hands the release an empty selection.
-				selected: boxSelecting ? (was?.selected ?? false) : sel.nodes(panelId).has(uid),
+				selected,
 				measured: was?.data.handles === handles ? was.measured : undefined
 			});
 		}
@@ -636,8 +652,10 @@
 
 	/** Push the store's selection back onto the rendered `selected` flags. */
 	function reassertSelection(): void {
-		flowNodes = flowNodes.map((n) => ({ ...n, selected: sel.nodes(panelId).has(n.id) }));
-		flowEdges = flowEdges.map((e) => ({ ...e, selected: sel.edges(panelId).has(e.id) }));
+		const nodes = sel.nodes(panelId);
+		const edges = sel.edges(panelId);
+		flowNodes = flowNodes.map((n) => (n.selected === nodes.has(n.id) ? n : { ...n, selected: nodes.has(n.id) }));
+		flowEdges = flowEdges.map((e) => (e.selected === edges.has(e.id) ? e : { ...e, selected: edges.has(e.id) }));
 	}
 
 	function onNodeClick(args: { node: Node; event: MouseEvent | TouchEvent }): void {

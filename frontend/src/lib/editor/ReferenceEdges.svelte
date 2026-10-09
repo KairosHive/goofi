@@ -13,10 +13,15 @@
 	/** Every `nd('name')` term of an expression, with the slot label behind `.out`, if any. */
 	const ND = /nd\(\s*(['"])(.+?)\1\s*\)(?:\s*\.\s*out\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?/g;
 
-	const paths = $derived.by(() => {
+	// The drawn ids as one string: a rebuild of the node objects that draws the same set does not
+	// re-scan every expression below.
+	const drawnIds = $derived(nodes.map((n) => n.id).join(' '));
+
+	/** The `producer>reader` pairs the selected node is one end of, from the records alone. */
+	const pairs = $derived.by(() => {
 		if (!selected) return [];
-		const drawn = new Map(nodes.map((n) => [n.id, n]));
-		const byName = new Map(nodes.flatMap((n) => (g.nodeById(n.id) ? [[g.nodeById(n.id)!.name, n.id] as const] : [])));
+		const ids = drawnIds.split(' ').filter(Boolean);
+		const byName = new Map(ids.flatMap((id) => (g.nodeById(id) ? [[g.nodeById(id)!.name, id] as const] : [])));
 		// The slot a term names: the label behind `.out`, or a one-output node's only slot.
 		const slotOf = (uid: string, label: string | undefined): string | undefined => {
 			const info = g.nodeById(uid);
@@ -24,6 +29,28 @@
 			if (label === undefined) return keys.length === 1 ? keys[0] : undefined;
 			return keys.find((k) => (info?.slot_labels?.[k] ?? k) === label);
 		};
+		const out = new Set<string>();
+		for (const id of ids) {
+			for (const group of Object.values(g.nodeById(id)?.params ?? {})) {
+				for (const d of Object.values(group)) {
+					const sources = [d, ...(d.elements ?? [])].filter((s) => s.mode === 'expression' && s.expression);
+					for (const s of sources) {
+						for (const m of s.expression!.matchAll(ND)) {
+							const uid = byName.get(m[2]);
+							const slot = uid === undefined ? undefined : slotOf(uid, m[3]);
+							if (!uid || !slot || uid === id || (uid !== selected && id !== selected)) continue;
+							out.add(`${uid}>${id}`);
+						}
+					}
+				}
+			}
+		}
+		return [...out];
+	});
+
+	const paths = $derived.by(() => {
+		if (!pairs.length) return [];
+		const drawn = new Map(nodes.map((n) => [n.id, n]));
 		const centre = (n: Node): [number, number] => {
 			const info = g.nodeById(n.id);
 			const fallback = nodeSurfaceSize(
@@ -34,26 +61,17 @@
 			const h = n.measured?.height ?? fallback.height;
 			return [n.position.x + w / 2, n.position.y + h / 2];
 		};
-		const out = new Map<string, string>();
-		for (const n of nodes) {
-			for (const group of Object.values(g.nodeById(n.id)?.params ?? {})) {
-				for (const d of Object.values(group)) {
-					const sources = [d, ...(d.elements ?? [])].filter((s) => s.mode === 'expression' && s.expression);
-					for (const s of sources) {
-						for (const m of s.expression!.matchAll(ND)) {
-							const uid = byName.get(m[2]);
-							const slot = uid === undefined ? undefined : slotOf(uid, m[3]);
-							if (!uid || !slot || uid === n.id || (uid !== selected && n.id !== selected)) continue;
-							const key = `${uid}>${n.id}`;
-							const [x1, y1] = centre(drawn.get(uid)!);
-							const [x2, y2] = centre(n);
-							out.set(key, `M${x1},${y1} L${x2},${y2}`);
-						}
-					}
-				}
-			}
+		const out: [string, string][] = [];
+		for (const key of pairs) {
+			const [from, to] = key.split('>');
+			const a = drawn.get(from);
+			const b = drawn.get(to);
+			if (!a || !b) continue;
+			const [x1, y1] = centre(a);
+			const [x2, y2] = centre(b);
+			out.push([key, `M${x1},${y1} L${x2},${y2}`]);
 		}
-		return [...out];
+		return out;
 	});
 </script>
 
