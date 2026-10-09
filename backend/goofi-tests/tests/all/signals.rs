@@ -3,7 +3,7 @@
 //!
 //! DIMENSIONALITY is the property that spans the set, so the source emits a grid, not a vector.
 
-use goofi_core::Data;
+use goofi_core::{Coord, Data};
 use goofi_tests::{f32s, hex, shape, text, j, Goofi};
 
 /// The bin carrying the most power, and its value.
@@ -328,22 +328,36 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     let flat = g.until("the re-cut frame", |_| ps.latest().filter(|d| shape(d) == vec![12]));
     assert_eq!(flat.meta().sfreq(), None, "a re-cut makes entries the input never had");
 
-    // Select keeps part of an axis by numpy index, and can drop the axis when one entry is left.
+    // Select keeps part of an axis — by position, slice, label or EEG group, in one list — then
+    // drops from that, and can drop the axis when one entry is left. The grid's three channels
+    // are labelled as a frontal, a central and an occipital electrode, two left and one right.
+    let named = g.add("Meta");
+    set(named, "meta", "labels", j!("Fp1,C4,O1"));
+    g.link(src, "out", named, "input");
     let pick = g.add("Select");
     // Off for the shapes below, which keep a one-long axis; the default squeezes it away.
     set(pick, "select", "squeeze", j!(false));
     set(pick, "select", "keep", j!("0,2"));
     let pp = g.probe(pick, "out");
-    g.link(src, "out", pick, "input");
+    g.link(named, "out", pick, "input");
+    let labels = |d: &Data| d.meta().channels().get(0).and_then(|x| x.coords.clone()).map(|c| c.to_vec()).unwrap_or_default();
     g.until("two of the three channels", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
     set(pick, "select", "keep", j!("::-2"));
     g.until("a reversed stride", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
-    // The two index modes run the same selects in the other order: take then delete, or not.
-    set(pick, "select", "keep", j!("0:2"));
+    // Both lists name positions on the SAME axis: the drop of the last entry leaves the first two.
+    set(pick, "select", "keep", j!("0:2,-1"));
     set(pick, "select", "drop", j!("-1"));
-    g.until("the last of the two taken, deleted", |_| pp.latest().filter(|d| shape(d) == vec![1, 4]));
-    set(pick, "select", "mode", j!("drop-keep"));
-    g.until("the first two of what the delete left", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
+    g.until("the last of the three taken, dropped", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
+    set(pick, "select", "drop", j!("1"));
+    g.until("the middle one dropped", |_| pp.latest().filter(|d| shape(d) == vec![2, 4] && labels(d)[1] == Coord::Str("O1".into())));
+    set(pick, "select", "keep", j!("O*,\"Fp1\""));
+    set(pick, "select", "drop", j!(""));
+    let by_label = g.until("a glob and a quoted label, in the order given", |_| pp.latest().filter(|d| shape(d) == vec![2, 4]));
+    assert_eq!(labels(&by_label), vec![Coord::Str("O1".into()), Coord::Str("Fp1".into())]);
+    set(pick, "select", "keep", j!("<eeg-left>"));
+    set(pick, "select", "drop", j!("<eeg-occipital>"));
+    let left = g.until("the left channels less the occipital one", |_| pp.latest().filter(|d| shape(d) == vec![1, 4]));
+    assert_eq!(labels(&left), vec![Coord::Str("Fp1".into())]);
     set(pick, "select", "drop", j!(""));
     set(pick, "select", "keep", j!("1"));
     set(pick, "select", "squeeze", j!(true));
@@ -400,7 +414,7 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     let offsets = lags.meta().channels().get(1).and_then(|x| x.coords.clone()).expect("lag coords");
     assert_eq!(offsets[3], goofi_core::Coord::Num(0.0), "the middle of the lag axis is no lag at all");
 
-    for n in [math, func, over_time, over_channels, swap, pick, end_to_end, join, op, auto] {
+    for n in [math, func, over_time, over_channels, swap, named, pick, end_to_end, join, op, auto] {
         assert!(g.error(n).is_none(), "an array node carries no error: {:?}", g.error(n));
     }
 }

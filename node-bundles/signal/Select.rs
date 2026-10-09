@@ -1,4 +1,5 @@
-//! Select — keep part of one axis, named by label or by numpy index.
+//! Select — keep part of one axis: `keep` names what stays, then `drop` names what goes, each a
+//! list of positions, numpy slices, labels and EEG groups.
 
 use goofi_core::{resolve_axis, Coord, Data, SlotType};
 use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
@@ -46,16 +47,28 @@ fn names(d: &Data, axis: usize, len: usize) -> Vec<String> {
     }
 }
 
-fn by_name(spec: &str, labels: &[String]) -> Vec<usize> {
-    let mut picked = Vec::new();
-    for pattern in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        for (i, name) in labels.iter().enumerate() {
-            if matches(pattern, name) && !picked.contains(&i) {
-                picked.push(i);
-            }
-        }
-    }
-    picked
+/// An EEG label as the 10-20 system writes it: `EEG Fp1-REF` and `fp1` are both `FP1`.
+fn electrode(label: &str) -> String {
+    let label = label.trim();
+    let label = label.strip_prefix("EEG").or_else(|| label.strip_prefix("eeg")).unwrap_or(label).trim();
+    label.split(['-', ' ', ':']).next().unwrap_or("").to_ascii_uppercase()
+}
+
+/// Whether an electrode belongs to the EEG group `<eeg-…>` names: a lobe by the letters before
+/// its number, a hemisphere by the number's parity, the midline (`z`) in neither hemisphere.
+fn in_group(group: &str, electrode: &str) -> Option<bool> {
+    let letters: String = electrode.chars().take_while(|c| c.is_ascii_alphabetic() && *c != 'Z').collect();
+    let number: Option<u32> = electrode[letters.len()..].parse().ok();
+    let lobe = |prefixes: &[&str]| prefixes.contains(&letters.as_str());
+    Some(match group {
+        "frontal" => lobe(&["FP", "AF", "F"]),
+        "central" => lobe(&["FC", "C", "CP"]),
+        "parietal" => lobe(&["P", "PO", "TP"]),
+        "occipital" => lobe(&["O", "I"]),
+        "left" => number.is_some_and(|n| n % 2 == 1),
+        "right" => number.is_some_and(|n| n > 0 && n % 2 == 0),
+        _ => return None,
+    })
 }
 
 /// A position on an axis of `len`, negative from the end, as numpy reads one.
@@ -90,30 +103,43 @@ fn slice(part: &str, len: usize) -> Result<Vec<usize>, String> {
     Ok(out)
 }
 
-/// A numpy index on one axis of `len`: positions and slices, comma-separated, in the order given,
-/// repeats kept. Empty is the whole axis.
-fn index(spec: &str, len: usize) -> Result<Vec<usize>, String> {
+/// Whether an element reads as a numpy index: digits, a sign, and colons, nothing else.
+fn is_index(part: &str) -> bool {
+    !part.is_empty() && part.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '+' | ':' | ' '))
+}
+
+/// The positions `spec` names on an axis of `labels`, in the order given, each once. An element
+/// is a position or a slice when it reads as one, an EEG group as `<eeg-left>`, a quoted `"3"`
+/// the label itself, and anything else a label with `*` for any run of characters.
+fn select(spec: &str, labels: &[String]) -> Result<Vec<usize>, String> {
+    let len = labels.len();
+    let mut picked: Vec<usize> = Vec::new();
+    let mut take = |i: usize| {
+        if !picked.contains(&i) {
+            picked.push(i);
+        }
+    };
     let spec = spec.trim().trim_start_matches('[').trim_end_matches(']');
-    if spec.trim().is_empty() {
-        return Ok((0..len).collect());
-    }
-    let mut picked = Vec::new();
     for part in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        match part.contains(':') {
-            true => picked.extend(slice(part, len)?),
-            false => picked.push(position(part, len)?),
+        if let Some(group) = part.strip_prefix("<eeg-").and_then(|g| g.strip_suffix('>')) {
+            for (i, label) in labels.iter().enumerate() {
+                match in_group(group, &electrode(label)) {
+                    Some(true) => take(i),
+                    Some(false) => {}
+                    None => return Err(format!("`{part}` is no EEG group: frontal, central, parietal, occipital, left or right")),
+                }
+            }
+        } else if let Some(text) = part.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            labels.iter().enumerate().filter(|(_, l)| matches(text, l)).for_each(|(i, _)| take(i));
+        } else if part.contains(':') && is_index(part) {
+            slice(part, len)?.into_iter().for_each(&mut take);
+        } else if is_index(part) {
+            take(position(part, len)?);
+        } else {
+            labels.iter().enumerate().filter(|(_, l)| matches(part, l)).for_each(|(i, _)| take(i));
         }
     }
     Ok(picked)
-}
-
-/// `kept` with the positions `spec` names deleted, as `np.delete` does.
-fn delete(kept: Vec<usize>, spec: &str) -> Result<Vec<usize>, String> {
-    if spec.trim().is_empty() {
-        return Ok(kept);
-    }
-    let gone = index(spec, kept.len())?;
-    Ok(kept.into_iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, k)| k).collect())
 }
 
 impl Node for Select {
@@ -129,24 +155,13 @@ impl Node for Select {
         let shape = a.shape();
         let axis = resolve_axis(p.i64("select", "axis").unwrap_or(0), shape.len())?;
         let len = shape[axis];
-        let mode = p.str("select", "mode").unwrap_or("keep-drop");
         let keep = p.str("select", "keep").unwrap_or("");
         let drop = p.str("select", "drop").unwrap_or("");
 
-        let kept = match mode {
-            // Each select reads the frame the one before it left, as two numpy getitems in a row.
-            "drop-keep" => {
-                let rest = delete((0..len).collect(), drop)?;
-                index(keep, rest.len())?.into_iter().map(|i| rest[i]).collect()
-            }
-            "name" => {
-                let labels = names(d, axis, len);
-                let dropped = by_name(drop, &labels);
-                let kept = if keep.trim().is_empty() { (0..len).collect() } else { by_name(keep, &labels) };
-                kept.into_iter().filter(|i| !dropped.contains(i)).collect::<Vec<_>>()
-            }
-            _ => delete(index(keep, len)?, drop)?,
-        };
+        let labels = names(d, axis, len);
+        let kept = if keep.trim().is_empty() { (0..len).collect() } else { select(keep, &labels)? };
+        let gone = select(drop, &labels)?;
+        let kept: Vec<usize> = kept.into_iter().filter(|i| !gone.contains(i)).collect();
         if kept.is_empty() {
             return Err("nothing is left after the selection".to_string().into());
         }
@@ -178,25 +193,15 @@ impl Node for Select {
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
-        name: "mode",
-        spec: ParamSpec::Str { default: "keep-drop", options: &["keep-drop", "drop-keep", "name"], refresh: false },
-        expression: None,
-        doc: Some(
-            "By numpy index — `keep-drop` takes `keep` and then deletes `drop` from what it took, \
-             `drop-keep` deletes first and then takes — or by label.",
-        ),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "select",
         name: "keep",
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
         doc: Some(
-            "What to keep: labels separated by commas with `*` for anything, or a numpy index like \
-             `-1`, `::2` or `[3, 0, 1:4]`, in the order given. Empty keeps everything.",
+            "What to keep, separated by commas, in the order given: positions and numpy slices \
+             like `-1` or `5:7`, labels with `*` for anything, `\"3\"` for the label rather than \
+             the position, and `<eeg-frontal>`, `<eeg-central>`, `<eeg-parietal>`, \
+             `<eeg-occipital>`, `<eeg-left>` or `<eeg-right>` for the channels of an EEG group. \
+             Empty keeps everything.",
         ),
         section: 0,
         show: &[],
@@ -207,7 +212,7 @@ static PARAMS: &[ParamDecl] = &[
         name: "drop",
         spec: ParamSpec::Str { default: "", options: &[], refresh: false },
         expression: None,
-        doc: Some("What to drop, written the same way; an index is deleted as `np.delete` does. Empty drops nothing."),
+        doc: Some("What to drop from what was kept, written the same way. Empty drops nothing."),
         section: 0,
         show: &[],
         role: None,
@@ -245,7 +250,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Keep part of one axis.\n\
-          Named by label, or by numpy index with keep and drop applied in either order.",
+          By position, numpy slice, label or EEG group: `keep` takes, then `drop` deletes.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,
