@@ -4,7 +4,6 @@ import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
-import type { ParamDescriptor } from '$lib/api/types';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { typeInfo } from '$lib/test/typeInfo';
 
@@ -120,22 +119,9 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
 		d.patch({ nodes: { n1: { params: { common: { max_frequency: { value: 55 } } } } } });
 
-		// A state_update carrying a STALE value (999) + an error + stage: the value must stay the
-		// doc's 55 (params are doc-owned), and the ERROR must not land at all. An op's echo is taken
-		// before the node has re-evaluated the source that op just moved, so its error is the
-		// PREVIOUS source's — which is how a corrected expression kept showing the typo's NameError.
-		fc.emit({
-			event: 'state_update',
-			payload: {
-				node: 'n1',
-				params: { common: { max_frequency: { value: 999, error: 'compile error' } } } as unknown as Record<
-					string,
-					Record<string, ParamDescriptor>
-				>,
-				stage: 'ready',
-				error: null
-			}
-		});
+		// A state_update carries options and stage, never a value or a param error: params are
+		// doc-owned, and an op's echo predates the re-evaluation of the source it moved.
+		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'ready', error: null } });
 		const n = g.nodeById('n1')!;
 		expect(n.params.common.max_frequency.value).toBe(55); // doc value preserved
 		expect(n.params.common.max_frequency.error, 'the echo is one evaluation behind').toBeNull();
@@ -220,7 +206,7 @@ describe('node runtime survives a doc rebuild', () => {
 		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
 
 		// The three node-level fields the doc never holds, each from its own event.
-		fc.emit({ event: 'state_update', payload: { node: 'n1', params: {}, stage: 'ready', error: 'boom' } });
+		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'ready', error: 'boom' } });
 		fc.emit({ event: 'node_stats', payload: { stats: { n1: { updates_per_second: 12.4 } } } });
 		expect([g.nodeById('n1')!.stage, g.nodeById('n1')!.error]).toEqual(['ready', 'boom']);
 

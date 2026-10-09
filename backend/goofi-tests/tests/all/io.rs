@@ -41,7 +41,7 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
         let p = ev.next("state_update");
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["lsl", "name"]])).then_some(p)
     });
-    let options = echo["params"]["lsl"]["name"]["options"].as_array().cloned().unwrap_or_default();
+    let options = echo["options"]["lsl"]["name"].as_array().cloned().unwrap_or_default();
     assert!(options.contains(&j!(stream)), "the live stream is offered: {options:?}");
     assert!(options.contains(&j!("")), "…and `any` stays an option: {options:?}");
 

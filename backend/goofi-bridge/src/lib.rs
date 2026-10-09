@@ -1360,14 +1360,14 @@ impl AppState {
     }
 }
 
-/// A per-node `state_update` event with a node's params and error. `refreshed` names the params
+/// A per-node `state_update` event with a node's options and error. `refreshed` names the params
 /// whose refresh completed, sent on EVERY outcome, or the button spins on.
 pub(crate) fn param_state_update(g: &Graph, peer: Uid, refreshed: &[(&str, &str)]) -> Event {
     let Value::Object(mut body) = schemas::runtime_json(g, peer) else {
         unreachable!("runtime_json builds an object")
     };
     body.insert("node".into(), json!(peer.to_hex()));
-    body.insert("params".into(), schemas::describe_node_params(g, peer));
+    body.insert("options".into(), schemas::node_options(g, peer));
     body.insert(
         "refreshed_params".into(),
         refreshed.iter().map(|(g, n)| json!([g, n])).collect(),

@@ -246,9 +246,17 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "value": 0.25 })).await;
     c.until_doc(|d| d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]) == Some(j!(0.25))).await;
     c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "7" })).await;
-    let echo = ev.next("state_update");
-    assert_eq!((&echo["node"], &echo["params"]["lfo"]["amplitude"]["mode"]), (&j!(uid), &j!("expression")),
-               "the value edit echoed a descriptor: {echo}");
+    // The echo follows the delta it belongs with, so the first one comes after the source moved.
+    let mut sourced = false;
+    let echo = loop {
+        match ev.next_of(&["doc_patch", "state_update"]) {
+            (name, echo) if name == "state_update" => break echo,
+            (_, patch) => sourced |= patch["ops"].as_array().is_some_and(|ops| ops.iter().any(|op| {
+                op["path"] == j!(["nodes", uid, "params", "lfo", "amplitude", "mode"]) && op["value"] == j!("expression")
+            })),
+        }
+    };
+    assert!(sourced && echo["node"] == j!(uid), "the value edit echoed: {echo}");
 
     // `/params` restates a pair only when it moved: the peer holds the last one it was sent.
     let level = g.add("_TestScalar");
@@ -305,14 +313,15 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     let mut victim = narrow(&base, "/control").await;
     victim.next().await; // the initial hello, then stall
 
-    // Re-binding the SAME expression pushes a `state_update` without touching the doc, isolating events.
     // Stalled for the WHOLE flood, and the flood sized in bytes: the ring lags only once the
     // socket's send buffer is full, and Linux autotunes that up to 4 MB before a write blocks.
+    // Each step moves a 16 KB viewer blob, so 1000 of them are four times that.
     let osc = g.add("LFO");
+    let pad = "x".repeat(16384);
     let flood = std::thread::spawn(move || {
-        for _ in 0..4000 {
-            g.call("node param edit", j!({ "node": hex(osc), "param": "common/max_frequency",
-                                           "expression": "7" }));
+        for i in 0..1000 {
+            g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "kind": "line",
+                                                                  "settings": { "pad": format!("{pad}{i}") } }] }));
         }
     });
     flood.join().unwrap();

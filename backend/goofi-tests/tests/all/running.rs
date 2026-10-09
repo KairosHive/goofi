@@ -583,7 +583,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
         let p = ev.next("state_update");
         (p["node"] == hex(picker)).then_some(p)
     });
-    let options = p["params"]["io"]["device"]["options"].as_array().cloned().unwrap_or_default();
+    let options = p["options"]["io"]["device"].as_array().cloned().unwrap_or_default();
     assert!(options.iter().any(|o| o.as_str().is_some_and(|s| s.starts_with("dev"))),
             "the re-enumerated list reached the client: {options:?}");
     assert_eq!(p["refreshed_params"], j!([["io", "device"]]), "…and the spinner is cleared");
@@ -595,7 +595,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
         (p["node"] == hex(mute)).then_some(p)
     });
     assert_eq!(p["refreshed_params"], j!([["io", "device"]]), "the spinner is cleared regardless");
-    assert_eq!(p["params"]["io"]["device"]["options"], j!(["none"]), "options left as declared");
+    assert_eq!(p["options"]["io"]["device"], j!(["none"]), "options left as declared");
 
     // A fixed list is refused, which is what lifts the spinner on the frontend's side.
     let osc = g.add("LFO");

@@ -66,7 +66,7 @@ fn refreshed(g: &Goofi, ev: &mut goofi_tests::Events, uid: Uid, group: &str, nam
         let p = ev.next("state_update");
         (p["node"] == hex(uid) && p["refreshed_params"] == j!([[group, name]])).then_some(p)
     });
-    p["params"][group][name]["options"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    p["options"][group][name].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
 }
 
 /// A constant one: an envelope gated open with no attack, which sustains at one for as long as

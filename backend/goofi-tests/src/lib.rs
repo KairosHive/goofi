@@ -557,17 +557,23 @@ impl Events {
     /// The next event named `name`, skipping the others.
     #[track_caller]
     pub fn next(&mut self, name: &str) -> Value {
+        self.next_of(&[name]).1
+    }
+
+    /// The next event named any of `names`, in broadcast order, with its name.
+    #[track_caller]
+    pub fn next_of(&mut self, names: &[&str]) -> (String, Value) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.rx.try_recv() {
                 Ok(raw) => {
                     let v: Value = serde_json::from_str(&raw).expect("an event is JSON");
-                    if v["event"] == name {
-                        return v["payload"].clone();
+                    if let Some(name) = v["event"].as_str().filter(|n| names.contains(n)) {
+                        return (name.to_string(), v["payload"].clone());
                     }
                 }
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
-                Err(e) => panic!("no `{name}` event arrived: {e}"),
+                Err(e) => panic!("no {names:?} event arrived: {e}"),
             }
         }
     }

@@ -163,7 +163,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['audio', 'device']]
 			}
 		});
@@ -183,7 +183,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['lsl', 'source_name']]
 			}
 		});
@@ -195,7 +195,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['audio', 'device']]
 			}
 		});

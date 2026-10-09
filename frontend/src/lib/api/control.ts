@@ -219,7 +219,8 @@ export type ControlEvent =
 			event: 'state_update';
 			payload: {
 				node: string;
-				params: Record<string, Record<string, ParamDescriptor>>;
+				/** Every string param's options as the instance shows them, refreshed lists included. */
+				options: Record<string, Record<string, string[]>>;
 				stage?: NodeStage;
 				// Re-pushed on the state plane, so a lost first error still surfaces and a clear lifts it.
 				error?: string | null;

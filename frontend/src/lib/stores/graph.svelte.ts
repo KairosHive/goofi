@@ -320,11 +320,8 @@ export class GraphStore {
 				const t = this._runtimeOf(ev.payload.node);
 				// Only the refreshed options are the runtime's. Not the param error: an echo predates
 				// the re-evaluation, so it carries the previous source's failure.
-				for (const [group, names] of Object.entries(ev.payload.params ?? {})) {
-					for (const [name, desc] of Object.entries(names)) {
-						const d = desc as { options?: string[] | null };
-						if (d.options !== undefined) ((t.options ??= {})[group] ??= {})[name] = d.options ?? null;
-					}
+				for (const [group, names] of Object.entries(ev.payload.options ?? {})) {
+					for (const [name, options] of Object.entries(names)) ((t.options ??= {})[group] ??= {})[name] = options;
 				}
 				if (ev.payload.stage) t.stage = ev.payload.stage;
 				// The state plane re-pushes the current error, so backend truth wins here even

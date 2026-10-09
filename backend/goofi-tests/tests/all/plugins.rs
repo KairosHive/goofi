@@ -210,7 +210,7 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
         let p = ev.next("state_update");
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["audio", "device"]])).then_some(p)
     });
-    let options = echo["params"]["audio"]["device"]["options"].as_array().cloned().unwrap_or_default();
+    let options = echo["options"]["audio"]["device"].as_array().cloned().unwrap_or_default();
     assert!(options.contains(&j!(input)), "the cable's monitor is an input device: {options:?}");
 
     // An AudioIn drop points that node at the cable; an AudioOut drop moves EVERY AudioOut,

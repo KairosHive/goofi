@@ -2,7 +2,7 @@
 //! These are the wire contract: co-edit the frontend when a field or shape changes.
 
 use goofi_core::{control, Data, Param};
-use goofi_graph::{Graph, Mode, Origin, SourceInfo, Uid};
+use goofi_graph::{Graph, Mode, Origin, Uid};
 use serde::Serialize;
 use ts_rs::TS;
 use goofi_node::{NodeManifest, ParamGroups};
@@ -103,8 +103,7 @@ pub struct ParamDescriptor {
     pub kind: ParamKind,
 }
 
-pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi_node::ParamDecl>) -> ParamDescriptor {
-    let text = |t: &str| (!t.is_empty()).then(|| t.to_string());
+pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDescriptor {
     let base = ParamBase {
         doc: decl.and_then(|d| d.doc).map(str::to_string),
         default: decl.and_then(|d| control::data_of(&d.spec.to_param())),
@@ -124,9 +123,9 @@ pub fn describe_param(p: &Param, source: Option<&SourceInfo>, decl: Option<goofi
             goofi_node::Role::Feed { slot, group } => ParamRole::Feed { slot: slot.into(), group: group.into() },
         }),
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
-        mode: source.map(|s| s.state.mode).unwrap_or_default(),
-        expression: source.and_then(|s| text(&s.state.expression)),
-        error: source.and_then(|s| s.error.clone()),
+        mode: Mode::default(),
+        expression: None,
+        error: None,
     };
     let kind = match p {
         Param::Num { vmin, vmax, int, options, color, .. } => ParamKind::Num {
@@ -159,17 +158,14 @@ fn param_decl(
         .find(|d| d.group == group && d.name == name)
 }
 
-/// Params as descriptors, `{group: {name: …}}`: a type's for the palette, or with `uid` one
-/// node's, each carrying its binding state and its live options.
-pub fn describe_params(g: &Graph, engine: &str, p: &ParamGroups, m: &'static NodeManifest, uid: Option<Uid>) -> Value {
+/// A type's params as descriptors, `{group: {name: …}}`, as the palette shows them.
+pub fn describe_params(g: &Graph, engine: &str, p: &ParamGroups, m: &'static NodeManifest) -> Value {
     let universal = g.universal_decls(engine, m);
     let mut groups = Map::new();
     for (gname, grp) in p {
         let mut names = Map::new();
         for (n, param) in grp {
-            let shown = uid.map(|u| g.shown_param(u, gname, n, param));
-            let source = uid.and_then(|u| g.param_source(u, gname, n));
-            let d = describe_param(shown.as_ref().unwrap_or(param), source.as_ref(), param_decl(m, &universal, gname, n));
+            let d = describe_param(param, param_decl(m, &universal, gname, n));
             names.insert(n.clone(), json!(d));
         }
         groups.insert(gname.clone(), Value::Object(names));
@@ -177,13 +173,18 @@ pub fn describe_params(g: &Graph, engine: &str, p: &ParamGroups, m: &'static Nod
     Value::Object(groups)
 }
 
-/// A node instance's params, each carrying its real expression binding state.
-pub fn describe_node_params(g: &Graph, uid: Uid) -> Value {
-    let (Some(params), Some(m)) = (g.params(uid), g.manifest(uid)) else {
-        return Value::Object(Map::new());
-    };
-    let ty = g.node_type(uid).unwrap_or_default();
-    describe_params(g, goofi_node::split_type_id(&ty).0.unwrap_or_default(), &params, m, Some(uid))
+/// A node instance's string-param options as it shows them, `{group: {name: options}}`: the live
+/// list where a refresh answered one, else the declared one. The rest of a param rides the doc.
+pub fn node_options(g: &Graph, uid: Uid) -> Value {
+    let mut groups = Map::new();
+    for (group, names) in g.params(uid).iter().flat_map(|p| p.iter()) {
+        for (name, p) in names {
+            if let Param::Str { options: Some(options), .. } = g.shown_param(uid, group, name, p) {
+                insert_at(&mut groups, group, name, json!(options));
+            }
+        }
+    }
+    Value::Object(groups)
 }
 
 /// The live values of a node's expression-driven params, `{group: {name: value}}`. Values only, so
@@ -289,7 +290,7 @@ pub fn palette_row(g: &Graph, engine: &str, ty: &str, m: Option<&'static NodeMan
         info["output_slots"] = m.map_or_else(|| json!({}), output_slots);
         // The owning engine's own normalization, so palette and instance agree.
         info["params"] = m.map_or_else(|| json!({}), |m| {
-            describe_params(g, engine, &g.default_params_of(ty, None).unwrap_or_default(), m, None)
+            describe_params(g, engine, &g.default_params_of(ty, None).unwrap_or_default(), m)
         });
     }
     info
