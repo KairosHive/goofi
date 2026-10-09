@@ -12,7 +12,7 @@
 	import { untrack } from 'svelte';
 	import { offsetIn, useAnchor, useSurface } from './plotHost';
 	import type { DrawnState } from './drawing';
-	import type { Hover } from './hover';
+	import type { Hover, ProbeBox } from './hover';
 	import { portal } from 'panelty';
 	import { drawsOnSurface, MODULES, viewSpecsForKind } from './registry';
 
@@ -182,7 +182,7 @@
 	$effect(() => {
 		const d = drawing;
 		if (!d || !capW) return; // unmeasured: nothing draws before the first size
-		d.settings(settings, { w: boxW, h: boxH, cols: capW, zoom });
+		d.settings(settings, { w: boxW, h: boxH, cols: capW });
 	});
 
 	/** The pointer in layout px: the box is measured under the flow zoom, the pointer is not. */
@@ -193,8 +193,9 @@
 		return { x: (e.clientX - r.left) * scale, y: (e.clientY - r.top) * scale };
 	}
 
-	function probeBox(): { w: number; h: number; tol: number } {
-		return { w: boxW, h: boxH, tol: 12 / zoom };
+	/** The pointer's reach and the plot's margin are device px; the probe works in layout px. */
+	function probeBox(): ProbeBox {
+		return { w: boxW, h: boxH, tol: 12 / zoom, pad: 2 / zoom };
 	}
 
 	function onPointerDown(e: PointerEvent): void {

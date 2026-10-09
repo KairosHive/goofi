@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { axisNames, imageProbe, lineProbe, trajectoryProbe } from './hover';
 import type { ArrayData } from '$lib/codec/decode';
 
-const axes = { logX: false, logY: false, pad: 0 };
-const box = { w: 100, h: 100, tol: 10 };
+const axes = { logX: false, logY: false };
+const box = { w: 100, h: 100, tol: 10, pad: 0 };
 
 describe('lineProbe', () => {
 	// Two series over 11 samples; the plot range is the drawn window.
@@ -58,7 +58,7 @@ describe('trajectoryProbe', () => {
 	];
 
 	it('reads the nearest point of any path, naming the rows it was drawn from', () => {
-		const probe = trajectoryProbe({ rows, xs }, range, 0, pairs, ['a', 'b', 'c']);
+		const probe = trajectoryProbe({ rows, xs }, range, pairs, ['a', 'b', 'c']);
 		const h = probe(97, 3, box)!;
 		expect(h.lines).toEqual([['10.00', '10.00'], ['a · b', 't 2']]);
 		expect(h.mark).toEqual({ x: 100, y: 0, r: 3.5 });

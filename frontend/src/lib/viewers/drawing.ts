@@ -9,12 +9,11 @@ import { lineData, pushImage } from './plotFeed';
 import type { SettingsMap } from './module';
 import type { ViewSummary } from './viewMeta';
 
-/** The body the drawing fills: its layout box in CSS px, its width in device px, the flow zoom. */
+/** The body the drawing fills: its layout box in CSS px and its width in device px. */
 export interface DrawBox {
 	w: number;
 	h: number;
 	cols: number;
-	zoom: number;
 }
 
 /** Text the drawing places on its picture, in layout px, turned by `angle` about its anchor. */
@@ -125,7 +124,7 @@ export class LineDrawing extends Base {
 		this.probe = lineProbe(
 			data,
 			r,
-			{ logX, logY: Boolean(s.logY), pad: 2 / box.zoom },
+			{ logX, logY: Boolean(s.logY) },
 			{ x: axisNames(f.meta, ndim - 1), series: ndim > 1 ? axisNames(f.meta, 0) : null }
 		);
 	}
@@ -180,7 +179,7 @@ export class TrajectoryDrawing extends Base {
 		const r = p.range();
 		if (!r) return;
 		this.labels = [formatTick(r.yMax), formatTick(r.yMin), formatTick(r.xMax)];
-		this.probe = trajectoryProbe(data, r, 2 / box.zoom, pairs, axisNames(f.meta, 0));
+		this.probe = trajectoryProbe(data, r, pairs, axisNames(f.meta, 0));
 	}
 }
 

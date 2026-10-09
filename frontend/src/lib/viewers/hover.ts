@@ -17,6 +17,8 @@ export interface ProbeBox {
 	h: number;
 	/** How far, in layout px, the pointer may sit from a point and still read it. */
 	tol: number;
+	/** The plot's inner margin in layout px; plotluck keeps a 2-device-px pad around the range. */
+	pad: number;
 }
 
 export type Probe = (x: number, y: number, box: ProbeBox) => Hover | null;
@@ -50,8 +52,6 @@ function log(v: number, on: boolean): number {
 export interface LineAxes {
 	logX: boolean;
 	logY: boolean;
-	/** The plot's inner margin in layout px; plotluck keeps a 2-device-px pad around the range. */
-	pad: number;
 }
 
 export interface LineNames {
@@ -73,11 +73,12 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 	const y0 = log(range.yMin, axes.logY);
 	const y1 = log(range.yMax, axes.logY);
 	return (px, py, box) => {
-		const w = box.w - 2 * axes.pad;
-		const h = box.h - 2 * axes.pad;
+		const pad = box.pad;
+		const w = box.w - 2 * pad;
+		const h = box.h - 2 * pad;
 		if (m === 0 || w <= 0 || h <= 0) return null;
-		const toPx = (x: number) => axes.pad + ((log(x, axes.logX) - x0) / (x1 - x0 || 1)) * w;
-		const toPy = (y: number) => axes.pad + (1 - (log(y, axes.logY) - y0) / (y1 - y0 || 1)) * h;
+		const toPx = (x: number) => pad + ((log(x, axes.logX) - x0) / (x1 - x0 || 1)) * w;
+		const toPy = (y: number) => pad + (1 - (log(y, axes.logY) - y0) / (y1 - y0 || 1)) * h;
 		// The first vertex at or right of the pointer, then outward while the x distance allows.
 		let lo = 0;
 		let hi = m;
@@ -116,7 +117,6 @@ export function lineProbe(data: LineData, range: Range, axes: LineAxes, names: L
 export function trajectoryProbe(
 	data: LineData,
 	range: Range,
-	pad: number,
 	pairs: [number, number][],
 	names: string[] | null
 ): Probe {
@@ -124,6 +124,7 @@ export function trajectoryProbe(
 	const xs = data.xs as ArrayLike<number>[] | undefined;
 	const m = rows[0]?.length ?? 0;
 	return (px, py, box) => {
+		const pad = box.pad;
 		const w = box.w - 2 * pad;
 		const h = box.h - 2 * pad;
 		if (!xs || m === 0 || w <= 0 || h <= 0) return null;
