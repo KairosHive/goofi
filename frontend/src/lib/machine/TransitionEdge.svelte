@@ -68,7 +68,7 @@
 		border-radius: 999px;
 		color: var(--text);
 		font-family: var(--font-mono);
-		font-size: var(--fs-small);
+		font-size: var(--fs-body);
 		white-space: nowrap;
 		cursor: pointer;
 		pointer-events: all;

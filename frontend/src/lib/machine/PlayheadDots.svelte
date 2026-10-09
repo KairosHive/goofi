@@ -76,8 +76,6 @@
 		position: absolute;
 		transform: translate(-50%, -50%);
 		border-radius: 50%;
-		border: 2px solid var(--surface-1);
-		box-shadow: 0 0 0 1px var(--border-strong);
 	}
 	/* The glide between two frames of a flight; a rest is placed, not slid, so a jump does not cross the canvas. */
 	.dot.flying {

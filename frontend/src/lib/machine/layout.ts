@@ -7,9 +7,9 @@ export const CARD_W = 200;
 /** A card's height before Svelte Flow has measured it. */
 export const FALLBACK_H = 44;
 /** Where resting dots sit along a card's top edge: the first dot's centre, and the step. */
-export const DOCK = { x: 14, step: 16 } as const;
+export const DOCK = { x: 20, step: 26 } as const;
 /** A dot's diameter in flow units. */
-export const DOT = 12;
+export const DOT = 22;
 
 /** Where a card sits and how big it is, from the flow node Svelte Flow holds for it. */
 export function cardBox(nodes: Node[], id: string): { x: number; y: number; w: number; h: number } | null {

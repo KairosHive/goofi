@@ -61,7 +61,7 @@
 		background: var(--surface-1);
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-md);
-		font-size: var(--fs-small);
+		font-size: var(--fs-title);
 	}
 	:global(.svelte-flow__node.selected) .card {
 		outline: var(--focus-width) solid var(--accent);
