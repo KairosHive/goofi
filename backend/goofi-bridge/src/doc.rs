@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// One step of a delta. A path is `[root]` or `[root, key]`: the roots are maps keyed by uid,
-/// link key or variable name, and the arrangement moves whole.
+/// One step of a delta. A path descends the document's maps, `[root, key, …]`, to the value it
+/// moves: a `put` lands a value there, a `del` removes it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum Op {
@@ -13,37 +13,33 @@ pub enum Op {
     Del { path: Vec<String> },
 }
 
-/// The ops that take `before` to `after`: an entry of a root map re-sent whole when it moved,
-/// any other root re-sent whole. Shallow by design — a record is the unit a reader derives from.
+/// The ops that take `before` to `after`, as deep as the maps go: a map whose kept keys stay in
+/// order is descended, so a moved literal rides alone; any other value is re-sent whole.
 pub fn diff_ops(before: &Value, after: &Value) -> Vec<Op> {
-    let (Some(b), Some(a)) = (before.as_object(), after.as_object()) else {
-        return vec![Op::Put { path: Vec::new(), value: after.clone() }];
-    };
     let mut ops = Vec::new();
-    for (root, av) in a {
-        match (b.get(root), av) {
-            // Per-key ops keep old keys in place and append new ones; any other order goes whole.
-            (Some(Value::Object(bm)), Value::Object(am)) if !keeps_order(bm, am) => {
-                ops.push(Op::Put { path: vec![root.clone()], value: av.clone() });
-            }
-            (Some(Value::Object(bm)), Value::Object(am)) => {
-                for (key, v) in am {
-                    if bm.get(key) != Some(v) {
-                        ops.push(Op::Put { path: vec![root.clone(), key.clone()], value: v.clone() });
-                    }
-                }
-                for key in bm.keys().filter(|k| !am.contains_key(*k)) {
-                    ops.push(Op::Del { path: vec![root.clone(), key.clone()] });
-                }
-            }
-            (Some(bv), _) if bv == av => {}
-            _ => ops.push(Op::Put { path: vec![root.clone()], value: av.clone() }),
-        }
-    }
-    for root in b.keys().filter(|k| !a.contains_key(*k)) {
-        ops.push(Op::Del { path: vec![root.clone()] });
-    }
+    diff_into(&mut ops, Vec::new(), before, after);
     ops
+}
+
+fn diff_into(ops: &mut Vec<Op>, path: Vec<String>, before: &Value, after: &Value) {
+    let at = |key: &str| path.iter().cloned().chain([key.to_string()]).collect::<Vec<_>>();
+    match (before.as_object(), after.as_object()) {
+        // Per-key ops keep old keys in place and append new ones; any other order goes whole.
+        (Some(b), Some(a)) if keeps_order(b, a) => {
+            for (key, v) in a {
+                match b.get(key) {
+                    Some(bv) if bv == v => {}
+                    Some(bv) => diff_into(ops, at(key), bv, v),
+                    None => ops.push(Op::Put { path: at(key), value: v.clone() }),
+                }
+            }
+            for key in b.keys().filter(|k| !a.contains_key(*k)) {
+                ops.push(Op::Del { path: at(key) });
+            }
+        }
+        _ if before == after => {}
+        _ => ops.push(Op::Put { path, value: after.clone() }),
+    }
 }
 
 /// Whether per-key ops on `before` leave its keys in `after`'s order.

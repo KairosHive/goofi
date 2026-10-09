@@ -56,9 +56,32 @@ struct Leaf {
     engine: &'static str,
     /// The param RECORD — the literals `serialize` writes, every param of the class. An evaluated
     /// value must never reach it; the typed params with bounds derive from the class on read.
-    values: doc::Values,
+    values: Record,
     /// The graph resolves each source's references and ships it; the NODE evaluates it.
     sources: HashMap<ParamKey, ParamSource>,
+}
+
+/// A leaf's literals, with the typed params derived from them memoized until the next write:
+/// the record's one reader derives through [`Graph::typed`], and a write clears the memo.
+struct Record {
+    values: doc::Values,
+    typed: std::sync::OnceLock<Arc<ParamGroups>>,
+}
+
+impl Record {
+    fn new(values: doc::Values) -> Record {
+        Record { values, typed: std::sync::OnceLock::new() }
+    }
+
+    fn get(&self) -> &doc::Values {
+        &self.values
+    }
+
+    /// The literals to write; the typed memo goes with the borrow.
+    fn get_mut(&mut self) -> &mut doc::Values {
+        self.typed.take();
+        &mut self.values
+    }
 }
 
 /// One running node: the engine it was born into and what it reports. Born and removed by
@@ -1023,6 +1046,7 @@ impl Graph {
             engine.id()
         );
         self.runtime.engines.push(engine);
+        self.forget_typed();
     }
 
     /// What every engine and the drain worker share: a node report notifies it, the worker parks
@@ -1173,6 +1197,7 @@ impl Graph {
             for engine in &mut self.runtime.engines {
                 out.extend(qualified(engine.id(), engine.scan(root)));
             }
+            self.forget_typed();
             let unavailable = out.iter().filter(|t| matches!(t.outcome, goofi_node::Scanned::Unavailable(_))).count();
             goofi_supervisor::progress::indexed(root, out.len() - unavailable, unavailable);
         }
@@ -1194,6 +1219,7 @@ impl Graph {
         let held = self.held_manifests();
         let out: Vec<_> =
             self.runtime.engines.iter_mut().flat_map(|e| qualified(e.id(), e.scan_own())).collect();
+        self.forget_typed();
         self.note_scanned(&out, &held);
         out
     }
@@ -1243,6 +1269,7 @@ impl Graph {
         for e in self.runtime.engines.iter_mut().filter(|e| engine.is_none_or(|want| want == e.id())) {
             had |= e.remove_type(name);
         }
+        self.forget_typed();
         self.runtime.unavailable.remove(type_name).is_some() || had
     }
 
@@ -1655,7 +1682,7 @@ impl Graph {
         values: doc::Values,
     ) {
         self.runtime.changed.push(Change::Added(uid));
-        let leaf = Leaf { manifest: entry.manifest, isolation: entry.isolation, engine, values, sources: HashMap::new() };
+        let leaf = Leaf { manifest: entry.manifest, isolation: entry.isolation, engine, values: Record::new(values), sources: HashMap::new() };
         self.patch.nodes.insert(uid, NodeEntry::new(Kind::Leaf(Box::new(leaf)), name, [0.0, 0.0]));
     }
 
@@ -1709,19 +1736,30 @@ impl Graph {
 
     /// A node's params as of now. An owned snapshot rather than a borrow: cloning the `Arc` is
     /// cheap, and a `&` would borrow the whole graph for as long as the caller held it.
-    pub fn params(&self, uid: Uid) -> Option<ParamGroups> {
+    pub fn params(&self, uid: Uid) -> Option<Arc<ParamGroups>> {
         self.leaf(uid).map(|l| self.typed(l))
     }
 
     /// The literals a leaf holds, as the document spells them.
     pub fn values(&self, uid: Uid) -> Option<doc::Values> {
-        self.leaf(uid).map(|l| l.values.clone())
+        self.leaf(uid).map(|l| l.values.get().clone())
     }
 
     /// A leaf's params as its class declares them NOW, with the record's literals folded in:
     /// the one derivation of a typed param, so no record can carry a stale bound or option.
-    fn typed(&self, leaf: &Leaf) -> ParamGroups {
-        self.folded(&goofi_node::qualify(leaf.engine, leaf.manifest.type_name), &leaf.values).unwrap_or_default()
+    /// Memoized on the record until it is written or the library moves.
+    fn typed(&self, leaf: &Leaf) -> Arc<ParamGroups> {
+        leaf.values
+            .typed
+            .get_or_init(|| Arc::new(self.folded(&goofi_node::qualify(leaf.engine, leaf.manifest.type_name), leaf.values.get()).unwrap_or_default()))
+            .clone()
+    }
+
+    /// The library moved: every typed memo derives again on its next read.
+    fn forget_typed(&mut self) {
+        for leaf in self.patch.nodes.values_mut().filter_map(|e| e.leaf_mut()) {
+            leaf.values.typed.take();
+        }
     }
 
     /// The class's params with `values` folded in, each coerced to its declared type; a value
@@ -1829,7 +1867,7 @@ impl Graph {
             return serde_json::json!({});
         };
         let mut out = serde_json::Map::new();
-        for (group, names) in &self.typed(leaf) {
+        for (group, names) in self.typed(leaf).iter() {
             for (name, p) in names {
                 if matches!(p, Param::Pulse) {
                     continue;
@@ -2434,12 +2472,13 @@ impl Graph {
         entry.manifest = lib.manifest;
         entry.isolation = lib.isolation;
         entry.engine = engine;
-        entry.values.retain(|group, names| {
+        let values = entry.values.get_mut();
+        values.retain(|group, names| {
             names.retain(|name, _| declared.get(group).is_some_and(|g| g.contains_key(name)));
             !names.is_empty()
         });
         for (group, names) in &declared {
-            let held = entry.values.entry(group.clone()).or_default();
+            let held = values.entry(group.clone()).or_default();
             for (name, p) in names {
                 if let (false, Some(v)) = (held.contains_key(name), control::data_of(p)) {
                     held.insert(name.clone(), v);
@@ -2503,7 +2542,7 @@ impl Graph {
         };
         if let Some(v) = control::data_of(&whole) {
             let leaf = self.leaf_mut(uid).expect("looked up above");
-            leaf.values.entry(group.to_string()).or_default().insert(base.to_string(), v);
+            leaf.values.get_mut().entry(group.to_string()).or_default().insert(base.to_string(), v);
         }
         // A LITERAL on a driven param switches it to constant, which is what the node does with
         // this write's `SetParam`; what the record retained stays retained.
@@ -2984,7 +3023,7 @@ impl Graph {
             }
         }
         let edges = self.resolved_edges();
-        let typed: HashMap<Uid, ParamGroups> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
+        let typed: HashMap<Uid, Arc<ParamGroups>> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
             let Runtime { generations, instance, engines, watched, .. } = &mut self.runtime;
             let variables = self.patch.variables.lock();
@@ -3189,7 +3228,7 @@ impl Graph {
         for (uid, e) in self.patch.nodes.iter().filter(|(u, _)| want.contains(u)) {
             let mut params = IndexMap::new();
             if let Some(leaf) = e.leaf() {
-                for (group, names) in &self.typed(leaf) {
+                for (group, names) in self.typed(leaf).iter() {
                     let entries: IndexMap<String, doc::ParamEntry> = names
                         .iter()
                         .filter_map(|(name, p)| {
@@ -3717,7 +3756,7 @@ fn apply_status_to(
 /// The settled view, borrowed from the one model — built at the settle point and nowhere else.
 fn build_view<'a>(
     nodes: &'a IndexMap<Uid, NodeEntry>,
-    typed: &'a HashMap<Uid, ParamGroups>,
+    typed: &'a HashMap<Uid, Arc<ParamGroups>>,
     generations: &HashMap<Uid, u64>,
     instance: &'a str,
     edges: &'a [Edge],

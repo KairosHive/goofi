@@ -557,6 +557,29 @@ fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
     assert_eq!(g.variable("patch.subject"), "P07");
 }
 
+#[tokio::test]
+async fn a_delta_names_the_leaf_it_moved_and_lands_a_replica_equal_to_the_document() {
+    // A param edit moves one literal of one node: the delta a tab receives names that leaf, not
+    // the whole record, and a tab applying every delta holds the document the manager holds.
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.add("Buffer");
+    let (mut tab, _hello) = Client::connect(&g.serve().await).await;
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency", "value": 7.5 }));
+    let patch = tab.event("doc_patch").await;
+    let ops = patch["ops"].as_array().expect("a delta is a list of ops");
+    assert!(!ops.is_empty(), "{patch}");
+    for op in ops {
+        assert_eq!(op["path"], j!(["nodes", hex(osc), "params", "lfo", "frequency", "value"]), "one literal moved: {patch}");
+    }
+    assert_eq!(tab.doc().to_json(), g.doc(), "the replica after the delta is the document");
+    // A record whose shape moves — a node born — still lands whole.
+    let buf = g.add("Buffer");
+    let patch = tab.event("doc_patch").await;
+    assert!(patch["ops"].as_array().unwrap().iter().any(|op| op["path"] == j!(["nodes", hex(buf)])), "{patch}");
+    assert_eq!(tab.doc().to_json(), g.doc());
+}
+
 fn panel_id(g: &Goofi) -> String {
     goofi_tests::panel_ids(&g.doc()["arrangement"]).first().cloned().expect("the default panel")
 }

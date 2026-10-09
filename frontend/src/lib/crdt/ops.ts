@@ -1,5 +1,5 @@
-/** The replica delta: path operations, the browser half of `goofi_bridge::doc`. A path is
- * `[root]` or `[root, key]`; a `put` sets the value there and a `del` removes it. */
+/** The replica delta: path operations, the browser half of `goofi_bridge::doc`. A path descends
+ * the document's maps, `[root, key, …]`; a `put` sets the value there and a `del` removes it. */
 import type { JsonValue, Op } from '$lib/api/generated';
 
 export type { Op };

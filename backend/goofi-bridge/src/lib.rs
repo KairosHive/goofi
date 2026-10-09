@@ -813,6 +813,11 @@ pub async fn serve_app(
     spa: Spa,
     dev_routes: bool,
 ) -> std::io::Result<()> {
+    // Every reply and delta goes out at once: a frame held back for a delayed ACK is lag.
+    use axum::serve::ListenerExt;
+    let listener = listener.tap_io(|tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     axum::serve(listener, app(state, spa, dev_routes)).await
 }
 
