@@ -311,7 +311,11 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     let g = Goofi::new();
     let base = g.serve().await;
     let mut victim = narrow(&base, "/control").await;
-    victim.next().await; // the initial hello, then stall
+    // The initial hello, which carries the palette, then stall.
+    let first = victim.next().await;
+    let Some(Ok(Message::Text(first))) = first else { panic!("no hello: {first:?}") };
+    let first: Value = serde_json::from_str(first.as_str()).unwrap();
+    assert!(first["payload"]["node_types"].as_array().is_some_and(|t| !t.is_empty()), "a fresh socket takes the palette");
 
     // Stalled for the WHOLE flood, and the flood sized in bytes: the ring lags only once the
     // socket's send buffer is full, and Linux autotunes that up to 4 MB before a write blocks.
@@ -329,8 +333,10 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     let recovered = tokio::time::timeout(WAIT, async {
         loop {
             if let Some(Ok(Message::Text(t))) = victim.next().await {
-                if serde_json::from_str::<Value>(t.as_str()).unwrap()["event"] == "hello" {
-                    return true;
+                let v = serde_json::from_str::<Value>(t.as_str()).unwrap();
+                if v["event"] == "hello" {
+                    // The client holds the palette already: a re-seed does not ship it again.
+                    return v["payload"].get("node_types").is_none();
                 }
             }
         }

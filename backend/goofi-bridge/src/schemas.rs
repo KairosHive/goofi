@@ -371,8 +371,6 @@ pub fn snapshot(
     snap["node_stats"] = stats;
     if with_protocol {
         snap["protocol_version"] = json!(PROTOCOL_VERSION);
-        // The palette rides along, so the first render needs no `list_nodes` round-trip.
-        snap["node_types"] = catalog_types(g, Detail::Full);
         snap["demo"] = json!(state.mode.demo);
         if let Some(examples) = state.examples() {
             snap["examples"] = examples;
