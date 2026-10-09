@@ -304,10 +304,11 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     });
     assert_eq!(shape(&flipped), vec![3, 4], "a function does not change the shape");
 
-    // Reducing the LAST axis takes the rate with it; reducing another leaves time in place.
+    // Reducing the LAST axis takes the rate with it; reducing another leaves time in place; an
+    // empty `axes` list collapses every axis into one value, which an array holds as `[1]`.
     let over_time = g.add("Reduce");
     let over_channels = g.add("Reduce");
-    set(over_channels, "reduce", "axis", j!(0));
+    set(over_channels, "reduce", "axes", j!("0"));
     let (pt, pc) = (g.probe(over_time, "out"), g.probe(over_channels, "out"));
     g.link(src, "out", over_time, "input");
     g.link(src, "out", over_channels, "input");
@@ -315,6 +316,21 @@ fn the_array_nodes_reshape_a_grid_and_the_rate_follows_the_time_axis() {
     assert_eq!(collapsed.meta().sfreq(), None, "the rate belonged to the axis that is gone");
     let across = g.until("one value per sample", |_| pc.latest().filter(|d| shape(d) == vec![4]));
     assert_eq!(across.meta().sfreq(), Some(256.0), "the last axis is still time, so the rate stays");
+    // A flat grid of sevens, so the totals are exact whatever tick the frame comes from.
+    let flat = g.add("signal:Math");
+    set(flat, "math", "multiply", j!(0.0));
+    set(flat, "math", "post_add", j!(7.0));
+    g.link(src, "out", flat, "input");
+    let whole = g.add("Reduce");
+    set(whole, "reduce", "mode", j!("sum"));
+    set(whole, "reduce", "axes", j!(""));
+    let pw = g.probe(whole, "out");
+    g.link(flat, "out", whole, "input");
+    let total = g.until("one value for the grid", |_| pw.latest().filter(|d| shape(d) == vec![1]));
+    assert_eq!(f32s(&total), vec![84.0], "the sum of twelve sevens");
+    set(whole, "reduce", "axes", j!("0, -1"));
+    let named = g.until("the same two axes, named", |_| pw.latest().filter(|d| shape(d) == vec![1]));
+    assert_eq!(f32s(&named), vec![84.0], "`0, -1` names every axis of a grid");
 
     // A reorder carries the labels; a re-cut cannot, so it carries nothing.
     let swap = g.add("Reshape");
