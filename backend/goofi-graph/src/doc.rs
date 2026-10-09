@@ -140,6 +140,11 @@ pub struct Archive {
 }
 
 impl Archive {
+    /// The manifest as the `.gfi` carries it.
+    pub fn to_yaml(&self) -> String {
+        serde_yaml_ng::to_string(self).unwrap_or_default()
+    }
+
     /// Parse a manifest, refusing a version this build does not read and naming its writer.
     pub fn parse(text: &str) -> Result<Archive, String> {
         let raw: Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;

@@ -1305,12 +1305,19 @@ impl Graph {
     /// Every wide variable's array written under `workspace/variables/` as a native file, the
     /// recorder's format, and every file there that names no wide variable removed.
     pub fn persist_variables(&self, workspace: &std::path::Path) -> Result<(), String> {
-        let wide: Vec<(String, Data)> = self
-            .variables()
-            .entries()
-            .filter(|(_, v)| is_wide(&v.value))
-            .map(|(n, v)| (n.to_string(), v.value.clone()))
-            .collect();
+        write_variables(workspace, &self.wide_variables())
+    }
+
+    /// Every wide variable's value, by name: what [`write_variables`] puts in the workspace.
+    pub fn wide_variables(&self) -> Vec<(String, Data)> {
+        self.variables().entries().filter(|(_, v)| is_wide(&v.value)).map(|(n, v)| (n.to_string(), v.value.clone())).collect()
+    }
+}
+
+/// Write `wide` into `workspace` as one `.npy` per variable, and remove the files of variables that
+/// are no longer wide. Needs no graph: a caller takes the values under the lock and writes after.
+pub fn write_variables(workspace: &std::path::Path, wide: &[(String, Data)]) -> Result<(), String> {
+    {
         let dir = workspace.join("variables");
         if let Ok(held) = std::fs::read_dir(&dir) {
             for entry in held.flatten() {
@@ -1327,7 +1334,7 @@ impl Graph {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for (name, value) in wide {
             let goofi_core::Value::Array(a) = value.value() else { continue };
-            let (path, bytes) = (variable_file(workspace, &name), goofi_record::npy::bytes(a.shape(), a.as_bytes()));
+            let (path, bytes) = (variable_file(workspace, name), goofi_record::npy::bytes(a.shape(), a.as_bytes()));
             // An unchanged file is left alone: a write is an edit to the watcher and the baseline.
             if std::fs::read(&path).is_ok_and(|held| held == bytes) {
                 continue;
@@ -1336,6 +1343,9 @@ impl Graph {
         }
         Ok(())
     }
+}
+
+impl Graph {
 
     /// Every engine that builds `.rs` node files, with the SDK crate it builds them against.
     pub fn rust_sdks(&self) -> Vec<(&'static str, &'static str)> {
@@ -3477,6 +3487,12 @@ impl Graph {
     /// The whole patch as its `.gfi` manifest, every narrow variable's value in it; a wide array
     /// is the file [`Self::persist_variables`] writes.
     pub fn serialize(&self) -> String {
+        self.archive().to_yaml()
+    }
+
+    /// The patch as its `.gfi` manifest, before encoding: what a caller takes under the graph lock
+    /// and encodes after releasing it.
+    pub fn archive(&self) -> doc::Archive {
         let mut patch = self.document();
         let variables = self.variables();
         // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
@@ -3487,13 +3503,12 @@ impl Graph {
         }
         // A device's group is the session's likewise, and a playhead's is its machine's to re-derive.
         patch.variable_groups.retain(|g, rec| !goofi_core::variables::is_own_group(g) && !rec.owned());
-        let archive = doc::Archive {
+        doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),
             patch,
             viewpoint: (!self.viewpoint.is_null()).then(|| self.viewpoint.clone()),
-        };
-        serde_yaml_ng::to_string(&archive).unwrap_or_default()
+        }
     }
 
     /// Replace the graph from a `.gfi` manifest, born into `workspace`. A rejected document leaves

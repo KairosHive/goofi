@@ -150,11 +150,13 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         }
         return;
     }
-    let (manifest, arrays) = {
+    // Taken under the graph lock, encoded and written after it: the status drain waits on that lock.
+    let (archived, wide) = {
         let g = state.graph.lock();
-        (g.serialize(), g.persist_variables(&dir.join(archive::WORKSPACE)))
+        (g.archive(), g.wide_variables())
     };
-    if let Err(e) = arrays {
+    let manifest = archived.to_yaml();
+    if let Err(e) = goofi_graph::write_variables(&dir.join(archive::WORKSPACE), &wide) {
         goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
     }
     if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
