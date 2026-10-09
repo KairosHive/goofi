@@ -704,7 +704,7 @@ fn shaders_render_on_the_gpu() {
     std::fs::write(dir.join("Overlong.wgsl"), OVERLONG).unwrap();
     g.call("library refresh", j!({}));
     let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["colour_hue"];
-    assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!({ "group": "look", "name": "tint", "any_of": ["true"] })));
+    assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!([{ "group": "look", "name": "tint", "any_of": ["true"] }])));
     assert_eq!(hue["role"], j!({ "as": "member", "section": "colour", "base": "hue", "slot": null }));
     let listed = g.call("library list", j!({ "full": true }));
     let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Untinted").cloned();
@@ -1016,11 +1016,11 @@ fn shaders_render_on_the_gpu() {
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
-    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.system.default_width"), &j!("expression")),
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.graphics.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
     drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
-    g.call("variable entry edit", j!({ "name": "system.default_width", "value": 96 }));
-    g.call("variable entry edit", j!({ "name": "system.default_height", "value": 48 }));
+    g.call("variable entry edit", j!({ "name": "graphics.default_width", "value": 96 }));
+    g.call("variable entry edit", j!({ "name": "graphics.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
     // A loop that follows itself at 0,0 can follow nothing: it takes the patch's default too, not
     // the number the variables were born with.

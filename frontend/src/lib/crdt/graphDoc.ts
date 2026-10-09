@@ -156,7 +156,7 @@ export function machineGroups(doc: Doc): Record<string, string> {
 /** The groups a control panel may draw, in document order: every plain group — not a device's,
  * not a playhead's, not goofi's own — and every group a control panel names, held or not. */
 export function controlGroups(doc: Doc): string[] {
-	const owned = new Set(['system', ...Object.keys(midiGroups(doc)), ...Object.keys(machineGroups(doc))]);
+	const owned = new Set(['system', 'signal', 'graphics', 'audio', ...Object.keys(midiGroups(doc)), ...Object.keys(machineGroups(doc))]);
 	const out = new Set<string>();
 	for (const group of Object.keys(obj(doc.variable_groups))) if (!owned.has(group)) out.add(group);
 	for (const name of Object.keys(obj(doc.variables))) {

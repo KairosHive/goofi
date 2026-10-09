@@ -39,9 +39,9 @@ describe('GraphStore variables mutators — the command surface the panel + agen
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		seedSystemVariable(d, 'system.default_ufreq', 30);
-		await g.setVariableValue('system.default_ufreq', 45);
-		expect(found(fc, 'variable entry edit')).toEqual({ name: 'system.default_ufreq', value: 45 });
+		seedSystemVariable(d, 'signal.default_ufreq', 30);
+		await g.setVariableValue('signal.default_ufreq', 45);
+		expect(found(fc, 'variable entry edit')).toEqual({ name: 'signal.default_ufreq', value: 45 });
 	});
 
 	it('setVariableValue rejects an unknown variable (no command sent)', async () => {

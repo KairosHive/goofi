@@ -153,7 +153,7 @@ describe('graphDoc variables', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'system.default_ufreq': {},
+				'signal.default_ufreq': {},
 				'system.goofi_home': { lock: { value: true } },
 				'patch.subject': {},
 				'mixer.gain': {
@@ -165,7 +165,7 @@ describe('graphDoc variables', () => {
 		};
 		const free = { config: false, value: false };
 		expect(variableViews(doc)).toEqual([
-			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', control: undefined, lock: free },
+			{ name: 'signal.default_ufreq', group: 'signal', element: 'default_ufreq', control: undefined, lock: free },
 			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', control: undefined, lock: { config: false, value: true } },
 			{ name: 'patch.subject', group: 'patch', element: 'subject', control: undefined, lock: free },
 			{ name: 'mixer.gain', group: 'mixer', element: 'gain', control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }

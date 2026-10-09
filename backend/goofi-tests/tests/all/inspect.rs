@@ -166,7 +166,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     let g = Goofi::new();
     let osc = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-                                   "expression": "variables.system.default_ufreq / 30" }));
+                                   "expression": "variables.signal.default_ufreq / 30" }));
     // A rate is MEASURED, so it needs two emits and a report across the status service.
     g.until("the LFO's measured rate", |g| {
         g.graph().node_ufreq(osc)
@@ -180,7 +180,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     assert!(out.contains("  common.frequency_mode = \"updates-per-second\" (string one of [updates-per-second, "),
             "{out}");
     // …and into its expression half. This binding cannot compile (no evaluator here), shown inline.
-    assert!(out.contains("  lfo.amplitude = expr: variables.system.default_ufreq / 30 → 1 [error: "),
+    assert!(out.contains("  lfo.amplitude = expr: variables.signal.default_ufreq / 30 → 1 [error: "),
             "{out}");
     // The slot line never carries the frame: there is one door onto a node's data and it is `/data`.
     assert!(out.contains("  out: ARRAY — emitting at "), "the emitting line: {out}");
@@ -210,7 +210,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     g.graph().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
     let bound = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(bound), "param": "lfo/amplitude",
-                                   "expression": "variables.system.default_ufreq / 30" }));
+                                   "expression": "variables.signal.default_ufreq / 30" }));
     let live = g.until("the node's own evaluation error", |g| {
         Some(text(g, "node state", j!({ "node": hex(bound) }))).filter(|t| t.contains(BLEW_UP))
     });
@@ -228,11 +228,14 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
 #[test]
 fn list_variables_names_the_system_variables_an_expression_can_read() {
     let g = Goofi::new();
-    let first = g.call("variable list", j!({}))["variables"][0].clone();
-    assert_eq!(first["name"], "system.default_ufreq");
-    assert_eq!(first["value"], 30);
-    // What holds it is the system group's lock, answered on the entry as the lock in force.
-    assert_eq!(first["lock"], j!({ "config": true, "value": false }));
+    let listed = g.call("variable list", j!({}))["variables"].clone();
+    let ufreq = listed.as_array().unwrap().iter().find(|v| v["name"] == "signal.default_ufreq").expect("seeded").clone();
+    assert_eq!(ufreq["value"], 30);
+    // What holds it is its group's lock, answered on the entry as the lock in force.
+    assert_eq!(ufreq["lock"], j!({ "config": true, "value": false }));
+    // Goofi's own groups come first, in the order they are seeded: the machine's, then one per engine.
+    let groups: Vec<&str> = listed.as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().split('.').next().unwrap()).collect();
+    assert!(groups.starts_with(&["system", "system", "signal", "graphics", "graphics", "audio"]), "{groups:?}");
 }
 
 #[test]

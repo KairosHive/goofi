@@ -53,7 +53,7 @@ pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 4] {
         decl(
             "max_frequency",
             ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
-            Some(ExprDecl { source: "variables.system.default_ufreq", mode: if m.producer { ExprMode::On } else { ExprMode::Off } }),
+            Some(ExprDecl { source: "variables.signal.default_ufreq", mode: if m.producer { ExprMode::On } else { ExprMode::Off } }),
             "Rate cap for this node, read through `frequency_mode`. 0 means uncapped — the node \
              runs as often as the scheduler and its inputs allow.",
         ),

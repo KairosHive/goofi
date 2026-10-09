@@ -88,6 +88,8 @@ pub struct AudioStatus {
     /// graph lock, which is the thing to read, not an underrun.
     pub contended: u64,
     pub render_max_us: u64,
+    /// The frames the host hands each callback, as it granted them; absent without a device.
+    pub period: Option<u32>,
 }
 
 #[derive(Default)]
@@ -105,6 +107,9 @@ pub(crate) struct Stats {
 struct DeviceClock {
     name: String,
     channels: u16,
+    /// What `audio.buffer_size` asked for when this opened, and the period the host granted.
+    buffer: u32,
+    period: Option<u32>,
     go: Option<mpsc::Sender<()>>,
     done: mpsc::Receiver<()>,
     /// Whether the stream still runs: lowered when it is dropped or its device went away.
@@ -114,8 +119,8 @@ struct DeviceClock {
 }
 
 impl DeviceClock {
-    fn open(name: &str, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(DeviceClock, f64), String> {
-        let (opened, on_open) = mpsc::channel::<Result<(f64, u16), String>>();
+    fn open(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(DeviceClock, f64), String> {
+        let (opened, on_open) = mpsc::channel::<Result<(f64, u16, Option<u32>), String>>();
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
@@ -124,9 +129,9 @@ impl DeviceClock {
         goofi_supervisor::worker::thread("goofi-audio-clock")
             .spawn(move || {
                 let _lowered = Lowered(lowered);
-                let stream = match open_output(&device, runtime, stats.clone(), waker.clone()) {
+                let stream = match open_output(&device, buffer, runtime, stats.clone(), waker.clone()) {
                     Ok((stream, rate, channels)) => {
-                        let _ = opened.send(Ok((rate, channels)));
+                        let _ = opened.send(Ok((rate, channels, stream.buffer_size().ok())));
                         stream
                     }
                     Err(e) => {
@@ -147,11 +152,11 @@ impl DeviceClock {
             })
             .map_err(|e| format!("could not start the clock thread: {e}"))?;
         let wait = if crate::host::asio_driver(name).is_some() { ASIO_OPEN_WAIT } else { OPEN_WAIT };
-        let (rate, channels) = on_open
+        let (rate, channels, period) = on_open
             .recv_timeout(wait)
             .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
         let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {name}"));
-        Ok((DeviceClock { name: name.to_string(), channels, go: Some(go), done: on_done, playing, _lease: lease }, rate))
+        Ok((DeviceClock { name: name.to_string(), channels, buffer, period, go: Some(go), done: on_done, playing, _lease: lease }, rate))
     }
 
     /// Start the callbacks — only once the runtime is cut to this stream's rate and width.
@@ -184,13 +189,16 @@ pub(crate) const DEFAULT_DEVICE: &str = "default";
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
-fn open_output(name: &str, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(cpal::Stream, f64, u16), String> {
+/// Open `name` with `buffer` frames per callback, or the host's own buffer for 0. A host left to
+/// itself may hold seconds (pipewire-pulse holds 2 s); `render_into` is size-agnostic.
+fn open_output(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(cpal::Stream, f64, u16), String> {
     let device = host::device(host::Kind::Output, name)?;
     let supported = device.default_output_config().map_err(|e| format!("`{name}`: {e}"))?;
     let format = supported.sample_format();
-    // The host's own buffer, never a size of ours: `render_into` is size-agnostic, and a request of
-    // ours underran while the client was unoptimized. The 2 s this costs is a roadmap item.
-    let config = supported.config();
+    let mut config = supported.config();
+    if buffer > 0 {
+        config.buffer_size = cpal::BufferSize::Fixed(buffer);
+    }
     let rate = f64::from(config.sample_rate);
     let channels = config.channels;
     // The sample format the DEVICE speaks, as on the input side; the runtime renders `f32`.
@@ -321,9 +329,11 @@ pub struct AudioEngine {
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
     device: Option<DeviceClock>,
-    /// The name last tried and what it answered: a name that failed is not tried again until it
-    /// moves, because the open runs under the graph lock.
-    tried: Option<(String, Option<String>)>,
+    /// The name and buffer size last tried and what they answered: a pair that failed is not tried
+    /// again until one moves, because the open runs under the graph lock.
+    tried: Option<(String, u32, Option<String>)>,
+    /// `audio.buffer_size` as the last settle read it: what the next open asks for.
+    buffer: u32,
     stats: Arc<Stats>,
     shared: Arc<Shared>,
     /// What only an audio control half needs: the clock's rate, what drives it, and the edits a
@@ -385,6 +395,7 @@ impl AudioEngine {
             clock,
             device: None,
             tried: None,
+            buffer: goofi_core::variables::DEFAULT_BUFFER,
             stats: Arc::new(Stats::default()),
             shared: Arc::new(Shared::new(waker.clone())),
             audio: Arc::new(AudioShared {
@@ -498,6 +509,7 @@ impl AudioEngine {
             xruns: self.stats.xruns.load(Ordering::Relaxed),
             contended: self.stats.contended.load(Ordering::Relaxed),
             render_max_us: self.stats.render_max_us.load(Ordering::Relaxed),
+            period: self.device.as_ref().and_then(|d| d.period),
         }
     }
 
@@ -630,8 +642,8 @@ impl AudioEngine {
             self.tried = None;
             return None;
         };
-        if let Some((tried, error)) = &self.tried {
-            if tried == name {
+        if let Some((tried, buffer, error)) = &self.tried {
+            if tried == name && *buffer == self.buffer {
                 return error.clone();
             }
         }
@@ -642,7 +654,7 @@ impl AudioEngine {
                 let _ = self.open(&previous);
             }
         }
-        self.tried = Some((name.to_string(), error.clone()));
+        self.tried = Some((name.to_string(), self.buffer, error.clone()));
         error
     }
 
@@ -654,7 +666,7 @@ impl AudioEngine {
     }
 
     fn open(&mut self, name: &str) -> Result<(), String> {
-        let (clock, rate) = DeviceClock::open(name, self.runtime.clone(), self.stats.clone(), self.shared.waker.clone())?;
+        let (clock, rate) = DeviceClock::open(name, self.buffer, self.runtime.clone(), self.stats.clone(), self.shared.waker.clone())?;
         self.retune(rate, clock.channels);
         clock.play();
         self.device = Some(clock);
@@ -917,6 +929,13 @@ impl Engine for AudioEngine {
             faults.extend(strays.map(|(uid, _)| (*uid, format!("the ASIO driver is `{held}`, and only one loads at a time"))));
         }
         if owns_devices(self.clock) {
+            // A moved buffer size is a new open of the same name: the clock closes so `follow`
+            // reopens it.
+            let buffer = view.variables.get("audio.buffer_size").map_or(0.0, goofi_core::control::number_of);
+            self.buffer = if buffer.is_finite() && buffer >= 0.0 { buffer.round() as u32 } else { 0 };
+            if self.device.as_ref().is_some_and(|d| d.buffer != self.buffer) {
+                self.close();
+            }
             if let Some(why) = self.follow(clock.as_deref()) {
                 faults.extend(outs.iter().filter(|(_, device)| agrees(device)).map(|(uid, _)| (*uid, why.clone())));
             }
@@ -946,11 +965,11 @@ impl Engine for AudioEngine {
         let device = s.device.unwrap_or_default();
         let driver = host::asio_driver(&device).unwrap_or_default().to_string();
         vec![
-            ("system.audio_rate", Data::number(s.rate)),
-            ("system.audio_channels", Data::number(f64::from(s.channels))),
-            ("system.audio_driver", Data::text(driver)),
-            ("system.audio_device", Data::text(device)),
-            ("system.audio_hosts", Data::text(host::hosts())),
+            ("audio.rate", Data::number(s.rate)),
+            ("audio.channels", Data::number(f64::from(s.channels))),
+            ("audio.driver", Data::text(driver)),
+            ("audio.device", Data::text(device)),
+            ("audio.hosts", Data::text(host::hosts())),
         ]
     }
 

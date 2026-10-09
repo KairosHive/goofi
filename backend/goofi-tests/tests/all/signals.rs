@@ -1030,7 +1030,7 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
     // chosen group's, offered as the group is picked — the graph answers both, the node's engine
     // never sees the store.
     let state = g.call("node state", j!({ "node": hex(var) }))["text"].to_string();
-    assert!(state.contains("one of [system, desk]") && state.contains("one of []"), "groups at birth, no element yet: {state}");
+    assert!(state.contains("one of [system, signal, graphics, audio, desk]") && state.contains("one of []"), "groups at birth, no element yet: {state}");
     let mut ev = g.events();
     set(var, "variable", "group", j!("desk"));
     let options = g.until("the group's elements offered", |_| {

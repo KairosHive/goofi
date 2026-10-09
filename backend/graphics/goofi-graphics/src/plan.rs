@@ -39,7 +39,7 @@ pub fn generator(view: &GraphView<'_>) -> (u32, u32) {
         Some(d) => (goofi_core::control::number_of(d) as i64).clamp(1, MAX_SIZE as i64) as u32,
         None => goofi_core::variables::DEFAULT_SIZE,
     };
-    (axis("system.default_width"), axis("system.default_height"))
+    (axis("graphics.default_width"), axis("graphics.default_height"))
 }
 /// The widest a node may ask for on either axis.
 pub const MAX_SIZE: u32 = goofi_core::texture::MAX_SIZE;

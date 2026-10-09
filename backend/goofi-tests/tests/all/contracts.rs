@@ -528,7 +528,7 @@ fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
     g.add("_TestResettable");
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
-                                   "expression": "variables.system.default_ufreq" }));
+                                   "expression": "variables.signal.default_ufreq" }));
     g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();

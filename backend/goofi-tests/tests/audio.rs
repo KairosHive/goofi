@@ -425,21 +425,21 @@ fn a_patch_sounds_under_the_external_clock() {
     // no door of its own. It is goofi's to say: a hand edit is refused, and no patch carries it.
     let listed = g.call("variable list", j!({}))["variables"].as_array().unwrap().clone();
     let variable = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
-    assert_eq!(variable("system.audio_rate")["value"].as_f64(), status["audio"]["rate"].as_f64(), "the rate the engine published");
-    assert_eq!(variable("system.audio_channels")["value"].as_f64(), status["audio"]["channels"].as_f64(), "the channels it published");
-    assert_eq!(variable("system.audio_device")["value"], j!(""), "no device under the external clock");
-    assert_eq!(variable("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    assert_eq!(variable("audio.rate")["value"].as_f64(), status["audio"]["rate"].as_f64(), "the rate the engine published");
+    assert_eq!(variable("audio.channels")["value"].as_f64(), status["audio"]["channels"].as_f64(), "the channels it published");
+    assert_eq!(variable("audio.device")["value"], j!(""), "no device under the external clock");
+    assert_eq!(variable("audio.driver")["value"], j!(""), "and no ASIO driver holds this process");
     // The APIs this build carries are published too, and every device a refresh offers is prefixed
     // with one of them — the name IS the host choice, so a name from an API outside the list would
     // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
-    let hosts = variable("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
+    let hosts = variable("audio.hosts")["value"].as_str().unwrap_or_default().to_string();
     assert!(!hosts.is_empty(), "a build carries at least one audio host");
     for name in devices.iter().filter(|n| *n != "default") {
         assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
                 "`{name}` names an audio host outside `{hosts}`");
     }
-    assert_eq!(variable("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
-    let why = g.refuse("variable entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
+    assert_eq!(variable("audio.rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
+    let why = g.refuse("variable entry edit", j!({ "name": "audio.rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
     assert!(!g.call("session manifest", j!({}))["yaml"].as_str().unwrap().contains("audio_rate"),
             "and a patch never carries it");
@@ -983,12 +983,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("node remove", j!({ "node": hex(fiftieth) }));
     // The params beside `mode` show only for a waveform; an oscillator has none.
     let signal = &g.call("library get", j!({ "type": "audio:SignalIn" }))["params"]["signal"];
-    let waveform = j!({ "group": "signal", "name": "mode", "any_of": ["waveform"] });
+    let waveform = j!([{ "group": "signal", "name": "mode", "any_of": ["waveform"] }]);
     for name in ["mix", "low", "high", "smoothing"] {
         assert_eq!(signal[name]["show"], waveform, "{name}");
     }
-    assert_eq!(signal["pitch"]["show"], j!({ "group": "signal", "name": "mode", "any_of": ["oscillator"] }));
-    assert_eq!(signal["mode"]["show"], j!(null));
+    assert_eq!(signal["pitch"]["show"], j!([{ "group": "signal", "name": "mode", "any_of": ["oscillator"] }]));
+    assert_eq!(signal["mode"]["show"], j!([]));
     for uid in [in2, ramp2] {
         g.call("node remove", j!({ "node": hex(uid) }));
     }

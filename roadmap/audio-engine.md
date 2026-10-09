@@ -12,10 +12,6 @@ The audio node contract is `sdk/README.md` and the code.
   choosing the worker scheduling and buffer policy. Remove the `audio_thread_priority` git patch
   (`dav0dea`, `goofi-direct-first`, `Cargo.toml [patch.crates-io]`) when upstream provides
   direct-first Linux promotion.
-- **A buffer size request.** goofi asks for none (no `BufferSize` in `goofi-audio`); the host
-  default costs 2 s of buffer on pipewire-pulse. `Fixed(1024)` would make it ~43 ms end to end.
-  Provable only from outside the process, by recording the sink back: `session status` reports
-  what goofi did, not what was heard, and this host never surfaces the server's underflow.
 - **A device switch, a rate change and a stream loss run only under `Clock::Internal`**, which only
   `goofi-cli` constructs for audio; every test boots audio under `Clock::External`. A rate change and a stream loss
   (`DeviceNotAvailable` in the error callback) are unexercised. Windows and macOS callbacks are

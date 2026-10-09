@@ -130,7 +130,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
 /// The universal `common` group every graphics node carries; a third param is added here and
 /// nowhere else.
 fn common_decls(m: &NodeManifest) -> [ParamDecl; 2] {
-    [size_decl("width", "variables.system.default_width", m), size_decl("height", "variables.system.default_height", m)]
+    [size_decl("width", "variables.graphics.default_width", m), size_decl("height", "variables.graphics.default_height", m)]
 }
 
 /// Every param a graphics node holds: the author's, then the engine's universal group. ONE order

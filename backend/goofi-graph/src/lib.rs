@@ -666,8 +666,9 @@ impl Graph {
         control: Option<Option<goofi_core::variables::Control>>,
     ) -> Result<(), String> {
         self.variables().apply_change(name, value, at, control)?;
-        // An engine reads `system.*` off the settled view, so a value there is delivered by a settle.
-        if name.starts_with("system.") {
+        // An engine reads goofi's own groups off the settled view, so a value there is delivered by
+        // a settle.
+        if goofi_core::variables::split_variable(name).is_some_and(|(g, _)| goofi_core::variables::is_own_group(g)) {
             self.runtime.resettle = true;
         }
         Ok(())
@@ -3428,13 +3429,13 @@ impl Graph {
         let mut patch = self.document();
         let variables = self.variables();
         // An ephemeral variable is goofi's own to say; writing it into a patch would carry one
-        // machine's answer onto another. The system group's lock is re-asserted on load likewise.
+        // machine's answer onto another. Goofi's own groups' locks are re-asserted on load likewise.
         patch.variables.retain(|name, _| !variables.is_ephemeral(name));
         for (name, record) in &mut patch.variables {
             record.value = variables.get(name).filter(|v| !is_wide(v)).cloned();
         }
         // A device's group is the session's likewise, and a playhead's is its machine's to re-derive.
-        patch.variable_groups.retain(|g, rec| g != goofi_core::variables::SYSTEM_GROUP && !rec.owned());
+        patch.variable_groups.retain(|g, rec| !goofi_core::variables::is_own_group(g) && !rec.owned());
         let archive = doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),

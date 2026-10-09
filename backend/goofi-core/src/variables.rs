@@ -249,13 +249,11 @@ pub struct VariableDef {
 /// graphics chain with nothing to follow falls back to it.
 pub const DEFAULT_SIZE: u32 = 1024;
 
+/// The frames an output device renders per callback unless `audio.buffer_size` says otherwise:
+/// the smallest a PipeWire server grants a PulseAudio client, 2.7 ms at 48 kHz.
+pub const DEFAULT_BUFFER: u32 = 128;
+
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
-    VariableDef {
-        name: "system.default_ufreq",
-        value: || Data::number(30.0),
-        doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
-        ephemeral: false,
-    },
     VariableDef {
         name: "system.viewer_fps",
         value: || Data::number(30.0),
@@ -263,51 +261,63 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
         ephemeral: false,
     },
     VariableDef {
-        name: "system.default_width",
+        name: "system.goofi_home",
+        value: || Data::text(crate::path::to_slash(&goofi_supervisor::layout::home())),
+        doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
+        ephemeral: true,
+    },
+    VariableDef {
+        name: "signal.default_ufreq",
+        value: || Data::number(30.0),
+        doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "graphics.default_width",
         value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
-        name: "system.default_height",
+        name: "graphics.default_height",
         value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
-        name: "system.audio_rate",
+        name: "audio.buffer_size",
+        value: || Data::number(f64::from(DEFAULT_BUFFER)),
+        doc: "The frames the output device is asked to render per callback: the buffer between goofi and the speakers. 0 leaves the choice to the host, which may hold seconds. The clock reopens when it moves.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "audio.rate",
         value: || Data::number(0.0),
         doc: "The audio clock's sample rate. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_channels",
+        name: "audio.channels",
         value: || Data::number(0.0),
         doc: "How many channels the audio clock carries. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_device",
+        name: "audio.device",
         value: || Data::text(""),
         doc: "The device driving the audio clock, empty under the external clock or where none is open.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_driver",
+        name: "audio.driver",
         value: || Data::text(""),
         doc: "The ASIO driver holding the process, empty where none does — one loads at a time, so it is the patch's.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_hosts",
+        name: "audio.hosts",
         value: || Data::text(""),
         doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
-        ephemeral: true,
-    },
-    VariableDef {
-        name: "system.goofi_home",
-        value: || Data::text(crate::path::to_slash(&goofi_supervisor::layout::home())),
-        doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
         ephemeral: true,
     },
 ];
@@ -375,9 +385,13 @@ pub fn is_valid_name(name: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
-/// The group `system`, which is goofi's own: born config-locked, and no lock of its is a caller's
-/// to set.
-pub const SYSTEM_GROUP: &str = "system";
+/// The groups goofi owns: each born config-locked, named for life, and no lock of theirs is a
+/// caller's to set. `system` is the machine's, the other three are one engine's each.
+pub const OWN_GROUPS: [&str; 4] = ["system", "signal", "graphics", "audio"];
+
+pub fn is_own_group(group: &str) -> bool {
+    OWN_GROUPS.contains(&group)
+}
 
 /// A variable's name as a producer's slot name: one leaked copy per distinct name, because a
 /// slot is spelled `&'static str` everywhere a wire is, and a patch names few variables.
@@ -485,7 +499,7 @@ impl VariableStore {
         // The system wires stay open: every node's default expression reads one, and a wire
         // reopened under a live reader is a second service. Their values start over in place.
         // A device's group is the session's as well, and stays as the device does.
-        let gone: Vec<String> = self.entries.keys().filter(|n| !n.starts_with("system.") && self.midi(group_of(n)).is_none()).cloned().collect();
+        let gone: Vec<String> = self.entries.keys().filter(|n| !is_own_group(group_of(n)) && self.midi(group_of(n)).is_none()).cloned().collect();
         for name in &gone {
             self.retire(name);
             self.entries.shift_remove(name);
@@ -495,7 +509,7 @@ impl VariableStore {
     }
 
     /// Back-fill any missing system variable with its default — on construction and after a load —
-    /// and re-lock the system group. An EPHEMERAL one is overwritten instead: goofi says what it
+    /// and re-lock goofi's own groups. An EPHEMERAL one is overwritten instead: goofi says what it
     /// holds, never a file.
     pub fn reassert_system(&mut self) {
         self.seed_system(false);
@@ -510,7 +524,9 @@ impl VariableStore {
                 self.entries.insert(def.name.to_string(), v);
             }
         }
-        self.groups.insert(SYSTEM_GROUP.to_string(), Group { lock: Lock { config: true, value: false }, ..Group::default() });
+        for group in OWN_GROUPS {
+            self.groups.insert(group.to_string(), Group { lock: Lock { config: true, value: false }, ..Group::default() });
+        }
     }
 
     pub fn get(&self, name: &str) -> Option<&Data> {
@@ -605,7 +621,7 @@ impl VariableStore {
     /// and takes the widget, a new one is born at its value, one not named is retired. The owner's
     /// write, never a command; a group that is somebody else's is refused.
     pub fn claim(&mut self, group: &str, record: Group, entries: Entries) -> Result<(), String> {
-        if !is_valid_identifier(group) || group == SYSTEM_GROUP {
+        if !is_valid_identifier(group) || is_own_group(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
         if self.has_group(group) && self.groups.get(group).map(|r| (&r.midi, &r.machine)) != Some((&record.midi, &record.machine)) {
@@ -673,9 +689,9 @@ impl VariableStore {
         self.own_lock(name).or(self.group_lock(group_of(name)))
     }
 
-    /// Set a variable's own lock, answering the one it held. The system group's are not a caller's.
+    /// Set a variable's own lock, answering the one it held. Goofi's own groups' are not a caller's.
     pub fn set_lock(&mut self, name: &str, lock: Lock) -> Result<Lock, String> {
-        if group_of(name) == SYSTEM_GROUP {
+        if is_own_group(group_of(name)) {
             return Err(format!("`{name}` is goofi's own; its lock is not yours to set"));
         }
         let Some(v) = self.entries.get_mut(name) else {
@@ -688,8 +704,8 @@ impl VariableStore {
 
     /// Set or remove a group record, answering the previous record for undo.
     pub fn set_group_lock(&mut self, group: &str, lock: Option<Lock>) -> Result<Option<Lock>, String> {
-        if group == SYSTEM_GROUP {
-            return Err(format!("`{SYSTEM_GROUP}` is goofi's own; its lock is not yours to set"));
+        if is_own_group(group) {
+            return Err(format!("`{group}` is goofi's own; its lock is not yours to set"));
         }
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
@@ -738,7 +754,7 @@ impl VariableStore {
 
     fn config_locked(&self, name: &str) -> Result<(), String> {
         match self.lock_of(name).config {
-            true if group_of(name) == SYSTEM_GROUP => Err(format!("`{name}` is a system variable; its name is goofi's")),
+            true if is_own_group(group_of(name)) => Err(format!("`{name}` is a system variable; its name is goofi's")),
             true => Err(format!("variable `{name}` is config-locked")),
             false => Ok(()),
         }
@@ -840,8 +856,8 @@ impl VariableStore {
         if !is_valid_identifier(to) {
             return Err(format!("invalid group name `{to}`: {VARIABLE_NAME_RULE}"));
         }
-        if from == SYSTEM_GROUP {
-            return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it keeps its name"));
+        if is_own_group(from) {
+            return Err(format!("`{from}` is goofi's own; it keeps its name"));
         }
         if self.group_lock(from).config {
             return Err(format!("group `{from}` is config-locked"));

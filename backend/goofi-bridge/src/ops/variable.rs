@@ -9,7 +9,7 @@ use goofi_core::Data;
 use goofi_graph::{Command, Graph};
 
 op!(List, "variable list", 0, NoArgs,
-    "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The `system` group is goofi's own: config-locked for life, and its EPHEMERAL members — `system.goofi_home` and the `system.audio_*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
+    "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The groups `system`, `signal`, `graphics` and `audio` are goofi's own: config-locked for life, and their EPHEMERAL members — `system.goofi_home` and the `audio.*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
     "{variables: [{name, value, lock: {config, value}, control?, expression?, error?}], groups: {group: {lock}}}");
 
 op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
@@ -33,7 +33,7 @@ op!(EntryEdit, "variable entry edit", 1, EntryEditArgs {
     pub control: Option<Option<Control>>,
     pub expression: Option<String>,
 },
-    "Change an existing variable's value: a number, a list of numbers (nested for a wider array), a bool or a string, as `variable entry add` takes it. A control widget must be able to draw the new value. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, system.audio_*). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it. `expression` makes the variable COMPUTED, in the one language a param's expression is: bare — `nd('level')`, `nd('midi').out.cc[74]`, `variables.desk.gain` — the manager copies that one frame or element as it comes, at the producer's rate; around any Python it evaluates when the variable is written or read. Nobody else may set a computed variable; an empty expression clears it. A name it spells follows a rename as a param's does.",
+    "Change an existing variable's value: a number, a list of numbers (nested for a wider array), a bool or a string, as `variable entry add` takes it. A control widget must be able to draw the new value. A value-locked variable refuses the edit, and so does an ephemeral one (system.goofi_home, the audio engine's audio.* facts). `control` sets the control-panel widget and its place, `null` clears it, and giving one makes `value` optional — which is what a panel sends when it moves a widget; a config-locked variable refuses it. `expression` makes the variable COMPUTED, in the one language a param's expression is: bare — `nd('level')`, `nd('midi').out.cc[74]`, `variables.desk.gain` — the manager copies that one frame or element as it comes, at the producer's rate; around any Python it evaluates when the variable is written or read. Nobody else may set a computed variable; an empty expression clears it. A name it spells follows a rename as a param's does.",
     "{value} — the value as stored");
 
 op!(EntryRemove, "variable entry remove", 1, EntryRemoveArgs {

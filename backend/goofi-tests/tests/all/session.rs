@@ -85,7 +85,9 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert!(saved_gain["value"].is_number(), "a narrow value is a literal in the manifest: {saved_gain}");
     assert!(saved["patch"]["variables"]["patch.pad"].get("value").is_none(), "a wide array is a file beside it");
     assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
-    assert!(saved["patch"]["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
+    for group in goofi_core::variables::OWN_GROUPS {
+        assert!(saved["patch"]["variable_groups"].get(group).is_none(), "`{group}`'s lock is goofi's, not the file's");
+    }
 
     // Step: a MIDI device is a group on the bus, the session's and never a patch's: a learn opens
     // every port the host lists, and a port stays open while the patch reads its group. A machine

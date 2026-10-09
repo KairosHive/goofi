@@ -366,7 +366,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let why = g.refuse("variable group remove", j!({ "group": "system" }));
     assert!(why.contains("system"), "{why}");
     assert_eq!(g.variable("bench.entry1"), 1);
-    g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "no" }));
+    g.refuse("variable entry edit", j!({ "name": "signal.default_ufreq", "value": "no" }));
     g.call("variable entry add", j!({ "name": "bench.knob", "value": 1.0,
         "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
     let before = g.doc()["variables"]["bench.knob"].clone();
@@ -905,11 +905,11 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
 
     // A variable's FORM is what every expression reading it depends on, so under a config lock it
     // is immutable: a string offered to a config-locked array is refused by naming both.
-    let why = g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "fast" }));
+    let why = g.refuse("variable entry edit", j!({ "name": "signal.default_ufreq", "value": "fast" }));
     assert!(why.contains("array") && why.contains("fast"), "{why}");
-    let why = g.refuse("variable entry add", j!({ "name": "system.default_ufreq", "value": 9.0 }));
+    let why = g.refuse("variable entry add", j!({ "name": "signal.default_ufreq", "value": 9.0 }));
     assert!(why.contains("already exists") && why.contains("variable entry edit"), "{why}");
-    assert_eq!(g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 12.5 }))["value"], 12.5);
+    assert_eq!(g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 12.5 }))["value"], 12.5);
 
     // An EPHEMERAL variable is goofi's own: the value refuses the edit the way the name refuses the
     // remove, and what it holds is this machine's .goofi folder, not anything a patch said.

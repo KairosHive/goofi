@@ -38,7 +38,7 @@ const CAT: ExprCatalogue = {
 	],
 	self: 'buffer0',
 	variables: [
-		{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', form: 'number' },
+		{ name: 'signal.default_ufreq', group: 'signal', element: 'default_ufreq', form: 'number' },
 		{ name: 'mixer.gain', group: 'mixer', element: 'gain', form: 'number' },
 		{ name: 'mixer.pan', group: 'mixer', element: 'pan', form: 'number' }
 	]
@@ -207,8 +207,8 @@ describe('the reference paths: .out, .params, and me', () => {
 
 describe('variables. and np.', () => {
 	it('offers the GROUPS after variables., and the group’s elements after one', () => {
-		expect(labels('variables.')).toEqual(['system', 'mixer']);
-		expect(labels('variables.mi'), 'partially typed').toEqual(['system', 'mixer']);
+		expect(labels('variables.')).toEqual(['signal', 'mixer']);
+		expect(labels('variables.mi'), 'partially typed').toEqual(['signal', 'mixer']);
 		expect(labels('variables.mixer.')).toEqual(['gain', 'pan']);
 		expect(labels('variables.mixer.ga'), 'partially typed').toEqual(['gain', 'pan']);
 	});
@@ -231,7 +231,7 @@ describe('variables. and np.', () => {
 	});
 
 	it('reads variables. as the right operand of an expression', () => {
-		expect(labels("nd('a').out + variables.")).toEqual(['system', 'mixer']);
+		expect(labels("nd('a').out + variables.")).toEqual(['signal', 'mixer']);
 	});
 });
 
