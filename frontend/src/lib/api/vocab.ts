@@ -71,7 +71,7 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 export const VIEWER_KINDS: readonly ViewerKindInfo[] = [
 	{ id: 'line', dtype: 'ARRAY', draws: [0, 2], accepts: [0, 3], doc: 'a time plot: one series (1-D) or one per channel (C, N); or, as a setting, the trajectory over pairs of rows' },
 	{ id: 'image', dtype: 'ARRAY', draws: [2, 3], accepts: [2, 3], doc: 'a bitmap: (H, W), or (H, W, C) for 1–4 channels' },
-	{ id: 'brain', dtype: 'ARRAY', draws: [1, 2], accepts: [1, 2], doc: 'a scalp map of one scalar per channel (1-D), or the connectivity between channels (C, C) as a ring or in 3-D' },
+	{ id: 'brain', dtype: 'ARRAY', draws: [1, 2], accepts: [1, 2], doc: 'a scalp map of one scalar per channel (1-D), or the connectivity between named channels (2-D) as a ring or in 3-D' },
 	{ id: 'string', dtype: 'STRING', draws: null, accepts: null, doc: 'the text of a STRING slot' },
 	{ id: 'table', dtype: 'TABLE', draws: null, accepts: null, doc: 'the rows of a TABLE slot' },
 ];

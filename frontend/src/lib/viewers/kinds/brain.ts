@@ -4,7 +4,7 @@ import { manual, wholeAsk } from '../module';
 import { BrainDrawing, brainMode } from '../brainDrawing';
 import { COLORMAPS } from '../colormaps';
 
-/** The brain viewer's drawings: `auto` is a topomap of a 1-D frame and a ring of a (C, C) one. */
+/** The brain viewer's drawings: `auto` is a topomap of a 1-D frame and a ring of a 2-D one. */
 const BRAIN_MODES = ['auto', 'topomap', 'ring', '3d'] as const;
 
 export const brain: ViewerModule = {
@@ -23,7 +23,7 @@ export const brain: ViewerModule = {
 	ask: () => wholeAsk('brain', 2),
 	renders(shape, s) {
 		const mode = brainMode(s, shape.length);
-		return shape.length === 1 ? mode === 'topomap' : mode !== 'topomap' && shape[0] === shape[1];
+		return shape.length === 1 ? mode === 'topomap' : mode !== 'topomap';
 	},
 	drawing: (surface) => new BrainDrawing(surface)
 };

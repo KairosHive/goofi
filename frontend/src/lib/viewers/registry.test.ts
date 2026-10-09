@@ -131,13 +131,13 @@ describe('isRenderable', () => {
 		expect(isRenderable('line', spec(2, 4, 4, 3), {})).toBe(false);
 	});
 
-	it('a trajectory wants pairs of rows; a brain a value per channel or a channel-by-channel matrix', () => {
+	it('a trajectory wants pairs of rows; a brain a value per channel or a matrix between channels', () => {
 		const trajectory = { mode: 'trajectory' };
 		expect(isRenderable('line', spec(2, 128), trajectory)).toBe(true);
 		expect(isRenderable('line', spec(128), trajectory)).toBe(false);
 		expect(isRenderable('brain', spec(8), {})).toBe(true);
 		expect(isRenderable('brain', spec(8, 8), {})).toBe(true);
-		expect(isRenderable('brain', spec(8, 4), {})).toBe(false);
+		expect(isRenderable('brain', spec(8, 4), {}), 'the two axes may name different channels').toBe(true);
 		expect(isRenderable('brain', spec(8), { mode: 'ring' })).toBe(false);
 		expect(isRenderable('brain', spec(8, 8), { mode: 'topomap' })).toBe(false);
 	});

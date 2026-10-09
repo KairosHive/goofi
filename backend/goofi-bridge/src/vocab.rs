@@ -79,7 +79,7 @@ pub static VIEWER_KINDS: &[ViewerKind] = &[
     ViewerKind { id: "image", draws: Draws::Array { draws: (2, 3), accepts: (2, 3) },
                  doc: "a bitmap: (H, W), or (H, W, C) for 1–4 channels" },
     ViewerKind { id: "brain", draws: Draws::Array { draws: (1, 2), accepts: (1, 2) },
-                 doc: "a scalp map of one scalar per channel (1-D), or the connectivity between channels (C, C) as a ring or in 3-D" },
+                 doc: "a scalp map of one scalar per channel (1-D), or the connectivity between named channels (2-D) as a ring or in 3-D" },
     ViewerKind { id: "string", draws: Draws::Pinned("STRING"), doc: "the text of a STRING slot" },
     ViewerKind { id: "table", draws: Draws::Pinned("TABLE"), doc: "the rows of a TABLE slot" },
 ];

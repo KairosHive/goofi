@@ -35,7 +35,31 @@ function known(names: string[]): Channel[] {
 	return out;
 }
 
-/** One chord of a (C, C) frame: the upper triangle, read against the window as `t`. */
+/** The channels of a 2-D frame: the known ones on each axis, merged by name into one list, and
+ * where each row and each column lands in it. An axis without names shares the other's when the
+ * frame is square. */
+interface Matrix {
+	channels: Channel[];
+	rows: (number | null)[];
+	cols: (number | null)[];
+}
+function matrixChannels(meta: Record<string, unknown> | undefined, shape: number[]): Matrix | null {
+	let [rowNames, colNames] = [axisNames(meta, 0), axisNames(meta, 1)];
+	if (shape[0] === shape[1]) [rowNames, colNames] = [rowNames ?? colNames, colNames ?? rowNames];
+	if (!rowNames || !colNames) return null;
+	const channels: Channel[] = [];
+	const place = (names: string[]) =>
+		names.map((name) => {
+			const pos = electrodeAt(name);
+			if (!pos) return null;
+			let k = channels.findIndex((c) => c.name === name);
+			if (k < 0) k = channels.push({ i: channels.length, name, pos }) - 1;
+			return k;
+		});
+	return { channels, rows: place(rowNames), cols: place(colNames) };
+}
+
+/** One chord of a 2-D frame, between two channels, read against the window as `t`. */
 interface Edge {
 	a: number;
 	b: number;
@@ -118,18 +142,19 @@ export class BrainDrawing extends Base {
 			this.field.setSettings({ lut: this.lutFor(String(settings.colormap ?? 'magma')), bands: settings.contours ? 10 : 0 });
 			this.applied = settings;
 		}
-		const channels = known(axisNames(frame.meta, 0) ?? []);
 		this.message = null;
 		this.texts = [];
-		if (mode === 'topomap') this.paintTopomap(arr, channels, settings, box);
-		else if (channels.length < 2) this.fail('need ≥ 2 recognized channels');
+		if (mode === 'topomap') this.paintTopomap(arr, known(axisNames(frame.meta, 0) ?? []), settings, box);
 		else {
+			const matrix = arr.shape.length === 2 ? matrixChannels(frame.meta, arr.shape) : null;
+			if (!matrix) return this.fail('need channel names on both axes');
+			if (matrix.channels.length < 2) return this.fail('need ≥ 2 recognized channels');
 			this.field.clear();
-			this.edges = this.edgesOf(arr, channels, settings);
-			this.names = channels.map((c) => c.name);
+			this.edges = this.edgesOf(arr, matrix, settings);
+			this.names = matrix.channels.map((c) => c.name);
 			const L = this.lutFor(String(settings.colormap ?? 'magma'));
-			if (mode === 'ring') this.paintRing(channels, box, L);
-			else this.paint3d(channels, settings, box, L);
+			if (mode === 'ring') this.paintRing(matrix.channels, box, L);
+			else this.paint3d(matrix.channels, settings, box, L);
 		}
 		this.probe = mode === 'topomap' ? this.topomapProbe : this.pointProbe;
 		this.drag = mode === '3d' ? this.rotate : null;
@@ -210,19 +235,27 @@ export class BrainDrawing extends Base {
 
 	// ── connectivity ─────────────────────────────────────────────────────────────────────────
 	/** The strongest `top` percent of the edges between the channels drawn, weakest first so the
-	 * strong ones land on top. The window is the kept edges' own, so the colours span them. */
-	private edgesOf(arr: ArrayData, channels: Channel[], s: SettingsMap): Edge[] {
+	 * strong ones land on top. A pair of channels is one edge, read where the frame first names
+	 * it, so a symmetric matrix reads its upper triangle. The window is the kept edges' own. */
+	private edgesOf(arr: ArrayData, m: Matrix, s: SettingsMap): Edge[] {
 		// The share of the edges drawn, strongest first: 100 is all of them.
 		const top = Math.min(100, Math.max(1, Number(s.top ?? 15)));
-		const n = arr.shape[0];
+		const cols = arr.shape[1];
 		const v = arr.values as ArrayLike<number>;
 		const out: Edge[] = [];
-		for (let a = 0; a < channels.length; a++) {
-			for (let b = a + 1; b < channels.length; b++) {
-				const value = Number(v[channels[a].i * n + channels[b].i]);
-				if (Number.isFinite(value)) out.push({ a, b, value, t: 0 });
-			}
-		}
+		const seen = new Set<number>();
+		m.rows.forEach((a, r) => {
+			if (a == null) return;
+			m.cols.forEach((b, c) => {
+				if (b == null || b === a) return;
+				const key = Math.min(a, b) * m.channels.length + Math.max(a, b);
+				if (seen.has(key)) return;
+				const value = Number(v[r * cols + c]);
+				if (!Number.isFinite(value)) return;
+				seen.add(key);
+				out.push({ a, b, value, t: 0 });
+			});
+		});
 		out.sort((x, y) => x.value - y.value);
 		const kept = out.slice(out.length - Math.max(1, Math.round((out.length * top) / 100)));
 		const [lo, hi] = valueWindow(kept.map((e) => e.value), s);
