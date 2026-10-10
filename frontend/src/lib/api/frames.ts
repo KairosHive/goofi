@@ -225,10 +225,10 @@ export function latestFrame(node: string, slot: string): DataFrame | null {
 export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
-	if (s.current) return headOf(s.current);
-	if (demand(s).frames) return null;
-	// Asked once: the worker answers on its next flush and on every frame after.
-	if (!s.headsAsked) {
+	// A frame held here is the latest only while this thread still takes frames.
+	if (demand(s).frames) return s.current ? headOf(s.current) : null;
+	// Asked once the worker holds the stream: it answers on its next flush and on every frame after.
+	if (!s.headsAsked && s.synced !== null) {
 		s.headsAsked = true;
 		post({ op: 'head', node, slot });
 	}

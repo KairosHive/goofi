@@ -249,6 +249,12 @@ export class GraphStore {
 			own.error = rt.error ?? null;
 			own.runtime = rt.runtime;
 		}
+		// The readings come whole: a node they leave out holds none now.
+		if (!freshSession)
+			for (const [uid, rt] of Object.entries(this._rt)) {
+				if (!snap.param_values?.[uid] && (rt.values || rt.errors)) rt.values = rt.errors = undefined;
+				if (!snap.node_stats?.[uid] && rt.stats) rt.stats = undefined;
+			}
 		for (const [uid, live] of Object.entries(snap.param_values ?? {})) {
 			const t = target(uid);
 			t.values = follow(t.values ?? {}, live.values);
