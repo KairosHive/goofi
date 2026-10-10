@@ -161,7 +161,14 @@ function report(): void {
 		st.arrivals = 0;
 		st.drops = 0;
 	}
-	if (paints === 0 && streams.length === 0) return;
+	if (paints === 0 && streams.length === 0) {
+		// No stream left to count: the next 'sub' starts the timer again.
+		if (slots.size === 0 && statsTimer !== null) {
+			clearInterval(statsTimer);
+			statsTimer = null;
+		}
+		return;
+	}
 	send({ stats: { paints, streams } });
 	paints = 0;
 }

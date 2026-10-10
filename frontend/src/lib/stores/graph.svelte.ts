@@ -392,7 +392,8 @@ export class GraphStore {
 			if (s.dropped > (before[key] ?? s.dropped)) moved.add(key);
 		}
 		this._droppedCounts = now;
-		this.dropping = moved;
+		// A recording re-announces itself each beat; a set that did not move wakes no reader.
+		if (moved.size !== this.dropping.size || [...moved].some((k) => !this.dropping.has(k))) this.dropping = moved;
 		this.record = status;
 	}
 
