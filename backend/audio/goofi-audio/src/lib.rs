@@ -88,6 +88,9 @@ pub struct AudioStatus {
     /// graph lock, which is the thing to read, not an underrun.
     pub contended: u64,
     pub render_max_us: u64,
+    /// Renders that took longer than their own block of frames: the host's underruns, which
+    /// the sound-server backends do not report.
+    pub late: u64,
     /// The frames the host hands each callback, as it granted them; absent without a device.
     pub period: Option<u32>,
 }
@@ -98,6 +101,7 @@ pub(crate) struct Stats {
     xruns: AtomicU64,
     contended: AtomicU64,
     render_max_us: AtomicU64,
+    late: AtomicU64,
     /// Raised by the stream's error callback; the drain closes the clock and tries the name once more.
     dead: AtomicBool,
 }
@@ -273,12 +277,16 @@ where
                 for (out, v) in data.iter_mut().zip(scratch.iter()) {
                     *out = T::from_sample_(*v);
                 }
-                stats.render_max_us.fetch_max(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+                let took = started.elapsed();
+                stats.render_max_us.fetch_max(took.as_micros() as u64, Ordering::Relaxed);
+                if took.as_secs_f64() * f64::from(rate) > (data.len() / channels) as f64 {
+                    stats.late.fetch_add(1, Ordering::Relaxed);
+                }
             },
-            // An underrun the backend reports recovers on its own and is an xrun; only a device
-            // that is gone is death.
+            // An underrun the backend reports recovers on its own and is an xrun; a device that
+            // is gone, or a sound server that dropped the stream, is death.
             move |e| match e.kind() {
-                cpal::ErrorKind::DeviceNotAvailable => {
+                cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated => {
                     died.dead.store(true, Ordering::Release);
                     waker.notify();
                 }
@@ -534,6 +542,7 @@ impl AudioEngine {
             xruns: self.stats.xruns.load(Ordering::Relaxed),
             contended: self.stats.contended.load(Ordering::Relaxed),
             render_max_us: self.stats.render_max_us.load(Ordering::Relaxed),
+            late: self.stats.late.load(Ordering::Relaxed),
             period: self.device.as_ref().and_then(|d| d.period),
         }
     }

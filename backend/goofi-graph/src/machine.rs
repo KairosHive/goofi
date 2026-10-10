@@ -367,6 +367,9 @@ pub struct Machines {
     requests: Vec<(f64, Request)>,
     reconcile: bool,
     errors: Vec<String>,
+    /// The functionals the last advance handed out, by source: a flight's stay the same for
+    /// its whole duration, and each compile is a Python call.
+    functionals: HashMap<String, Arc<[u8]>>,
 }
 
 impl Machines {
@@ -494,6 +497,15 @@ impl Machines {
         }
         self.settle(now, read);
         let mut out = Vec::new();
+        let mut used = HashMap::new();
+        let mut functional = |source: String| {
+            let code = match self.functionals.remove(&source).or_else(|| used.get(&source).cloned()) {
+                Some(code) => code,
+                None => compile(&self.evaluator, &source),
+            };
+            used.insert(source, code.clone());
+            Data::functional(code, Meta::default())
+        };
         for run in self.runs.values() {
             for (ph, head) in &run.heads {
                 out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
@@ -505,10 +517,10 @@ impl Machines {
                         out.extend(head.held.iter().map(|(a, v)| (format!("{ph}.{a}"), v.clone())));
                     }
                     Some(f) => {
-                        out.push((format!("{ph}.progress"), self.functional(&progress_source(f))));
+                        out.push((format!("{ph}.progress"), functional(progress_source(f))));
                         for (a, origin) in &f.origin {
                             let value = match f.target.get(a).and_then(|target| blend_source(origin, target, f)) {
-                                Some(source) => self.functional(&source),
+                                Some(source) => functional(source),
                                 None => origin.clone(),
                             };
                             out.push((format!("{ph}.{a}"), value));
@@ -517,6 +529,7 @@ impl Machines {
                 }
             }
         }
+        self.functionals = used;
         out
     }
 
@@ -555,20 +568,20 @@ impl Machines {
         self.errors.extend(ctx.errors.into_inner());
     }
 
-    /// A functional over `source`, compiled through the evaluator; with none, an empty one that
-    /// any reader reports.
-    fn functional(&self, source: &str) -> Data {
-        let code = match &self.evaluator {
-            Some(ev) => match ev.compile(source) {
-                Ok(c) => {
-                    ev.release(c.id);
-                    c.code
-                }
-                Err(_) => Arc::from(&b""[..]),
-            },
-            None => Arc::from(&b""[..]),
-        };
-        Data::functional(code, Meta::default())
+}
+
+/// The code of a functional over `source`, compiled through the evaluator; with none, an empty
+/// one that any reader reports.
+fn compile(evaluator: &Option<Arc<dyn ExprEvaluator>>, source: &str) -> Arc<[u8]> {
+    match evaluator {
+        Some(ev) => match ev.compile(source) {
+            Ok(c) => {
+                ev.release(c.id);
+                c.code
+            }
+            Err(_) => Arc::from(&b""[..]),
+        },
+        None => Arc::from(&b""[..]),
     }
 }
 
