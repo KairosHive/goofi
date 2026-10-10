@@ -4,9 +4,13 @@
 import { bindViewer } from '$lib/api/frames';
 import type { Literal } from '$lib/api/generated';
 import { isArrayFrame, isStringFrame, type ArrayData, type DataFrame } from '$lib/codec/decode';
+import { SvelteMap } from 'svelte/reactivity';
 
-/** The latest frame per watched variable; absent until its first frame lands. */
-const frames = $state<Record<string, DataFrame>>({});
+/** The latest frame per watched variable; absent until its first frame lands. Keyed, so a frame
+ * wakes the readers of its own variable alone, and held as it came, never proxied. */
+const frames = new SvelteMap<string, DataFrame>();
+/** Each frame's literal, built once however often a template reads it. */
+const literals = new WeakMap<DataFrame, Literal | null>();
 const readers = new Map<string, { count: number; off: () => void }>();
 
 function hold(name: string): void {
@@ -16,7 +20,7 @@ function hold(name: string): void {
 		return;
 	}
 	const off = bindViewer('variables', name, `variable:${name}`, null, (f) => {
-		frames[name] = f;
+		frames.set(name, f);
 	});
 	readers.set(name, { count: 1, off });
 }
@@ -28,28 +32,37 @@ function release(name: string): void {
 	if (r.count > 0) return;
 	r.off();
 	readers.delete(name);
-	delete frames[name];
+	frames.delete(name);
 }
 
-/** Keep every variable `names()` lists subscribed for as long as the calling component lives. */
+/** Keep every variable `names()` lists subscribed for as long as the calling component lives. A
+ * list that moves holds what it gained before it lets go of what it lost, so a kept name never
+ * drops its stream or its value. */
 export function watchVariables(names: () => string[]): void {
+	let held = new Set<string>();
 	$effect(() => {
-		const held = [...new Set(names())];
-		for (const n of held) hold(n);
-		return () => {
-			for (const n of held) release(n);
-		};
+		const next = new Set(names());
+		for (const n of next) if (!held.has(n)) hold(n);
+		for (const n of held) if (!next.has(n)) release(n);
+		held = next;
+	});
+	$effect(() => () => {
+		for (const n of held) release(n);
+		held = new Set();
 	});
 }
 
 /** The latest frame of a watched variable, or null before it lands. */
 export function variableFrame(name: string): DataFrame | null {
-	return frames[name] ?? null;
+	return frames.get(name) ?? null;
 }
 
 /** The latest value of a watched variable as a literal, or null before it lands. */
 export function variableValue(name: string): Literal | null {
-	return literalOf(variableFrame(name));
+	const f = variableFrame(name);
+	if (!f) return null;
+	if (!literals.has(f)) literals.set(f, literalOf(f));
+	return literals.get(f) ?? null;
 }
 
 /** The pad array a watched variable holds, or null when it holds anything else. */

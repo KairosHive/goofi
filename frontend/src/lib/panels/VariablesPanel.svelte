@@ -10,10 +10,10 @@
 	let {}: PanelProps = $props();
 	const g = graph();
 	const groups = $derived(groupedVariables(g.variables, g.variableGroups));
-	// Values come over the data plane, one stream per variable shown.
-	watchVariables(() => g.variables.map((entry) => entry.name));
 	let panel: HTMLDivElement;
 	let open = $state<Record<string, boolean>>({});
+	// Values come over the data plane, one stream per variable shown: a collapsed group shows none.
+	watchVariables(() => groups.filter((grp) => open[grp.group]).flatMap((grp) => grp.entries.map((entry) => entry.name)));
 	let editing = $state<string | null>(null);
 	let groupName = $state('');
 	let focusEntry = $state<string | null>(null);
