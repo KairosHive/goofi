@@ -77,10 +77,9 @@ describe('SyncClient', () => {
 		warn.mockRestore();
 	});
 
-	it('refuses a delta that reaches PAST this replica, and waits for a fresh doc_state', () => {
-		// A gap can only mean the client fell behind the broadcast ring. Applying anyway would leave
-		// a replica that looks healthy and is wrong, so it stops until the manager re-seeds it —
-		// which the manager does on exactly that lag.
+	it('refuses a delta that reaches PAST this replica, and asks for a fresh doc_state', () => {
+		// Applying anyway would leave a replica that looks healthy and is wrong, so it stops and asks
+		// for a re-seed: waiting would wait for ever on any gap the manager did not see as a lag.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
@@ -91,6 +90,7 @@ describe('SyncClient', () => {
 		expect(nodesMap(client.doc)['9'], 'the out-of-order delta was not applied').toBeUndefined();
 		expect(client.version, 'and the replica did not move').toBe(1);
 		expect(warn).toHaveBeenCalled();
+		expect(ctl.resyncs, 'and it asked for the seed').toBe(1);
 
 		ctl.emit({ event: 'doc_state', payload: { v: 6, doc: stateWith({ '9': OSC }) } });
 		expect(client.version).toBe(6);

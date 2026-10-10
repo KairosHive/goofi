@@ -16,6 +16,11 @@ export class FakeControl implements Control {
 	/** Every preview sent, in order, with the key it would coalesce on. */
 	previews: Array<{ key: string; op: OpName; payload: Record<string, unknown> }> = [];
 	private listeners = new Set<(ev: ControlEvent) => void>();
+	/** How many fresh seeds were asked for. */
+	resyncs = 0;
+	resync(): void {
+		this.resyncs += 1;
+	}
 	private connectListeners = new Set<(c: boolean) => void>();
 	private results = new Map<string, unknown>();
 	private failing = new Set<string>();

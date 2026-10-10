@@ -288,6 +288,8 @@ export interface Control {
 	/** One step of a drag: the op as a PREVIEW, no reply, and the newest per `key` each frame. */
 	preview(key: string, op: OpName, payload: Record<string, unknown>): void;
 	on(fn: (ev: ControlEvent) => void): () => void;
+	/** Ask for a fresh seed: the hello and the whole document again. */
+	resync(): void;
 	onConnect(fn: (c: boolean) => void): () => void;
 }
 
@@ -344,6 +346,12 @@ export class ControlClient implements Control {
 		});
 		ws.addEventListener('message', (e) => this._onMessage(e));
 		ws.addEventListener('close', () => this._onClose());
+	}
+
+	/** Drop the socket for a fresh one, whose seed is the whole document again: what a replica
+	 * that lost a delta needs. The calls in flight fail as on any drop. */
+	resync(): void {
+		this.ws?.close();
 	}
 
 	private _onMessage(e: MessageEvent): void {

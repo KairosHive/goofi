@@ -11,6 +11,7 @@ export class SyncClient {
 	}
 	/** Told what moved: the applied ops, or `null` when the whole document was replaced. */
 	private changed: (ops: Op[] | null) => void;
+	private control: Control;
 	/** The version `_doc` is at, or `-1` before the first `doc_state`. */
 	private _version = $state(-1);
 	get version(): number {
@@ -23,6 +24,7 @@ export class SyncClient {
 
 	constructor(control: Control, changed: (ops: Op[] | null) => void) {
 		this.changed = changed;
+		this.control = control;
 		control.on((ev) => {
 			if (ev.event === 'doc_state') {
 				this._doc = ev.payload.doc;
@@ -45,9 +47,8 @@ export class SyncClient {
 	applyPatch(from: number, to: number, ops: Op[]): void {
 		if (to <= this._version) return; // stale: the seed already carries it
 		if (from !== this._version) {
-			console.warn(
-				`goofi: doc patch spans v${from}→v${to} but this replica is at v${this._version} — a delta was lost; waiting for a fresh doc_state`
-			);
+			console.warn(`goofi: doc patch spans v${from}→v${to} but this replica is at v${this._version}; re-seeding`);
+			this.control.resync();
 			return;
 		}
 		applyOps(this._doc, ops);
