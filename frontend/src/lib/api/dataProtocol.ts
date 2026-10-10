@@ -37,6 +37,8 @@ export type ToWorker =
 	| { op: 'sub'; node: string; slot: string; frames: boolean }
 	| { op: 'spec'; node: string; slot: string; specs: ViewSpec[]; frames: boolean }
 	| { op: 'unsub'; node: string; slot: string }
+	/** A reader here asks what the stream's frames say of themselves; heads follow from now on. */
+	| { op: 'head'; node: string; slot: string }
 	| { op: 'surface'; id: number; canvas: OffscreenCanvas }
 	| { op: 'view'; id: number; view: View }
 	| { op: 'dispose'; id: number }

@@ -26,6 +26,8 @@ interface Slot {
 	current: DataFrame | null;
 	/** What the last frame said of itself, for a stream no reader here holds. */
 	head: FrameHead | null;
+	/** Whether the worker was asked for heads; it builds none for a stream nobody asked about. */
+	headsAsked: boolean;
 	/** This stream's own coalescing rate, as the worker counts it — per slot, because a drop
 	 * belongs to the stream that overwrote a frame. */
 	drops: RateMeter;
@@ -112,6 +114,7 @@ function ensureSlot(k: string): Slot {
 			synced: null,
 			reconciling: false,
 			current: null,
+			headsAsked: false,
 			head: null,
 			drops: new RateMeter(),
 			arrivals: new RateMeter()
@@ -223,5 +226,11 @@ export function latestHead(node: string, slot: string): FrameHead | null {
 	const s = slots.get(streamKey(node, slot));
 	if (!s) return null;
 	if (s.current) return headOf(s.current);
-	return demand(s).frames ? null : s.head;
+	if (demand(s).frames) return null;
+	// Asked once: the worker answers on its next flush and on every frame after.
+	if (!s.headsAsked) {
+		s.headsAsked = true;
+		post({ op: 'head', node, slot });
+	}
+	return s.head;
 }

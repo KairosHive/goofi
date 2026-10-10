@@ -23,6 +23,8 @@ interface SlotState {
 	specs: unknown[];
 	/** Whether the main thread reads this stream's frames. */
 	frames: boolean;
+	/** Whether the main thread asked for this stream's heads; until then a frame's summary is not built. */
+	heads: boolean;
 	/** The drawings this stream feeds. */
 	drawings: Set<DrawingState>;
 	/** The last decoded frame, replayed to a drawing that attaches. */
@@ -232,6 +234,7 @@ function ensureSlot(node: string, slot: string): SlotState {
 			reconnectMs: 250,
 			specs: [],
 			frames: false,
+			heads: false,
 			drawings: new Set(),
 			latest: null,
 			news: null,
@@ -258,6 +261,15 @@ self.addEventListener('message', (e: MessageEvent) => {
 			st.frames = m.frames;
 			statsTimer ??= setInterval(report, 250);
 			openWs(st);
+			requestFlush();
+			break;
+		}
+		case 'head': {
+			// The ask can precede the settled tick's 'sub'; the slot it makes is the one 'sub' opens.
+			const st = ensureSlot(m.node, m.slot);
+			if (st.heads) break;
+			st.heads = true;
+			if (st.latest && !st.frames) st.news = { head: headOf(st.latest) };
 			requestFlush();
 			break;
 		}
@@ -379,7 +391,7 @@ function arrive(st: SlotState, raw: ArrayBuffer): void {
 			const n = st.news;
 			if (n?.frame) n.frame = { ...n.frame, meta: { ...n.frame.meta, ...stamps } };
 			else if (n?.head) n.head = { ...n.head, meta: { ...n.head.meta, ...stamps } };
-			else st.news = { stamps: { ...n?.stamps, ...stamps } };
+			else if (st.frames || st.heads) st.news = { stamps: { ...n?.stamps, ...stamps } };
 			requestFlush();
 			return;
 		}
@@ -393,6 +405,7 @@ function arrive(st: SlotState, raw: ArrayBuffer): void {
 	if (st.unflushed) st.drops++;
 	st.unflushed = true;
 	for (const d of st.drawings) stale.add(d);
-	st.news = st.frames ? { frame } : { head: headOf(frame) };
+	if (st.frames) st.news = { frame };
+	else if (st.heads) st.news = { head: headOf(frame) };
 	requestFlush();
 }

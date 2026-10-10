@@ -78,9 +78,15 @@ describe('the data worker', () => {
 		vi.advanceTimersByTime(20);
 		expect(posted.length, 'a corrupt frame posts nothing and keeps the slot').toBe(count);
 
-		// A stream nobody reads on the main thread sends its head there, never the frame.
+		// A stream nobody reads on the main thread sends nothing there until a reader asks for its
+		// head; then the head of each frame, never the frame.
 		inbound({ data: { op: 'spec', node: 'n', slot: 'out', specs: [], frames: false } });
-		ws.fire('message', { data: bytes(golden.entries.find((e) => e.name === 'array_f32_1d')!.hex) });
+		const before = posted.length;
+		ws.fire('message', { data: frame });
+		vi.advanceTimersByTime(20);
+		expect(posted.slice(before).some((m) => 'batch' in m), 'no head is built for a stream nobody asked about').toBe(false);
+		inbound({ data: { op: 'head', node: 'n', slot: 'out' } });
+		ws.fire('message', { data: frame });
 		vi.advanceTimersByTime(20);
 		const last = posted.at(-1)!.batch![0] as { frame?: unknown; head?: { dtype: string; array?: { shape: number[] } } };
 		expect(last.frame).toBeUndefined();
