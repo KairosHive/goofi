@@ -978,35 +978,30 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     assert!(set("")["error"].is_null(), "an empty expression clears the binding");
 
     let mut ev = g.events();
+    // The record is the document's; `error` is runtime-derived and read back through `node state`.
+    let line = |g: &Goofi| {
+        let text = g.call("node state", j!({ "node": hex(consumer) }))["text"].as_str().unwrap().to_string();
+        text.lines().find(|l| l.contains("common.max_frequency")).unwrap_or("").to_string()
+    };
+    let field = |what: &str, want: &dyn Fn(&serde_json::Value) -> bool| {
+        g.until(what, |g| {
+            let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
+            want(&d).then_some(d)
+        })
+    };
     set("nd('src') * 1");
-    // The record rides `state_update`; `error` is runtime-derived and rides the LIVE plane, never
-    // the doc and never an op's echo — an echo is taken before the node has re-evaluated the source
-    // the op just moved, so it would carry the error of the source that is gone.
-    let d = g.until("the descriptor echo", |_| {
-        let p = ev.next("state_update");
-        (p["node"] == hex(consumer)).then(|| p["params"]["common"]["max_frequency"].clone())
-    });
-    assert_eq!((&d["expression"], &d["mode"]), (&j!("nd('src') * 1"), &j!("expression")));
-    assert!(d["error"].is_string(), "got {:?}", d["error"]);
+    let d = field("the record", &|d| d["expression"] == j!("nd('src') * 1"));
+    assert_eq!(d["mode"], j!("expression"), "{d}");
     assert!(d.get("expression_autoeval").is_none(), "auto-eval is always on, so it is not on the wire");
+    g.until("the shape error", |g| line(g).contains("[error").then_some(()));
 
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
-    let expr = g.until("the referrer's echo", |_| {
-        let p = ev.next("state_update");
-        (p["node"] == hex(consumer))
-            .then(|| p["params"]["common"]["max_frequency"]["expression"].clone())
-    });
-    assert_eq!(expr, "nd('signal') * 1", "the referrer's nd() term followed the rename");
+    field("the referrer's nd() term followed the rename", &|d| d["expression"] == j!("nd('signal') * 1"));
     // A term in a comment or a string is text: one scan decides what is text for every reader.
     set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "src" }));
-    let expr = g.until("the referrer's echo", |_| {
-        let p = ev.next("state_update");
-        let d = &p["params"]["common"]["max_frequency"];
-        (p["node"] == hex(consumer) && d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")))
-            .then(|| d["expression"].clone())
-    });
-    assert_eq!(expr, "nd('src') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    let d = field("the referrer's record", &|d| d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")));
+    assert_eq!(d["expression"], "nd('src') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
     set("nd('signal')");
 
@@ -1020,26 +1015,18 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
         payload.as_object_mut().unwrap().extend(spec.as_object().unwrap().clone());
         g.call("node param edit", payload)
     };
-    // An op's echo is a `state_update`; a RUNTIME error is read back through `node state`.
-    let line = |g: &Goofi| {
-        let text = g.call("node state", j!({ "node": hex(consumer) }))["text"].as_str().unwrap().to_string();
-        text.lines().find(|l| l.contains("common.max_frequency")).unwrap_or("").to_string()
-    };
-    let field = |ev: &mut goofi_tests::Events, what: &str, want: &dyn Fn(&serde_json::Value) -> bool| {
-        g.until(what, |_| {
-            let p = ev.next("state_update");
-            let d = &p["params"]["common"]["max_frequency"];
-            (p["node"] == hex(consumer) && want(d)).then(|| d.clone())
-        })
-    };
     for bad in ["nd('nosuch')", "nd('level').out.nope", "nd('level').nope", "nd('a b')"] {
         let why = param(&g, j!({ "expression": bad }))["error"].clone();
         assert!(why.as_str().is_some_and(|e| !e.is_empty()), "`{bad}` is refused or unresolvable: {why}");
     }
     let bound = param(&g, j!({ "expression": "nd('level')" }));
     assert!(bound["error"].is_null(), "a bare read of a running scalar producer binds: {bound}");
-    let d = field(&mut ev, "the descriptor shows the expression", &|d| d["expression"] == j!("nd('level')"));
-    assert_eq!((&d["mode"], &d["error"]), (&j!("expression"), &j!(null)), "{d}");
+    let d = field("the record shows the expression", &|d| d["expression"] == j!("nd('level')"));
+    assert_eq!(d["mode"], j!("expression"), "{d}");
+    g.until("the bare read carries no error", |g| {
+        let l = line(g);
+        (l.contains("expr: nd('level')") && !l.contains("[error")).then_some(())
+    });
     // The value lands with NO evaluator in this process: the runtime copied the frame's one element.
     g.until("the bare value lands", |_| {
         (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.25)).then_some(())
@@ -1048,7 +1035,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     assert_ne!(g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"]["value"], j!(0.25));
     // A rename follows into the text.
     g.call("node edit", j!({ "node": hex(level), "name": "gain" }));
-    field(&mut ev, "the expression followed the rename", &|d| d["expression"] == j!("nd('gain')"));
+    field("the expression followed the rename", &|d| d["expression"] == j!("nd('gain')"));
     let wide = g.add("_TestConst");
     g.call("node edit", j!({ "node": hex(wide), "name": "wide" }));
     g.set_param(wide, "constant", "value", 0.75);
@@ -1058,7 +1045,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
         (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
     });
     g.call("node edit", j!({ "node": hex(wide), "name": "bank" }));
-    field(&mut ev, "the indexed read follows a rename", &|d| d["expression"] == j!("nd('bank')[7]"));
+    field("the indexed read follows a rename", &|d| d["expression"] == j!("nd('bank')[7]"));
     param(&g, j!({ "expression": "nd('bank')[8]" }));
     g.until("an out-of-range index reports an error", |g| line(g).contains("outside frame").then_some(()));
     // Anything else around the target is Python's, and there is no interpreter in this process.
@@ -1077,17 +1064,15 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     param(&g, j!({ "value": 7 }));
     let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
     assert_eq!((&d["value"], &d["mode"], &d["expression"]), (&j!(7), &j!("constant"), &j!("nd('signal')")), "{d}");
-    // The echoes of the edits above are still queued, so the subscription is taken afresh.
-    ev = g.events();
     param(&g, j!({ "mode": "expression" }));
-    let d = field(&mut ev, "the retained expression is live", &|d| d["mode"] == j!("expression"));
+    let d = field("the retained expression is live", &|d| d["mode"] == j!("expression"));
     assert_eq!(d["expression"], j!("nd('signal')"), "{d}");
     g.until("the expression reads again", |g| {
         let l = line(g);
         (l.contains("expr: nd('signal')") && !l.contains("[error")).then_some(())
     });
     param(&g, j!({ "expression": "" }));
-    let d = field(&mut ev, "an empty expression clears it", &|d| d["mode"] == j!("constant"));
+    let d = field("an empty expression clears it", &|d| d["mode"] != j!("expression"));
     assert_eq!(d["expression"], j!(null), "{d}");
     param(&g, j!({ "expression": "nd('gain')" }));
     // The runtime clears the shape error on its own clock, so the echo is not the oracle.

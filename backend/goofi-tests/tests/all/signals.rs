@@ -1037,7 +1037,7 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
     set(var, "variable", "group", j!("desk"));
     let options = g.until("the group's elements offered", |_| {
         let p = ev.next("state_update");
-        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["params"]["variable"]["element"]["options"].clone())
+        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["options"]["variable"]["element"].clone())
     });
     assert_eq!(options, j!(["level", "word"]));
     set(var, "variable", "element", j!("level"));
@@ -1050,7 +1050,7 @@ fn the_text_and_table_nodes_carry_a_value_out_to_json_and_back() {
     g.call("node param request", j!({ "node": hex(var), "param": "variable/element", "request": "refresh" }));
     let options = g.until("the refreshed list's echo", |_| {
         let p = ev.next("state_update");
-        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["params"]["variable"]["element"]["options"].clone())
+        (p["node"] == hex(var) && p["refreshed_params"] == j!([["variable", "element"]])).then_some(p["options"]["variable"]["element"].clone())
     });
     assert_eq!(options, j!(["level", "word", "late"]));
 }
