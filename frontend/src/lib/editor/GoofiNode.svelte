@@ -92,7 +92,7 @@
 		for (const group of Object.values(node?.params ?? {}))
 			for (const d of Object.values(group))
 				for (const m of (d.mode === 'expression' && d.expression?.matchAll(/variables\.(\w+\.\w+)/g)) || [])
-					if (g.variables.some((v) => v.name === m[1] && v.control)) names.add(m[1]);
+					if (g.controlled.has(m[1])) names.add(m[1]);
 		return [...names];
 	});
 </script>

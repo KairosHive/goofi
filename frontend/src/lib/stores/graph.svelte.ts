@@ -141,6 +141,10 @@ export class GraphStore {
 
 	/** Patch variables (system + user), doc-authoritative, in system-first/creation order. */
 	variables: VariableView[] = $derived(variableViews(this.doc));
+	/** The variables a control panel draws, by name: what a card's expressions are tested against.
+	 * Through the joined names, so an edit that leaves the set as it was wakes no card. */
+	private _controlledKey = $derived(this.variables.filter((v) => v.control).map((v) => v.name).join('\n'));
+	controlled: ReadonlySet<string> = $derived(new Set(this._controlledKey.split('\n').filter(Boolean)));
 	/** Every variable group that carries a lock, by name. */
 	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
 	/** The groups a control panel may draw, in document order. */
