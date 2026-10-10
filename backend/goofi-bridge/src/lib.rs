@@ -1186,16 +1186,15 @@ pub(crate) async fn blocking<T: Send + 'static>(state: &AppState, work: impl FnO
 /// Seed (or re-seed) a control socket: the hello snapshot, then the whole document; false when a
 /// send fails. The filesystem reads happen BEFORE the graph lock, which the status drain waits on.
 /// A fresh socket takes the palette too; a re-seed's client holds it, and `node_types` moves it.
-async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, actor: &str, fresh: bool) -> bool {
+async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, actor: &str) -> bool {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
     let roster = state.harnesses.roster(&goofi_supervisor::layout::agents());
     let hello = {
         let g = state.graph.lock();
         let mut snap = schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster);
-        if fresh {
-            snap["node_types"] = schemas::catalog_types(&g, schemas::Detail::Full);
-        }
+        // A lag may have dropped a `node_types` event, so a re-seed carries the palette too.
+        snap["node_types"] = schemas::catalog_types(&g, schemas::Detail::Full);
         // The actor's stack outlives its socket: a reload finds its undo where it left it.
         snap["history"] = state.history_labels(actor);
         Event::Hello(snap).text()
@@ -1217,7 +1216,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     // neither, and the replica desyncs silently. A re-delivery is read as stale and skipped.
     let mut events = state.events.subscribe();
 
-    if !seed(&mut tx, &state, named.as_deref().unwrap_or(DEFAULT_ACTOR), true).await {
+    if !seed(&mut tx, &state, named.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
         return;
     }
 
@@ -1308,7 +1307,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
                 // connection seeds them.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    if !seed(&mut tx, &state, actor.as_deref().unwrap_or(DEFAULT_ACTOR), false).await {
+                    if !seed(&mut tx, &state, actor.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
                         break;
                     }
                 }

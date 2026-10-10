@@ -335,8 +335,8 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
             if let Some(Ok(Message::Text(t))) = victim.next().await {
                 let v = serde_json::from_str::<Value>(t.as_str()).unwrap();
                 if v["event"] == "hello" {
-                    // The client holds the palette already: a re-seed does not ship it again.
-                    return v["payload"].get("node_types").is_none();
+                    // A lag may have dropped a `node_types` event: the re-seed ships the palette again.
+                    return v["payload"]["node_types"].as_array().is_some_and(|t| !t.is_empty());
                 }
             }
         }
