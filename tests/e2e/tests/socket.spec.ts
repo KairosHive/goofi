@@ -453,6 +453,9 @@ test.describe('the control socket', () => {
 
 				// Copy the FACADE and paste it. A sub-patch is not one type, so what rides the
 				// clipboard has to be its members, its ports and the wiring among them.
+				// The steps before left the view zoomed onto other cards: frame this one first, or the
+				// inspector the press opens can cover it.
+				await page.locator('.svelte-flow__controls-fitview').click();
 				await selectNode(page, scope);
 				// Each press lands off the one before it: two on one spot inside 350 ms enter the sub-patch.
 				const aside = { x: 12, y: 6 };
