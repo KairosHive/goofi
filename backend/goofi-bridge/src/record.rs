@@ -205,7 +205,7 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
         (g.instance().to_string(), g.time())
     };
     let draining = recorder.draining();
-    let started = goofi_transport::thread("goofi-record").spawn(move || {
+    let started = goofi_supervisor::worker::thread("goofi-record").spawn(move || {
         let _draining = draining;
         let ports = goofi_transport::PortBundle::open(&iox, |node| {
             let door = goofi_transport::event_service(node, &goofi_transport::record_door_service(&instance))?;

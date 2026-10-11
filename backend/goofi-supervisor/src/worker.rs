@@ -9,15 +9,21 @@ use std::time::{Duration, Instant};
 
 use crate::scope::{self, Kind};
 
+/// The stack every goofi thread gets unless its builder says otherwise. Opening an iceoryx2
+/// service parses its config through serde and toml, whose debug-build frames overflow a platform
+/// default: 2 MiB for a spawned thread, and 1 MiB for the Windows main thread. Every goofi thread
+/// — a worker here, a tokio runtime's — is built with this, so the platform default never decides.
+pub const STACK: usize = 8 * 1024 * 1024;
+
 /// A thread being described: its name, and the stack it gets.
 pub struct Builder {
     name: String,
-    stack: Option<usize>,
+    stack: usize,
 }
 
 /// Describe a thread named `name`.
 pub fn thread(name: impl Into<String>) -> Builder {
-    Builder { name: name.into(), stack: None }
+    Builder { name: name.into(), stack: STACK }
 }
 
 /// Start `f` on a thread named `name`. The handle may be dropped: the thread runs on, listed
@@ -28,7 +34,7 @@ pub fn spawn<T: Send + 'static>(name: impl Into<String>, f: impl FnOnce() -> T +
 
 impl Builder {
     pub fn stack_size(mut self, bytes: usize) -> Self {
-        self.stack = Some(bytes);
+        self.stack = bytes;
         self
     }
 
@@ -36,11 +42,7 @@ impl Builder {
         let lease = scope::lease(Kind::Worker, self.name.clone());
         let done = Arc::new(Latch::default());
         let finished = done.clone();
-        let mut builder = std::thread::Builder::new().name(self.name.clone());
-        if let Some(stack) = self.stack {
-            builder = builder.stack_size(stack);
-        }
-        let handle = builder.spawn(move || {
+        let handle = std::thread::Builder::new().name(self.name.clone()).stack_size(self.stack).spawn(move || {
             // Held by the thread itself: the entry is there exactly while the thread runs.
             let _lease = lease;
             let _ending = Ending(finished);

@@ -471,7 +471,7 @@ pub fn spawn<E: Executor + 'static>(
     let mail = Arc::new(Mutex::new(Mail::default()));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
-    goofi_transport::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
+    goofi_supervisor::worker::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
         .spawn(move || {
             goofi_supervisor::log::set_source(goofi_supervisor::log::Source {
                 component: spawn.engine.into(),

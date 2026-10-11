@@ -4,6 +4,7 @@
 pub mod child;
 pub mod layout;
 pub mod log;
+pub mod process;
 pub mod progress;
 pub mod scope;
 pub mod session;

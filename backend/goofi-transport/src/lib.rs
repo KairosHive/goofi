@@ -159,12 +159,3 @@ impl<P> std::ops::DerefMut for PortBundle<P> {
     }
 }
 
-/// The stack a thread needs to OPEN an iceoryx2 service: serde and toml parse its config, and their
-/// debug-build frames overflow a platform default. It is the main thread's own size.
-pub const STACK: usize = 8 * 1024 * 1024;
-
-/// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is
-/// built here, so the platform default never decides.
-pub fn thread(name: impl Into<String>) -> goofi_supervisor::worker::Builder {
-    goofi_supervisor::worker::thread(name).stack_size(STACK)
-}

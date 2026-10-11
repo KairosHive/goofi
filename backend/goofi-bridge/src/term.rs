@@ -124,7 +124,7 @@ impl Harnesses {
         let ended = eof.clone();
         let inst = Arc::new(Instance {
             harness: agent.to_string(),
-            pid: child.process_id(),
+            tree: child.process_id().and_then(|pid| goofi_supervisor::child::Tree::by_pid(pid).ok()),
             writer: Mutex::new(writer),
             master: Mutex::new(pty.master),
             output: output.clone(),
@@ -212,13 +212,13 @@ impl Harnesses {
         }
         for (_, inst) in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
-            let _ = signal(inst, goofi_supervisor::child::request_stop);
+            let _ = signal(inst, goofi_supervisor::child::Tree::ask);
         }
         Some(move || {
             let deadline = std::time::Instant::now() + GRACE;
             for (_, inst) in &taken {
                 if !inst.reaped_within(deadline.saturating_duration_since(std::time::Instant::now())) {
-                    let _ = signal(inst, goofi_supervisor::child::force_kill);
+                    let _ = signal(inst, goofi_supervisor::child::Tree::kill);
                 }
             }
             let deadline = std::time::Instant::now() + goofi_transport::SHUTDOWN_WAIT;
@@ -235,11 +235,11 @@ impl Harnesses {
 /// that leaves at once releases the thread at once.
 fn begin_stop(inst: Arc<Instance>) -> Result<(), String> {
     inst.stopping.store(true, Ordering::Relaxed);
-    signal(&inst, goofi_supervisor::child::request_stop)?;
+    signal(&inst, goofi_supervisor::child::Tree::ask)?;
     let stopped = inst.clone();
     let stop = goofi_supervisor::worker::spawn("goofi-term-stop", move || {
         if !stopped.reaped_within(GRACE) {
-            let _ = signal(&stopped, goofi_supervisor::child::force_kill);
+            let _ = signal(&stopped, goofi_supervisor::child::Tree::kill);
         }
     });
     inst.workers.lock().extend(stop);
@@ -275,7 +275,7 @@ impl Sizes {
 /// One spawned harness: its PTY, its exit, and the tail an attach replays.
 pub struct Instance {
     harness: String,
-    pid: Option<u32>,
+    tree: Option<goofi_supervisor::child::Tree>,
     /// Writing can block when the child stops reading, but it is bounded by what a person types,
     /// so it is taken inline.
     writer: Mutex<Box<dyn Write + Send>>,
@@ -419,13 +419,13 @@ fn take_cursor_queries(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Reach the instance with `goofi_supervisor::child`'s request_stop or force_kill, skipped once the
-/// child has been reaped, since a recycled pid would name a stranger.
-fn signal(inst: &Instance, how: fn(u32) -> Result<(), String>) -> Result<(), String> {
+/// Reach the instance's tree with its ask or its kill, skipped once the child has been reaped,
+/// since a recycled pid would name a stranger.
+fn signal(inst: &Instance, how: fn(&goofi_supervisor::child::Tree) -> Result<(), String>) -> Result<(), String> {
     if inst.exit_code().is_some() {
         return Ok(());
     }
-    how(inst.pid.ok_or("the harness reported no pid to signal")?)
+    how(inst.tree.as_ref().ok_or("the harness reported no pid to signal")?)
 }
 
 /// The undo stack a spawned shell's ops land in — dropped with the instance, so a stopped

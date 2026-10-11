@@ -57,7 +57,6 @@ const INTERMEDIATE: &str = "GOOFI_TEST_INTERMEDIATE";
 const OUTPUT_HOLDER: &str = "GOOFI_TEST_OUTPUT_HOLDER";
 
 #[test]
-#[cfg(unix)]
 fn output_holder() {
     let Some(path) = std::env::var_os(OUTPUT_HOLDER) else { return };
     let grandchild = sleeper_command()
@@ -82,7 +81,6 @@ fn intermediate() {
 
 /// The liveness pipe, end to end: a parent killed with no chance to clean up takes its child
 /// with it, because the pipe's write end closes with the parent and the child exits on EOF.
-#[cfg(unix)]
 #[test]
 fn a_hard_killed_parent_still_stops_its_child() {
     goofi_tests::walled_home();
@@ -105,10 +103,8 @@ fn a_hard_killed_parent_still_stops_its_child() {
     }
     let grandchild: u32 = line.trim().strip_prefix("GRANDCHILD ").and_then(|p| p.parse().ok()).expect("a pid");
     assert!(alive(grandchild));
-    // SAFETY: SIGKILL to a child this test spawned and has not reaped.
-    unsafe {
-        libc::kill(parent.id() as i32, libc::SIGKILL);
-    }
+    // std's kill is the hard one: SIGKILL, or TerminateProcess.
+    parent.kill().expect("kill the intermediate parent");
     let _ = parent.wait();
     let deadline = Instant::now() + WAIT;
     while alive(grandchild) && Instant::now() < deadline {
@@ -116,7 +112,7 @@ fn a_hard_killed_parent_still_stops_its_child() {
     }
     let orphaned = alive(grandchild);
     if orphaned {
-        let _ = child::force_kill(grandchild);
+        let _ = child::Tree::by_pid(grandchild).map(|tree| tree.kill());
     }
     assert!(!orphaned, "pid {grandchild} outlived its hard-killed parent: the liveness pipe did not fire");
 }
@@ -176,8 +172,7 @@ fn a_tool_past_its_deadline_is_killed_and_reported() {
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
 
     // A tool's exit does not close a pipe another process holds. The deadline also bounds those
-    // readers and kills the group, including a descendant that watches no liveness pipe.
-    #[cfg(unix)]
+    // readers and kills the tree, including a descendant that watches no liveness pipe.
     {
         let record = tempfile::NamedTempFile::new().expect("the holder's pid file");
         let mut held = Command::new(std::env::current_exe().expect("this test binary"));

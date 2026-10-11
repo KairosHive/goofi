@@ -1,5 +1,5 @@
 //! The one way goofi runs a process: a child joins the session, watches a liveness pipe, leads
-//! its own process group, is listed while it lives, logs what it prints, and dies with its [`Child`].
+//! its own [`Tree`], is listed while it lives, logs what it prints, and dies with its [`Child`].
 
 use std::io::{self, PipeReader, PipeWriter, Read};
 use std::process::{Command, ExitStatus, Output, Stdio};
@@ -12,7 +12,8 @@ use crate::worker::Worker;
 /// Env var carrying the liveness pipe's read end: a unix fd number, or a Windows HANDLE.
 pub const LIVENESS_ENV: &str = "GOOFI_PARENT_PIPE";
 
-/// Set in this process for the embedded interpreter alone; no child inherits them.
+/// Set in this process for the embedded interpreter, or by the user for their shell; no child
+/// inherits them, so a host's path never reaches a node's interpreter.
 pub const EMBEDDED_ONLY: [&str; 2] = ["PYTHONHOME", "PYTHONPATH"];
 
 /// A process this one spawned, alive at most as long as this value.
@@ -25,6 +26,7 @@ pub struct Child {
     reaped: bool,
     /// The threads copying a logged stream into the log; joined once the process has ended.
     drains: Vec<Worker>,
+    tree: Tree,
     _lease: Lease,
 }
 
@@ -103,6 +105,9 @@ impl Spawn<'_> {
                 cmd.env_remove(key);
             }
         }
+        // Every pipe between goofi and a child carries UTF-8. A Python child follows the ANSI code
+        // page on Windows unless told so; every other child ignores the variable.
+        cmd.env("PYTHONUTF8", "1");
         // Its own process group, so a Ctrl+C at the terminal reaches goofi alone, which then
         // stops its children in order.
         #[cfg(unix)]
@@ -126,6 +131,7 @@ impl Spawn<'_> {
         cmd.stdout(wire(stdout)).stderr(wire(stderr));
         let (alive, _shared) = arm(cmd)?;
         let mut inner = cmd.spawn()?;
+        let tree = Tree::of(&inner)?;
         let lease = scope::lease(Kind::Child, format!("{name} (pid {})", inner.id()));
         let mut drains = Vec::new();
         if log_out {
@@ -134,7 +140,7 @@ impl Spawn<'_> {
         if log_err {
             drains.extend(inner.stderr.take().and_then(|err| drain(&name, err, source, "stderr")));
         }
-        Ok(Child { inner, name, alive: Some(alive), reaped: false, drains, _lease: lease })
+        Ok(Child { inner, name, alive: Some(alive), reaped: false, drains, tree, _lease: lease })
     }
 }
 
@@ -153,7 +159,7 @@ pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> i
     let status = child.wait_within(deadline.saturating_duration_since(Instant::now()));
     let timeout = || {
         // A tool may have exited while its descendants still hold its output pipes.
-        let _ = force_kill(child.inner.id());
+        let _ = child.tree.kill();
         io::Error::new(io::ErrorKind::TimedOut, format!("{} did not finish in {within:?}", child.name))
     };
     let collect = |r: Worker<io::Result<Vec<u8>>>| {
@@ -175,20 +181,20 @@ fn reader(mut from: impl Read + Send + 'static) -> io::Result<Worker<io::Result<
 }
 
 impl Child {
-    /// Ask the child's group to leave, wait `grace`, then insist. Returns how it ended, or `None`
+    /// Ask the child's tree to leave, wait `grace`, then insist. Returns how it ended, or `None`
     /// when it had to be killed.
     pub fn stop(&mut self, grace: Duration) -> Option<ExitStatus> {
         if !self.reaped {
             // Closed first: this reaches a child that watches the pipe even where a signal or a
             // dead handle defeats the kill.
             drop(self.alive.take());
-            let _ = request_stop(self.inner.id());
+            let _ = self.tree.ask();
         }
         self.wait_within(grace)
     }
 
     fn kill_and_reap(&mut self) {
-        let _ = force_kill(self.inner.id());
+        let _ = self.tree.kill();
         let _ = self.inner.kill();
         let _ = self.inner.wait();
     }
@@ -302,17 +308,127 @@ impl Drop for Child {
 
 // ---- the stop policy, shared with the PTY harness, which portable-pty spawns itself ----
 
-/// Ask everything `pid` started to leave, so it can save its state on the way out. The pid names
-/// a process GROUP leader: every child spawned here is one, and so is a PTY child.
-#[cfg(unix)]
-pub fn request_stop(pid: u32) -> Result<(), String> {
-    signal(pid, libc::SIGTERM)
+/// Everything one child started, as one thing to ask and to kill. On unix it is the process group
+/// the child leads. On Windows it is a job object the child and every descendant stay in, killed
+/// as one when the job closes — a `taskkill /T` walk misses a grandchild whose parent already
+/// left — and the console group the child leads, which carries the ask.
+pub struct Tree {
+    pid: u32,
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
 }
 
-/// Insist, once the grace has run out.
-#[cfg(unix)]
-pub fn force_kill(pid: u32) -> Result<(), String> {
-    signal(pid, libc::SIGKILL)
+// SAFETY: a job handle is a kernel object reference, usable from any thread.
+#[cfg(windows)]
+unsafe impl Send for Tree {}
+#[cfg(windows)]
+unsafe impl Sync for Tree {}
+
+impl Tree {
+    /// The tree a child of this process leads: `cmd.spawn()`'s result.
+    pub fn of(child: &std::process::Child) -> io::Result<Tree> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            Tree::adopt(child.id(), child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE)
+        }
+        #[cfg(not(windows))]
+        Ok(Tree { pid: child.id() })
+    }
+
+    /// The tree a process another spawner started leads — a PTY child — by pid. Every child spawned
+    /// here leads a group, and so does a PTY child.
+    pub fn by_pid(pid: u32) -> io::Result<Tree> {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+            // SAFETY: a handle opened on a pid, checked and closed below.
+            let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+            if process.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let tree = Tree::adopt(pid, process);
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(process) };
+            tree
+        }
+        #[cfg(not(windows))]
+        Ok(Tree { pid })
+    }
+
+    /// A job the process joins, owned by this value, whose close kills what is left in it.
+    #[cfg(windows)]
+    fn adopt(pid: u32, process: windows_sys::Win32::Foundation::HANDLE) -> io::Result<Tree> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
+        };
+        // SAFETY: plain kernel calls on handles this function owns; `limits` is the struct the
+        // information class names, passed with its own size.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+            let info = (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast();
+            if SetInformationJobObject(job, JobObjectExtendedLimitInformation, info, size) == 0
+                || AssignProcessToJobObject(job, process) == 0
+            {
+                let err = io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(err);
+            }
+            Ok(Tree { pid, job })
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Ask everything in the tree to leave, so it can save its state on the way out: `SIGTERM` to
+    /// the group on unix; Ctrl+Break to the console group on Windows, which a console child with no
+    /// handler leaves on, and one in a console of its own never hears — the liveness pipe, closed
+    /// before this, is what reaches it.
+    pub fn ask(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        return signal(self.pid, libc::SIGTERM);
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
+            // SAFETY: a plain call naming the group the child leads.
+            if unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid) } == 0 {
+                return Err(io::Error::last_os_error().to_string());
+            }
+            Ok(())
+        }
+    }
+
+    /// Insist, once the grace has run out.
+    pub fn kill(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        return signal(self.pid, libc::SIGKILL);
+        #[cfg(windows)]
+        {
+            // SAFETY: a plain call on the job handle this value owns.
+            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) } == 0 {
+                return Err(io::Error::last_os_error().to_string());
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Tree {
+    /// Closing the job kills whatever is still in it.
+    fn drop(&mut self) {
+        // SAFETY: the handle this value owns, closed once.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
+    }
 }
 
 /// A process that has already left is what was being asked for, not a failure.
@@ -328,37 +444,6 @@ fn signal(pid: u32, sig: i32) -> Result<(), String> {
         Some(libc::ESRCH) => Ok(()),
         _ => Err(err.to_string()),
     }
-}
-
-/// A Windows console process refuses `taskkill` without `/F`; that is not a failure, because the
-/// grace reaches [`force_kill`].
-#[cfg(windows)]
-pub fn request_stop(pid: u32) -> Result<(), String> {
-    taskkill(pid, false).map(drop)
-}
-
-#[cfg(windows)]
-pub fn force_kill(pid: u32) -> Result<(), String> {
-    let out = taskkill(pid, true)?;
-    if out.status.success() || out.status.code() == Some(NOT_FOUND) {
-        return Ok(());
-    }
-    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-}
-
-/// taskkill's exit code for "there is no such pid" — the unix half's `ESRCH` under another name.
-#[cfg(windows)]
-const NOT_FOUND: i32 = 128;
-
-/// `/T` is why this shells out rather than calling `TerminateProcess`: it takes the whole tree.
-#[cfg(windows)]
-fn taskkill(pid: u32, force: bool) -> Result<Output, String> {
-    let mut cmd = Command::new("taskkill");
-    cmd.args(["/T", "/PID"]).arg(pid.to_string());
-    if force {
-        cmd.arg("/F");
-    }
-    cmd.output().map_err(|e| format!("taskkill: {e}"))
 }
 
 // ---- the liveness pipe ----

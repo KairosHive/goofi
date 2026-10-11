@@ -31,6 +31,21 @@ mod pyinit {
             Python::attach(|py| {
                 let _ = py.run(c"import signal\nsignal.signal(signal.SIGINT, signal.SIG_DFL)", None, None);
             });
+            // The venv's site-packages, added as `site` adds one: its `.pth` files are processed,
+            // which a `PYTHONPATH` entry's never are (pywin32, editable installs).
+            let venv = goofi_supervisor::layout::runtime().python_ft();
+            if let Some(site) = goofi_supervisor::layout::site_packages(&venv) {
+                Python::attach(|py| {
+                    let add = || -> PyResult<()> {
+                        let module = py.import("site")?;
+                        module.getattr("addsitedir")?.call1((site.display().to_string(),))?;
+                        Ok(())
+                    };
+                    if let Err(e) = add() {
+                        eprintln!("the embedded interpreter did not take its site-packages: {e}");
+                    }
+                });
+            }
         });
     }
 
