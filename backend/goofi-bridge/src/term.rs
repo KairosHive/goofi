@@ -112,7 +112,13 @@ impl Harnesses {
         // stack, and the leading PATH entry makes `goofi` this server's own binary.
         cmd.env("GOOFI_SESSION", session_id);
         cmd.env("GOOFI_ACTOR", actor_of(&id));
-        cmd.env("PATH", prepend_path(&own_dir()?, env));
+        let own = own_dir()?;
+        cmd.env("PATH", prepend_path(&own, env));
+        // Git Bash's profile rebuilds PATH from ORIGINAL_PATH when a shell inherited one, and would
+        // drop the entry above: an agent's `bash` tool then finds no `goofi`. Lead that one too.
+        if let Some((_, original)) = env.iter().find(|(k, _)| k == "ORIGINAL_PATH") {
+            cmd.env("ORIGINAL_PATH", format!("{}:{}", posix_form(&own), original.to_string_lossy()));
+        }
         let child = pty.slave.spawn_command(cmd).map_err(|e| format!("spawn {agent}: {e}"))?;
         // Closed here, or the master never sees EOF when the child exits and the drain blocks.
         drop(pty.slave);
@@ -457,6 +463,17 @@ fn shell_command(command: &str) -> CommandBuilder {
 fn own_dir() -> Result<PathBuf, String> {
     let me = std::env::current_exe().map_err(|e| format!("the running binary: {e}"))?;
     me.parent().map(Path::to_path_buf).ok_or_else(|| "the running binary has no directory".into())
+}
+
+/// A directory as an MSYS shell spells it: `C:\a\b` is `/c/a/b`. Elsewhere the path itself.
+fn posix_form(dir: &Path) -> String {
+    let text = dir.to_string_lossy().replace('\\', "/");
+    match text.as_bytes() {
+        [drive, b':', b'/', ..] if drive.is_ascii_alphabetic() => {
+            format!("/{}{}", drive.to_ascii_lowercase() as char, &text[2..])
+        }
+        _ => text,
+    }
 }
 
 /// The child's PATH with that directory FIRST. A login shell's profile may rebuild PATH over
