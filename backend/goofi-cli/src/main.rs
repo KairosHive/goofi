@@ -43,6 +43,7 @@ fn main() {
     };
     let serve = move || {
         tokio::runtime::Builder::new_multi_thread()
+            .thread_stack_size(goofi_supervisor::worker::STACK)
             .enable_all()
             .build()
             .expect("the serve runtime")
@@ -50,7 +51,7 @@ fn main() {
     };
     // Where a display answers, the main thread is the window thread; the server runs beside it on a
     // goofi thread (a Windows main-thread stack is too small), and its death ends the process.
-    let served = goofi_transport::thread("goofi-serve")
+    let served = goofi_supervisor::worker::thread("goofi-serve")
         .spawn(|| {
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
                 release_session();
@@ -98,6 +99,8 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         return;
     }
     let shutdown = watch_shutdown(cli.shell);
+    goofi_supervisor::process::fine_timer();
+    explain_transport_fatal();
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
     if goofi_provision::DIST {
         report("Preparing goofi's runtime");
@@ -151,10 +154,40 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     std::process::exit(code);
 }
 
+/// iceoryx2 ends a condition it cannot recover from with a panic it calls fatal, and on Windows
+/// the unwinding that follows overflows the stack, so the process dies as `STATUS_STACK_OVERFLOW`
+/// with nothing said. The one such condition seen is its per-process handle table (1024 entries,
+/// about 50 nodes). This hook says so on the terminal, releases the session and exits before the
+/// unwinding starts; every other panic keeps the default handling.
+fn explain_transport_fatal() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let text = info.to_string();
+        if !text.contains("This should never happen") {
+            return;
+        }
+        let why = if cfg!(windows) {
+            "On Windows, goofi's transport (iceoryx2) allows 1024 handles per process, which is \
+             about 50 nodes with their viewers. This patch reached that limit, and the transport \
+             cannot continue."
+        } else {
+            "goofi's transport (iceoryx2) hit a condition it cannot recover from."
+        };
+        let _ = goofi_supervisor::log::terminal_line(&format!(
+            "\ngoofi stopped: {why}\n  Please open an issue at {} with this message, your platform and \
+             the patch you were running.\n  {text}",
+            goofi_supervisor::ISSUES
+        ));
+        release_session();
+        std::process::exit(1);
+    }));
+}
+
 /// One line when a newer release is out, from a thread of its own: the check may wait on the
 /// network, and the server does not.
 fn notice_newer_release() {
-    let _ = goofi_transport::thread("goofi-update-check").spawn(|| {
+    let _ = goofi_supervisor::worker::thread("goofi-update-check").spawn(|| {
         if let Ok(latest) = goofi_provision::latest_release(&layout::runtime()) {
             if goofi_provision::is_newer(&latest) {
                 let _ = goofi_supervisor::log::terminal_line(&format!("  goofi {latest} is out — `goofi update` installs it"));
@@ -560,7 +593,7 @@ fn watch_shutdown(shell: bool) -> tokio::sync::oneshot::Receiver<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let (closed, stdin_closed) = tokio::sync::oneshot::channel::<()>();
     if shell {
-        goofi_transport::thread("goofi-shell-watch")
+        goofi_supervisor::worker::thread("goofi-shell-watch")
             .spawn(move || {
                 let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
                 let _ = closed.send(());
@@ -570,7 +603,7 @@ fn watch_shutdown(shell: bool) -> tokio::sync::oneshot::Receiver<()> {
         // Kept, never used: a dropped sender would resolve the receiver at once.
         std::mem::forget(closed);
     }
-    goofi_transport::thread("goofi-signals").spawn(move || {
+    goofi_supervisor::worker::thread("goofi-signals").spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -618,21 +651,18 @@ async fn managed_stop() {
     }
 }
 
-/// Windows has no SIGTERM: the console closing and the machine going down stand in for it.
+/// Windows has no SIGTERM: the console closing and the machine going down stand in for it. The
+/// handler is goofi's own, not tokio's: it holds the console's grace open until the shutdown ends
+/// the process, where tokio's would return at once and the console would kill mid-shutdown.
 #[cfg(windows)]
 async fn managed_stop() {
-    let doors = (tokio::signal::windows::ctrl_close(), tokio::signal::windows::ctrl_shutdown());
-    let (mut close, mut shutdown) = match doors {
-        (Ok(close), Ok(shutdown)) => (close, shutdown),
-        (Err(e), _) | (_, Err(e)) => {
-            eprintln!("Windows shutdown handlers unavailable: {e}");
-            return std::future::pending::<()>().await;
-        }
-    };
-    tokio::select! {
-        _ = close.recv() => {}
-        _ = shutdown.recv() => {}
+    static ASKED: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    let asked = ASKED.get_or_init(tokio::sync::Notify::new);
+    if let Err(e) = goofi_supervisor::process::on_console_close(|| asked.notify_one()) {
+        eprintln!("Windows shutdown handler unavailable: {e}");
+        return std::future::pending::<()>().await;
     }
+    asked.notified().await;
 }
 
 /// The pyo3 param-expression evaluator the graph is booted with.

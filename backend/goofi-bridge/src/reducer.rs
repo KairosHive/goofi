@@ -415,7 +415,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
     let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (shared, failed) = (reducer.slot.clone(), reducer.slot.clone());
     let (uid, slot) = key.clone();
-    match goofi_transport::thread(format!("goofi-reduce-{slot}")).spawn(move || {
+    match goofi_supervisor::worker::thread(format!("goofi-reduce-{slot}")).spawn(move || {
         let Slot { specs, taps, retap, tx, stop, reductions, gen, latest, asked } = &*shared;
         // Owed a serve: watched, holding a frame, and with a new frame or a bump not yet served.
         let owed = |made: &Option<Bytes>, served: Option<u64>, pending: bool| {

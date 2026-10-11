@@ -526,7 +526,16 @@ impl Goofi {
                 "error" => panic!("{node} failed instead of reporting ready: {}",
                                   self.error(node).unwrap_or_default()),
                 stage if Instant::now() >= deadline => {
-                    panic!("timed out waiting for {node} to report ready (stage: {stage})")
+                    // What the engines said meanwhile is the diagnosis a bare timeout would bury.
+                    let said: Vec<String> = goofi_supervisor::log::since(None).groups.into_iter()
+                        .filter_map(|g| g.message)
+                        .filter(|m| m.level != goofi_supervisor::log::Level::Info)
+                        .map(|m| format!("[{} {}] {}", m.source.component, m.source.node.unwrap_or_default(), m.text))
+                        .collect();
+                    let tail = said.iter().rev().take(12).rev().cloned().collect::<Vec<_>>().join("
+  ");
+                    panic!("timed out waiting for {node} to report ready (stage: {stage}); the log said:
+  {tail}")
                 }
                 _ => std::thread::sleep(Duration::from_millis(2)),
             }

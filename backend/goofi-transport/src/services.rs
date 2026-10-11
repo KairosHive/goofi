@@ -65,7 +65,7 @@ impl Doorbell {
 
     /// A bell on a door this node already holds open, so the door is opened once on the node.
     pub fn on(door: &EventService, what: &str) -> Result<Doorbell, String> {
-        Ok(Doorbell(door.notifier_builder().create().map_err(|e| format!("notifier `{what}`: {e}"))?))
+        Ok(Doorbell(door.notifier_builder().create().map_err(|e| crate::explained(format!("notifier `{what}`: {e}")))?))
     }
 
     /// Ring it. A failed ring costs a wake, never a message: the payload is already in a queue the
@@ -117,7 +117,7 @@ pub fn stream_service(node: &IoxNode, name: &str, kind: ServiceKind) -> Result<B
         .max_publishers(1)
         .max_subscribers(subscribers)
         .open_or_create()
-        .map_err(|e| format!("{kind:?} service `{name}`: {e}"))
+        .map_err(|e| crate::explained(format!("{kind:?} service `{name}`: {e}")))
 }
 
 /// The event service every door is, ONE configuration because the first opener fixes it. Two
@@ -130,7 +130,7 @@ pub fn event_service(node: &IoxNode, name: &str) -> Result<EventService, String>
         .max_notifiers(MAX_NOTIFIERS)
         .max_listeners(2)
         .open_or_create()
-        .map_err(|e| format!("event service `{name}`: {e}"))
+        .map_err(|e| crate::explained(format!("event service `{name}`: {e}")))
 }
 
 /// How many subscribers a data service has right now — whether anyone drinks from it.

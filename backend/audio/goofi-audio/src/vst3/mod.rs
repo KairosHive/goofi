@@ -109,6 +109,7 @@ pub fn platform_dirs() -> Vec<PathBuf> {
 /// `goofi vst3-scan <bundle> <answer>`: the child half, which writes the bundle's classes to
 /// `answer` as JSON — never to stdout, which the plugin it just loaded also owns.
 pub fn scan_main(args: &[String]) -> i32 {
+    goofi_supervisor::process::no_error_dialogs();
     goofi_window::open_com_apartment();
     let (Some(bundle), Some(answer)) = (args.first(), args.get(1)) else {
         eprintln!("usage: goofi vst3-scan <bundle> <answer>");
@@ -331,6 +332,7 @@ fn answered(child: &mut goofi_supervisor::child::Child, errors: &Path) -> Result
         s if s.success() => Ok(()),
         _ if !said.is_empty() => Err(said),
         s => Err(match s.code() {
+            Some(code) if goofi_supervisor::process::is_crash_code(code) => format!("the scanner crashed (0x{code:08X})"),
             Some(code) => format!("the scanner exited with {code}"),
             None => "the scanner crashed".into(),
         }),

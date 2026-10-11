@@ -129,17 +129,20 @@ fn walk(kind: Kind, only: Option<cpal::HostId>) -> Vec<(String, cpal::Device)> {
     out
 }
 
-/// Every device goofi offers for `kind`, by stored name, then the remembered ASIO devices the walk
-/// could not see because a stream holds their driver.
+/// Every device goofi offers for `kind`, by stored name: the hosts that answer without loading a
+/// driver, walked fresh, then the ASIO devices [`warm`] learned. Enumerating ASIO loads every
+/// driver installed, and a refresh runs on a node's control thread, so ASIO is never walked here.
 pub(crate) fn named(kind: Kind) -> Vec<(String, cpal::Device)> {
     warm();
-    let mut out = walk(kind, None);
-    remember(kind, &out);
-    let live: std::collections::HashSet<String> = out.iter().map(|(n, _)| n.clone()).collect();
-    let mut extra: Vec<(String, cpal::Device)> =
-        remembered(kind).into_iter().filter(|(n, _)| !live.contains(n)).collect();
-    extra.sort_by(|a, b| a.0.cmp(&b.0));
-    out.extend(extra);
+    let mut out: Vec<(String, cpal::Device)> = cpal::available_hosts()
+        .iter()
+        .copied()
+        .filter(|id| !id.name().eq_ignore_ascii_case(ASIO))
+        .flat_map(|id| walk(kind, Some(id)))
+        .collect();
+    let mut asio = remembered(kind);
+    asio.sort_by(|a, b| a.0.cmp(&b.0));
+    out.extend(asio);
     out
 }
 

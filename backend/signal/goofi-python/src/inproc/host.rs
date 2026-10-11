@@ -111,19 +111,13 @@ pub fn interpreter_path() -> Option<String> {
     layout::venv_python(&layout::runtime().python_ft()).map(|p| p.display().to_string())
 }
 
-/// Hand the EMBEDDED interpreter its venv, before any use of it: pyo3 links `libpython` from
-/// that venv's BASE install, which is told by `PYTHONHOME`, and the venv's own site-packages is
-/// on no search path. An existing value of either is the documented override.
+/// Hand the EMBEDDED interpreter its venv's base, before any use of it: pyo3 links `libpython` from
+/// that venv's BASE install, which is told by `PYTHONHOME`. An existing value is the documented
+/// override. The venv's own site-packages joins the path on the first attach, through `site`.
 pub fn configure_embedded() {
-    let venv = layout::runtime().python_ft();
     if std::env::var_os("PYTHONHOME").is_none() {
-        if let Some(home) = layout::venv_prefix(&venv) {
+        if let Some(home) = layout::venv_prefix(&layout::runtime().python_ft()) {
             std::env::set_var("PYTHONHOME", home);
-        }
-    }
-    if std::env::var_os("PYTHONPATH").is_none() {
-        if let Some(site) = layout::site_packages(&venv) {
-            std::env::set_var("PYTHONPATH", site);
         }
     }
 }

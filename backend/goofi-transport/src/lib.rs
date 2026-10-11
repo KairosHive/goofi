@@ -85,10 +85,28 @@ impl Iox {
     /// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
     /// root and each is counted by every service's `max_nodes`.
     pub fn node(&self) -> Result<IoxNode, String> {
-        let node = NodeBuilder::new().config(&self.config).create::<Svc>().map_err(|e| format!("iox node: {e}"))?;
+        let node = NodeBuilder::new().config(&self.config).create::<Svc>().map_err(|e| explained(format!("iox node: {e}")))?;
         // Named by the thread that opened it, which is what a reader of the inventory can act on.
         let owner = std::thread::current().name().unwrap_or("?").to_string();
         Ok(IoxNode { node, _lease: goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Port, owner) })
+    }
+}
+
+/// An iceoryx2 error as a reader can act on it. On Windows the platform layer allows 1024 handles
+/// per process, about 50 nodes with their viewers, and a full table answers every open with an
+/// internal failure, a corrupted state or a hang in creation: those words get the explanation
+/// and where to report it. Elsewhere, and for every other error, the text stands as it is.
+pub fn explained(error: String) -> String {
+    const SIGNS: [&str; 4] = ["InternalFailure", "InternalError", "ServiceInCorruptedState", "HangsInCreation"];
+    if cfg!(windows) && SIGNS.iter().any(|sign| error.contains(sign)) {
+        format!(
+            "{error} — on Windows goofi's transport (iceoryx2) allows 1024 handles per process, about 50 nodes \
+             with their viewers, and this patch has likely reached that limit; please open an issue at {} \
+             with this message and the patch",
+            goofi_supervisor::ISSUES
+        )
+    } else {
+        error
     }
 }
 
@@ -159,12 +177,3 @@ impl<P> std::ops::DerefMut for PortBundle<P> {
     }
 }
 
-/// The stack a thread needs to OPEN an iceoryx2 service: serde and toml parse its config, and their
-/// debug-build frames overflow a platform default. It is the main thread's own size.
-pub const STACK: usize = 8 * 1024 * 1024;
-
-/// A named thread with the stack [`STACK`] states. Every goofi thread that can reach this crate is
-/// built here, so the platform default never decides.
-pub fn thread(name: impl Into<String>) -> goofi_supervisor::worker::Builder {
-    goofi_supervisor::worker::thread(name).stack_size(STACK)
-}
