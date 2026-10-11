@@ -10,9 +10,12 @@ code goes. What remains lives in iceoryx2, or needs a Windows CI runner to prove
   `win32_handle_translator.rs`). A full table panics in `Directory::new` ("This should never
   happen"), and the panic ends the process as `STATUS_STACK_OVERFLOW`. Seen in the `tests/all`
   binary whenever its situations run in parallel on Windows (one process, many sessions); serial
-  (`--test-threads=1`) passes. A patch must open about 30 nodes to reach it. A viewer attached
-  to a patch of 15 hosted nodes logged `ServiceInCorruptedState` on two view doors, hundreds of
-  times a minute; whether that is the same table is not proven.
+  (`--test-threads=1`) passes. A headless goofi with nothing else open dies with
+  `STATUS_STACK_OVERFLOW` while about the 50th `signal:Clock` is added (2026-10-11, twice, at 47
+  and between 50 and 60); built against a copy of the crate with the table at 16384 it took 130
+  (once). That exit code is what a user's goofi died with twice that day. A viewer attached to a patch of 15 hosted nodes
+  logged `ServiceInCorruptedState` on two view doors, hundreds of times a minute; whether that
+  is the same table is not proven.
 - `open_with_mode` (`fcntl.rs`) leaks the `CreateFileA` handle when the table is full; every later
   open of that service fails with `HangsInCreation` until the session ends.
 - The shared-memory and root directories are compile-time constants in
