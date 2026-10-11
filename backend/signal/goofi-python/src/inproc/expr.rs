@@ -78,23 +78,33 @@ def __goofi_eval(fn, t, lo, hi, locals_):
 const LOADED: usize = 256;
 
 /// The functionals loaded by the hash of their code, and the order they came in.
-type Loaded = (HashMap<u64, Py<PyAny>>, VecDeque<u64>);
+type Loaded = (HashMap<u64, Arc<Py<PyAny>>>, VecDeque<u64>);
 
 /// One compiled source: the function, its marshaled code, and how many bindings hold it.
 struct Code {
-    fn_: Py<PyAny>,
+    fn_: Arc<Py<PyAny>>,
     marshaled: Arc<[u8]>,
     holds: usize,
 }
 
+/// The compiled functions by [`BindingId`], and the id each source text compiled to.
+#[derive(Default)]
+struct Table {
+    codes: HashMap<u64, Code>,
+    by_source: HashMap<String, u64>,
+}
+
 /// The pyo3 evaluator: the harness functions, the compiled functions keyed by [`BindingId`] and
 /// shared by source text, and the functionals loaded from their code.
+///
+/// Its locks are taken DETACHED and never held across a Python call. A free-threaded collection
+/// stops the world until every attached thread parks; one attached thread blocked on a mutex
+/// whose holder is itself waiting to attach never parks, and the process is dead.
 pub struct PyExprEvaluator {
     compile_fn: Py<PyAny>,
     load_fn: Py<PyAny>,
     eval_fn: Py<PyAny>,
-    codes: Mutex<HashMap<u64, Code>>,
-    by_source: Mutex<HashMap<String, u64>>,
+    table: Mutex<Table>,
     loaded: Mutex<Loaded>,
     next: AtomicU64,
 }
@@ -112,8 +122,7 @@ impl PyExprEvaluator {
                 compile_fn: m.getattr("__goofi_compile")?.unbind(),
                 load_fn: m.getattr("__goofi_load")?.unbind(),
                 eval_fn: m.getattr("__goofi_eval")?.unbind(),
-                codes: Mutex::new(HashMap::new()),
-                by_source: Mutex::new(HashMap::new()),
+                table: Mutex::new(Table::default()),
                 loaded: Mutex::new((HashMap::new(), VecDeque::new())),
                 next: AtomicU64::new(1),
             })
@@ -147,18 +156,27 @@ fn names_of(source: &str) -> Vec<String> {
 }
 
 impl PyExprEvaluator {
-    /// Call one compiled function at `ctx`, its result read back as a frame.
-    fn call(&self, py: Python<'_>, fn_: &Bound<'_, PyAny>, ctx: &EvalCtx<'_>) -> Result<Data, ExprError> {
+    /// The functionals among `ctx`'s locals, read at this evaluation's instant — DETACHED, since
+    /// reading one loads its code under the `loaded` lock.
+    fn functionals(&self, ctx: &EvalCtx<'_>) -> Result<Vec<Option<Data>>, ExprError> {
+        ctx.locals
+            .iter()
+            .map(|(_, local)| match local {
+                Local::Frame(d) if d.as_functional().is_some() => goofi_node::at(self, d, ctx.t, ctx.range).map(Some),
+                _ => Ok(None),
+            })
+            .collect()
+    }
+
+    /// Call one compiled function at `ctx`, its result read back as a frame. `now` is
+    /// [`Self::functionals`] for the same `ctx`.
+    fn call(&self, py: Python<'_>, fn_: &Bound<'_, PyAny>, ctx: &EvalCtx<'_>, now: &[Option<Data>]) -> Result<Data, ExprError> {
             let locals = PyDict::new(py);
-            for (name, local) in ctx.locals {
-                let val: Py<PyAny> = match local {
-                    // A functional among the locals is read at this evaluation's instant.
-                    Local::Frame(d) if d.as_functional().is_some() => {
-                        let now = goofi_node::at(self, d, ctx.t, ctx.range)?;
-                        data_to_py(py, &now).map_err(|e| ExprError(e.to_string()))?
-                    }
-                    Local::Frame(d) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
-                    Local::Value(p) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
+            for ((name, local), now) in ctx.locals.iter().zip(now) {
+                let val: Py<PyAny> = match (local, now) {
+                    (_, Some(now)) => data_to_py(py, now).map_err(|e| ExprError(e.to_string()))?,
+                    (Local::Frame(d), None) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
+                    (Local::Value(p), None) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
                 };
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;
             }
@@ -179,72 +197,80 @@ impl PyExprEvaluator {
 
 impl ExprEvaluator for PyExprEvaluator {
     fn compile(&self, source: &str) -> Result<Compiled, ExprError> {
-        let mut by_source = self.by_source.lock();
-        let mut codes = self.codes.lock();
-        if let Some(code) = by_source.get(source).and_then(|id| codes.get_mut(id).map(|c| (*id, c))) {
-            code.1.holds += 1;
-            return Ok(Compiled { id: code.0, code: code.1.marshaled.clone() });
+        let held = |table: &mut Table, source: &str| {
+            let id = *table.by_source.get(source)?;
+            let code = table.codes.get_mut(&id)?;
+            code.holds += 1;
+            Some(Compiled { id, code: code.marshaled.clone() })
+        };
+        if let Some(hit) = held(&mut self.table.lock(), source) {
+            return Ok(hit);
         }
-        crate::attach(|py| -> Result<Compiled, ExprError> {
+        let (fn_, marshaled) = crate::attach(|py| -> Result<(Py<PyAny>, Arc<[u8]>), ExprError> {
             let (fn_, marshaled): (Bound<'_, PyAny>, Bound<'_, PyBytes>) = self
                 .compile_fn
                 .bind(py)
                 .call1((source, names_of(source)))
                 .and_then(|r| r.extract())
                 .map_err(|e| ExprError(e.to_string()))?;
-            let marshaled: Arc<[u8]> = Arc::from(marshaled.as_bytes());
-            let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-            codes.insert(id, Code { fn_: fn_.unbind(), marshaled: marshaled.clone(), holds: 1 });
-            by_source.insert(source.to_string(), id);
-            Ok(Compiled { id, code: marshaled })
-        })
+            Ok((fn_.unbind(), Arc::from(marshaled.as_bytes())))
+        })?;
+        let mut table = self.table.lock();
+        // Another thread compiled the same text meanwhile: one source, one function.
+        if let Some(hit) = held(&mut table, source) {
+            drop(table);
+            drop(fn_);
+            return Ok(hit);
+        }
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        table.codes.insert(id, Code { fn_: Arc::new(fn_), marshaled: marshaled.clone(), holds: 1 });
+        table.by_source.insert(source.to_string(), id);
+        Ok(Compiled { id, code: marshaled })
     }
 
     fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError> {
-        crate::attach(|py| -> Result<Data, ExprError> {
-            let fn_ = self
-                .codes
-                .lock()
-                .get(&id)
-                .map(|c| c.fn_.clone_ref(py))
-                .ok_or_else(|| ExprError("expression not compiled".into()))?;
-            self.call(py, fn_.bind(py), ctx)
-        })
+        let fn_ = self.table.lock().codes.get(&id).map(|c| c.fn_.clone()).ok_or_else(|| ExprError("expression not compiled".into()))?;
+        let now = self.functionals(ctx)?;
+        crate::attach(|py| self.call(py, fn_.bind(py), ctx, &now))
     }
 
     fn release(&self, id: BindingId) {
-        let mut codes = self.codes.lock();
-        let Some(code) = codes.get_mut(&id) else { return };
-        code.holds -= 1;
-        if code.holds == 0 {
-            codes.remove(&id);
-            self.by_source.lock().retain(|_, held| *held != id);
-        }
+        let gone = {
+            let mut table = self.table.lock();
+            let Some(code) = table.codes.get_mut(&id) else { return };
+            code.holds -= 1;
+            if code.holds > 0 {
+                return;
+            }
+            table.by_source.retain(|_, held| *held != id);
+            table.codes.remove(&id)
+        };
+        // Dropped off the lock: the function's last reference may run Python.
+        drop(gone);
     }
 
     fn run(&self, code: &[u8], ctx: &EvalCtx<'_>) -> Result<Data, ExprError> {
         let mut h = DefaultHasher::new();
         code.hash(&mut h);
         let key = h.finish();
-        crate::attach(|py| -> Result<Data, ExprError> {
-            let fn_ = {
+        let known = self.loaded.lock().0.get(&key).cloned();
+        let fn_ = match known {
+            Some(fn_) => fn_,
+            None => {
+                let fn_ = crate::attach(|py| -> Result<Py<PyAny>, ExprError> {
+                    Ok(self.load_fn.bind(py).call1((PyBytes::new(py, code),)).map_err(|e| ExprError(e.to_string()))?.unbind())
+                })?;
+                let fn_ = Arc::new(fn_);
                 let mut loaded = self.loaded.lock();
-                match loaded.0.get(&key) {
-                    Some(fn_) => fn_.clone_ref(py),
-                    None => {
-                        let fn_ = self.load_fn.bind(py).call1((PyBytes::new(py, code),)).map_err(|e| ExprError(e.to_string()))?;
-                        if loaded.1.len() >= LOADED {
-                            if let Some(old) = loaded.1.pop_front() {
-                                loaded.0.remove(&old);
-                            }
-                        }
-                        loaded.1.push_back(key);
-                        loaded.0.insert(key, fn_.clone().unbind());
-                        fn_.unbind()
-                    }
-                }
-            };
-            self.call(py, fn_.bind(py), ctx)
-        })
+                let evicted = (loaded.1.len() >= LOADED).then(|| loaded.1.pop_front()).flatten().and_then(|old| loaded.0.remove(&old));
+                loaded.1.push_back(key);
+                let fn_ = loaded.0.entry(key).or_insert(fn_).clone();
+                drop(loaded);
+                drop(evicted);
+                fn_
+            }
+        };
+        let now = self.functionals(ctx)?;
+        crate::attach(|py| self.call(py, fn_.bind(py), ctx, &now))
     }
 }

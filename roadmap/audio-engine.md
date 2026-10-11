@@ -31,10 +31,13 @@ The audio node contract is `sdk/README.md` and the code.
   pinned a core on a live patch (2026-10-10; the profile was not readable, so the cost inside it
   is unknown), and the server's underflow events never reach cpal's error callback: `late` in
   `session status` is goofi's own count. A native PipeWire or ALSA output path removes both.
-- **A plugin's own threads run as the plugin asks.** Vital's JUCE puts its OpenGL editor renderer
-  and helper threads at `SCHED_RR` 50, above the callback's real-time grant, and the renderer
-  spun a whole core while its window was up. Where goofi can hold a thread's policy around
-  `createInstance` and the editor open, measure first whether JUCE sets it itself.
+- **A plugin's own threads run as the plugin asks.** Measured 2026-10-11 on `examples/laser.gfi`
+  with Vital's editor open: Vital calls `pthread_setschedparam` itself (the symbol is imported);
+  its OpenGL renderer (`Pool`) runs `SCHED_RR` 50 at 85–95% of a core, `JUCE Timer` at `RR` 69,
+  its gdbus/gmain/firebase threads at `RR` 50 — all above goofi's callback at `RR` 10 — and the
+  user's `rtprio` limit of 95 (audio group) lets every request through with no rtkit. Options:
+  lower `RLIMIT_RTPRIO` to 0 before the first plugin loads (goofi's callback keeps rtkit), or host
+  plugins out of process. Neither is built; measure the callback's `late` count with and without.
 - **`MidiIn` reads notes, bend and the sustain pedal** (`nodes/midi_in.rs`). Other CCs and
   aftertouch are absent, and a note-on for a held note moves its voice's velocity, not its
   envelope. A note lands at block start, up to 1.3 ms late; sample-accurate placement needs the

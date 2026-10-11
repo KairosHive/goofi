@@ -77,3 +77,50 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     assert!(goofi_codec::decode(&goofi_codec::encode(&goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default())).unwrap()).is_ok());
     assert!(goofi_node::at(&evaluator, &goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default()), 0.0, (0.0, 1.0)).is_err(), "code that is not code is a run error, not a panic");
 }
+
+/// Compiles, evaluations and a free-threaded collection run on their own threads at once, as a
+/// patch's reducers, node threads and machines do. A collection stops the world until every
+/// attached thread parks; an evaluator that blocks attached on a lock whose holder waits to
+/// attach never parks, and the manager, the machines and every node freeze with it.
+#[test]
+fn concurrent_compile_eval_and_collection_all_finish() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    const ROUNDS: u64 = 300;
+    let evaluator = Arc::new(PyExprEvaluator::new().unwrap());
+    let ctx = || EvalCtx { locals: &[], t: 0.5, range: (0.0, 1.0) };
+    let done: Arc<Vec<AtomicU64>> = Arc::new((0..9).map(|_| AtomicU64::new(0)).collect());
+    for (i, counter) in (0..9).zip(0..) {
+        let (ev, done) = (evaluator.clone(), done.clone());
+        std::thread::spawn(move || {
+            for round in 0..ROUNDS {
+                match i {
+                    // The collector: every call is a stop-the-world collection.
+                    0 => {
+                        let code = ev.compile("__import__('gc').collect() * 0 + t").unwrap();
+                        assert_eq!(control::number_of(&ev.eval(code.id, &ctx()).unwrap()), 0.5);
+                        ev.release(code.id);
+                    }
+                    // Compilers: a fresh text each round is a compile under the table lock.
+                    1..=4 => {
+                        let code = ev.compile(&format!("t + {i} * {round}")).unwrap();
+                        ev.release(code.id);
+                    }
+                    // Evaluators: a held function read attached, as a node thread reads it.
+                    _ => {
+                        let code = ev.compile("t * 2").unwrap();
+                        assert_eq!(control::number_of(&ev.eval(code.id, &ctx()).unwrap()), 1.0);
+                        ev.release(code.id);
+                    }
+                }
+                done[counter].fetch_add(1, Ordering::Relaxed);
+            }
+        });
+    }
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
+    while done.iter().any(|d| d.load(Ordering::Relaxed) < ROUNDS) {
+        let rounds: Vec<u64> = done.iter().map(|d| d.load(Ordering::Relaxed)).collect();
+        assert!(std::time::Instant::now() < deadline, "threads stalled at {rounds:?} of {ROUNDS} rounds each");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}

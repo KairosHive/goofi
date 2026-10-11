@@ -19,8 +19,6 @@ Found by reading; each fix lands with a fixture that fails on the broken variant
 
 ## Deadlock and ordering
 
-- `compile` takes `by_source` then `codes`; `release` takes `codes` then `by_source`
-  (`goofi-python/src/inproc/expr.rs:181-221`). One order, and no Python attach under either lock.
 - A preview in flight when its `/control` socket closes stays applied, with no history entry and no
   dirty flag: `end_previews` is not ordered after the pending dispatch (`goofi-bridge/src/lib.rs:1297`).
   Await `pending` first. Also: an unparsable request gets no reply; the per-socket queue is unbounded.
