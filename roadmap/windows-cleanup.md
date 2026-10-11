@@ -27,8 +27,8 @@ code goes. What remains lives in iceoryx2, or needs a Windows CI runner to prove
 - Each iceoryx2 wait is a UDP socket whose option changes scan the handle table under one
   process-wide lock; the cost grows with nodes times rate.
 
-Decision open: fork `iceoryx2-pal-posix` through `[patch.crates-io]` with the table raised and the
-leak closed, or wait upstream.
+Decided 2026-10-11: wait upstream rather than fork. Report the table and the leak to
+eclipse-iceoryx; a `[patch.crates-io]` copy with the table raised is the fallback if that stalls.
 
 ## Open defects in goofi
 
