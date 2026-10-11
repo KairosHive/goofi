@@ -1,5 +1,7 @@
 <!-- RecoverDialog — the offer a manager makes at the start: what an earlier goofi left unsaved.
-     Each row opens its autosave; its × removes it. Dismissing keeps every recovery on disk. -->
+     Each row opens its autosave; its × removes it, Remove all removes every one. Skipping keeps
+     every recovery on disk. The list keeps its height as rows go, so the next × lands under a
+     finger that stays put, and a row leaves on the click, so a repeat never asks twice. -->
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { getControl, type Recovery } from '$lib/api/control';
@@ -13,13 +15,13 @@
 	let recoveries = $state<Recovery[]>([]);
 	let dismissed = $state(false);
 	const open = $derived(!dismissed && recoveries.length > 0);
-	let later = $state<HTMLElement | null>(null);
+	let skip = $state<HTMLElement | null>(null);
 
 	// A modal focuses its first control (a patch row); the safe answer takes focus instead, once
 	// open, since an `autofocus` fires at mount while the dialog is still closed.
 	$effect(() => {
 		if (!open) return;
-		void tick().then(() => later?.querySelector('button')?.focus());
+		void tick().then(() => skip?.querySelector('button')?.focus());
 	});
 
 	// Once per SERVER session, on the startup hook: a page that stayed open across a restart is
@@ -42,34 +44,47 @@
 		return new Date(at * 1000).toLocaleString();
 	}
 
-	function forget(workspace: string): void {
+	/** Take a row out of the list; the row comes back when the call it stood for is refused. */
+	function take(workspace: string): Recovery | undefined {
+		const row = recoveries.find((r) => r.workspace === workspace);
 		recoveries = recoveries.filter((r) => r.workspace !== workspace);
+		return row;
+	}
+
+	function restore(row: Recovery | undefined): void {
+		if (row) recoveries = [...recoveries, row];
 	}
 
 	async function recover(workspace: string): Promise<void> {
+		const row = take(workspace);
 		try {
 			await ctl.call('session recover', { workspace });
-			forget(workspace);
 			dismissed = true;
 		} catch (e) {
+			restore(row);
 			notify().failure('Recover', e);
 		}
 	}
 
 	async function discard(workspace: string): Promise<void> {
+		const row = take(workspace);
 		try {
 			await ctl.call('session discard', { workspace });
-			forget(workspace);
 		} catch (e) {
+			restore(row);
 			notify().failure('Discard', e);
 		}
+	}
+
+	function discardAll(): void {
+		for (const r of recoveries) void discard(r.workspace);
 	}
 </script>
 
 <ConfirmDialog
 	{open}
 	question="Recover unsaved work?"
-	detail="A goofi that did not shut down cleanly left these patches behind. Open one to continue from its last autosave, or remove it."
+	detail="A goofi that did not shut down cleanly left these patches behind. Open one to continue from its last autosave, or remove it. Skipping keeps them for next time."
 	onClose={() => (dismissed = true)}
 	data-testid="recover-dialog"
 >
@@ -92,7 +107,8 @@
 			{/each}
 		</ul>
 	{/snippet}
-	<span bind:this={later}><Button variant="ghost" onclick={() => (dismissed = true)}>Later</Button></span>
+	<Button variant="danger" data-testid="recover-discard-all" onclick={discardAll}>Remove all</Button>
+	<span bind:this={skip}><Button data-testid="recover-skip" onclick={() => (dismissed = true)}>Skip</Button></span>
 </ConfirmDialog>
 
 <style>
@@ -103,10 +119,13 @@
 		gap: var(--space-2);
 		margin: var(--space-6) 0 0;
 		padding: 0;
-		max-height: 40dvh;
+		/* A fixed size: the answers stay where they are as rows go, whatever the names. */
+		width: min(80vw, 28rem);
+		height: min(16rem, 40dvh);
 		overflow-y: auto;
 	}
 	.row {
+		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
