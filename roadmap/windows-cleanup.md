@@ -16,9 +16,9 @@ code goes. What remains lives in iceoryx2, or needs a Windows CI runner to prove
   (once). That exit code is what a user's goofi died with twice that day. Three later fills
   degraded instead: nodes past the table report `iox node: InternalError`. Both modes now name
   the limit and the issue tracker (`goofi_transport::explained`, and the panic hook in
-  `goofi-cli/src/main.rs`); the hook's message is not yet seen on a real death. A viewer attached to a patch of 15 hosted nodes
-  logged `ServiceInCorruptedState` on two view doors, hundreds of times a minute; whether that
-  is the same table is not proven.
+  `goofi-cli/src/main.rs`); the hook's message is not yet seen on a real death. A viewer
+  attached to a patch of 15 hosted nodes logged `ServiceInCorruptedState` on two view doors,
+  hundreds of times a minute; whether that is the same table is not proven.
 - `open_with_mode` (`fcntl.rs`) leaks the `CreateFileA` handle when the table is full; every later
   open of that service fails with `HangsInCreation` until the session ends.
 - The shared-memory and root directories are compile-time constants in
