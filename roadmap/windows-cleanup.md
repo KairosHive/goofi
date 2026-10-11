@@ -13,7 +13,10 @@ code goes. What remains lives in iceoryx2, or needs a Windows CI runner to prove
   (`--test-threads=1`) passes. A headless goofi with nothing else open dies with
   `STATUS_STACK_OVERFLOW` while about the 50th `signal:Clock` is added (2026-10-11, twice, at 47
   and between 50 and 60); built against a copy of the crate with the table at 16384 it took 130
-  (once). That exit code is what a user's goofi died with twice that day. A viewer attached to a patch of 15 hosted nodes
+  (once). That exit code is what a user's goofi died with twice that day. Three later fills
+  degraded instead: nodes past the table report `iox node: InternalError`. Both modes now name
+  the limit and the issue tracker (`goofi_transport::explained`, and the panic hook in
+  `goofi-cli/src/main.rs`); the hook's message is not yet seen on a real death. A viewer attached to a patch of 15 hosted nodes
   logged `ServiceInCorruptedState` on two view doors, hundreds of times a minute; whether that
   is the same table is not proven.
 - `open_with_mode` (`fcntl.rs`) leaks the `CreateFileA` handle when the table is full; every later

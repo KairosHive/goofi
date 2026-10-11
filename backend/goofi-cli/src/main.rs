@@ -100,6 +100,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let shutdown = watch_shutdown(cli.shell);
     goofi_supervisor::process::fine_timer();
+    explain_transport_fatal();
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
     if goofi_provision::DIST {
         report("Preparing goofi's runtime");
@@ -151,6 +152,36 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
     release_session();
     std::process::exit(code);
+}
+
+/// iceoryx2 ends a condition it cannot recover from with a panic it calls fatal, and on Windows
+/// the unwinding that follows overflows the stack, so the process dies as `STATUS_STACK_OVERFLOW`
+/// with nothing said. The one such condition seen is its per-process handle table (1024 entries,
+/// about 50 nodes). This hook says so on the terminal, releases the session and exits before the
+/// unwinding starts; every other panic keeps the default handling.
+fn explain_transport_fatal() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let text = info.to_string();
+        if !text.contains("This should never happen") {
+            return;
+        }
+        let why = if cfg!(windows) {
+            "On Windows, goofi's transport (iceoryx2) allows 1024 handles per process, which is \
+             about 50 nodes with their viewers. This patch reached that limit, and the transport \
+             cannot continue."
+        } else {
+            "goofi's transport (iceoryx2) hit a condition it cannot recover from."
+        };
+        let _ = goofi_supervisor::log::terminal_line(&format!(
+            "\ngoofi stopped: {why}\n  Please open an issue at {} with this message, your platform and \
+             the patch you were running.\n  {text}",
+            goofi_supervisor::ISSUES
+        ));
+        release_session();
+        std::process::exit(1);
+    }));
 }
 
 /// One line when a newer release is out, from a thread of its own: the check may wait on the
