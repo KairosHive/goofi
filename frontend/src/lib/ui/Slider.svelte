@@ -14,6 +14,7 @@
 		max = 1,
 		step,
 		disabled = false,
+		bounds = true,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -26,6 +27,8 @@
 		step?: number;
 		/** Show the value and take no input — what a driven param's own control wears. */
 		disabled?: boolean;
+		/** The min and max printed beside the track; off where a readout beside it says more. */
+		bounds?: boolean;
 	} = $props();
 
 	const ownId = $props.id();
@@ -50,7 +53,7 @@
 </script>
 
 <div {...rest} class={`ui-slider ${klass}`.trim()}>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(min)}</span>
+	{#if bounds}<span class="ui-slider-bound" aria-hidden="true">{fmtBound(min)}</span>{/if}
 	<input
 		id={fieldId}
 		class="ui-slider-range"
@@ -70,7 +73,7 @@
 		oninput={(e) => live.input(Number((e.currentTarget as HTMLInputElement).value))}
 		onchange={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
 	/>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>
+	{#if bounds}<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>{/if}
 </div>
 
 <style>

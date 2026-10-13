@@ -1,2 +1,2 @@
-/** What the machine panel's inspector shows: the one selected state or transition, else the machine. */
-export type Subject = { kind: 'machine' } | { kind: 'state'; id: string } | { kind: 'transition'; id: string };
+/** What the machine panel's inspector shows: the selected states, or the selected transitions. */
+export type Subject = { kind: 'state' | 'transition'; ids: string[] };

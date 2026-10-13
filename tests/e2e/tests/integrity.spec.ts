@@ -260,8 +260,9 @@ test('a patch under construction holds together at every stage', async ({ page }
 				await rawCall(page, 'machine attribute add', { machine: 'sweep', name: 'level', value: 0.5, kind: { type: 'num', vmin: 0, vmax: 1 } });
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'A', pos: [0, 0], values: { level: 0.2 } });
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'B', pos: [320, 40] });
-				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', triggers: [{ kind: 'manual' }, { kind: 'after', seconds: 2, weight: 0.5 }], duration: 1 });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', triggers: [{ kind: 'manual' }], duration: 1 });
 				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', triggers: [{ kind: 'when', expression: 'variables.system.time > 1' }] });
+				await rawCall(page, 'machine state edit', { machine: 'sweep', name: 'A', interval: 2, noop: 0.5, weights: { t1: 0.5 } });
 				await rawCall(page, 'machine playhead add', { machine: 'sweep', start: 'A' });
 				for (const name of names) {
 					await choosePanelType(page, name);
@@ -272,7 +273,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 						});
 						await expect(page.getByTestId('state-card-A')).toBeVisible();
 						// The label shows once a box of the transition is selected.
-						await page.getByTestId('state-card-A').click();
+						await page.getByTestId('state-card-A').getByTestId('state-card-name').click();
 						await page.getByTestId('transition-t1').click();
 						await expect(page.getByTestId('machine-transition')).toBeVisible();
 					}

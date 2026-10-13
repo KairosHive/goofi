@@ -31,11 +31,28 @@ export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
 export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, color: boolean, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
 export type Attribute = { default: Literal, kind: AttributeKind, };
-export type State = { pos: [number, number], values?: Record<string, Literal>, };
+export type Decision = "sequence" | "random" | "expression";
+export type State = { pos: [number, number], values?: Record<string, Literal>, 
+/**
+ * Seconds between decisions, from arrival; 0 decides once, on arrival.
+ */
+interval: number, mode: Decision, 
+/**
+ * The weight of a decision that waits one more interval, in `random`.
+ */
+noop: number, 
+/**
+ * Per transition out, by id, its weight in `random`; one left out weighs 1, so a new state
+ * draws evenly.
+ */
+weights: { [key in string]: number }, 
+/**
+ * In `expression`: the index of the transition out to take; a negative one waits.
+ */
+expression: string, };
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
 export type Policy = "fifo" | "lifo" | "all";
-export type Seconds = number | string;
-export type Trigger = { "kind": "manual" } | { "kind": "after", seconds: Seconds, weight: number, } | { "kind": "when", expression: string, weight: number, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
+export type Trigger = { "kind": "manual" } | { "kind": "when", expression: string, weight: number, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
 export type Transition = { 
 /**
  * A state name, or `*` for any state.

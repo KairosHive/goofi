@@ -1,55 +1,22 @@
-<!-- Per-slot viewer settings: a cog opening a Popover of the kind's settings, one under the
-     other. Its role is `group`, not a menu — nothing in it is a menuitem. -->
+<!-- Per-slot viewer settings: a cog opening the kind's settings, one under the other. -->
 <script lang="ts">
 	import { MODULES } from './registry';
 	import type { SettingDescriptor } from './module';
 	import type { ViewBinding } from './viewBinding';
-	import { Popover, Icon, IconButton, Field, ScrollArea, EmptyState, Toggle, Select, NumberInput } from '$lib/ui';
+	import { Field, EmptyState, NumberInput, Select, SettingsMenu, Toggle } from '$lib/ui';
 
 	let { binding }: { binding: ViewBinding } = $props();
 
 	const schema = $derived(MODULES[binding.kind].settings);
 	const settings = $derived(binding.settings);
 
-	let open = $state(false);
-	let anchor = $state<HTMLElement | null>(null);
-
-	function toggle(e: MouseEvent): void {
-		// stopPropagation so picking the cog on a node header does not also toggle the slot's collapse.
-		e.stopPropagation();
-		open = !open;
-	}
-
 	function visible(s: SettingDescriptor): boolean {
 		return !s.showWhen || s.showWhen.anyOf.includes(settings[s.showWhen.key]);
 	}
 </script>
 
-<span class="vs-anchor" bind:this={anchor}>
-	<IconButton
-		variant="ghost"
-		size="sm"
-		class={open ? 'vs-cog on' : 'vs-cog'}
-		label="viewer settings"
-		aria-expanded={open}
-		data-testid="viewer-settings-cog"
-		onclick={toggle}
-	>
-		<Icon name="settings" />
-	</IconButton>
-</span>
-
-<Popover
-	{anchor}
-	{open}
-	onDismiss={() => (open = false)}
-	catcher
-	role="group"
-	aria-label="viewer settings"
-	class="vs-menu"
-	data-testid="viewer-settings-menu"
->
-	<ScrollArea>
+<span class="vs-anchor">
+	<SettingsMenu label="viewer settings" testid="viewer-settings-cog" menuTestid="viewer-settings-menu" class="vs-cog">
 		{#if schema.length === 0}
 			<EmptyState>
 				{#snippet hint()}No settings{/snippet}
@@ -78,8 +45,8 @@
 				</Field>
 			{/each}
 		</div>
-	</ScrollArea>
-</Popover>
+	</SettingsMenu>
+</span>
 
 <style>
 	.vs-anchor {
@@ -120,14 +87,5 @@
 		column-gap: var(--space-5);
 		row-gap: var(--space-3);
 		--number-width: 100%;
-	}
-	:global(.vs-menu) {
-		--popover-min-width: 0;
-		/* This menu overhangs a small cog, which Popover's default --radius-md rounds visibly too much. */
-		--popover-radius: var(--radius-sm);
-		width: 232px;
-		max-height: 70dvh;
-		display: flex;
-		flex-direction: column;
 	}
 </style>

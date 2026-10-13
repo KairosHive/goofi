@@ -1,7 +1,7 @@
 // One state machine, built with the pointer the project gives: two boxes from a double-click or a
-// held finger, a transition dragged from one box's edge to the other, a playhead added in the
-// inspector, and the dot that crosses when the transition is tapped. Runs on the desktop and the
-// phone, and sweeps the scene.
+// held finger, a transition dragged from one box's edge to the other, a playhead and an attribute
+// added from a box's menu, its decision set on the box, and the dot that crosses when the
+// transition is tapped. Runs on the desktop and the phone, and sweeps the scene.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
@@ -79,85 +79,178 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		};
 		const card0 = page.getByTestId('state-card-state0');
 		const card1 = page.getByTestId('state-card-state1');
-		// In the canvas the inspector leaves bare: its pane takes the right side, or the bottom on a phone.
-		// Apart enough that the cards clear each other on a phone's short canvas once on the grid.
-		await addState({ x: box.x + box.width * 0.2, y: box.y + box.height * 0.1 }, card0);
-		await addState({ x: box.x + box.width * 0.7, y: box.y + box.height * 0.45 }, card1);
+		// A new card is selected, and its inspector takes the right side, or the bottom on a phone: the
+		// cards sit in the canvas it leaves bare, apart on a diagonal, and a tap on the bare corner
+		// closes it between the two. A card is wider than half a phone, so the phone zooms out first.
+		const corner = { x: box.x + box.width * 0.55, y: box.y + box.height * 0.04 };
+		const tapCorner = async (): Promise<void> => {
+			if (hasTouch) await page.touchscreen.tap(corner.x, corner.y);
+			else await page.mouse.click(corner.x, corner.y);
+		};
+		if (hasTouch) for (let i = 0; i < 3; i++) await press(panel.locator('.svelte-flow__controls-zoomout'));
+		await addState({ x: box.x + box.width * 0.35, y: box.y + box.height * 0.12 }, card0);
+		await tapCorner();
+		await expect(page.getByTestId('auto-side-panel')).not.toHaveClass(/open/);
+		await addState({ x: box.x + box.width * 0.75, y: box.y + box.height * 0.3 }, card1);
 
 		// A transition dragged from one box's edge into the other; the inspector shows it, selected.
 		await drag(page, hasTouch, card0, card1);
 		const label = page.getByTestId('transition-t1');
+		// A new box draws evenly among its transitions out; this one holds, so only a fire moves it.
+		await expect(label).toHaveText('100% | manual');
+		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'state0', noop: 1, weights: { t1: 0 } });
 		await expect(label).toHaveText('manual');
 		const inspector = page.getByTestId('machine-inspector');
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await expect(page.getByTestId('machine-transition')).toBeVisible();
 
-		// A box selected shows its name and the transition out of it; the bare canvas shows the machine.
-		await press(card0);
+		// A box selected shows its name and the transition out of it; the bare canvas shows no inspector.
+		const name0 = card0.getByTestId('state-card-name');
+		const name1 = card1.getByTestId('state-card-name');
+		await press(name0);
 		await expect(inspector).toHaveAttribute('data-subject', 'state');
 		await expect(inspector.getByTestId('state-name')).toHaveText('state0');
 		await expect(inspector.getByTestId('transitions-out').getByTestId('transition-row-t1')).toBeVisible();
 		await expect(inspector.getByTestId('transitions-in').getByTestId('transition-row-t1')).toHaveCount(0);
-		const corner = { x: box.x + box.width * 0.55, y: box.y + box.height * 0.04 };
-		if (hasTouch) await page.touchscreen.tap(corner.x, corner.y);
-		else await page.mouse.click(corner.x, corner.y);
-		await expect(inspector).toHaveAttribute('data-subject', 'machine');
+		await tapCorner();
+		await expect(page.getByTestId('auto-side-panel')).not.toHaveClass(/open/);
 
-		// A playhead is born in the first state, and its dot sits on that box's top edge.
-		await press(page.getByTestId('machine-add-playhead'));
+		// A playhead is born in the box whose menu adds it, and its dot sits on that box's top edge.
+		const menu0 = page.getByTestId('state-menu-state0-menu');
+		await press(card0.getByTestId('state-menu-state0'));
+		await expect(menu0.getByTestId('state-menu-state0-search')).toBeFocused();
+		await press(menu0.getByTestId('machine-add-playhead'));
 		const dot = page.getByTestId('playhead-dot');
 		await expect(dot).toHaveAttribute('data-state', 'state0');
+		await expect(menu0.getByTestId('playhead-state')).toHaveText('state0');
+		await page.keyboard.press('Escape');
+		await expect(menu0).toHaveCount(0);
 		await expect.poll(() => onTopEdge(dot, card0)).toBe(true);
-		await expect(page.getByTestId('playhead-state')).toHaveText('state0');
 
 		// The label is gone while nothing of it is selected; a box of the transition brings it back, and
 		// a tap on it selects it. The inspector's fire button moves the playhead, and the dot comes to
 		// rest on the target box.
 		await expect(label).toHaveCount(0);
-		await press(card1);
+		await press(name1);
 		await press(label);
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await press(inspector.getByTestId('transition-fire'));
 		await expect(dot).toHaveAttribute('data-state', 'state1');
 		await expect(dot).toHaveAttribute('data-flying', 'false');
 		await expect.poll(() => onTopEdge(dot, card1)).toBe(true);
-		if (hasTouch) await page.touchscreen.tap(corner.x, corner.y);
-		else await page.mouse.click(corner.x, corner.y);
-		await expect(page.getByTestId('playhead-state')).toHaveText('state1');
+		await tapCorner();
+		await press(card0.getByTestId('state-menu-state0'));
+		await expect(menu0.getByTestId('playhead-state')).toHaveText('state1');
+		await page.keyboard.press('Escape');
 
-		// The machine's name and seed are the inspector's; the bar's tabs are the switch between machines.
-		await expect(inspector.getByTestId('machine-name')).toHaveText('machine0');
-		await expect(inspector.getByTestId('machine-seed')).toHaveValue('0');
+		// The seed rides the bar; the bar's tabs are the switch between machines.
+		await expect(panel.getByTestId('machine-seed')).toHaveValue('0');
 		const tabs = panel.getByTestId('machine-tabs');
 		await expect(tabs.locator('[role=tab][aria-selected="true"]')).toHaveText('machine0');
 
-		// An attribute is drawn as a param: a number's slider, and the kind select offers the faces.
-		await press(inspector.getByTestId('machine-add-attribute'));
-		const attr = inspector.getByTestId('attribute-attr0');
-		await expect(attr).toHaveAttribute('data-face', 'number');
-		await expect(attr.getByTestId('param-slider')).toBeVisible();
-		await attr.getByTestId('attribute-kind').locator('select').selectOption('toggle');
-		await expect(attr).toHaveAttribute('data-face', 'toggle');
-		await expect(attr.getByTestId('param-toggle')).toBeVisible();
+		// A name typed into a box's menu is a new attribute, set there and drawn as a param: a number's
+		// slider. Up and down walk the menu; a cleared value keeps its slider, and a turn sets it again.
+		const menu1 = page.getByTestId('state-menu-state1-menu');
+		const search1 = menu1.getByTestId('state-menu-state1-search');
+		const machineState = async (): Promise<any> => (await rawCall(page, 'session state')).result.machines.machine0;
+		await press(card1.getByTestId('state-menu-state1'));
+		await expect(search1).toBeFocused();
+		await search1.fill('gain');
+		await page.keyboard.press('Enter');
+		const gain = menu1.getByTestId('state-value-gain');
+		await expect(gain).toHaveAttribute('data-set', 'true');
+		await expect(search1).toHaveValue('');
+		await page.keyboard.press('ArrowDown');
+		await expect(gain.locator(':focus')).toHaveCount(1);
+		await page.keyboard.press('ArrowUp');
+		await expect(search1).toBeFocused();
+		await press(gain.getByTestId('state-clear'));
+		await expect(gain).toHaveAttribute('data-set', 'false');
+		await gain.getByTestId('param-slider').locator('input').fill('0.7');
+		await expect(gain).toHaveAttribute('data-set', 'true');
+		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBeCloseTo(0.7);
+		await page.keyboard.press('Escape');
+		await expect(menu1).toHaveCount(0);
+
+		// Both boxes selected: the inspector writes a value to each as one step, and defines the
+		// attribute for every state under its pencil.
+		const pick = async (l: Locator): Promise<void> => (hasTouch ? l.tap() : l.click({ modifiers: ['Shift'] }));
+		const multi = async (): Promise<void> => {
+			if (!hasTouch) return;
+			await press(page.getByTestId('topbar-overflow'));
+			await press(page.getByText('Multi-select mode'));
+		};
+		await press(name1);
+		await multi();
+		await pick(name0);
+		await expect(inspector).toHaveAttribute('data-count', '2');
+		const both = inspector.getByTestId('state-attribute-gain');
+		await expect(both).toHaveAttribute('data-mixed', 'true');
+		await both.getByTestId('param-slider').locator('input').fill('0.3');
+		await expect(both).toHaveAttribute('data-mixed', 'false');
+		await expect.poll(async () => Object.values((await machineState()).states).map((s: any) => s.values?.gain)).toEqual([0.3, 0.3]);
+		await press(page.getByTestId('topbar-undo'));
+		await expect.poll(async () => Object.values((await machineState()).states).map((s: any) => s.values?.gain)).toEqual([undefined, 0.7]);
+		await press(both.getByTestId('state-clear'));
+		await expect(both).toHaveAttribute('data-set', 'false');
+		await press(both.getByTestId('attribute-edit'));
+		const kind = inspector.getByTestId('attribute-gain');
+		await expect(kind).toHaveAttribute('data-face', 'number');
+		await kind.getByTestId('attribute-kind').locator('select').selectOption('toggle');
+		await expect(kind).toHaveAttribute('data-face', 'toggle');
+		await expect(both.locator('.slot-head').getByTestId('param-toggle')).toBeVisible();
+		await multi();
+		await tapCorner();
 
 		await page.screenshot({ path: testInfo.outputPath('machine.png') });
+
+		// A box decides each interval: a drawn share moves the others with it so they sum to one, and
+		// its label carries it. The knob turns the interval; the mode toggle switches to a sequence.
+		const decision = async (): Promise<{ noop: number; weights: Record<string, number>; interval: number; mode: string }> =>
+			(await rawCall(page, 'session state')).result.machines.machine0.states.state0;
+		await expect(card0).toHaveAttribute('data-mode', 'random');
+		await card0.getByTestId('state-share-t1').locator('input').fill('0.6');
+		await expect.poll(async () => (await decision()).weights.t1).toBeCloseTo(0.6);
+		expect((await decision()).noop).toBeCloseTo(0.4);
+		await expect(card0.getByTestId('state-share-wait')).toContainText('40%');
+		await press(name0);
+		await expect(label).toHaveText('60% | manual');
+		await card0.getByRole('slider', { name: 'interval' }).focus();
+		await page.keyboard.press('ArrowUp');
+		await expect(card0.getByTestId('state-interval-value')).toHaveText('1.05s');
+		await press(card0.getByTestId('state-mode-sequence'));
+		await expect(card0).toHaveAttribute('data-mode', 'sequence');
+		await expect(card0.getByTestId('state-share-t1')).toContainText('1 → state1');
+		await expect(label).toHaveText('#1 | manual');
+		await tapCorner();
 
 		// A transition back the other way runs beside the first, its label apart from the first's, and
 		// either label selects its own. The labels show once a box of theirs is selected.
 		await rawCall(page, 'machine transition add', { machine: 'machine0', from: 'state1', to: 'state0', triggers: [{ kind: 'manual' }] });
 		const back = page.getByTestId('transition-t2');
 		await expect(back).toHaveCount(0);
-		await press(card0);
+		await press(name0);
 		await expect(back).toBeVisible();
 		const [l1, l2] = await Promise.all([label.boundingBox(), back.boundingBox()]);
 		expect(l1!.x + l1!.width <= l2!.x || l2!.x + l2!.width <= l1!.x || l1!.y + l1!.height <= l2!.y || l2!.y + l2!.height <= l1!.y, `the two labels do not overlap: ${JSON.stringify(l1)} ${JSON.stringify(l2)}`).toBe(true);
+		// Both transitions selected: the inspector moves each, as one step.
+		await multi();
+		await pick(label);
+		await pick(back);
+		await pick(name0);
+		await expect(inspector).toHaveAttribute('data-subject', 'transition');
+		await expect(inspector).toHaveAttribute('data-count', '2');
+		await inspector.getByTestId('transition-duration').getByTestId('param-slider').locator('input').fill('0.5');
+		await expect.poll(async () => Object.values((await machineState()).transitions).map((t: any) => t.duration)).toEqual([0.5, 0.5]);
+		await multi();
+		await press(name0);
 		await press(back);
 		await expect(page.locator('.svelte-flow__edge.selected')).toHaveAttribute('data-id', /t2/);
 		await page.keyboard.press('Delete');
 		await expect(back).toHaveCount(0);
 
 		// The first goes with the Delete key too, picked from its label; the box's ✕ is gone with it.
-		await press(card0);
+		await press(name0);
 		await press(label);
 		await expect(inspector).toHaveAttribute('data-subject', 'transition');
 		await page.keyboard.press('Delete');
@@ -166,7 +259,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 
 		// The zoom cluster is never under the inspector pane: the pane takes its room from the canvas.
 		// The cluster shows while the pointer is in the panel, and always on a touch screen.
-		await press(card1);
+		await press(name1);
 		await expect(inspector).toHaveAttribute('data-subject', 'state');
 		const cluster = panel.locator('.svelte-flow__controls');
 		if (!hasTouch) await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5);

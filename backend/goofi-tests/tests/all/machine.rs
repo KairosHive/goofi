@@ -1,5 +1,5 @@
 //! A state machine built through ops, read through its playheads' variables, and driven by every
-//! trigger kind, then saved, reopened and undone; and the stepper itself on explicit instants.
+//! decision mode and trigger kind, then saved, reopened and undone; and the stepper itself on explicit instants.
 
 use std::sync::Arc;
 
@@ -52,6 +52,10 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     write("machine state add", j!({ "machine": "seq", "name": "A", "pos": [0.0, 0.0], "values": { "gain": 0.2, "label": "a" } }));
     write("machine state add", j!({ "machine": "seq", "name": "B", "pos": [200.0, 0.0], "values": { "gain": 1.0 } }));
     write("machine state add", j!({ "machine": "seq", "name": "C", "pos": [400.0, 0.0], "values": { "gain": 0.0, "label": "c" } }));
+    // These states hold until fired: a new state would draw evenly among its transitions out.
+    for name in ["A", "B", "C"] {
+        write("machine state edit", j!({ "machine": "seq", "name": name, "mode": "expression", "expression": "-1" }));
+    }
     let why = g.refuse("machine state add", j!({ "machine": "seq", "name": "D", "values": { "nosuch": 1.0 } }));
     assert!(why.contains("no attribute `nosuch`"), "{why}");
     let why = g.refuse("machine transition add", j!({ "machine": "seq", "from": "A", "to": "Z" }));
@@ -127,14 +131,20 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert_eq!(number(&g, "head.gain"), 0.0);
     assert_eq!(g.variable("head.label"), j!("c"), "a string switches on arrival");
 
-    // A dwell: the playhead leaves after its seconds, reached by polling. A weight of 0 is never drawn.
-    let t3 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "triggers": [{ "kind": "after", "seconds": 0.2 }] }))["id"].clone();
+    // A state decides every interval: a weighted transition out is drawn, a weight of 0 never
+    // is. A transition's weight leaves with it.
+    let t3 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A" }))["id"].clone();
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "C", "weights": { "t1": 1.0 } }));
+    assert!(why.contains("no transition out"), "{why}");
+    write("machine state edit", j!({ "machine": "seq", "name": "C", "mode": "random", "interval": 0.2, "noop": 0.0, "weights": { t3.as_str().unwrap(): 1.0 } }));
     at_rest_in(&g, "head", "A");
-    write("machine transition edit", j!({ "machine": "seq", "id": t3, "triggers": [{ "kind": "after", "seconds": 0.05, "weight": 0.0 }] }));
+    write("machine state edit", j!({ "machine": "seq", "name": "C", "interval": 0.05, "noop": 1.0, "weights": { t3.as_str().unwrap(): 0.0 } }));
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "C");
-    assert!(g.stays(|g| text(g, "head.state") == "C"), "a trigger of weight 0 never leaves");
+    assert!(g.stays(|g| text(g, "head.state") == "C"), "a weight of 0 never leaves");
     write("machine transition remove", j!({ "machine": "seq", "id": t3 }));
+    assert_eq!(g.doc()["machines"]["seq"]["states"]["C"]["weights"], j!({}), "the weight left with its transition");
+    write("machine state edit", j!({ "machine": "seq", "name": "C", "mode": "expression" }));
 
     // A `when` trigger reads a variable through the one expression language, on the rising edge.
     write("variable entry add", j!({ "name": "desk.gate", "value": 0.0 }));
@@ -242,10 +252,13 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let period = 1.0 / 48_000.0;
     let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "pp": {
         "attributes": { "gain": { "default": 0.0, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } } },
-        "states": { "A": { "values": { "gain": 0.0 } }, "B": { "values": { "gain": 1.0 } } },
+        "states": {
+            "A": { "values": { "gain": 0.0 }, "interval": period, "mode": "sequence" },
+            "B": { "values": { "gain": 1.0 }, "interval": period, "mode": "sequence" }
+        },
         "transitions": {
-            "ab": { "from": "A", "to": "B", "triggers": [{ "kind": "after", "seconds": period }], "duration": period, "curve": "linear" },
-            "ba": { "from": "B", "to": "A", "triggers": [{ "kind": "after", "seconds": period }], "duration": period, "curve": "linear" }
+            "ab": { "from": "A", "to": "B", "duration": period, "curve": "linear" },
+            "ba": { "from": "B", "to": "A", "duration": period, "curve": "linear" }
         },
         "playheads": { "p": { "start": "A" } }
     } })).unwrap();
@@ -281,7 +294,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     assert!((value_at(&ev, progress, 1.75 * period) - 0.75).abs() < 1e-9);
     assert_eq!(d[2].iter().filter(|(n, _)| n == "p.gain").count(), 1);
     // A request is stamped where it is made and lands in order with the deadlines: a jump at
-    // 0.4 periods, before the first dwell is due, puts the head in B then; the dwell out of B is
+    // 0.4 periods, before the first decision is due, puts the head in B then; the one out of B is
     // due a period after THAT instant, not after the advance that carried it.
     let mut m = Machines::default();
     m.configure(model.clone(), Some(ev.clone()));
@@ -292,6 +305,52 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let w = m.advance(1.9 * period, &none);
     assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("A", "B"), "left B at 1.4 periods");
     assert!((value_at(&ev, written(&w, "p.progress"), 1.9 * period) - 0.5).abs() < 1e-9, "halfway through a one-period flight begun at 1.4");
+}
+
+#[test]
+fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
+    // A hub with three dead-end spokes, on explicit instants: each second's decision is read off
+    // where the playhead went, then a jump puts it back in the hub, its place in a sequence kept.
+    let ev = Arc::new(PyExprEvaluator::new().unwrap());
+    let walk = |hub: Value, read: &dyn Fn(&str) -> Option<Data>| -> (String, Vec<String>) {
+        let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "m": {
+            "states": { "H": hub, "X": {}, "Y": {}, "Z": {} },
+            "transitions": { "hx": { "from": "H", "to": "X" }, "hy": { "from": "H", "to": "Y" }, "hz": { "from": "H", "to": "Z" } },
+            "playheads": { "p": { "start": "H" } }
+        } })).unwrap();
+        let mut m = Machines::default();
+        m.configure(model, Some(ev.clone()));
+        m.advance(0.0, read);
+        let mut path = String::new();
+        for k in 1..=6 {
+            let w = m.advance(k as f64, read);
+            match written(&w, "p.state").as_str().unwrap() {
+                "H" => path.push('-'),
+                spoke => {
+                    path.push_str(spoke);
+                    m.jump(k as f64, "m", "p", "H");
+                    m.advance(k as f64, read);
+                }
+            }
+        }
+        (path, m.take_errors())
+    };
+    let none = |_: &str| None;
+    assert_eq!(walk(j!({ "mode": "sequence" }), &none).0, "XYZXYZ", "the next spoke in authored order, round the ring");
+    let (path, _) = walk(j!({}), &none);
+    assert!(path.len() == 6 && !path.contains('-'), "a new state draws evenly and never waits: {path}");
+    let (path, _) = walk(j!({ "noop": 0.0, "weights": { "hx": 1.0, "hy": 2.0 } }), &none);
+    assert!(path.len() == 6 && path.chars().all(|c| c == 'X' || c == 'Y'), "a draw among the weighted spokes alone: {path}");
+    let (path, _) = walk(j!({ "noop": 1.0, "weights": { "hx": 0.0, "hy": 0.0, "hz": 1.0 } }), &none);
+    assert!(path.chars().all(|c| c == '-' || c == 'Z'), "{path}");
+    // An expression picks the spoke by index; a negative one, or None, waits; past the last is an error.
+    let go = |name: &str| (name == "desk.go").then(|| Data::number(1.0));
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "variables.desk.go * 2" }), &go).0, "ZZZZZZ");
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "variables.desk.go - 2" }), &go), ("------".to_string(), Vec::new()));
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "None if variables.desk.go else 0" }), &go), ("------".to_string(), Vec::new()));
+    let (path, errors) = walk(j!({ "mode": "expression", "expression": "variables.desk.go * 5" }), &go);
+    assert_eq!(path, "------");
+    assert!(errors.iter().any(|e| e.contains("past the last of 3")), "{errors:?}");
 }
 
 /// The distinct values of `xs` strictly inside `(lo, hi)`.
@@ -316,6 +375,7 @@ async fn a_flight_is_heard_between_its_frames_by_a_viewer_a_computation_and_an_a
         ("machine state add", j!({ "machine": "m", "name": "A", "values": { "gain": 0.0 } })),
         ("machine state add", j!({ "machine": "m", "name": "B", "values": { "gain": 1.0 } })),
         ("machine transition add", j!({ "machine": "m", "from": "A", "to": "B", "triggers": [{ "kind": "manual" }], "duration": 1.5, "curve": "linear" })),
+        ("machine state edit", j!({ "machine": "m", "name": "A", "noop": 1.0, "weights": { "t1": 0.0 } })),
         ("machine playhead add", j!({ "machine": "m", "name": "head", "start": "A" })),
         ("variable entry add", j!({ "name": "desk.twice", "value": 0.0 })),
         ("variable entry edit", j!({ "name": "desk.twice", "expression": "variables.head.gain * 2" })),

@@ -1,4 +1,4 @@
-//! The machines' own thread, `goofi-machines`: it wakes for a reason alone — a landing, a dwell's
+//! The machines' own thread, `goofi-machines`: it wakes for a reason alone — a landing, a decision's
 //! due, a stamped request, a replaced model, or a write to a variable a machine reads — settles
 //! every instant owed and writes each playhead's group through the store, as the follower does:
 //! no graph lock, no undo entry, no dirty mark. The graph lock is for config edits, which hand it

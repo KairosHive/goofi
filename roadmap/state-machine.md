@@ -10,12 +10,12 @@ merged; it holds the specification of the features below in its `roadmap/state-m
 
 Each as its own small change against the shipped model, in this order of value:
 
-1. Selection policies per state (`ordered`, `weighted`, `uniform`) with an authored transition
-   order, and `chance` on a transition.
+1. An authored order of the transitions out of a state, editable on its card: `sequence` and an
+   `expression`'s index read it. Today it is the transitions' authored order.
 2. `guard` expressions; `event {name}` and `always` triggers with a `machine event` op.
 3. `when` edge modes (`rising`, `falling`, `change`, `level`).
 4. `exit_values` on a state and `values` on a transition; `internal` self-transitions.
-5. A random range `{min, max}` as a duration or an `after`, sampled once from the machine's seed.
+5. A random range `{min, max}` as a duration or an interval, sampled once from the machine's seed.
 
 ## Open
 

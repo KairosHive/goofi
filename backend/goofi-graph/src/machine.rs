@@ -139,14 +139,46 @@ pub struct Attribute {
     pub kind: AttributeKind,
 }
 
-/// A state: where its card sits, and the attributes it sets; one left out is kept on entry.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+/// A state: where its card sits, the attributes it sets (one left out is kept on entry), and how
+/// a playhead resting in it picks a transition out, once per `interval`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct State {
     #[serde(default)]
     pub pos: [f64; 2],
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     #[ts(type = "Record<string, Literal>")]
     pub values: IndexMap<String, Data>,
+    /// Seconds between decisions, from arrival; 0 decides once, on arrival.
+    #[serde(default = "one")]
+    pub interval: f64,
+    #[serde(default)]
+    pub mode: Decision,
+    /// The weight of a decision that waits one more interval, in `random`.
+    #[serde(default)]
+    pub noop: f64,
+    /// Per transition out, by id, its weight in `random`; one left out weighs 1, so a new state
+    /// draws evenly.
+    #[serde(default)]
+    pub weights: IndexMap<String, f64>,
+    /// In `expression`: the index of the transition out to take; a negative one waits.
+    #[serde(default)]
+    pub expression: String,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State { pos: [0.0; 2], values: IndexMap::new(), interval: 1.0, mode: Decision::default(), noop: 0.0, weights: IndexMap::new(), expression: String::new() }
+    }
+}
+
+/// How a state decides: the next transition out in turn, a weighted draw, or an expression.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Decision {
+    Sequence,
+    #[default]
+    Random,
+    Expression,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -168,11 +200,6 @@ pub struct Transition {
 pub enum Trigger {
     Manual,
     /// `weight` is its share of the draw among the triggers that fire in one tick; 0 is never drawn.
-    After {
-        seconds: Seconds,
-        #[serde(default = "one")]
-        weight: f64,
-    },
     When {
         expression: String,
         #[serde(default = "one")]
@@ -183,14 +210,6 @@ pub enum Trigger {
         policy: Policy,
     },
     Alone,
-}
-
-/// A dwell: a number of seconds, or an expression over the variables read on entry.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(untagged)]
-pub enum Seconds {
-    Fixed(f64),
-    Expression(String),
 }
 
 /// Who takes a `meet` transition: the longest resident, the newest arrival, or every resident.
@@ -222,11 +241,24 @@ pub fn check_expression(expression: &str) -> Result<(), String> {
 impl Machine {
     /// Every expression the machine evaluates.
     pub fn expressions(&self) -> impl Iterator<Item = &str> {
-        self.transitions.values().flat_map(|t| &t.triggers).filter_map(|tr| match tr {
+        let whens = self.transitions.values().flat_map(|t| &t.triggers).filter_map(|tr| match tr {
             Trigger::When { expression, .. } => Some(expression.as_str()),
-            Trigger::After { seconds: Seconds::Expression(e), .. } => Some(e.as_str()),
             _ => None,
-        })
+        });
+        whens.chain(self.states.values().filter(|s| s.mode == Decision::Expression && !s.expression.is_empty()).map(|s| s.expression.as_str()))
+    }
+
+    /// The transitions out of `state`, in authored order: what a decision picks among.
+    pub fn outgoing<'a>(&'a self, state: &'a str) -> impl Iterator<Item = &'a String> + 'a {
+        self.transitions.iter().filter(move |(_, t)| leaves(t, state)).map(|(id, _)| id)
+    }
+
+    /// Drop every state's weight for a transition that no longer leaves it.
+    pub fn prune(&mut self) {
+        let outgoing: Vec<HashSet<String>> = self.states.keys().map(|s| self.outgoing(s).cloned().collect()).collect();
+        for (s, out) in self.states.values_mut().zip(outgoing) {
+            s.weights.retain(|id, _| out.contains(id));
+        }
     }
 
     /// Whether the record holds together: every name legal, every reference to something it holds.
@@ -246,6 +278,18 @@ impl Machine {
             if let Some(attr) = state.values.keys().find(|a| !self.attributes.contains_key(*a)) {
                 return Err(format!("state `{name}` sets `{attr}`, which is no attribute of the machine"));
             }
+            if !(state.interval.is_finite() && state.interval >= 0.0) {
+                return Err(format!("state `{name}`: interval is seconds of at least 0"));
+            }
+            if !(state.noop.is_finite() && state.noop >= 0.0) || state.weights.values().any(|w| !(w.is_finite() && *w >= 0.0)) {
+                return Err(format!("state `{name}`: a weight is at least 0"));
+            }
+            if let Some(id) = state.weights.keys().find(|id| !self.transitions.get(*id).is_some_and(|t| leaves(t, name))) {
+                return Err(format!("state `{name}` weighs `{id}`, which is no transition out of it"));
+            }
+            if !state.expression.is_empty() {
+                check_expression(&state.expression).map_err(|why| format!("state `{name}`: {why}"))?;
+            }
         }
         for (id, t) in &self.transitions {
             if t.from != "*" && !self.states.contains_key(&t.from) {
@@ -258,17 +302,11 @@ impl Machine {
                 return Err(format!("transition `{id}`: duration is at least 0"));
             }
             for trigger in &t.triggers {
-                match trigger {
-                    Trigger::After { weight, .. } | Trigger::When { weight, .. } if weight.is_nan() || *weight < 0.0 => {
+                if let Trigger::When { expression, weight } = trigger {
+                    if weight.is_nan() || *weight < 0.0 {
                         return Err(format!("transition `{id}`: a trigger's weight is at least 0"));
                     }
-                    Trigger::After { seconds: Seconds::Fixed(s), .. } if s.is_nan() || *s < 0.0 => {
-                        return Err(format!("transition `{id}`: `after` takes seconds of at least 0"));
-                    }
-                    Trigger::After { seconds: Seconds::Expression(e), .. } | Trigger::When { expression: e, .. } => {
-                        check_expression(e).map_err(|why| format!("transition `{id}`: {why}"))?;
-                    }
-                    _ => {}
+                    check_expression(expression).map_err(|why| format!("transition `{id}`: {why}"))?;
                 }
             }
         }
@@ -315,7 +353,7 @@ struct Flight {
     target: IndexMap<String, Data>,
 }
 
-/// A dwell armed: when it is due, and the interval it was armed with, which a retry keeps.
+/// A decision armed: when it is due, and the interval it was armed with.
 #[derive(Clone, Copy)]
 struct Due {
     at: f64,
@@ -329,8 +367,11 @@ struct Head {
     arrived: f64,
     held: IndexMap<String, Data>,
     flight: Option<Flight>,
-    /// Per `after` transition out of the state, its dwell.
-    due: HashMap<String, Due>,
+    /// The state's next decision, at infinity once a 0 interval has decided; none in a state with
+    /// no transition out.
+    due: Option<Due>,
+    /// Per state, where `sequence` takes up again: the index of the next transition out.
+    cursor: HashMap<String, usize>,
     /// Per `when` transition out of the state, the gate as last read.
     gates: HashMap<String, bool>,
     fire: Option<String>,
@@ -465,11 +506,11 @@ impl Machines {
         out
     }
 
-    /// The next instant something is owed: a landing, a dwell's due, or a request — what the
+    /// The next instant something is owed: a landing, a decision due, or a request — what the
     /// thread sleeps toward. None while nothing is armed.
     pub fn next_deadline(&self) -> Option<f64> {
         let heads = self.runs.values().flat_map(|r| r.heads.values());
-        let owed = heads.flat_map(|h| h.flight.as_ref().map(|f| f.end).into_iter().chain(h.flight.is_none().then(|| h.due.values().map(|d| d.at)).into_iter().flatten()));
+        let owed = heads.flat_map(|h| h.flight.as_ref().map(|f| f.end).or_else(|| h.due.map(|d| d.at).filter(|at| at.is_finite())));
         owed.chain(self.requests.iter().map(|(at, _)| *at)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
     }
 
@@ -557,6 +598,7 @@ impl Machines {
                     }
                     Request::Reset { machine: m } if m.as_deref().is_none_or(|m| m == name) => {
                         for (ph, head) in run.heads.iter_mut() {
+                            head.cursor.clear();
                             relocate(head, machine, &machine.playheads[ph].start.clone(), &ctx, &mut events);
                         }
                     }
@@ -675,19 +717,6 @@ impl<'a> Ctx<'a> {
             }
         }
     }
-
-    fn seconds(&self, s: &Seconds) -> f64 {
-        match s {
-            Seconds::Fixed(s) => *s,
-            Seconds::Expression(text) => match self.eval(text) {
-                Ok(frame) => control::number_of(&frame).max(0.0),
-                Err(why) => {
-                    self.errors.borrow_mut().push(format!("`{text}`: {why}"));
-                    0.0
-                }
-            },
-        }
-    }
 }
 
 fn seed_state(seed: u64) -> u64 {
@@ -717,7 +746,8 @@ fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head 
         arrived: ctx.now,
         held: machine.attributes.iter().map(|(a, attr)| (a.clone(), attr.default.clone())).collect(),
         flight: None,
-        due: HashMap::new(),
+        due: None,
+        cursor: HashMap::new(),
         gates: HashMap::new(),
         fire: None,
     };
@@ -725,7 +755,7 @@ fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head 
     head
 }
 
-/// Put `head` in `state` at `at`: the state's values land, the dwell starts, its triggers arm.
+/// Put `head` in `state` at `at`: the state's values land, its decisions and triggers arm.
 fn arrive(head: &mut Head, machine: &Machine, state: &str, at: f64, ctx: &Ctx, events: &mut Events) {
     head.state = state.to_string();
     head.prev.clear();
@@ -751,29 +781,32 @@ fn relocate(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: 
     arrive(head, machine, state, ctx.now, ctx, events);
 }
 
-/// Arm what fires out of the head's state: a dwell's due from its arrival, a gate's baseline.
-/// With `fresh`, everything is re-armed; without, only what was not armed yet, so a model edit
-/// keeps a dwell.
+/// Arm what fires out of the head's state: its decisions from its arrival, a gate's baseline.
+/// With `fresh`, everything is re-armed; without, a model edit keeps the decision's beat, moved to
+/// a changed interval from the last one.
 fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
     if fresh {
-        head.due.clear();
+        head.due = None;
         head.gates.clear();
     }
     let state = head.state.clone();
-    head.due.retain(|id, _| machine.transitions.get(id).is_some_and(|t| leaves(t, &state)));
     head.gates.retain(|id, _| machine.transitions.get(id).is_some_and(|t| leaves(t, &state)));
+    let interval = machine.states.get(&state).map_or(0.0, |s| s.interval);
+    let from = if fresh { head.arrived } else { ctx.now };
+    head.due = match (machine.outgoing(&state).next(), head.due) {
+        (None, _) => None,
+        (Some(_), None) => Some(Due { at: from + interval, interval }),
+        (Some(_), Some(d)) if d.interval == interval => Some(d),
+        (Some(_), Some(d)) if d.at.is_infinite() => Some(Due { at: ctx.now + interval, interval }),
+        (Some(_), Some(d)) => Some(Due { at: (d.at - d.interval + interval).max(ctx.now), interval }),
+    };
     for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &state)) {
         for trigger in &t.triggers {
-            match trigger {
-                Trigger::After { seconds, .. } if !head.due.contains_key(id) => {
-                    let interval = ctx.seconds(seconds);
-                    head.due.insert(id.clone(), Due { at: head.arrived + interval, interval });
-                }
-                Trigger::When { expression, .. } if !head.gates.contains_key(id) => {
+            if let Trigger::When { expression, .. } = trigger {
+                if !head.gates.contains_key(id) {
                     let gate = ctx.gate(expression);
                     head.gates.insert(id.clone(), gate);
                 }
-                _ => {}
             }
         }
     }
@@ -850,7 +883,7 @@ fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut 
     }
     head.prev = prev;
     head.state = t.to.clone();
-    head.due.clear();
+    head.due = None;
     head.gates.clear();
     head.flight = Some(Flight { start: ctx.now, end: ctx.now + t.duration, curve: t.curve, origin: head.held.clone(), target });
 }
@@ -878,34 +911,29 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
             if head.flight.is_some() {
                 continue;
             }
-            // Every trigger firing at this instant, across the transitions out of here, is one draw
-            // by weight. A dwell that fires is re-armed from its due, drawn or not.
+            // A decision due now is taken, and re-armed from its due; a `when` rising at this
+            // instant goes first, the draw among them by weight.
+            let decided = match head.due.filter(|d| d.at <= ctx.now) {
+                Some(d) => {
+                    let at = if d.interval > 0.0 { d.at + d.interval } else { f64::INFINITY };
+                    head.due = Some(Due { at, interval: d.interval });
+                    decide(machine, head, ctx, &mut run.rng)
+                }
+                None => None,
+            };
             let mut fired: Vec<(String, f64)> = Vec::new();
             for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &head.state)) {
                 for trigger in &t.triggers {
-                    match trigger {
-                        Trigger::After { weight, .. } => {
-                            if let Some(due) = head.due.get_mut(id).filter(|d| d.at <= ctx.now) {
-                                fired.push((id.clone(), *weight));
-                                if due.interval > 0.0 {
-                                    due.at += due.interval;
-                                } else {
-                                    head.due.remove(id);
-                                }
-                            }
+                    if let Trigger::When { expression, weight } = trigger {
+                        let gate = ctx.gate(expression);
+                        if gate && !head.gates.get(id).copied().unwrap_or(false) {
+                            fired.push((id.clone(), *weight));
                         }
-                        Trigger::When { expression, weight } => {
-                            let gate = ctx.gate(expression);
-                            if gate && !head.gates.get(id).copied().unwrap_or(false) {
-                                fired.push((id.clone(), *weight));
-                            }
-                            head.gates.insert(id.clone(), gate);
-                        }
-                        _ => {}
+                        head.gates.insert(id.clone(), gate);
                     }
                 }
             }
-            if let Some(id) = pick(&fired, &mut run.rng) {
+            if let Some(id) = pick(&fired, &mut run.rng).or(decided) {
                 takes.push((ph.clone(), id));
             }
         }
@@ -945,6 +973,46 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
             if let Some(head) = run.heads.get_mut(&ph) {
                 depart(head, machine, &id, ctx, &mut events);
             }
+        }
+    }
+}
+
+/// The transition out of the head's state its decision takes, or none to wait.
+fn decide(machine: &Machine, head: &mut Head, ctx: &Ctx, rng: &mut u64) -> Option<String> {
+    let s = machine.states.get(&head.state)?;
+    let outgoing: Vec<&String> = machine.outgoing(&head.state).collect();
+    if outgoing.is_empty() {
+        return None;
+    }
+    match s.mode {
+        Decision::Sequence => {
+            let next = head.cursor.entry(head.state.clone()).or_insert(0);
+            let id = outgoing[*next % outgoing.len()].clone();
+            *next = (*next + 1) % outgoing.len();
+            Some(id)
+        }
+        Decision::Random => {
+            let mut options: Vec<(String, f64)> = vec![(String::new(), s.noop)];
+            options.extend(outgoing.iter().map(|id| ((*id).clone(), s.weights.get(*id).copied().unwrap_or(1.0))));
+            pick(&options, rng).filter(|id| !id.is_empty())
+        }
+        Decision::Expression if s.expression.is_empty() => None,
+        Decision::Expression => {
+            let index = match ctx.eval(&s.expression) {
+                Ok(frame) => control::number_of(&frame),
+                Err(why) => {
+                    ctx.errors.borrow_mut().push(format!("`{}`: {why}", s.expression));
+                    return None;
+                }
+            };
+            if index < 0.0 || index.is_nan() {
+                return None;
+            }
+            let id = outgoing.get(index as usize);
+            if id.is_none() {
+                ctx.errors.borrow_mut().push(format!("state `{}`: `{}` is {index}, past the last of {} transitions out", head.state, s.expression, outgoing.len()));
+            }
+            id.map(|id| (*id).clone())
         }
     }
 }

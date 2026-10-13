@@ -1,7 +1,7 @@
 <!-- State machine panel: one machine on a canvas — its states as boxes, its transitions as lines,
      its playheads as dots that move as the manager moves them — with the editor's inspector pane
-     beside it. Every change is a `machine` op, so the manager owns the model and this panel owns the
-     drawing and the gesture in flight. -->
+     beside it for the selected states or transitions; the seed rides the tab bar. Every change
+     is a `machine` op, so the manager owns the model and this panel the drawing and the gesture. -->
 <script lang="ts">
 	import {
 		Background,
@@ -31,13 +31,13 @@
 	import type { Subject } from '$lib/machine/subject';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
 	import { GRID } from '$lib/editor/nodeMetrics';
-	import { CARD_W, FALLBACK_H } from '$lib/machine/layout';
+	import { CARD_W, TITLE_Y } from '$lib/machine/layout';
 	import { summary } from '$lib/machine/triggers';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { EmptyState, Icon, IconButton } from '$lib/ui';
+	import { EmptyState, Icon, IconButton, NumberInput } from '$lib/ui';
 	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
 
@@ -91,17 +91,11 @@
 	const subject = $derived.by<Subject | null>(() => {
 		const m = machine;
 		if (!m) return null;
-		const nodes = sel.nodes(panelId);
-		const edges = sel.edges(panelId);
-		if (nodes.size === 1 && edges.size === 0) {
-			const id = [...nodes][0];
-			if (id in m.states) return { kind: 'state', id };
-		}
-		if (edges.size === 1 && nodes.size === 0) {
-			const id = [...edges][0];
-			if (id in m.transitions) return { kind: 'transition', id };
-		}
-		return { kind: 'machine' };
+		const nodes = [...sel.nodes(panelId)].filter((id) => id in m.states);
+		const edges = [...sel.edges(panelId)].filter((id) => id in m.transitions);
+		if (nodes.length > 0 && edges.length === 0) return { kind: 'state', ids: nodes };
+		if (edges.length > 0 && nodes.length === 0) return { kind: 'transition', ids: edges };
+		return null;
 	});
 	const dismiss = (): void => sel.dismissInspectorFor(panelId);
 
@@ -148,12 +142,15 @@
 				zIndex: 1001,
 				selected: selected.has(id),
 				data: {
-					summary: summary(t),
+					summary: summary(m, id),
 					k: siblings.indexOf(id),
 					n: siblings.length,
 					// The label shows while the transition or either of its boxes is selected.
 					labelled: selected.has(id) || boxes.has(t.from) || boxes.has(t.to),
-					onPick: () => sel.setSelection(panelId, [], [id])
+					onPick: (e: MouseEvent) => {
+						sel.clickEdge(panelId, id, modifier(e));
+						void tick().then(reassertSelection);
+					}
 				}
 			};
 		});
@@ -192,8 +189,9 @@
 		Boolean((target as HTMLElement | null)?.classList.contains('svelte-flow__pane'));
 	function addState(at: { x: number; y: number }): void {
 		const p = screenToFlow?.(at) ?? { x: 0, y: 0 };
-		// Centred on the gesture, then on the grid, as a dragged card lands.
-		const pos = [p.x - CARD_W / 2, p.y - FALLBACK_H / 2].map((v) => Math.round(v / GRID) * GRID);
+		// Its name under the gesture, so the release lands there and not on a control; then on the
+		// grid, as a dragged card lands.
+		const pos = [p.x - CARD_W / 2, p.y - TITLE_Y].map((v) => Math.round(v / GRID) * GRID);
 		void call('machine state add', { pos });
 	}
 	// A double click adds a box: the browser counts a mouse's clicks; a touch's taps are counted
@@ -321,6 +319,12 @@
 	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}
 		onClose={(m) => void remove(m)}>
 		{#snippet end()}
+			{#if machine}
+				<span class="seed" title="Starts the random draws, so a run repeats">
+					<NumberInput value={machine.seed ?? 0} min={0} step={1} aria-label="seed" data-testid="machine-seed"
+						onChange={(v) => void call('machine edit', { seed: Math.max(0, Math.round(v)) })} />
+				</span>
+			{/if}
 			<IconButton variant="ghost" size="sm" label="Reset the playheads" title="Put every playhead back in its start state" data-testid="machine-reset"
 				onclick={() => void call('machine reset', {})}><Icon name="refresh-cw" /></IconButton>
 		{/snippet}
@@ -344,7 +348,7 @@
 					onnodedragstop={onNodeDragStop}
 					onnodeclick={({ node, event }) => {
 						// A plain click is the whole selection, the transition included, as Flow itself has it.
-						if (modifier(event)) sel.clickNode(panelId, node.id, true);
+						if (modifier(event) || sel.multiSelect) sel.clickNode(panelId, node.id, true);
 						else sel.setSelection(panelId, [node.id], []);
 						void tick().then(reassertSelection);
 					}}
@@ -383,7 +387,7 @@
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} onRemove={() => void remove(name)} />
+						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} />
 					{/snippet}
 				</SidePane>
 			</div>
@@ -397,6 +401,11 @@
 		display: grid;
 		grid-template-rows: auto minmax(0, 1fr);
 		height: 100%;
+	}
+	.seed {
+		display: inline-flex;
+		width: 4.5em;
+		--number-width: 100%;
 	}
 	/* The pane's host: the canvas and the pane side by side, so the pane never covers the cluster. */
 	.canvas {

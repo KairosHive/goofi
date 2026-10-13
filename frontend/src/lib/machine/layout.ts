@@ -2,10 +2,18 @@
  * dock is known before the card is measured. */
 import type { Node } from '@xyflow/svelte';
 
-/** A state card's width; its height is its name's row. */
-export const CARD_W = 200;
-/** A card's height before Svelte Flow has measured it. */
-export const FALLBACK_H = 44;
+/** A state card's width. */
+export const CARD_W = 240;
+/** A card's rows: its name and its controls, then each line of its decision. `canvas.rs` places
+ * cards by the same footprint. */
+export const CARD_HEAD = 96;
+export const CARD_LINE = 28;
+/** A card's height: a line for the decision's own control, then one per transition out. */
+export const cardHeight = (outgoing: number): number => CARD_HEAD + CARD_LINE * (1 + outgoing);
+/** How far down a card its name's row sits: the band, then half the title. */
+export const TITLE_Y = 27;
+/** A card's height before Svelte Flow has measured it: a new state's. */
+export const FALLBACK_H = cardHeight(0);
 /** Where resting dots sit along a card's top edge: the first dot's centre, and the step. */
 export const DOCK = { x: 20, step: 26 } as const;
 /** A dot's diameter in flow units. */

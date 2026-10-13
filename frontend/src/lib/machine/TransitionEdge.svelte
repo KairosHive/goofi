@@ -9,7 +9,7 @@
 	import { CARD_W, FALLBACK_H } from './layout';
 
 	let { id, source, target, selected, data }: EdgeProps = $props();
-	const d = $derived(data as { summary: string; k: number; n: number; labelled: boolean; onPick: () => void });
+	const d = $derived(data as { summary: string; k: number; n: number; labelled: boolean; onPick: (e: MouseEvent) => void });
 
 	const store = useStore();
 	const boxOf = (n: InternalNode | undefined): Box | null =>
@@ -39,7 +39,7 @@
 				onclick={(e) => {
 					// Stopped here: the label sits in the pane, and Flow would read the click as the pane's.
 					e.stopPropagation();
-					d.onPick();
+					d.onPick(e);
 				}}>{d.summary}</button
 			>
 		</EdgeLabel>
