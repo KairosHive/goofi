@@ -469,6 +469,8 @@ test.describe('the control socket', () => {
 						)
 						.toBe(true);
 				const label = page.getByTestId('node-name');
+				// The pane slides open from no width, and unrendered text selects as ''.
+				await expect(label).toBeVisible();
 				const selectedText = await label.textContent();
 				await label.evaluate((el) => {
 					const range = document.createRange();
