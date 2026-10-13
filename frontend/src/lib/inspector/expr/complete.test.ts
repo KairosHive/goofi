@@ -242,7 +242,7 @@ describe('variables. and np.', () => {
 describe('the injected scope', () => {
 	it('offers the evaluator scope at a partially-typed name', () => {
 		const got = labels('n');
-		for (const name of ['nd', 'me', 't', 'np', 'variables', 'time', 'sin', 'pi', 'lfo', 'noi']) {
+		for (const name of ['nd', 'me', 't', 'np', 'variables', 'time', 'sin', 'pi', 'lfo', 'noi', 'qtz']) {
 			expect(got, `\`${name}\` is in the scope`).toContain(name);
 		}
 	});

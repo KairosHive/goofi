@@ -150,6 +150,7 @@ const SCOPE: Completion[] = [
 	{ label: 'me', type: 'variable', detail: 'this node — me.out / me.params', boost: 1 },
 	{ label: 'lfo', type: 'function', detail: 'sine wave — lfo(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
 	{ label: 'noi', type: 'function', detail: 'smooth noise — noi(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
+	{ label: 'qtz', type: 'function', detail: "volts per octave onto a scale — qtz(v, scale='major', root='C')", boost: 1 },
 	{ label: 't', type: 'variable', detail: 'seconds since start', boost: 1 },
 	{ label: 'np', type: 'namespace', detail: 'numpy', boost: 1 },
 	{ label: 'variables', type: 'namespace', detail: 'patch variables — variables.group.element', boost: 1 },

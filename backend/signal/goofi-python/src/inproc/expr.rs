@@ -9,13 +9,15 @@ use goofi_supervisor::sync::Mutex;
 
 use goofi_core::{Data, Meta, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
 
 /// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
 /// generated variable, so an expression compiles ONCE into a function of `t` and those variables,
 /// over a module scope with `np`, `math`'s whole namespace and `time()` simply there. `lfo()` and
-/// `noi()` read the call's time and range off a thread local, so no namespace is rebuilt per call.
+/// `noi()` read the call's time and range off a thread local, so no namespace is rebuilt per call;
+/// `qtz()` snaps through [`qtz_core`], so its scales are `goofi_core::scale`'s.
 /// A result leaves as a string, or as the shape and bytes of an f32 array.
 const EVAL_SRC: &str = r#"
 import marshal
@@ -52,6 +54,11 @@ def noi(*, freq=1, src=None, vmin=None, vmax=None):
     vmin = c.lo if vmin is None else vmin
     vmax = c.hi if vmax is None else vmax
     return vmin + (vmax - vmin) * __goofi_noise(freq * src)
+
+def qtz(v, scale="major", root="C"):
+    if np.ndim(v) == 0:
+        return __goofi_qtz(float(v), scale, root)
+    return np.vectorize(lambda x: __goofi_qtz(float(x), scale, root), otypes=[float])(v)
 
 def __goofi_compile(source, names):
     # The source on a line of its own, so a trailing comment ends before the closing parenthesis.
@@ -118,6 +125,7 @@ impl PyExprEvaluator {
                 c"goofi_expr.py",
                 c"goofi_expr",
             )?;
+            m.add_function(wrap_pyfunction!(qtz_core, &m)?)?;
             Ok(PyExprEvaluator {
                 compile_fn: m.getattr("__goofi_compile")?.unbind(),
                 load_fn: m.getattr("__goofi_load")?.unbind(),
@@ -128,6 +136,36 @@ impl PyExprEvaluator {
             })
         })
     }
+}
+
+/// A `qtz()` root: a note name, or semitones above C.
+#[derive(FromPyObject)]
+enum Root {
+    Note(String),
+    Semitones(f64),
+}
+
+/// `qtz()`'s core: a pitch in volts per octave onto the nearest degree of the preset `scale`,
+/// counted from `root`.
+#[pyfunction]
+#[pyo3(name = "__goofi_qtz")]
+fn qtz_core(volts: f64, scale: &str, root: Root) -> PyResult<f64> {
+    use goofi_core::scale::{Recipe, MAX_DEGREES, NOTES, OCTAVE, PRESET_NAMES};
+    if !PRESET_NAMES.contains(&scale) {
+        return Err(PyValueError::new_err(format!("qtz: no scale `{scale}`; one of {}", PRESET_NAMES.join(", "))));
+    }
+    let semitones = match root {
+        Root::Semitones(s) => s,
+        Root::Note(n) => NOTES.iter().position(|x| x.eq_ignore_ascii_case(&n)).ok_or_else(|| {
+            PyValueError::new_err(format!("qtz: no root `{n}`; a note of {} or semitones above C", NOTES.join(" ")))
+        })? as f64,
+    };
+    let recipe = Recipe::preset(scale);
+    let mut degrees = [0.0; MAX_DEGREES];
+    let n = recipe.degrees(&mut degrees);
+    let root = semitones * OCTAVE / 12.0;
+    let (cents, _) = recipe.snap(&degrees[..n], volts * OCTAVE - root);
+    Ok((cents + root) / OCTAVE)
 }
 
 /// A frame as the expression sees it: an array as a numpy view over its bytes, a string as itself;

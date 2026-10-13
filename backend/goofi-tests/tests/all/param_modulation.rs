@@ -124,3 +124,43 @@ fn concurrent_compile_eval_and_collection_all_finish() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
+
+#[test]
+fn qtz_snaps_volts_per_octave_onto_a_scale() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let evaluate = |source: &str| {
+        let code = evaluator.compile(source).unwrap();
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (-5.0, 5.0) });
+        evaluator.release(code.id);
+        result
+    };
+    let semis = |source: &str| control::number_of(&evaluate(source).unwrap()) * 12.0;
+    let near = |source: &str, want: f64| {
+        let got = semis(source);
+        assert!((got - want).abs() < 1e-4, "{source}: {got} semitones, not {want}");
+    };
+    // C major by default, 0 V the C: a pitch goes to its nearest degree, in its own octave, and
+    // one just under the next C climbs to it.
+    near("qtz(0)", 0.0);
+    near("qtz(1.4 / 12)", 2.0);
+    near("qtz(0.23)", 2.0);
+    near("qtz(1 + 11.4 / 12)", 23.0);
+    near("qtz(11.6 / 12)", 12.0);
+    near("qtz(-0.4 / 12)", 0.0);
+    near("qtz(-1.6 / 12)", -1.0);
+    // A scale by name and a root by note or by semitones: D major pentatonic is D E F# A B.
+    near("qtz(5.4 / 12, 'pentatonic_major', 'D')", 6.0);
+    near("qtz(5.4 / 12, scale='pentatonic_major', root=2)", 6.0);
+    near("qtz(1.4 / 12, 'minor', 'a')", 2.0);
+    near("qtz(3.4 / 12, 'chromatic')", 3.0);
+    // An array snaps element by element.
+    let frame = evaluate("qtz(np.array([0.0, 1.4 / 12, 4.6 / 12]))").unwrap();
+    let goofi_core::Value::Array(a) = frame.value() else { panic!("an array: {frame:?}") };
+    let got: Vec<f64> = a.values().map(|v| (f64::from(v) * 12.0 * 1e4).round() / 1e4).collect();
+    assert_eq!(got, [0.0, 2.0, 5.0]);
+    // A scale or root that is none is the expression's error, naming what there is.
+    let why = format!("{:?}", evaluate("qtz(0, 'nope')").unwrap_err());
+    assert!(why.contains("major") && why.contains("dorian"), "{why}");
+    let why = format!("{:?}", evaluate("qtz(0, root='H')").unwrap_err());
+    assert!(why.contains("F#"), "{why}");
+}
