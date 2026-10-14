@@ -280,7 +280,7 @@ Additional engine support:
 | Sample / Texture-to-signal | Read pixels, rows or regions through transport; specify readback rate and cost; never viewer snapshots. |
 | Media playback | Camera plays a video file. Add seek, pause, speed, timestamps and image sequences through the existing source owner. |
 | Optical Flow | Motion vectors from successive frames need history and a pyramid or internal passes; after Cache. |
-| External texture I/O | Screen capture and Spout/Syphon/NDI; optional for the basic bundle. |
+| External texture I/O | Screen capture and Spout/Syphon; optional for the basic bundle. |
 
 Do not add separate Add, Multiply, Over, Under, Invert, Limit, Circle, Rectangle, Movie File Out
 or texture In/Out nodes merely to match TOP names; existing nodes cover those roles. General 3D
