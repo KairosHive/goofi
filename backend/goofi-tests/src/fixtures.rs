@@ -51,6 +51,7 @@ pub fn register(g: &mut Graph) {
     add(g, manifest("_TestMute", "a refreshable list with no hook behind it", &[], &[], PICKER_PARAMS, false), || Box::new(MutePicker));
     add(g, manifest("_TestConst", "constant float32 array source (value+length) — hidden test/bench scaffolding.", &[], OUT_ARRAY, CONST_PARAMS, true), || Box::new(TestConst));
     add(g, manifest("_TestRamp", "a [C, T] ramp frame at `sfreq`: channel c rises from c to c + 1", &[], OUT_ARRAY, RAMP_PARAMS, true), || Box::new(Ramp));
+    add(g, manifest("_TestTake", "an array, a text and a table that change every run, for a recording to take", &[], OUT_TAKE, NO_PARAMS, true), || Box::new(Take::default()));
     add(g, manifest("_TestImage", "a 4x4 gradient image, gray and bipolar on request", &[], OUT_ARRAY, IMAGE_PARAMS, true), || Box::new(Image));
 }
 
@@ -83,6 +84,11 @@ static IN_PAIR: &[SlotDecl] = &[
 static OUT_ARRAY: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 static OUT_STRING: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::String }];
 static NO_PARAMS: &[ParamDecl] = &[];
+static OUT_TAKE: &[OutputDecl] = &[
+    OutputDecl { name: "array", kind: SlotType::Array },
+    OutputDecl { name: "text", kind: SlotType::String },
+    OutputDecl { name: "table", kind: SlotType::Table },
+];
 
 /// An engine that is nothing but a library: it advertises the names it was built with, and runs
 /// them nowhere. What a test registers to put a second engine behind a name a shipped one offers.
@@ -500,6 +506,33 @@ impl Node for MutePicker {
 }
 
 /// `_TestConst` — a constant float32 array source.
+/// `_TestTake` — each run, an array whose shape moves, with labelled channels and a key of its
+/// own; a text with a newline, a comma and quotes; and a table of a number, such a text and an
+/// empty cell. What a recording that is played back and recorded again must keep.
+#[derive(Default)]
+struct Take {
+    run: u32,
+}
+
+impl Node for Take {
+    fn process(&mut self, _inp: &Inputs<'_>, out: &mut Outputs<'_>, _ctx: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
+        use goofi_core::{Axes, Axis, Coord, MetaValue};
+        let k = self.run;
+        self.run += 1;
+        let width = 1 + k as usize % 3;
+        let buf: Vec<u8> = (0..2 * width).flat_map(|i| (k as f32 + i as f32 / 7.0).to_le_bytes()).collect();
+        let mut meta = Meta::new().with_sfreq(Some(250.0)).with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("a".into()), Coord::Str("b".into())])));
+        meta.set("take", MetaValue::Int(k as i64 / 2));
+        out.set("array", Data::array_f32(vec![2, width], buf, meta).map_err(|e| e.to_string())?);
+        let text = format!("run {k}, said \"twice\"\nand again");
+        out.set("text", Data::string(text.clone(), Meta::new()));
+        let half = Data::array_f32(vec![1], (k as f32 * 0.5).to_le_bytes().to_vec(), Meta::new()).map_err(|e| e.to_string())?;
+        let cells = [("half", half), ("text", Data::string(text, Meta::new())), ("blank", Data::string("", Meta::new()))];
+        out.set("table", Data::table(cells.into_iter().map(|(k, v)| (k.to_string(), v)).collect(), Meta::new()));
+        Ok(())
+    }
+}
+
 struct TestConst;
 
 impl Node for TestConst {

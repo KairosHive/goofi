@@ -373,7 +373,7 @@ impl Goofi {
             use base64::Engine;
             let got = g.call("node snapshot", json!({ "output": address, "raw": true }));
             let bytes = base64::engine::general_purpose::STANDARD.decode(got["npy_b64"].as_str()?).ok()?;
-            let (shape, samples) = goofi_record::npy::read(&bytes).ok()?;
+            let (shape, samples) = goofi_core::replay::read_npy(&bytes).ok()?;
             goofi_core::Data::array_f32(shape, samples, goofi_core::Meta::default()).ok()
         })
     }

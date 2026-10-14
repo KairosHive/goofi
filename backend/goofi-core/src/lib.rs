@@ -16,6 +16,7 @@ pub mod probe;
 pub mod reduce;
 pub mod scale;
 pub mod record;
+pub mod replay;
 pub mod stream;
 pub mod time;
 pub mod texture;

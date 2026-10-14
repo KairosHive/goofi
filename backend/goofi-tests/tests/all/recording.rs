@@ -1200,3 +1200,124 @@ fn video_quality_changes_the_encoded_picture() {
     }
     assert!(errors[1] < errors[0], "very high quality preserves more of the supplied picture: {errors:?}");
 }
+
+/// What a recorded stream holds once the recorder's own bookkeeping is set aside: the values or
+/// lines, and per frame its shape, extent and the meta it carried bar the engine's stamps.
+fn taken(file: &std::path::Path) -> (Vec<String>, Vec<String>) {
+    let body: Vec<String> = match file.extension().and_then(|e| e.to_str()) {
+        Some("npy") => {
+            let (_, samples) = goofi_core::replay::read_npy(&std::fs::read(file).expect("the npy")).expect("an npy");
+            samples.chunks_exact(4).map(|v| f32::from_le_bytes(v.try_into().unwrap()).to_bits().to_string()).collect()
+        }
+        // A row's first cell is its instant, which a replay keeps only to the run it lands on.
+        Some("csv") => std::fs::read_to_string(file).expect("the csv").lines().map(|l| l.split_once(',').map_or("", |(_, r)| r).to_string()).collect(),
+        _ => std::fs::read_to_string(file).expect("the file").lines().map(str::to_string).collect(),
+    };
+    let Ok(beside) = std::fs::read_to_string(file.with_extension("jsonl")) else { return (body, Vec::new()) };
+    let (mut shape, mut meta) = (serde_json::Value::Null, serde_json::Map::new());
+    let frames = beside
+        .lines()
+        .map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).expect("a json line");
+            if !line["shape"].is_null() {
+                shape = line["shape"].clone();
+            }
+            for (k, v) in line["meta"].as_object().into_iter().flatten() {
+                match v {
+                    serde_json::Value::Null => meta.remove(k),
+                    v => meta.insert(k.clone(), v.clone()),
+                };
+            }
+            meta.retain(|k, _| !["index", "emit", "source", "ufreq", "drift"].contains(&k.as_str()));
+            format!("{shape} {} {}", line["n"], serde_json::Value::Object(meta.clone()))
+        })
+        .collect();
+    (body, frames)
+}
+
+/// Record the `(node, slot)` outputs, `start` once the recording runs, until each holds at least
+/// seven frames — or, given `exact`, that many and no more.
+fn record_streams(g: &goofi_tests::Goofi, outputs: &[(goofi_tests::Uid, &str)], start: impl FnOnce(), exact: Option<&[u64]>) -> std::path::PathBuf {
+    let eps: Vec<String> = outputs.iter().map(|(uid, slot)| goofi_tests::ep(goofi_tests::hex(*uid), slot)).collect();
+    for output in &eps {
+        g.call("record arm", j!({ "output": output }));
+    }
+    let root = tempfile::tempdir().expect("a temp root").keep();
+    let folder = g.call("record start", j!({ "root": root }))["folder"].as_str().expect("a folder").to_string();
+    start();
+    let names: Vec<String> = outputs.iter().map(|(uid, _)| g.name(&goofi_tests::hex(*uid))).collect();
+    let frames = |g: &goofi_tests::Goofi| -> Vec<u64> {
+        let status = g.call("record status", j!({}));
+        outputs
+            .iter()
+            .zip(&names)
+            .map(|((_, slot), name)| {
+                status["streams"].as_array().into_iter().flatten().filter(|s| s["node"] == name.as_str() && s["slot"] == *slot).filter_map(|s| s["frames"].as_u64()).sum()
+            })
+            .collect()
+    };
+    let full = |f: &[u64]| exact.map_or(f.iter().all(|&n| n >= 7), |want| f == want);
+    g.until("every stream to take its frames", |g| full(&frames(g)).then_some(()));
+    if exact.is_some() {
+        assert!(g.stays(|g| full(&frames(g))), "a replay ends with the frames it was given: {:?}", frames(g));
+    }
+    g.call("record stop", j!({}));
+    for output in &eps {
+        g.call("record disarm", j!({ "output": output }));
+    }
+    std::path::PathBuf::from(folder)
+}
+
+/// The file the manifest in `folder` names for `node`'s `slot`.
+fn stream_file(g: &goofi_tests::Goofi, folder: &std::path::Path, node: goofi_tests::Uid, slot: &str) -> std::path::PathBuf {
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).expect("a manifest")).expect("json");
+    let name = g.name(&goofi_tests::hex(node));
+    let entry = manifest["streams"].as_array().unwrap().iter().find(|s| s["node"] == name.as_str() && s["slot"] == slot);
+    folder.join(entry.unwrap_or_else(|| panic!("no `{name}.{slot}` stream: {manifest}"))["file"].as_str().unwrap())
+}
+
+#[test]
+fn a_recording_played_back_and_recorded_again_holds_the_same_data() {
+    // The oracle is the recorder itself: what it wrote of a source, played back and recorded
+    // again, is the same values, lines, cells, shapes and meta, frame for frame.
+    let g = goofi_tests::Goofi::new();
+    let take = g.add("_TestTake");
+    g.set_param(take, "common", "max_frequency", 20.0);
+    g.ready(take);
+    let kinds = [("ArrayPlayback", "array"), ("StringPlayback", "text"), ("TablePlayback", "table")];
+    let first = record_streams(&g, &kinds.map(|(_, slot)| (take, slot)), || {}, None);
+    let files: Vec<std::path::PathBuf> = kinds.iter().map(|(_, slot)| stream_file(&g, &first, take, slot)).collect();
+    let players: Vec<goofi_tests::Uid> = kinds.iter().map(|(kind, _)| g.add(kind)).collect();
+    for uid in &players {
+        g.ready(*uid);
+    }
+    let counts: Vec<u64> = files.iter().map(|f| taken(f).1.len() as u64).collect();
+    let outputs: Vec<(goofi_tests::Uid, &str)> = players.iter().map(|uid| (*uid, "out")).collect();
+    let second = record_streams(&g, &outputs, || {
+        for (uid, file) in players.iter().zip(&files) {
+            g.set_param(*uid, "playback", "file", file.to_string_lossy().to_string());
+        }
+    }, Some(&counts));
+    for ((uid, file), (kind, _)) in players.iter().zip(&files).zip(kinds) {
+        assert_eq!(taken(&stream_file(&g, &second, *uid, "out")), taken(file), "{kind}: the stream played back and recorded again is the stream recorded");
+    }
+
+    // Without its sidecar, an array is read one sample per channel and a text a line per `sfreq`
+    // second: the values and lines come back whole all the same.
+    let bare = tempfile::tempdir().expect("a bare folder").keep();
+    let (array, text) = (bare.join("array.npy"), bare.join("text.txt"));
+    std::fs::copy(&files[0], &array).unwrap();
+    std::fs::copy(&files[1], &text).unwrap();
+    let (a, t) = (g.add("ArrayPlayback"), g.add("StringPlayback"));
+    g.set_param(a, "fallback", "channels", 2);
+    g.set_param(t, "fallback", "sfreq", 50.0);
+    g.ready(a);
+    g.ready(t);
+    let exact = [taken(&array).0.len() as u64 / 2, taken(&text).0.len() as u64];
+    let third = record_streams(&g, &[(a, "out"), (t, "out")], || {
+        g.set_param(a, "playback", "file", array.to_string_lossy().to_string());
+        g.set_param(t, "playback", "file", text.to_string_lossy().to_string());
+    }, Some(&exact));
+    assert_eq!(taken(&stream_file(&g, &third, a, "out")).0, taken(&array).0, "the bare array's values");
+    assert_eq!(taken(&stream_file(&g, &third, t, "out")).0, taken(&text).0, "the bare text's lines");
+}

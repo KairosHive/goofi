@@ -569,7 +569,7 @@ fn variable_file(workspace: &std::path::Path, name: &str) -> std::path::PathBuf 
 fn read_variable_file(workspace: &std::path::Path, name: &str) -> Result<Data, String> {
     let path = variable_file(workspace, name);
     let file = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (shape, samples) = goofi_record::npy::read(&file).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (shape, samples) = goofi_core::replay::read_npy(&file).map_err(|e| format!("{}: {e}", path.display()))?;
     Data::array_f32(shape, samples, goofi_core::Meta::default()).map_err(|e| e.to_string())
 }
 
