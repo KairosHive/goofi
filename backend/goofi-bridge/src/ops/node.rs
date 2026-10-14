@@ -119,7 +119,7 @@ op!(NodesGroup, "nodes group", 1, NodesGroupArgs {
 op!(NodesArrange, "nodes arrange", 0, NodesArrangeArgs {
     pub inst_id: Option<NodeRef>,
 },
-    "Lay out every node of one scope by dataflow: a column per depth, left to right, each ordered by where its sources landed, on the canvas's 24 px grid with clear cells between. `inst_id` names the sub-patch; absent = root. The ◇ button on the canvas is this op. One undo step.",
+    "Lay out every node of one scope by dataflow: each group of linked nodes on its own, the groups stacked top to bottom in the order of their first node, so two flows never share rows. In a group, a column per depth, left to right, each ordered by where its sources landed. Only links join a group; a param expression does not. All on the canvas's 24 px grid with clear cells between. `inst_id` names the sub-patch; absent = root. The ◇ button on the canvas is this op. One undo step.",
     "{moved: n} — how many nodes changed place");
 
 op!(NodesUngroup, "nodes ungroup", 1, NodesUngroupArgs {

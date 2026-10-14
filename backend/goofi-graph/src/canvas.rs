@@ -165,8 +165,8 @@ fn forward_edges(n: usize, succ: &dyn Fn(usize) -> Vec<usize>) -> Vec<Vec<usize>
 }
 
 /// Layers by depth: a column per dataflow depth, each ordered by where its sources landed, so a
-/// cable runs to the right and seldom crosses. Sizes in cells; the answer in flow px per index.
-fn layer(sizes: &[(i64, i64)], preds: &[Vec<usize>]) -> Vec<[f64; 2]> {
+/// cable runs to the right and seldom crosses. Sizes and the answer in cells, per index.
+fn layer(sizes: &[(i64, i64)], preds: &[Vec<usize>]) -> Vec<(i64, i64)> {
     let n = sizes.len();
     let mut depth = vec![usize::MAX; n];
     fn depth_of(i: usize, preds: &[Vec<usize>], depth: &mut [usize]) -> usize {
@@ -181,7 +181,7 @@ fn layer(sizes: &[(i64, i64)], preds: &[Vec<usize>]) -> Vec<[f64; 2]> {
     for i in 0..n {
         depth_of(i, preds, &mut depth);
     }
-    let mut out = vec![[0.0, 0.0]; n];
+    let mut out = vec![(0, 0); n];
     let mut row = vec![0i64; n];
     let mut x = 0i64;
     let layers = depth.iter().copied().max().map_or(0, |d| d + 1);
@@ -195,7 +195,7 @@ fn layer(sizes: &[(i64, i64)], preds: &[Vec<usize>]) -> Vec<[f64; 2]> {
         let mut cursor = 0i64;
         for i in members.iter().copied() {
             row[i] = want(i, &row).unwrap_or(0).max(cursor);
-            out[i] = px(x, row[i]);
+            out[i] = (x, row[i]);
             cursor = row[i] + sizes[i].1 + GAP;
         }
         x += members.iter().map(|&i| sizes[i].0).max().unwrap_or(0) + GAP;
@@ -203,7 +203,40 @@ fn layer(sizes: &[(i64, i64)], preds: &[Vec<usize>]) -> Vec<[f64; 2]> {
     out
 }
 
+/// The groups that wires join, each in member order, ordered by their first member.
+fn components(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut near = vec![Vec::new(); succ.len()];
+    for (a, bs) in succ.iter().enumerate() {
+        for &b in bs {
+            near[a].push(b);
+            near[b].push(a);
+        }
+    }
+    let mut seen = vec![false; succ.len()];
+    let mut groups = Vec::new();
+    for i in 0..succ.len() {
+        if seen[i] {
+            continue;
+        }
+        seen[i] = true;
+        let (mut group, mut todo) = (Vec::new(), vec![i]);
+        while let Some(j) = todo.pop() {
+            group.push(j);
+            for &k in &near[j] {
+                if !std::mem::replace(&mut seen[k], true) {
+                    todo.push(k);
+                }
+            }
+        }
+        group.sort_unstable();
+        groups.push(group);
+    }
+    groups
+}
+
 /// Every member of `scope` moved into dataflow layers: `(uid, pos)` for each, in member order.
+/// Each group of wired members is laid out on its own and the groups stack top to bottom, so
+/// two flows never share a column. Only links join a group; a param's expression does not.
 pub fn arrange_scope(g: &Graph, scope: Option<Uid>) -> Vec<(Uid, [f64; 2])> {
     let members: Vec<Uid> = g.all_uids().into_iter().filter(|u| g.scope_of(*u) == scope).collect();
     let index: HashMap<Uid, usize> = members.iter().enumerate().map(|(i, u)| (*u, i)).collect();
@@ -215,8 +248,20 @@ pub fn arrange_scope(g: &Graph, scope: Option<Uid>) -> Vec<(Uid, [f64; 2])> {
         }
     }
     let sizes: Vec<(i64, i64)> = members.iter().map(|u| node_size(g, *u)).collect();
-    let preds = forward_edges(members.len(), &|i| succ[i].clone());
-    members.into_iter().zip(layer(&sizes, &preds)).collect()
+    let mut out = vec![[0.0, 0.0]; members.len()];
+    let mut top = 0i64;
+    for group in components(&succ) {
+        let local: HashMap<usize, usize> = group.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+        let local_succ = |k: usize| succ[group[k]].iter().map(|j| local[j]).collect();
+        let preds = forward_edges(group.len(), &local_succ);
+        let local_sizes: Vec<(i64, i64)> = group.iter().map(|&i| sizes[i]).collect();
+        let cells = layer(&local_sizes, &preds);
+        for (k, &(x, y)) in cells.iter().enumerate() {
+            out[group[k]] = px(x, top + y);
+        }
+        top += cells.iter().zip(&local_sizes).map(|(c, s)| c.1 + s.1).max().unwrap_or(0) + GAP;
+    }
+    members.into_iter().zip(out).collect()
 }
 
 /// Every state on a ring, in the order a playhead reaches them from its start, the ring sized so

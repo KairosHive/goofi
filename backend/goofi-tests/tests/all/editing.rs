@@ -1368,4 +1368,24 @@ fn a_node_without_a_place_is_packed_clear_and_arrange_lays_a_scope_out_by_datafl
     let inside: Vec<[f64; 2]> = [&win, &tap, &inner].iter().map(|u| pos_of(&g, u)).collect();
     assert!(inside.iter().all(|p| on_grid(*p)), "{inside:?}");
     assert!(inside[0][0] > 0.0 && inside[1][0] > 0.0, "the wired members sit right of the ports that feed them: {inside:?}");
+
+    // Each wired group is laid out on its own, one under the next, so two flows never share a
+    // column's rows. A param's expression is no wire: it does not join two groups.
+    let add = |ty: &str| g.call("node add", j!({ "type": ty }));
+    let fan = add("LFO");
+    let (fan, fan_name) = (fan["uid"].as_str().unwrap().to_string(), fan["name"].as_str().unwrap().to_string());
+    let (left, right) = (add("Buffer")["uid"].as_str().unwrap().to_string(), add("Buffer")["uid"].as_str().unwrap().to_string());
+    let (head, tail) = (add("LFO")["uid"].as_str().unwrap().to_string(), add("Buffer")["uid"].as_str().unwrap().to_string());
+    g.call("link add", j!({ "from": ep(&fan, "out"), "to": ep(&left, "input") }));
+    g.call("link add", j!({ "from": ep(&fan, "out"), "to": ep(&right, "input") }));
+    g.call("link add", j!({ "from": ep(&head, "out"), "to": ep(&tail, "input") }));
+    g.call("node param edit", j!({ "node": &tail, "param": "buffer/size", "expression": format!("nd('{fan_name}')") }));
+    g.call("nodes arrange", j!({}));
+    let ys = |uids: &[&String]| uids.iter().map(|u| pos_of(&g, u)[1]).collect::<Vec<f64>>();
+    let groups = [ys(&[&src, &inst]), ys(&[&fan, &left, &right]), ys(&[&head, &tail])];
+    for pair in groups.windows(2) {
+        let above = pair[0].iter().copied().fold(f64::MIN, f64::max);
+        assert!(pair[1].iter().all(|y| *y > above), "each group starts below the one before: {groups:?}");
+    }
+    assert!(pos_of(&g, &tail)[0] > pos_of(&g, &head)[0], "a group still runs left to right");
 }
