@@ -7,7 +7,7 @@ use std::sync::Arc;
 use goofi_core::control;
 use goofi_core::ease::Curve;
 use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
-use goofi_core::{Data, Meta, Value};
+use goofi_core::{Data, Meta, Param, Value};
 use goofi_node::{EvalCtx, ExprEvaluator, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,20 @@ impl AttributeKind {
             (AttributeKind::Str { .. }, Value::Str(_)) => true,
             _ => false,
         }
+    }
+
+    /// `value` read into this kind as a param reads a frame ([`control::read`]), as many numbers
+    /// as `default` holds; a value the kind still cannot hold is `default`.
+    pub fn read(&self, value: &Data, default: &Data) -> Data {
+        let target = match self {
+            AttributeKind::Num { vmin, vmax, int, color } => {
+                let dims = control::numbers(default).count().max(1);
+                Param::Num { value: vec![0.0; dims], vmin: *vmin, vmax: *vmax, int: *int, options: Vec::new(), color: *color }
+            }
+            AttributeKind::Bool => Param::Bool { value: false },
+            AttributeKind::Str { options } => Param::Str { value: String::new(), options: options.clone(), refresh: false },
+        };
+        control::data_of(&control::read(value, &target)).filter(|d| self.fits(d)).unwrap_or_else(|| default.clone())
     }
 
     pub fn mismatch(&self, value: &Data) -> String {

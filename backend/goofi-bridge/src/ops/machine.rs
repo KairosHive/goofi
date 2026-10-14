@@ -59,7 +59,7 @@ op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
 },
-    "Change an attribute's default and/or its kind; the kind must hold the default and every state's value.",
+    "Change an attribute's default and/or its kind; the kind must hold the default. A new kind reads every state's value as a param reads a frame: a text parses to numbers, a number prints as a text, a bool is its truth, a vector fills or cuts to the default's length; a value the kind still cannot hold, such as a text outside the options, becomes the default.",
     "{name}");
 
 op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
@@ -356,14 +356,17 @@ impl WriteOp for AttributeEdit {
         if let Some(v) = a.value {
             attr.default = literal(v.0)?;
         }
+        let rekind = a.kind.is_some();
         if let Some(k) = a.kind {
             attr.kind = k;
         }
         fits(&attr.kind, &attr.default)?;
-        let kind = attr.kind.clone();
-        for (state, s) in &m.states {
-            if let Some(v) = s.values.get(&a.name) {
-                fits(&kind, v).map_err(|why| format!("state `{state}`: {why}"))?;
+        let (kind, default) = (attr.kind.clone(), attr.default.clone());
+        if rekind {
+            for s in m.states.values_mut() {
+                if let Some(v) = s.values.get_mut(&a.name) {
+                    *v = kind.read(v, &default);
+                }
             }
         }
         set(tx, &a.machine, m)?;

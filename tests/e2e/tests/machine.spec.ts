@@ -191,11 +191,19 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => Object.values((await machineState()).states).map((s: any) => s.values?.gain)).toEqual([0.3, 0.3]);
 		await press(page.getByTestId('topbar-undo'));
 		await expect.poll(async () => Object.values((await machineState()).states).map((s: any) => s.values?.gain)).toEqual([undefined, 0.7]);
-		await press(both.getByTestId('state-clear'));
-		await expect(both).toHaveAttribute('data-set', 'false');
+		// A new kind takes the set value with it, read as a param reads it, and the widgets and the
+		// kind's settings follow: a text has no range and no integer switch.
 		await press(both.getByTestId('attribute-edit'));
 		const kind = inspector.getByTestId('attribute-gain');
 		await expect(kind).toHaveAttribute('data-face', 'number');
+		await expect(kind.locator('[aria-label="integer"]')).toHaveCount(1);
+		await kind.getByTestId('attribute-kind').locator('select').selectOption('text');
+		await expect(kind).toHaveAttribute('data-face', 'text');
+		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBe('0.7');
+		await expect(kind.locator('[aria-label="integer"], [aria-label="min"]')).toHaveCount(0);
+		await expect(both.locator('.slot-head').getByTestId('param-text')).toBeVisible();
+		await press(both.getByTestId('state-clear'));
+		await expect(both).toHaveAttribute('data-set', 'false');
 		await kind.getByTestId('attribute-kind').locator('select').selectOption('toggle');
 		await expect(kind).toHaveAttribute('data-face', 'toggle');
 		await expect(both.locator('.slot-head').getByTestId('param-toggle')).toBeVisible();

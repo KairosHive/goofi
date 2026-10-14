@@ -52,6 +52,23 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     write("machine state add", j!({ "machine": "seq", "name": "A", "pos": [0.0, 0.0], "values": { "gain": 0.2, "label": "a" } }));
     write("machine state add", j!({ "machine": "seq", "name": "B", "pos": [200.0, 0.0], "values": { "gain": 1.0 } }));
     write("machine state add", j!({ "machine": "seq", "name": "C", "pos": [400.0, 0.0], "values": { "gain": 0.0, "label": "c" } }));
+    // A new kind reads every state's value as a param reads a frame; one it cannot hold, such as a
+    // text outside the options, falls back to the default.
+    write("machine attribute add", j!({ "machine": "seq", "name": "mood", "value": 0.0, "kind": num }));
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "mood": 0.7 } }));
+    let mood = |g: &Goofi| g.doc()["machines"]["seq"]["states"]["A"]["values"]["mood"].clone();
+    let kinds = [
+        (j!({ "type": "string" }), j!(""), j!("0.7")),
+        (num.clone(), j!(0.0), j!(0.7)),
+        (j!({ "type": "num", "vmin": 0.0, "vmax": 1.0, "color": true }), j!([0.0, 0.0, 0.0, 1.0]), j!([0.7, 0.7, 0.7, 0.7])),
+        (j!({ "type": "bool" }), j!(0), j!(1)),
+        (j!({ "type": "string", "options": ["calm", "wild"] }), j!("calm"), j!("calm")),
+    ];
+    for (kind, default, want) in kinds {
+        write("machine attribute edit", j!({ "machine": "seq", "name": "mood", "kind": kind, "value": default }));
+        assert_eq!(mood(&g), want, "a state's value follows the kind {kind}");
+    }
+    write("machine attribute remove", j!({ "machine": "seq", "name": "mood" }));
     // These states hold until fired: a new state would draw evenly among its transitions out.
     for name in ["A", "B", "C"] {
         write("machine state edit", j!({ "machine": "seq", "name": name, "mode": "expression", "expression": "-1" }));
