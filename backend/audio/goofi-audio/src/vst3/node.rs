@@ -2,6 +2,7 @@
 //! params and note events queued per block, its buses staged from the arena.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use goofi_audio_sdk::{high, AudioNode, Block, BLOCK};
@@ -19,7 +20,7 @@ use super::module;
 use super::ok;
 use crate::control::AudioShared;
 use goofi_window::{self as ui, Ui};
-use goofi_node::Uid;
+use goofi_node::{Origin, Uid};
 
 /// The tempo the host reports: a constant, as goofi has no transport, but a synced plugin stops
 /// at zero.
@@ -45,9 +46,36 @@ pub struct Derived {
     pub cid: TUID,
     pub inputs: Vec<u16>,
     pub outputs: Vec<u16>,
-    /// Per plugin param: its id, and the steps a goofi scalar is divided by to normalize it (1
-    /// for a continuous one).
-    pub params: Vec<(ParamID, f64)>,
+    pub params: Vec<Knob>,
+}
+
+/// One plugin param as goofi drives it.
+#[derive(Clone, Copy, Debug)]
+pub struct Knob {
+    pub id: ParamID,
+    /// What a goofi scalar is divided by to normalize it: 1 for a continuous param.
+    pub steps: f64,
+    /// The declared default, normalized as a block sends it: what a fresh plugin holds, and what
+    /// the document shows of a param no patch stores.
+    pub default: f64,
+}
+
+impl Knob {
+    pub fn new(id: ParamID, steps: f64, default: f64) -> Knob {
+        let knob = Knob { id, steps, default };
+        Knob { default: knob.as_sent(default), ..knob }
+    }
+
+    /// A normalized value as the document's scalar spells it, and back as a block sends it.
+    pub fn as_sent(&self, v: f64) -> f64 {
+        let scalar = if self.steps > 1.0 { (v.clamp(0.0, 1.0) * self.steps).round() } else { v };
+        self.normalized(scalar as f32)
+    }
+
+    /// A goofi scalar as the normalized value the plugin takes.
+    pub fn normalized(&self, scalar: f32) -> f64 {
+        (scalar as f64 / self.steps).clamp(0.0, 1.0)
+    }
 }
 
 pub struct Plugin {
@@ -107,9 +135,14 @@ impl AudioNode for Plugin {
         *failed = on(ui, |host| match live {
             Some(live) => live.retune(rate),
             None => Live::open(class, rate).map(|opened| {
-                opened.load(blob);
+                if !blob.is_empty() {
+                    opened.load(blob);
+                    if let (Some(uid), Some(shared)) = (*uid, shared.as_ref()) {
+                        opened.read_back(class, uid, shared, Origin::Restored);
+                    }
+                }
                 if let (Some(_), Some(uid), Some(shared), Some(controller)) = (host, *uid, shared.clone(), opened.controller()) {
-                    editor::register(uid, controller, shared);
+                    editor::register(uid, controller, shared, class.clone(), opened.known.clone());
                 }
                 *live = Some(opened)
             }),
@@ -143,11 +176,19 @@ impl AudioNode for Plugin {
         stream.bytes.take()
     }
 
+    /// The blob is the plugin's one stored state: both halves take it on the window thread, and
+    /// the document is shown the values it holds.
     fn load(&mut self, bytes: &[u8]) {
         self.blob = bytes.to_vec();
-        if let Some(live) = self.live.as_mut() {
-            live.load(bytes);
-        }
+        let Plugin { class, ui, uid, shared, live, .. } = self;
+        let Some(live) = live.as_mut() else { return };
+        on(ui, move |_| {
+            let Some(uid) = *uid else { return live.load(bytes) };
+            editor::quietly(uid, || live.load(bytes));
+            if let Some(shared) = shared.as_ref() {
+                live.read_back(class, uid, shared, Origin::Restored);
+            }
+        });
     }
 }
 
@@ -166,8 +207,12 @@ struct Live {
     context: Box<ProcessContext>,
     ins: Buses,
     outs: Buses,
-    /// The normalized value last handed over per plugin param; NaN sends it at the next block.
-    sent: Vec<f64>,
+    /// Per plugin param, the value goofi last gave it, from the declared default on: a document
+    /// that does not store the param moves nothing, and the plugin's own state stands.
+    seen: Vec<f64>,
+    /// Per plugin param, the value the plugin is known to hold, as a block would send it: what it
+    /// was sent, or what the window thread read back from it. A value it holds is not sent again.
+    pub(super) known: Arc<[AtomicU64]>,
     /// Per voice, the note sounding and the cents it was detuned by.
     held: [Option<(i16, f32)>; MIDI_CHANNELS],
     /// Per voice, where its channel's pitch wheel sits in `changes` — `None` where the plugin
@@ -196,7 +241,7 @@ impl Live {
         // A per-note offset prefers each channel's pitch-wheel parameter, which every plugin
         // honours; the note-on's optional `tuning` is the fallback.
         let (bend, bend_ids) = unsafe { wheels(controller.as_ref(), &component, class.params.len()) };
-        let changes = ComWrapper::new(Changes::new(class.params.iter().map(|(id, _)| *id).chain(bend_ids)));
+        let changes = ComWrapper::new(Changes::new(class.params.iter().map(|k| k.id).chain(bend_ids)));
         let changes_ptr = changes.to_com_ptr().expect("changes are an IParameterChanges");
         let events = ComWrapper::new(Events::with_capacity(BLOCK * MIDI_CHANNELS));
         let events_ptr = events.to_com_ptr().expect("events are an IEventList");
@@ -213,7 +258,8 @@ impl Live {
             context: Box::new(unsafe { std::mem::zeroed() }),
             ins,
             outs,
-            sent: vec![f64::NAN; class.params.len()],
+            seen: class.params.iter().map(|k| k.default).collect(),
+            known: class.params.iter().map(|k| AtomicU64::new(k.default.to_bits())).collect(),
             held: [None; MIDI_CHANNELS],
             bend,
             prepared: false,
@@ -257,8 +303,8 @@ impl Live {
         self.context.tempo = TEMPO;
         self.context.timeSigNumerator = 4;
         self.context.timeSigDenominator = 4;
-        // The reactivation dropped the plugin's voices, so a gate still HIGH must note again.
-        self.sent.fill(f64::NAN);
+        // The reactivation dropped the plugin's voices, so a gate still HIGH must note again. Its
+        // params it keeps.
         self.held = [None; MIDI_CHANNELS];
         Ok(())
     }
@@ -268,6 +314,7 @@ impl Live {
         self.controller.clone().or_else(|| self.component.cast())
     }
 
+    /// The component's state, and the separate controller's view of it.
     fn load(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -275,16 +322,31 @@ impl Live {
         let stream = ComWrapper::new(Stream::of(bytes));
         let ptr = stream.to_com_ptr::<IBStream>().expect("a stream is an IBStream");
         unsafe { self.component.setState(ptr.as_ptr()) };
+        if let Some(controller) = &self.controller {
+            let stream = ComWrapper::new(Stream::of(bytes));
+            let ptr = stream.to_com_ptr::<IBStream>().expect("a stream is an IBStream");
+            unsafe { controller.setComponentState(ptr.as_ptr()) };
+        }
+    }
+
+    /// Every plugin param's value, read off the controller into the document; on the window thread.
+    fn read_back(&self, class: &Derived, uid: Uid, shared: &AudioShared, origin: Origin) {
+        if let Some(controller) = self.controller() {
+            read_back(&controller, class, &self.known, uid, shared, origin);
+        }
     }
 
     fn block(&mut self, class: &Derived, b: &mut Block<'_>) {
         // The voice params, if any, are the ones the manifest carries beyond the plugin's own.
         let voice = b.scalars.len() - class.params.len();
         self.changes.clear();
-        for (i, (_, steps)) in class.params.iter().enumerate() {
-            let value = (b.scalars[voice + i] as f64 / steps).clamp(0.0, 1.0);
-            if self.sent[i].to_bits() != value.to_bits() {
-                self.sent[i] = value;
+        for (i, knob) in class.params.iter().enumerate() {
+            let value = knob.normalized(b.scalars[voice + i]);
+            // Sent only where goofi moved it, and the plugin does not already hold it.
+            if std::mem::replace(&mut self.seen[i], value).to_bits() == value.to_bits() {
+                continue;
+            }
+            if self.known[i].swap(value.to_bits(), Ordering::Relaxed) != value.to_bits() {
                 self.changes.set(i, value);
             }
         }
@@ -405,6 +467,19 @@ unsafe fn wheels(
 
 /// A component and its controller, each holding the other's connection point.
 type Wire = (ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>);
+
+/// Read every param of `controller` into the document as `origin`, and note that the plugin holds
+/// each, so a block does not send it back.
+pub(super) fn read_back(controller: &ComPtr<IEditController>, class: &Derived, known: &[AtomicU64], uid: Uid, shared: &AudioShared, origin: Origin) {
+    let mut edits = shared.edits.lock();
+    for (i, knob) in class.params.iter().enumerate() {
+        let v = unsafe { controller.getParamNormalized(knob.id) }.clamp(0.0, 1.0);
+        known[i].store(knob.as_sent(v).to_bits(), Ordering::Relaxed);
+        edits.push((uid, knob.id, v, origin));
+    }
+    drop(edits);
+    shared.waker.notify();
+}
 
 /// What pairing yields: the other half, and the connection to undo before tearing it down.
 type Pair = (Option<ComPtr<IEditController>>, Option<Wire>);

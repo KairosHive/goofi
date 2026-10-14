@@ -349,6 +349,8 @@ pub(crate) struct Instance {
     /// What each inbox ring and each output's rings were minted for; a plan or a frame past it
     /// re-mints them.
     minted: Minted,
+    /// A plugin's params as its window was last told them, from the declared defaults on.
+    shown: Vec<f64>,
 }
 
 #[derive(Default)]
@@ -650,7 +652,7 @@ impl AudioEngine {
             .params
             .iter()
             .enumerate()
-            .map(|(i, (id, steps))| (*id, (goofi_runtime::scalar(&consts[voice + i]) / steps).clamp(0.0, 1.0)))
+            .map(|(i, k)| (k.id, k.normalized(goofi_runtime::scalar(&consts[voice + i]) as f32)))
             .collect();
         Some(values)
     }
@@ -821,7 +823,7 @@ impl Engine for AudioEngine {
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
-        let Some(Class { manifest, make, .. }) = self.classes.get(type_name).cloned() else {
+        let Some(Class { manifest, make, plugin }) = self.classes.get(type_name).cloned() else {
             return Some(format!("no audio node type `{type_name}`"));
         };
         let chans = Arc::new(AtomicU16::new(1));
@@ -909,7 +911,8 @@ impl Engine for AudioEngine {
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted });
+        let shown = plugin.map(|d| d.params.iter().map(|k| k.default).collect()).unwrap_or_default();
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -942,12 +945,18 @@ impl Engine for AudioEngine {
         for uid in self.live.keys().copied().collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
-            let shown = self.plugin_values(uid, &desired.consts);
+            let values = self.plugin_values(uid, &desired.consts);
             if !self.live[&uid].control.send_if_changed(desired) {
                 continue;
             }
-            if let (Some(ui), Some(values)) = (&self.ui, shown) {
-                ui.post(move |_| vst3::editor::sync(uid, values));
+            // Only what goofi moved is told to a plugin's window: the rest is the plugin's own.
+            let (Some(ui), Some(values)) = (&self.ui, values) else { continue };
+            let inst = self.live.get_mut(&uid).expect("looked up above");
+            let moved: Vec<(u32, f64)> =
+                values.iter().zip(&inst.shown).filter(|((_, v), was)| v.to_bits() != was.to_bits()).map(|(p, _)| *p).collect();
+            inst.shown = values.iter().map(|(_, v)| *v).collect();
+            if !moved.is_empty() {
+                ui.post(move |_| vst3::editor::sync(uid, moved));
             }
         }
         let outs = self.devices(view, audio_out::TYPE, audio_out::P::DEVICE);
@@ -1047,12 +1056,12 @@ impl Engine for AudioEngine {
     fn take_edits(&mut self) -> Vec<Edit> {
         let raw = std::mem::take(&mut *self.audio.edits.lock());
         let mut edits: Vec<Edit> = Vec::new();
-        for (uid, id, v) in raw {
+        for (uid, id, v, origin) in raw {
             let Some(inst) = self.live.get(&uid) else { continue };
             let Some(derived) = self.classes.get(inst.manifest.type_name).and_then(|c| c.plugin.as_ref()) else { continue };
-            let Some(i) = derived.params.iter().position(|(pid, _)| *pid == id) else { continue };
+            let Some(i) = derived.params.iter().position(|k| k.id == id) else { continue };
             let decl = &inst.manifest.params[inst.manifest.params.len() - derived.params.len() + i];
-            let steps = derived.params[i].1;
+            let steps = derived.params[i].steps;
             let mut value = decl.spec.to_param();
             match &mut value {
                 Param::Num { value, int, .. } => value[0] = if *int { (v.clamp(0.0, 1.0) * steps).round() } else { v.clamp(0.0, 1.0) },
@@ -1063,7 +1072,7 @@ impl Engine for AudioEngine {
             }
             let key = ParamKey::new(decl.group, decl.name);
             edits.retain(|e| !(e.uid == uid && e.key == key));
-            edits.push(Edit { uid, key, value });
+            edits.push(Edit { uid, key, value, origin });
         }
         edits
     }

@@ -1,8 +1,10 @@
 //! `GoofiFixture` by `goofi`: one stereo input, one event input, one stereo output, one
 //! continuous `Gain` parameter kept in its state. Its output is the input times the gain, plus
 //! a sine at every held note's pitch — bent by its channel's wheel, or by the note's own `tuning`
-//! where `deaf` leaves it no wheel — at half the velocity. Its editor draws nothing and
-//! turns the gain to a quarter once it is attached — the whole loop a knob in a real one makes.
+//! where `deaf` leaves it no wheel — at half the velocity. Its editor draws nothing: the first view
+//! turns the gain to a quarter once it is attached — the whole loop a knob in a real one makes —
+//! and every later one loads a preset, as a preset browser does: both halves take its values, and
+//! the host is told only that they moved.
 #![allow(non_snake_case)]
 
 use std::cell::{Cell, RefCell};
@@ -68,8 +70,17 @@ struct Voice {
     phase: f32,
 }
 
+/// Gain, shape and steps: the params the processor keeps, in its blob and from its messages.
+const KEPT: usize = 3;
+/// What the preset sets, by param id.
+const PRESET: [f64; KEPT] = [0.75, 0.5, 0.25];
+/// The message a preset reaches the processor by, and its attributes by param id.
+const PRESET_MESSAGE: &std::ffi::CStr = c"preset";
+const PRESET_ATTRS: [&std::ffi::CStr; KEPT] = [c"gain", c"shape", c"steps"];
+
 struct Processor {
-    gain: AtomicU64,
+    /// Gain, shape and steps, by param id.
+    kept: [AtomicU64; KEPT],
     rate: AtomicU64,
     voices: RefCell<[Voice; VOICES]>,
     /// Each channel's wheel, in semitones.
@@ -91,7 +102,19 @@ impl IConnectionPointTrait for Processor {
     unsafe fn disconnect(&self, _other: *mut IConnectionPoint) -> tresult {
         kResultOk
     }
-    unsafe fn notify(&self, _message: *mut IMessage) -> tresult {
+    /// A preset from the controller: every kept value at once.
+    unsafe fn notify(&self, message: *mut IMessage) -> tresult {
+        let Some(message) = ComRef::from_raw(message) else { return kInvalidArgument };
+        if message.getMessageID().is_null() || std::ffi::CStr::from_ptr(message.getMessageID()) != PRESET_MESSAGE {
+            return kResultFalse;
+        }
+        let Some(attrs) = ComRef::from_raw(message.getAttributes()) else { return kResultFalse };
+        for (k, name) in PRESET_ATTRS.iter().enumerate() {
+            let mut v = 0.0;
+            if attrs.getFloat(name.as_ptr(), &mut v) == kResultOk {
+                self.kept[k].store(v.to_bits(), Ordering::Relaxed);
+            }
+        }
         kResultOk
     }
 }
@@ -101,7 +124,7 @@ impl Processor {
 
     fn new() -> Processor {
         Processor {
-            gain: AtomicU64::new(1.0f64.to_bits()),
+            kept: [1.0f64, 0.0, 0.5].map(|v| AtomicU64::new(v.to_bits())),
             rate: AtomicU64::new(48_000.0f64.to_bits()),
             voices: RefCell::new([Voice::default(); VOICES]),
             bend: RefCell::new([0.0; VOICES]),
@@ -172,12 +195,13 @@ impl IComponentTrait for Processor {
 
     unsafe fn setState(&self, state: *mut IBStream) -> tresult {
         let Some(state) = ComRef::from_raw(state) else { return kInvalidArgument };
-        let mut bytes = [0u8; 9];
+        let mut bytes = [0u8; BLOB];
         let mut read = 0;
-        if state.read(bytes.as_mut_ptr() as *mut c_void, 9, &mut read) == kResultOk && read == 9 {
-            let gain: [u8; 8] = bytes[..8].try_into().expect("eight of nine");
-            self.gain.store(f64::from_le_bytes(gain).to_bits(), Ordering::Relaxed);
-            self.pushed.store(bytes[8] != 0, Ordering::Relaxed);
+        if state.read(bytes.as_mut_ptr() as *mut c_void, BLOB as i32, &mut read) == kResultOk && read == BLOB as i32 {
+            for (k, v) in kept_of(&bytes).into_iter().enumerate() {
+                self.kept[k].store(v.to_bits(), Ordering::Relaxed);
+            }
+            self.pushed.store(bytes[BLOB - 1] != 0, Ordering::Relaxed);
             return kResultOk;
         }
         kResultFalse
@@ -185,11 +209,13 @@ impl IComponentTrait for Processor {
 
     unsafe fn getState(&self, state: *mut IBStream) -> tresult {
         let Some(state) = ComRef::from_raw(state) else { return kInvalidArgument };
-        let mut bytes = [0u8; 9];
-        bytes[..8].copy_from_slice(&f64::from_bits(self.gain.load(Ordering::Relaxed)).to_le_bytes());
-        bytes[8] = self.pushed.load(Ordering::Relaxed) as u8;
+        let mut bytes = [0u8; BLOB];
+        for k in 0..KEPT {
+            bytes[k * 8..k * 8 + 8].copy_from_slice(&f64::from_bits(self.kept[k].load(Ordering::Relaxed)).to_le_bytes());
+        }
+        bytes[BLOB - 1] = self.pushed.load(Ordering::Relaxed) as u8;
         let mut written = 0;
-        state.write(bytes.as_ptr() as *mut c_void, 9, &mut written);
+        state.write(bytes.as_ptr() as *mut c_void, BLOB as i32, &mut written);
         kResultOk
     }
 }
@@ -240,8 +266,13 @@ impl IAudioProcessorTrait for Processor {
                 let (mut offset, mut value) = (0, 0.0);
                 if points > 0 && queue.getPoint(points - 1, &mut offset, &mut value) == kResultOk {
                     match queue.getParameterId() {
-                        0 => self.gain.store(value.to_bits(), Ordering::Relaxed),
-                        1 if value >= 0.99 => self.pushed.store(true, Ordering::Relaxed),
+                        id @ (0 | 2) => self.kept[id as usize].store(value.to_bits(), Ordering::Relaxed),
+                        1 => {
+                            self.kept[1].store(value.to_bits(), Ordering::Relaxed);
+                            if value >= 0.99 {
+                                self.pushed.store(true, Ordering::Relaxed);
+                            }
+                        }
                         id if (BEND_ID..BEND_ID + VOICES as u32).contains(&id) => {
                             self.bend.borrow_mut()[(id - BEND_ID) as usize] = (value as f32 - 0.5) * 2.0 * BEND_SEMITONES;
                         }
@@ -274,7 +305,7 @@ impl IAudioProcessorTrait for Processor {
                 }
             }
         }
-        let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
+        let gain = f64::from_bits(self.kept[0].load(Ordering::Relaxed)) as f32;
         let rate = f64::from_bits(self.rate.load(Ordering::Relaxed)) as f32;
         let loud = if self.pushed.load(Ordering::Relaxed) { 0.25 } else { 0.5 };
         let n = data.numSamples as usize;
@@ -315,7 +346,12 @@ impl IAudioProcessorTrait for Processor {
 }
 
 struct Controller {
-    gain: Cell<f64>,
+    /// Every param's value, by id; the meter reads 0.
+    values: RefCell<[f64; KEPT + 1]>,
+    /// The processor, once connected: what a preset is sent to.
+    other: RefCell<Option<ComPtr<IConnectionPoint>>>,
+    /// Views made so far: the first turns a knob, every later one loads the preset.
+    views: Cell<u32>,
     /// The host, kept from `initialize` so the connection can ask it for a message.
     host: RefCell<Option<ComPtr<IHostApplication>>>,
     /// What a view edits through, kept from `setComponentHandler`.
@@ -351,7 +387,8 @@ impl IMidiMappingTrait for Controller {
 impl IConnectionPointTrait for Controller {
     /// Introduced to the processor: allocate a message from the host, and only then publish params.
     /// A host that connects but cannot allocate a message leaves this controller mute.
-    unsafe fn connect(&self, _other: *mut IConnectionPoint) -> tresult {
+    unsafe fn connect(&self, other: *mut IConnectionPoint) -> tresult {
+        *self.other.borrow_mut() = ComRef::from_raw(other).map(|o| o.to_com_ptr());
         let Some(host) = self.host.borrow().clone() else { return kResultOk };
         let mut obj: *mut c_void = std::ptr::null_mut();
         let rc = host.createInstance(&IMessage_iid as *const _ as *mut _, &IMessage_iid as *const _ as *mut _, &mut obj);
@@ -365,6 +402,7 @@ impl IConnectionPointTrait for Controller {
     }
     unsafe fn disconnect(&self, _other: *mut IConnectionPoint) -> tresult {
         self.ready.set(false);
+        *self.other.borrow_mut() = None;
         kResultOk
     }
     unsafe fn notify(&self, _message: *mut IMessage) -> tresult {
@@ -374,6 +412,39 @@ impl IConnectionPointTrait for Controller {
 
 impl Controller {
     const CID: TUID = uid(0x1E2F3A4B, 0x5C6D7E8F, 0x90A1B2C3, 0xD4E5F607 ^ VARIANT);
+
+    /// What a preset browser does: the controller's values, the processor's by message, and the
+    /// host told that every value moved, not which.
+    unsafe fn load_preset(&self) {
+        self.values.borrow_mut()[..KEPT].copy_from_slice(&PRESET);
+        let host = self.host.borrow().clone();
+        let other = self.other.borrow().clone();
+        if let (Some(host), Some(other)) = (host, other) {
+            let mut obj: *mut c_void = std::ptr::null_mut();
+            let iid = &IMessage_iid as *const _ as *mut _;
+            if host.createInstance(iid, iid, &mut obj) == kResultOk {
+                if let Some(message) = ComPtr::<IMessage>::from_raw(obj as *mut IMessage) {
+                    message.setMessageID(PRESET_MESSAGE.as_ptr());
+                    if let Some(attrs) = ComRef::from_raw(message.getAttributes()) {
+                        for (name, v) in PRESET_ATTRS.iter().zip(PRESET) {
+                            attrs.setFloat(name.as_ptr(), v);
+                        }
+                    }
+                    other.notify(message.as_ptr());
+                }
+            }
+        }
+        if let Some(handler) = self.handler.borrow().clone() {
+            handler.restartComponent(RestartFlags_::kParamValuesChanged as int32);
+        }
+    }
+}
+
+/// The processor's blob: gain, shape and steps as `f64`, then the latch.
+const BLOB: usize = KEPT * 8 + 1;
+
+fn kept_of(bytes: &[u8]) -> [f64; KEPT] {
+    std::array::from_fn(|k| f64::from_le_bytes(bytes[k * 8..k * 8 + 8].try_into().expect("eight bytes")))
 }
 
 impl IPluginBaseTrait for Controller {
@@ -392,10 +463,10 @@ impl IPluginBaseTrait for Controller {
 impl IEditControllerTrait for Controller {
     unsafe fn setComponentState(&self, state: *mut IBStream) -> tresult {
         let Some(state) = ComRef::from_raw(state) else { return kInvalidArgument };
-        let mut bytes = [0u8; 8];
+        let mut bytes = [0u8; BLOB];
         let mut read = 0;
-        if state.read(bytes.as_mut_ptr() as *mut c_void, 8, &mut read) == kResultOk && read == 8 {
-            self.gain.set(f64::from_le_bytes(bytes));
+        if state.read(bytes.as_mut_ptr() as *mut c_void, BLOB as i32, &mut read) == kResultOk && read == BLOB as i32 {
+            self.values.borrow_mut()[..KEPT].copy_from_slice(&kept_of(&bytes));
         }
         kResultOk
     }
@@ -458,12 +529,15 @@ impl IEditControllerTrait for Controller {
         plain_value
     }
 
-    unsafe fn getParamNormalized(&self, _id: u32) -> f64 {
-        self.gain.get()
+    unsafe fn getParamNormalized(&self, id: u32) -> f64 {
+        self.values.borrow().get(id as usize).copied().unwrap_or(0.0)
     }
 
-    unsafe fn setParamNormalized(&self, _id: u32, value: f64) -> tresult {
-        self.gain.set(value);
+    unsafe fn setParamNormalized(&self, id: u32, value: f64) -> tresult {
+        match self.values.borrow_mut().get_mut(id as usize) {
+            Some(v) => *v = value,
+            None => return kInvalidArgument,
+        }
         kResultOk
     }
 
@@ -475,8 +549,13 @@ impl IEditControllerTrait for Controller {
     unsafe fn createView(&self, name: *const c_char) -> *mut IPlugView {
         let editor = !name.is_null() && std::ffi::CStr::from_ptr(name).to_str() == Ok("editor");
         let Some(handler) = self.handler.borrow().clone().filter(|_| editor) else { return std::ptr::null_mut() };
+        // A later view is a preset browser: the preset is chosen as it opens, and it turns nothing.
+        let first = self.views.replace(self.views.get() + 1) == 0;
+        if !first {
+            self.load_preset();
+        }
         #[cfg(target_os = "linux")]
-        let (timer, event) = callback_handlers(handler.clone());
+        let (timer, event) = callback_handlers(handler.clone(), first);
         #[cfg(target_os = "linux")]
         let (event_fd, event_peer) = std::os::unix::net::UnixStream::pair().expect("the editor's event descriptors");
         let view = View {
@@ -491,7 +570,7 @@ impl IEditControllerTrait for Controller {
             #[cfg(target_os = "linux")]
             run_loop: RefCell::new(None),
             #[cfg(not(target_os = "linux"))]
-            handler,
+            handler: Some(handler.clone()).filter(|_| first),
             frame: RefCell::new(None),
         };
         ComWrapper::new(view).to_com_ptr::<IPlugView>().expect("a view is a plug view").into_raw()
@@ -508,8 +587,9 @@ unsafe fn turn(handler: &ComPtr<IComponentHandler>) {
 /// The editor: attached, it turns the knob — through the host's run loop on Linux, where a real
 /// editor's own events and timers ride, and straight away where the platform pumps them itself.
 struct View {
+    /// Where the first view turns the knob through; none for a later one.
     #[cfg(not(target_os = "linux"))]
-    handler: ComPtr<IComponentHandler>,
+    handler: Option<ComPtr<IComponentHandler>>,
     frame: RefCell<Option<ComPtr<IPlugFrame>>>,
     #[cfg(target_os = "linux")]
     turn: ComPtr<Linux::ITimerHandler>,
@@ -552,7 +632,9 @@ impl IPlugViewTrait for View {
             *self.run_loop.borrow_mut() = Some(run_loop);
         }
         #[cfg(not(target_os = "linux"))]
-        turn(&self.handler);
+        if let Some(handler) = &self.handler {
+            turn(handler);
+        }
         kResultOk
     }
 
@@ -619,7 +701,7 @@ impl Class for Turn {
 /// The caller already has typed callback pointers. Reject redundant queries, which returned
 /// a different interface in Zebralette3 and made the host call the wrong vtable method.
 #[cfg(target_os = "linux")]
-fn callback_handlers(handler: ComPtr<IComponentHandler>) -> (ComPtr<Linux::ITimerHandler>, ComPtr<Linux::IEventHandler>) {
+fn callback_handlers(handler: ComPtr<IComponentHandler>, armed: bool) -> (ComPtr<Linux::ITimerHandler>, ComPtr<Linux::IEventHandler>) {
     use std::sync::OnceLock;
     unsafe extern "system" fn no_query(_this: *mut FUnknown, _iid: *const TUID, obj: *mut *mut c_void) -> tresult {
         *obj = std::ptr::null_mut();
@@ -627,7 +709,7 @@ fn callback_handlers(handler: ComPtr<IComponentHandler>) -> (ComPtr<Linux::ITime
     }
     static TIMER: OnceLock<Linux::ITimerHandlerVtbl> = OnceLock::new();
     static EVENT: OnceLock<Linux::IEventHandlerVtbl> = OnceLock::new();
-    let callback = ComWrapper::new(Turn { handler, fired: Cell::new(false) });
+    let callback = ComWrapper::new(Turn { handler, fired: Cell::new(!armed) });
     let timer = callback.to_com_ptr::<Linux::ITimerHandler>().expect("a timer handler");
     let event = callback.to_com_ptr::<Linux::IEventHandler>().expect("an event handler");
     // Each fresh interface keeps its generated addRef, release and callback entries. Only
@@ -703,7 +785,15 @@ impl IPluginFactoryTrait for Factory {
     unsafe fn createInstance(&self, cid: FIDString, iid: FIDString, obj: *mut *mut c_void) -> tresult {
         let instance = match *(cid as *const TUID) {
             Processor::CID | SYNTH_CID => ComWrapper::new(Processor::new()).to_com_ptr::<FUnknown>(),
-            Controller::CID => ComWrapper::new(Controller { gain: Cell::new(1.0), host: RefCell::new(None), handler: RefCell::new(None), ready: Cell::new(false) }).to_com_ptr::<FUnknown>(),
+            Controller::CID => ComWrapper::new(Controller {
+                values: RefCell::new([1.0, 0.0, 0.5, 0.0]),
+                other: RefCell::new(None),
+                views: Cell::new(0),
+                host: RefCell::new(None),
+                handler: RefCell::new(None),
+                ready: Cell::new(false),
+            })
+            .to_com_ptr::<FUnknown>(),
             _ => None,
         };
         match instance {

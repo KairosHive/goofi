@@ -2533,6 +2533,18 @@ impl Graph {
         Ok(())
     }
 
+    /// A value the node's own state took, written as the param's literal: no command, so no undo
+    /// step, and a param a source drives keeps its source and its literal. Whether the literal moved.
+    pub fn project_param(&mut self, uid: Uid, key: &ParamKey, value: Param) -> Result<bool, String> {
+        if self.source_state(uid, key).is_some_and(|s| s.mode != Mode::Constant) {
+            return Ok(false);
+        }
+        let literal = |g: &Self| g.values(uid).and_then(|v| v.get(&key.group)?.get(&key.name).cloned());
+        let before = literal(self);
+        self.update_param(uid, &key.group, &key.name, value)?;
+        Ok(literal(self) != before)
+    }
+
     pub fn update_param(
         &mut self,
         uid: Uid,
@@ -3503,6 +3515,7 @@ impl Graph {
         }
         // A device's group is the session's likewise, and a playhead's is its machine's to re-derive.
         patch.variable_groups.retain(|g, rec| !goofi_core::variables::is_own_group(g) && !rec.owned());
+        drop_held(&mut patch, |hex, _| self.manifest(Uid::from_hex(hex)?));
         doc::Archive {
             version: doc::MANIFEST_VERSION,
             goofi: env!("CARGO_PKG_VERSION").to_string(),
@@ -3515,7 +3528,9 @@ impl Graph {
     /// the graph as it was; what was dropped on the way in is answered as warnings.
     pub fn load_doc(&mut self, text: &str, workspace: &std::path::Path) -> Result<Vec<String>, String> {
         let archive = doc::Archive::parse(text)?;
-        let (doc, mut warnings) = self.admit(archive.patch)?;
+        let (mut doc, mut warnings) = self.admit(archive.patch)?;
+        let mut types = HashMap::new();
+        drop_held(&mut doc, |_, record| *types.entry(record.type_id.clone()).or_insert_with(|| self.owner_of(&record.type_id).map(|(_, m)| m)));
 
         self.clear();
         // The outgoing nodes retire NOW, into the workspace being replaced: an engine saves a
@@ -3849,4 +3864,24 @@ fn entry_error<'a>(e: &'a Leaf, health: Option<&'a Health>) -> Option<&'a str> {
         .chain(health.into_iter().flat_map(|h| h.param_errors.iter().map(|(k, m)| (k, m.as_str()))))
         .min_by(|a, b| a.0.cmp(b.0))
         .map(|(_, s)| s)
+}
+
+/// A held value is the node's saved state's to say, so a patch neither writes nor reads one; its
+/// source, where it has one, is goofi's and stays. `manifest_of` names a record's class.
+fn drop_held(patch: &mut doc::PatchDoc, mut manifest_of: impl FnMut(&str, &doc::NodeRecord) -> Option<&'static NodeManifest>) {
+    for (hex, record) in &mut patch.nodes {
+        let Some(manifest) = manifest_of(hex, record) else { continue };
+        for d in manifest.params.iter().filter(|d| d.role == Some(goofi_node::Role::Held)) {
+            let Some(group) = record.params.get_mut(d.group) else { continue };
+            if let Some(entry) = group.get_mut(d.name) {
+                entry.value = None;
+                if entry.mode.is_none() {
+                    group.shift_remove(d.name);
+                }
+            }
+            if group.is_empty() {
+                record.params.shift_remove(d.group);
+            }
+        }
+    }
 }

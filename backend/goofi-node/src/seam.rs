@@ -138,11 +138,23 @@ impl GraphView<'_> {
     }
 }
 
-/// One value a node's own editor wrote: what the document is asked to hold, through the param op.
+/// One value a node reported of its own: what the document is asked to hold.
 pub struct Edit {
     pub uid: Uid,
     pub key: ParamKey,
     pub value: Param,
+    pub origin: Origin,
+}
+
+/// What moved a value a node reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A hand in the node's own window: authored, through the param op, with its undo step.
+    Authored,
+    /// The node itself, as a preset does: the patch changed, with no step to undo.
+    Changed,
+    /// The node's saved state, restored: the document shows it, and the patch is as it was.
+    Restored,
 }
 
 /// What [`Engine::editor`] hands back: the open or close itself, run once the graph lock is

@@ -24,7 +24,7 @@ use vst3::{ComPtr, ComWrapper};
 use crate::nodes::{self, Class};
 use crate::AudioEngine;
 pub(crate) use node::Derived;
-use node::Plugin;
+use node::{Knob, Plugin};
 
 /// A stepped parameter with this many steps or fewer is a `Str` of the plugin's own strings.
 const STR_STEPS: i32 = 64;
@@ -396,7 +396,7 @@ const AUTOMATABLE: i32 = ParameterInfo_::ParameterFlags_::kCanAutomate;
 
 /// The manifest a class derives to, and — in the same pass, so they cannot drift — how each of
 /// its params reaches the plugin.
-fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<(ParamID, f64)>) {
+fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<Knob>) {
     let audio = goofi_core::SlotType::Audio.name().to_string();
     let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Num { default: vec![default], min, max, int: false, options: vec![], color: false };
     let voice = |name: &str, doc: &str, spec: probe::ParamSpec| probe::Param {
@@ -428,7 +428,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
     let groups = unit_groups(class);
     // Named and specced over the WHOLE offered set, so the name a param gets never depends on
     // whether it was chosen — which is what lets one be adopted later under that same name.
-    let catalog: Vec<(ParamID, f64, probe::Param)> = offered
+    let catalog: Vec<(Knob, probe::Param)> = offered
         .iter()
         .map(|p| {
             let group = groups.get(&p.unit).cloned().unwrap_or_else(|| "plugin".into());
@@ -445,7 +445,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 let default = (p.default * p.steps as f64).round() as i64;
                 (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], color: false }, p.steps as f64, p.title.clone())
             };
-            (p.id, steps, probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: Vec::new(), role: None, spec })
+            (Knob::new(p.id, steps, p.default), probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: Vec::new(), role: Some(probe::Role::Held), spec })
         })
         .collect();
     // `chosen` bounds the KINDS too, which is what keeps a param's index and the id it writes back
@@ -453,9 +453,9 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
     let room = MAX_PARAMS - params.len();
     let keep: HashSet<ParamID> = chosen(&offered, room, &groups).into_iter().map(|p| p.id).collect();
     let mut kinds = Vec::new();
-    for (id, steps, param) in catalog.iter().filter(|(id, ..)| keep.contains(id)) {
+    for (knob, param) in catalog.iter().filter(|(k, _)| keep.contains(&k.id)) {
         params.push(param.clone());
-        kinds.push((*id, *steps));
+        kinds.push(*knob);
     }
     // A plugin has no tag to name its vendor, so the doc line does — unless its name already has.
     let named = match class.name.starts_with(vendor) {

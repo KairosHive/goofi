@@ -71,7 +71,9 @@ The audio node contract is `sdk/README.md` and the code.
   nothing else composes to.
 - **VST3 residuals**: bus arrangements are the plugin's defaults (`vst3/node.rs` `arrange`), never
   the patch's choice; output parameter changes and output events are not read
-  (`outputParameterChanges`, `outputEvents` are null). A bundle replaced in place keeps its old
+  (`outputParameterChanges`, `outputEvents` are null). A plugin that moves its own values without
+  `performEdit` or `restartComponent(kParamValuesChanged)` leaves the document showing the old
+  ones until the next load; its blob, which a save stores, is right. A bundle replaced in place keeps its old
   code until goofi restarts (`goofi_build::library` and `vst3/module.rs` keep one handle per path); the scan
   cache is never pruned; a class the host cannot describe is dropped without a row, and a bundle
   that yields none greys under its file name. Not yet proven on a real JUCE editor on Windows or

@@ -117,10 +117,12 @@ pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDe
                 })
                 .collect()
         }),
-        role: decl.and_then(|d| d.role).map(|r| match r {
-            goofi_node::Role::Count { section } => ParamRole::Count { section: section.into() },
-            goofi_node::Role::Member { section, base, slot } => ParamRole::Member { section: section.into(), base: base.into(), slot },
-            goofi_node::Role::Feed { slot, group } => ParamRole::Feed { slot: slot.into(), group: group.into() },
+        // A held value is the save's concern alone: the inspector shows it as any other.
+        role: decl.and_then(|d| d.role).and_then(|r| match r {
+            goofi_node::Role::Count { section } => Some(ParamRole::Count { section: section.into() }),
+            goofi_node::Role::Member { section, base, slot } => Some(ParamRole::Member { section: section.into(), base: base.into(), slot }),
+            goofi_node::Role::Feed { slot, group } => Some(ParamRole::Feed { slot: slot.into(), group: group.into() }),
+            goofi_node::Role::Held => None,
         }),
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: Mode::default(),

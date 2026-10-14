@@ -78,9 +78,9 @@ pub struct AudioShared {
     pub rate: AtomicU64,
     /// What drives the blocks: a live stream is opened only where the device does.
     pub clock: Clock,
-    /// What a plugin's own editor wrote — node, plugin param id, normalized value — for the
-    /// worker to put through the param op.
-    pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64)>>,
+    /// What a plugin reported of its own values — node, plugin param id, normalized value, and
+    /// what moved it — for the worker to put into the document.
+    pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64, goofi_node::Origin)>>,
     /// The drain's door, so an edit made on the window thread is taken without waiting for a tick.
     pub waker: Arc<goofi_node::DrainWaker>,
     /// The block count and its one tie to the clock: what dates every recorded block.

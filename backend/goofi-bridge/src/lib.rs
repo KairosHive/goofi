@@ -653,8 +653,9 @@ fn logged() -> &'static tokio::sync::watch::Sender<u64> {
     })
 }
 
-/// The status drain: take every node's reports, apply them, and broadcast their events. It never
-/// sets dirty, and FORGETS a uid on removal so a stale error cannot outlive its node.
+/// The status drain: take every node's reports, apply them, and broadcast their events. It sets
+/// dirty only for a node that changed its own state, and FORGETS a uid on removal so a stale error
+/// cannot outlive its node.
 pub fn spawn_workers(state: &AppState) {
     let owner = state.clone();
     let state = state.clone();
@@ -723,9 +724,25 @@ pub fn spawn_workers(state: &AppState) {
             };
             // A knob turned in a plugin's own window is authoring, and enters by the door every
             // other author uses — its own actor, so a tab's undo never takes a window's edit.
-            for e in edits {
+            let (authored, projected): (Vec<_>, Vec<_>) = edits.into_iter().partition(|e| e.origin == goofi_node::Origin::Authored);
+            for e in authored {
                 let payload = json!({ "node": e.uid.to_hex(), "param": format!("{}/{}", e.key.group, e.key.name), "value": goofi_graph::param_value_json(&e.value) });
                 let _ = state.call("node param edit", payload, "editor");
+            }
+            // What a plugin's own state holds is shown, never authored: no step to undo, and the
+            // patch changes only when the plugin changed it, not when a load restored it.
+            if !projected.is_empty() {
+                let mut changed = false;
+                let mut g = graph.lock();
+                for e in projected {
+                    let moved = g.project_param(e.uid, &e.key, e.value).unwrap_or(false);
+                    changed |= moved && e.origin == goofi_node::Origin::Changed;
+                }
+                let (doc, projection) = settle_and_project(&state, &mut g);
+                drop(g);
+                state.settled_now();
+                let outbox: Vec<Event> = if changed { state.set_dirty(true).into_iter().collect() } else { Vec::new() };
+                reconcile_and_broadcast(&state, doc, projection, outbox);
             }
             let Some((rates, stages, refreshed, live)) = collected else { continue };
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of

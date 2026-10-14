@@ -17,7 +17,7 @@ pub mod type_id;
 pub use describe::{describe, digest_of, engine_of, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_file_count, node_files, parse_introspection, type_name_of};
 pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
-    Edit, EditorAction,
+    Edit, Origin, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeView,
     Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Touched, Via,
 };
@@ -144,6 +144,9 @@ pub enum Role {
     /// A `Str` param naming a variable's element, beside the `Str` param `group` of the same
     /// param group naming its group: that variable's wire feeds input `slot`, as a cable would.
     Feed { slot: &'static str, group: &'static str },
+    /// A value the node's own saved state holds — a plugin's — so the document shows what the
+    /// node reports and a saved patch leaves it out.
+    Held,
 }
 
 /// Every feed of a manifest: the input slot, the group param's name, and the element param.

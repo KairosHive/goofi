@@ -1328,21 +1328,36 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("library refresh", j!({}));
     assert_eq!(scanned(), 4, "a binary whose bytes moved is scanned again");
 
-    // The plugin's state is its own blob, and the record is its params: the fixture latches the
-    // first time `shape` reaches its last step and halves its tone for ever after, which no param
-    // can say. Latched, then set back, saved and reopened: `shape` is the record's `soft` and the
-    // tone is still the latched one, so the blob came back and the record went on top of it.
+    // The plugin's state is its own blob, the one place its values are stored: the fixture latches
+    // the first time `shape` reaches its last step and halves its tone for ever after, which no
+    // param can say. Latched, then set to `mid`, saved and reopened: the patch stores no plugin
+    // value, the tone is still the latched one, and the document reads `mid` back off the plugin.
+    let plugin_values = |g: &Goofi| {
+        let params = g.doc()["nodes"][hex(plug)]["params"]["plugin"].clone();
+        let shape = params["shape"]["value"].as_str().unwrap_or_default().to_string();
+        (params["gain"]["value"].as_f64(), shape, params["steps"]["value"].as_f64())
+    };
+    let stored = |what: &str| {
+        let dest = keep.path().join(what);
+        let manifest = goofi_graph::archive::read_gfi(&target, &dest).unwrap();
+        let archive = goofi_graph::doc::Archive::parse(&manifest).unwrap();
+        archive.patch.nodes[&hex(plug)].params.get("plugin").cloned()
+    };
     g.call("link remove", j!({ "from": ep(hex(src), "out"), "to": ep(hex(plug), "input") }));
     g.set_param(plug, "voice", "gate", true);
     heard(&g, plug, "the tone before the latch", |x| (peak(x) - 0.5).abs() < 0.02);
     g.set_param(plug, "plugin", "shape", "hard");
     heard(&g, plug, "the latched tone", |x| (peak(x) - 0.25).abs() < 0.02);
-    g.set_param(plug, "plugin", "shape", "soft");
+    g.set_param(plug, "plugin", "shape", "mid");
+    heard(&g, plug, "the latch holds past the shape", |x| (peak(x) - 0.25).abs() < 0.02);
     g.call("session save", j!({ "path": target.to_string_lossy() }));
+    assert_eq!(stored("latched"), None, "the blob holds the plugin's values, and the patch none");
     let carried = Goofi::new();
     carried.call("session load", j!({ "path": target.to_string_lossy() }));
-    assert_eq!(carried.doc()["nodes"][hex(plug)]["params"]["plugin"]["shape"]["value"], j!("soft"));
+    carried.until("the plugin's own shape to reach the document", |g| (plugin_values(g).1 == "mid").then_some(()));
+    assert_eq!(plugin_values(&carried).0, Some(0.5), "the gain the blob holds");
     heard(&carried, plug, "the archive carried the blob", |x| (peak(x) - 0.25).abs() < 0.02 && near(per_tenth(x), 52));
+    assert_eq!(carried.call("session status", j!({}))["dirty"], false, "what a load restores is no change");
     drop(carried);
 
     // Step: a plugin's own editor is a window on the machine goofi runs on, off the LIVE
@@ -1361,6 +1376,21 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(g.call("node editor", j!({ "node": hex(plug), "show": false }))["changed"], true);
     assert_eq!(g.call("node editor", j!({ "node": hex(plug), "show": false }))["changed"], false, "already closed");
     assert_eq!(g.call("node editor", j!({ "node": hex(plug) }))["changed"], true, "opens again");
+
+    // The fixture's later views are a preset browser: a preset moves every value in both halves
+    // and tells the host only that they moved. The document reads them back, the patch stores
+    // none, and a reload plays the preset — so nothing goofi holds was sent over the blob.
+    let preset = (Some(0.75), "mid".to_string(), Some(50.0));
+    g.until("the preset's values to reach the document", |g| (plugin_values(g) == preset).then_some(()));
+    heard(&g, plug, "the preset's gain", |x| (peak(x) - 0.75).abs() < 0.02);
+    g.call("session save", j!({ "path": target.to_string_lossy() }));
+    assert_eq!(stored("preset"), None, "the preset is the blob's alone");
+    let reloaded = Goofi::new();
+    reloaded.call("session load", j!({ "path": target.to_string_lossy() }));
+    reloaded.until("the reloaded preset to reach the document", |g| (plugin_values(g) == preset).then_some(()));
+    heard(&reloaded, plug, "the reloaded preset's gain", |x| (peak(x) - 0.75).abs() < 0.02);
+    assert_eq!(reloaded.call("session status", j!({}))["dirty"], false, "a reload is no change");
+    drop(reloaded);
     g.call("node remove", j!({ "node": hex(plug) }));
     assert!(g.refuse("node editor", j!({ "node": hex(plug) })).contains("no such node"), "the window went with the node");
 }

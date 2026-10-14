@@ -95,6 +95,8 @@ pub enum Role {
     },
     /// A string param naming a variable whose wire feeds the input `slot`.
     Feed { slot: String, group: String },
+    /// A value the node's own saved state holds: shown in the document, left out of a patch.
+    Held,
 }
 
 /// One rule of a param's `show`: it holds while `param` (`name` in the same group, or
