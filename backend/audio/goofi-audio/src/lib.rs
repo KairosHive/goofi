@@ -46,6 +46,7 @@ macro_rules! by_format {
 pub(crate) use by_format;
 pub(crate) mod nodes;
 mod plan;
+mod pool;
 mod runtime;
 mod scan;
 mod wav;
@@ -264,6 +265,8 @@ where
                     // A panic must not unwind through cpal's callback: the block is silence and
                     // the cause is logged; the runtime's lock takes the poison over.
                     Some(mut rt) => {
+                        // The render helpers keep this thread's deadline, so they take its grant.
+                        rt.pool.realtime((data.len() / channels) as u32, rate);
                         if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(&mut scratch))) {
                             scratch.fill(0.0);
                             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
@@ -902,6 +905,7 @@ impl Engine for AudioEngine {
             dead: false,
             overruns: 0,
             cost: None,
+            fault: None,
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });

@@ -89,6 +89,11 @@ impl<T> Worker<T> {
         self.handle.join()
     }
 
+    /// The thread itself, for a caller that parks and wakes it.
+    pub fn thread(&self) -> &std::thread::Thread {
+        self.handle.thread()
+    }
+
     /// Whether the thread has ended.
     pub fn is_done(&self) -> bool {
         self.done.is_open()

@@ -52,7 +52,11 @@ pub struct Stage {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
+    /// In levels: a stage reads only what the levels before its own wrote, so the stages of one
+    /// level may run at once.
     pub stages: Vec<Stage>,
+    /// Where each level ends in `stages`.
+    pub levels: Vec<usize>,
     pub arena_len: usize,
     /// What the device hears: every agreeing `AudioOut`'s input times its gain, summed here.
     pub output: (Region, u16),
@@ -62,7 +66,7 @@ pub struct Plan {
 
 impl Default for Plan {
     fn default() -> Plan {
-        Plan { stages: Vec::new(), arena_len: BLOCK, output: (SILENCE, 1), sinks: Vec::new() }
+        Plan { stages: Vec::new(), levels: Vec::new(), arena_len: BLOCK, output: (SILENCE, 1), sinks: Vec::new() }
     }
 }
 
@@ -175,6 +179,7 @@ pub fn compile(
     let (order, members) = goofi_runtime::schedule(&inbound, &HashSet::new(), |u| live[&u].twin.feedback());
     let mut faults: Vec<(Uid, String)> =
         members.iter().map(|u| (*u, "in a loop with no feedback node, so it does not run".to_string())).collect();
+    let level = levels(&order, &inbound, |u| if live[&u].twin.feedback() { feeds(u) } else { Vec::new() });
 
     let mut plan = Plan::default();
     let parts_of = |uid: Uid, slot: &str, outs_of: &HashMap<(Uid, &'static str), (Region, u16)>| -> Vec<(Region, u16)> {
@@ -253,6 +258,15 @@ pub fn compile(
         let scalars_at = alloc_strip(params.len(), &mut plan.arena_len);
         plan.stages.push(Stage { idx: inst.idx, serial: inst.serial, ins, params, outs, audio_params, scalars_at });
     }
+    // Stable, so a level keeps the order it had: a later level is always further down the order.
+    let mut leveled: Vec<(usize, Stage)> = order.iter().map(|u| level[u]).zip(std::mem::take(&mut plan.stages)).collect();
+    leveled.sort_by_key(|(l, _)| *l);
+    for (k, (l, stage)) in leveled.iter().enumerate() {
+        if leveled.get(k + 1).is_none_or(|(next, _)| next != l) {
+            plan.levels.push(k + 1);
+        }
+        plan.stages.push(stage.clone());
+    }
     // The device opens as wide as the furthest channel any sink reaches: its own width, or one
     // past the highest channel its selection names.
     let width = plan
@@ -272,6 +286,28 @@ pub fn compile(
         .min(CEILING);
     plan.output = (alloc(width, &mut plan.arena_len), width);
     (plan, faults)
+}
+
+/// Each node's level: one past the deepest producer it reads this block. A feedback node reads
+/// its producers' previous block, so it keeps the side of each producer that `order` gave it.
+fn levels(order: &[Uid], inbound: &HashMap<Uid, Vec<Uid>>, looped: impl Fn(Uid) -> Vec<Uid>) -> HashMap<Uid, usize> {
+    let pos: HashMap<Uid, usize> = order.iter().enumerate().map(|(i, u)| (*u, i)).collect();
+    let mut after: HashMap<Uid, Vec<Uid>> = HashMap::new();
+    for f in order {
+        for p in looped(*f).into_iter().filter(|p| pos.contains_key(p)) {
+            match pos[&p] < pos[f] {
+                true => after.entry(*f).or_default().push(p),
+                false => after.entry(p).or_default().push(*f),
+            }
+        }
+    }
+    let mut level: HashMap<Uid, usize> = HashMap::new();
+    for u in order {
+        let deps = inbound.get(u).into_iter().flatten().chain(after.get(u).into_iter().flatten());
+        let l = deps.filter_map(|p| level.get(p)).map(|l| l + 1).max().unwrap_or(0);
+        level.insert(*u, l);
+    }
+    level
 }
 
 /// A `Str` param's text at plan time, off the node's record rather than a control half's consts:

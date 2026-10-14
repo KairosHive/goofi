@@ -5,7 +5,8 @@ The audio node contract is `sdk/README.md` and the code.
 ## Remaining
 
 - **Process isolation for native plugin processing.** Only the VST3 scan runs in a child
-  (`goofi vst3-scan`); `vst3/node.rs` calls the processor on the device thread, so a plugin that
+  (`goofi vst3-scan`); `vst3/node.rs` calls the processor on the device thread or one of its
+  render helpers (`pool.rs`), so a plugin that
   crashes at `setupProcessing` or its first block, or a CPU-limit signal under the RTKit fallback,
   takes the server with it. Keep the device callback bounded, with a defined fallback for late
   worker output. Measure the added buffering latency and deadline misses under CPU load before
@@ -27,7 +28,8 @@ The audio node contract is `sdk/README.md` and the code.
   `numpy` is imported on every array conversion, and `PyBytes::new` copies an array an
   `Arc<[u8]>` could alias.
 - **The OS mixer labels goofi `cpal-pulseaudio-<pid>`**; cpal exposes no way to set it. Upstream.
-- **The pure-Rust PulseAudio client is a poor fit for a 128-frame period.** Its reactor thread
+- **The pure-Rust PulseAudio client is a poor fit for a short period** (the default is now 256
+  frames; a patch may store 128). Its reactor thread
   pinned a core on a live patch (2026-10-10; the profile was not readable, so the cost inside it
   is unknown), and the server's underflow events never reach cpal's error callback: `late` in
   `session status` is goofi's own count. A native PipeWire or ALSA output path removes both.

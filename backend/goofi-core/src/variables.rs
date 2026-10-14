@@ -250,8 +250,8 @@ pub struct VariableDef {
 pub const DEFAULT_SIZE: u32 = 1024;
 
 /// The frames an output device renders per callback unless `audio.buffer_size` says otherwise:
-/// the smallest a PipeWire server grants a PulseAudio client, 2.7 ms at 48 kHz.
-pub const DEFAULT_BUFFER: u32 = 128;
+/// 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
+pub const DEFAULT_BUFFER: u32 = 256;
 
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     VariableDef {

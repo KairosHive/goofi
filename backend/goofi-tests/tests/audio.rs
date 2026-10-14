@@ -1707,3 +1707,44 @@ fn wide(g: &Goofi, what: &str, channels: u16) -> Vec<f32> {
         (c == channels).then_some(x)
     })
 }
+
+#[test]
+fn nodes_that_do_not_feed_each_other_render_at_once() {
+    // Two instances of one authored node share its library, so a counter there is a rendezvous:
+    // each waits inside `process` for the other to arrive in the same block. Rendered one after
+    // the other, the first waits out its bound alone and says 0; rendered at once, both say 1.
+    let g = Goofi::new();
+    assert!(std::thread::available_parallelism().is_ok_and(|n| n.get() > 1), "this machine has one core");
+    let dir = g.state.mount().join("nodes_audio");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Meet.rs"),
+        "use goofi_audio_sdk::goofi_core::SlotType;\n\
+         use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl};\n\
+         use std::sync::atomic::{AtomicU64, Ordering};\n\
+         static ARRIVED: AtomicU64 = AtomicU64::new(0);\n\
+         static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"waits in each block for a second of its kind\", inputs: &[], outputs: OUTS, params: &[] };\n\
+         #[derive(Default)]\nstruct Meet;\n\
+         impl AudioNode for Meet {\n    \
+         fn prepare(&mut self, _rate: f64) {}\n    \
+         fn process(&mut self, b: &mut Block<'_>) {\n        \
+         let mine = ARRIVED.fetch_add(1, Ordering::SeqCst) + 1;\n        \
+         let pair = mine.div_ceil(2) * 2;\n        \
+         let bound = std::time::Instant::now() + std::time::Duration::from_millis(100);\n        \
+         while ARRIVED.load(Ordering::SeqCst) < pair && std::time::Instant::now() < bound { std::hint::spin_loop(); }\n        \
+         let met = ARRIVED.load(Ordering::SeqCst) >= pair;\n        \
+         if !met { ARRIVED.fetch_add(1, Ordering::SeqCst); }\n        \
+         b.outs[0].chan_mut(0).fill(if met { 1.0 } else { 0.0 });\n    \
+         }\n}\n\
+         goofi_audio_sdk::export!(Meet, MANIFEST);\n",
+    )
+    .unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Meet"]));
+    let out = g.add("AudioOut");
+    for _ in 0..2 {
+        let meet = g.add("Meet");
+        g.link(meet, "out", out, "input");
+    }
+    sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
+}

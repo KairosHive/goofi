@@ -56,6 +56,8 @@ pub struct Slot {
     pub overruns: u8,
     /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
     pub cost: Option<Duration>,
+    /// What this block's run found wrong, for the audio thread to send once the level is done.
+    pub fault: Option<Fault>,
 }
 
 /// How many block boundaries a ramp carries: 16 blocks is 21 ms at 48 kHz, past the control
@@ -190,7 +192,9 @@ impl Inbox {
 /// Every computed result that landed since the last block, each into its param's region: a block
 /// is copied, a shorter result holds its last sample, a narrower one repeats its last channel. A
 /// param with no result this block keeps the region as it was — the hold.
-fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: &mut [f32]) {
+/// # Safety
+/// As [`run_stage`]: the stage's block regions are its own.
+unsafe fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: Arena) {
     while let Ok(head) = ring.read_chunk(3) {
         let (a, b) = head.as_slices();
         let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
@@ -611,6 +615,8 @@ pub struct Runtime {
     pub budget: Duration,
     /// The block count, and its one tie to the clock.
     pub anchor: Arc<Anchor>,
+    /// The helpers a level's stages run on beside the audio thread.
+    pub pool: crate::pool::Pool,
 }
 
 impl Runtime {
@@ -625,6 +631,7 @@ impl Runtime {
             device: None,
             budget: Duration::from_secs_f64(BLOCK as f64 / crate::RATE) * BUDGET,
             anchor,
+            pool: crate::pool::Pool::new(),
         }
     }
 
@@ -710,128 +717,33 @@ impl Runtime {
         }
     }
 
-    /// One block: drain the inbox, run every stage in plan order, append the output to the fifo.
-    /// A stage whose index another occupant took since the plan was compiled waits for its own.
+    /// One block: drain the inbox, run the plan level by level, each level's stages at once on
+    /// the pool, and append the output to the fifo.
     pub fn render_block(&mut self) {
         self.apply_pending();
         let n = self.anchor.blocks.load(Ordering::Relaxed);
         let epoch = self.anchor.epoch();
         let width = self.channels() as usize;
-        let budget = self.budget;
-        let arena: &mut [f32] = &mut self.arena;
-        for stage in &self.plan.stages {
-            let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
-            take_blocks(&mut slot.blocks, stage, arena);
-            for src in stage.params.iter().chain(&stage.ins) {
-                match src {
-                    Source::Scalar { at, param } => {
-                        let region = carve(arena, &[(*at, BLOCK)]).take(0);
-                        if slot.ramps[*param].fill(n, region) {
-                            continue;
-                        }
-                        let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
-                        if region[0] != v {
-                            region.fill(v);
-                        }
-                    }
-                    Source::Sum { at, channels, parts } => {
-                        let mut carved = carve(arena, &[(*at, *channels as usize * BLOCK)]);
-                        let dst = carved.take(0);
-                        dst.fill(0.0);
-                        for (part, pc) in parts {
-                            let src = Port::new(carved.read(*part, *pc as usize * BLOCK), *pc, true);
-                            for c in 0..*channels as usize {
-                                let from = src.chan(c);
-                                for i in 0..BLOCK {
-                                    dst[c * BLOCK + i] += from[i];
-                                }
-                            }
-                        }
-                    }
-                    Source::Inbox { at, channels, inbox } => {
-                        let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
-                        slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
-                    }
-                    Source::Silence | Source::Region { .. } | Source::Block { .. } => {}
+        let arena = Arena::of(&mut self.arena);
+        let slab = self.slab.as_mut_ptr();
+        let mut from = 0;
+        for &to in &self.plan.levels {
+            let level = Level { stages: &self.plan.stages[from..to], slab, arena, n, epoch, budget: self.budget };
+            self.pool.run(&level, to - from);
+            // Pushed here, by the one thread that owns the outbox. Dead only once the fault is on
+            // its way: a full outbox means it faults again next block.
+            for stage in &self.plan.stages[from..to] {
+                let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
+                if let Some(fault) = slot.fault.take() {
+                    slot.dead = self.outbox.push(Retired::Faulted { uid: slot.uid, serial: slot.serial, fault }).is_ok();
                 }
             }
-            // The stage writes its outputs and its scalar strip; everything else it reads.
-            let mut wants = [(0, 0); MAX_PORTS + 1];
-            for (k, (at, channels)) in stage.outs.iter().enumerate() {
-                wants[k] = (*at, *channels as usize * BLOCK);
-            }
-            wants[stage.outs.len()] = (stage.scalars_at, stage.params.len());
-            let (ran, started) = {
-                let mut carved = carve(arena, &wants[..stage.outs.len() + 1]);
-                // Every param's one value for this block, settled after the sources above, so a
-                // control rate param reaches the node without costing a port.
-                let scalars = carved.take(stage.outs.len());
-                for (i, src) in stage.params.iter().enumerate() {
-                    scalars[i] = carved.first(src);
-                }
-                let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
-                    Some(s) => carved.port(s),
-                    None => Port::new(&[], 0, false),
-                });
-                let params: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.params.get(i).filter(|_| i < stage.audio_params) {
-                    Some(s) => carved.port(s),
-                    None => Port::new(&[], 0, false),
-                });
-                let mut outs: [PortMut<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.outs.get(i) {
-                    Some((_, channels)) => PortMut::new(carved.take(i), *channels),
-                    None => PortMut::new(&mut [], 0),
-                });
-                let mut block = Block {
-                    ins: &ins[..stage.ins.len()],
-                    outs: &mut outs[..stage.outs.len()],
-                    params: &params[..stage.audio_params],
-                    scalars,
-                };
-                let started = Instant::now();
-                (if slot.dead { None } else { Some(catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)))) }, started)
-            };
-            // The outputs again, now the node is done with them: judged, silenced if need be, published.
-            let mut outs = carve(arena, &wants[..stage.outs.len()]);
-            let fault = match ran {
-                None => None,
-                Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
-                Some(Ok(())) if outs.writes[..stage.outs.len()].iter().flatten().any(|o| o.iter().any(|v| !v.is_finite())) => {
-                    Some(Fault::NotANumber)
-                }
-                Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
-                    slot.overruns = slot.overruns.saturating_add(1);
-                    (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
-                }
-                Some(Ok(())) => {
-                    slot.overruns = 0;
-                    None
-                }
-            };
-            // Dead only once the fault is on its way: a full outbox means it faults again next block.
-            let faulted = fault.is_some();
-            if let Some(fault) = fault {
-                slot.dead = self.outbox.push(Retired::Faulted { uid: slot.uid, serial: slot.serial, fault }).is_ok();
-            }
-            for (k, (_, channels)) in stage.outs.iter().enumerate() {
-                let out = outs.take(k);
-                if slot.dead || faulted {
-                    out.fill(0.0);
-                }
-                if let Some(tap) = slot.taps.get_mut(k) {
-                    publish(tap, &[*channels as f32], out);
-                }
-                if let Some(rec) = slot.recs.get_mut(k) {
-                    // A block that does not fit is simply not there: its NUMBER is the gap the
-                    // recorder counts, so nothing here has to remember that it was lost.
-                    let (lo, hi) = number_out(n);
-                    let head = [*channels as f32, lo, hi, epoch as f32];
-                    publish(rec, &head, out);
-                }
-            }
+            from = to;
         }
         let (at, channels) = self.plan.output;
         {
-            let mut carved = carve(arena, &[(at, channels as usize * BLOCK)]);
+            // SAFETY: every level is done, so this thread alone touches the arena.
+            let mut carved = unsafe { carve(arena, &[(at, channels as usize * BLOCK)]) };
             let dst = carved.take(0);
             dst.fill(0.0);
             for (input, gain, sel) in &self.plan.sinks {
@@ -868,7 +780,7 @@ impl Runtime {
             }
         }
         self.anchor.blocks.store(n + 1, Ordering::Relaxed);
-        let out = Port::new(&arena[at..at + channels as usize * BLOCK], channels, true);
+        let out = Port::new(&self.arena[at..at + channels as usize * BLOCK], channels, true);
         for i in 0..BLOCK {
             for c in 0..width {
                 self.fifo.push(out.chan(c)[i]);
@@ -877,61 +789,222 @@ impl Runtime {
     }
 }
 
+/// One level of the plan, as the pool runs it: item `i` is stage `i`.
+struct Level<'a> {
+    stages: &'a [Stage],
+    slab: *mut Option<Slot>,
+    arena: Arena,
+    n: u64,
+    epoch: u64,
+    budget: Duration,
+}
+
+// SAFETY: items reach disjoint slots and disjoint arena regions; see `Level::run`.
+unsafe impl Sync for Level<'_> {}
+
+impl crate::pool::Work for Level<'_> {
+    fn run(&self, item: usize) {
+        let stage = &self.stages[item];
+        // SAFETY: a plan holds one stage per slab index, so no two items reach one slot, and the
+        // slab is not resized while a block renders.
+        let Some(slot) = (unsafe { (*self.slab.add(stage.idx)).as_mut() }).filter(|s| s.serial == stage.serial) else { return };
+        // SAFETY: a stage writes only regions the plan gave it alone, and reads only regions that
+        // an earlier level wrote, so nothing it touches is written by another item of this level.
+        unsafe { run_stage(stage, slot, self.arena, self.n, self.epoch, self.budget) }
+    }
+}
+
+/// One stage for one block: its sources filled, its node run, its outputs judged and published.
+/// A fault is left on the slot for the audio thread to send.
+///
+/// # Safety
+/// No other thread may touch this stage's write regions, or write the regions it reads.
+unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch: u64, budget: Duration) {
+    take_blocks(&mut slot.blocks, stage, arena);
+    for src in stage.params.iter().chain(&stage.ins) {
+        match src {
+            Source::Scalar { at, param } => {
+                let region = carve(arena, &[(*at, BLOCK)]).take(0);
+                if slot.ramps[*param].fill(n, region) {
+                    continue;
+                }
+                let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
+                if region[0] != v {
+                    region.fill(v);
+                }
+            }
+            Source::Sum { at, channels, parts } => {
+                let mut carved = carve(arena, &[(*at, *channels as usize * BLOCK)]);
+                let dst = carved.take(0);
+                dst.fill(0.0);
+                for (part, pc) in parts {
+                    let src = Port::new(carved.read(*part, *pc as usize * BLOCK), *pc, true);
+                    for c in 0..*channels as usize {
+                        let from = src.chan(c);
+                        for i in 0..BLOCK {
+                            dst[c * BLOCK + i] += from[i];
+                        }
+                    }
+                }
+            }
+            Source::Inbox { at, channels, inbox } => {
+                let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
+                slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
+            }
+            Source::Silence | Source::Region { .. } | Source::Block { .. } => {}
+        }
+    }
+    // The stage writes its outputs and its scalar strip; everything else it reads.
+    let mut wants = [(0, 0); MAX_PORTS + 1];
+    for (k, (at, channels)) in stage.outs.iter().enumerate() {
+        wants[k] = (*at, *channels as usize * BLOCK);
+    }
+    wants[stage.outs.len()] = (stage.scalars_at, stage.params.len());
+    let (ran, started) = {
+        let mut carved = carve(arena, &wants[..stage.outs.len() + 1]);
+        // Every param's one value for this block, settled after the sources above, so a
+        // control rate param reaches the node without costing a port.
+        let scalars = carved.take(stage.outs.len());
+        for (i, src) in stage.params.iter().enumerate() {
+            scalars[i] = carved.first(src);
+        }
+        let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
+            Some(s) => carved.port(s),
+            None => Port::new(&[], 0, false),
+        });
+        let params: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.params.get(i).filter(|_| i < stage.audio_params) {
+            Some(s) => carved.port(s),
+            None => Port::new(&[], 0, false),
+        });
+        let mut outs: [PortMut<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.outs.get(i) {
+            Some((_, channels)) => PortMut::new(carved.take(i), *channels),
+            None => PortMut::new(&mut [], 0),
+        });
+        let mut block = Block {
+            ins: &ins[..stage.ins.len()],
+            outs: &mut outs[..stage.outs.len()],
+            params: &params[..stage.audio_params],
+            scalars,
+        };
+        let started = Instant::now();
+        (if slot.dead { None } else { Some(catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)))) }, started)
+    };
+    // The outputs again, now the node is done with them: judged, silenced if need be, published.
+    let mut outs = carve(arena, &wants[..stage.outs.len()]);
+    let fault = match ran {
+        None => None,
+        Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
+        Some(Ok(())) if (0..stage.outs.len()).any(|k| outs.peek(k).iter().any(|v| !v.is_finite())) => Some(Fault::NotANumber),
+        Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
+            slot.overruns = slot.overruns.saturating_add(1);
+            (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
+        }
+        Some(Ok(())) => {
+            slot.overruns = 0;
+            None
+        }
+    };
+    let faulted = fault.is_some();
+    slot.fault = fault;
+    for (k, (_, channels)) in stage.outs.iter().enumerate() {
+        let out = outs.take(k);
+        if slot.dead || faulted {
+            out.fill(0.0);
+        }
+        if let Some(tap) = slot.taps.get_mut(k) {
+            publish(tap, &[*channels as f32], out);
+        }
+        if let Some(rec) = slot.recs.get_mut(k) {
+            // A block that does not fit is simply not there: its NUMBER is the gap the
+            // recorder counts, so nothing here has to remember that it was lost.
+            let (lo, hi) = number_out(n);
+            let head = [*channels as f32, lo, hi, epoch as f32];
+            publish(rec, &head, out);
+        }
+    }
+}
+
 /// What a read lands on when the plan put it inside a written region, which it never does.
 static QUIET: [f32; crate::plan::CEILING as usize * BLOCK] = [0.0; crate::plan::CEILING as usize * BLOCK];
 
-/// The arena carved for one pass: every region asked for as its own exclusive slice, answered
-/// in the order asked, and the gaps between them as the shared slices every read comes from.
-struct Carved<'a> {
-    writes: [Option<&'a mut [f32]>; MAX_PORTS + 1],
-    gaps: [Option<(usize, &'a [f32])>; MAX_PORTS + 2],
+/// The arena as the stages of a level share it: a stage writes only regions the plan gave it
+/// alone, and reads only what an earlier level wrote, so one arena serves several threads at once.
+#[derive(Clone, Copy)]
+struct Arena {
+    ptr: *mut f32,
+    len: usize,
 }
 
-/// Split `arena` at each wanted `(at, len)`, in address order. The plan lays regions out
-/// disjoint, which is what lets this hand out exclusive slices with no pointer arithmetic.
-fn carve<'a>(arena: &'a mut [f32], wants: &[(usize, usize)]) -> Carved<'a> {
-    let mut order = [(0, 0, 0); MAX_PORTS + 1];
-    for (i, (at, len)) in wants.iter().enumerate() {
-        order[i] = (*at, *len, i);
+// SAFETY: the arena outlives every block, and the plan's layout keeps concurrent slices disjoint.
+unsafe impl Send for Arena {}
+unsafe impl Sync for Arena {}
+
+impl Arena {
+    fn of(arena: &mut [f32]) -> Arena {
+        Arena { ptr: arena.as_mut_ptr(), len: arena.len() }
     }
-    let order = &mut order[..wants.len()];
-    order.sort_unstable();
-    let mut writes: [Option<&'a mut [f32]>; MAX_PORTS + 1] = std::array::from_fn(|_| None);
-    let mut gaps = [None; MAX_PORTS + 2];
-    let mut rest: &'a mut [f32] = arena;
-    let mut start = 0;
-    let mut g = 0;
-    for &(at, len, i) in order.iter() {
-        debug_assert!(at >= start && at + len <= start + rest.len(), "the plan lays regions out disjoint");
-        let (gap, tail) = rest.split_at_mut(at - start);
-        let (region, tail) = tail.split_at_mut(len);
-        let gap: &'a [f32] = gap;
-        gaps[g] = Some((start, gap));
-        g += 1;
-        writes[i] = Some(region);
-        rest = tail;
-        start = at + len;
+
+    /// # Safety
+    /// No thread writes `at..at + len` while the slice lives.
+    unsafe fn read<'a>(self, at: usize, len: usize) -> &'a [f32] {
+        if at + len > self.len {
+            debug_assert!(false, "a read past the arena");
+            return &QUIET[..len.min(QUIET.len())];
+        }
+        std::slice::from_raw_parts(self.ptr.add(at), len)
     }
-    let rest: &'a [f32] = rest;
-    gaps[g] = Some((start, rest));
-    Carved { writes, gaps }
+
+    /// # Safety
+    /// No other thread reads or writes `at..at + len` while the slice lives.
+    unsafe fn write<'a>(self, at: usize, len: usize) -> &'a mut [f32] {
+        assert!(at + len <= self.len, "a write past the arena");
+        std::slice::from_raw_parts_mut(self.ptr.add(at), len)
+    }
+}
+
+/// One pass over the arena: the regions it writes, each handed out once, and reads of any other.
+struct Carved<'a> {
+    arena: Arena,
+    wants: [(usize, usize); MAX_PORTS + 1],
+    count: usize,
+    taken: [bool; MAX_PORTS + 1],
+    _life: std::marker::PhantomData<&'a mut [f32]>,
+}
+
+/// Claim `wants` of `arena` for one pass.
+///
+/// # Safety
+/// The caller holds `wants` alone, and no thread writes what the pass reads.
+unsafe fn carve<'a>(arena: Arena, wants: &[(usize, usize)]) -> Carved<'a> {
+    let mut held = [(0, 0); MAX_PORTS + 1];
+    held[..wants.len()].copy_from_slice(wants);
+    Carved { arena, wants: held, count: wants.len(), taken: [false; MAX_PORTS + 1], _life: std::marker::PhantomData }
 }
 
 impl<'a> Carved<'a> {
     /// The `i`th wanted region, once.
     fn take(&mut self, i: usize) -> &'a mut [f32] {
-        self.writes[i].take().expect("a region is taken once")
+        assert!(!std::mem::replace(&mut self.taken[i], true), "a region is taken once");
+        let (at, len) = self.wants[i];
+        // SAFETY: `carve`'s caller holds it alone, and this hands it out once.
+        unsafe { self.arena.write(at, len) }
     }
 
-    /// `len` floats from `at`, which lie in one gap.
+    /// The `i`th wanted region, read once its writer is done with it.
+    fn peek(&self, i: usize) -> &[f32] {
+        let (at, len) = self.wants[i];
+        // SAFETY: held alone, and not taken: nothing writes it while this lives.
+        unsafe { self.arena.read(at, len) }
+    }
+
+    /// `len` floats from `at`, which lie outside every wanted region.
     fn read(&self, at: usize, len: usize) -> &'a [f32] {
-        for (start, gap) in self.gaps.iter().flatten() {
-            if at >= *start && at + len <= *start + gap.len() {
-                return &gap[at - start..at - start + len];
-            }
-        }
-        debug_assert!(false, "a read region lies inside a written one");
-        &QUIET[..len.min(QUIET.len())]
+        debug_assert!(
+            self.wants[..self.count].iter().all(|(w, l)| at + len <= *w || w + l <= at),
+            "a read region lies inside a written one"
+        );
+        // SAFETY: `carve`'s caller promised no thread writes what this pass reads.
+        unsafe { self.arena.read(at, len) }
     }
 
     fn port(&self, src: &Source) -> Port<'a> {
