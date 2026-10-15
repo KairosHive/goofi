@@ -208,9 +208,35 @@ impl Inbox {
 
 /// Drop all but the newest `keep` (at most `QUEUED`) chunks queued `from` samples on; answers
 /// whether any went.
+/// A param's own region and its channel count: what a glide reads across blocks and plans.
+fn param_region(src: &Source) -> Option<(usize, usize)> {
+    match src {
+        Source::Scalar { at, .. } => Some((*at, 1)),
+        Source::Block { at, channels, .. } => Some((*at, *channels as usize)),
+        _ => None,
+    }
+}
+
+/// A param region's next block toward `to`: from the sample the last block ended on, linearly to
+/// `to` at this block's end, so a move is never a step at a block edge. A `step` kind lands on that
+/// same last sample, so a gate rises where the pitch beside it has arrived.
+fn glide(region: &mut [f32], to: f32, step: bool) {
+    let from = region[BLOCK - 1];
+    if from == to {
+        region.fill(to);
+    } else if step {
+        region[..BLOCK - 1].fill(from);
+        region[BLOCK - 1] = to;
+    } else {
+        for (k, x) in region.iter_mut().enumerate() {
+            *x = from + (to - from) * (k + 1) as f32 / BLOCK as f32;
+        }
+    }
+}
+
 /// Every computed result that landed since the last block, each into its param's region: a block
-/// is copied, a shorter result holds its last sample, a narrower one repeats its last channel. A
-/// param with no result this block keeps the region as it was — the hold.
+/// is copied, a shorter result is glided to its last sample, a narrower one repeats its last
+/// channel. A param with no result this block keeps the region as it was — the hold.
 /// # Safety
 /// As [`run_stage`]: the stage's block regions are its own.
 unsafe fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: Arena) {
@@ -221,17 +247,22 @@ unsafe fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: Aren
         head.commit_all();
         let Ok(body) = ring.read_chunk(chans * len) else { break };
         let region = stage.params.iter().find_map(|s| match s {
-            Source::Block { at, channels, param: p } if *p == param => Some((*at, *channels as usize)),
+            Source::Block { at, channels, param: p, step } if *p == param => Some((*at, *channels as usize, *step)),
             _ => None,
         });
-        if let (Some((at, channels)), true) = (region, chans * len > 0) {
+        if let (Some((at, channels, step)), true) = (region, chans * len > 0) {
             let (a, b) = body.as_slices();
             let sample = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
             let region = carve(arena, &[(at, channels * BLOCK)]).take(0);
             for c in 0..channels {
                 let from = c.min(chans - 1) * len;
-                for i in 0..BLOCK {
-                    region[c * BLOCK + i] = sample(from + if len >= BLOCK { i } else { len - 1 });
+                let lane = &mut region[c * BLOCK..(c + 1) * BLOCK];
+                if len >= BLOCK {
+                    for (i, x) in lane.iter_mut().enumerate() {
+                        *x = sample(from + i);
+                    }
+                } else {
+                    glide(lane, sample(from + len - 1), step);
                 }
             }
         }
@@ -700,7 +731,18 @@ impl Runtime {
                 }
                 Some(Retired::Rings(rings))
             }
-            Msg::Plan { plan, arena } => {
+            Msg::Plan { plan, mut arena } => {
+                // A param region the new plan keeps starts where the old one ended: a swap is not
+                // a move, and the glide reads the block before.
+                for stage in &plan.stages {
+                    let Some(was) = self.plan.stages.iter().find(|s| s.idx == stage.idx && s.serial == stage.serial) else { continue };
+                    for (new, old) in stage.params.iter().zip(&was.params) {
+                        if let (Some((to, tc)), Some((from, fc))) = (param_region(new), param_region(old)) {
+                            let n = tc.min(fc) * BLOCK;
+                            arena[to..to + n].copy_from_slice(&self.arena[from..from + n]);
+                        }
+                    }
+                }
                 let old = std::mem::replace(&mut self.plan, plan);
                 let old_arena = std::mem::replace(&mut self.arena, arena);
                 // An inbox the new plan no longer reads is flushed, or what its last producer
@@ -842,14 +884,14 @@ unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch:
     take_blocks(&mut slot.blocks, stage, arena);
     for src in stage.params.iter().chain(&stage.ins) {
         match src {
-            Source::Scalar { at, param } => {
+            Source::Scalar { at, param, step } => {
                 let region = carve(arena, &[(*at, BLOCK)]).take(0);
                 if slot.ramps[*param].fill(n, region) {
                     continue;
                 }
                 let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
-                if region[0] != v {
-                    region.fill(v);
+                if region[0] != v || region[BLOCK - 1] != v {
+                    glide(region, v, *step);
                 }
             }
             Source::Sum { at, channels, parts } => {
@@ -885,7 +927,7 @@ unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch:
         // control rate param reaches the node without costing a port.
         let scalars = carved.take(stage.outs.len());
         for (i, src) in stage.params.iter().enumerate() {
-            scalars[i] = carved.first(src);
+            scalars[i] = carved.last(src);
         }
         let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
             Some(s) => carved.port(s),
@@ -1039,12 +1081,12 @@ impl<'a> Carved<'a> {
         }
     }
 
-    /// This block's one value for a param, whatever it is sourced from.
-    fn first(&self, src: &Source) -> f32 {
+    /// This block's one value for a param, whatever it is sourced from: where its glide lands.
+    fn last(&self, src: &Source) -> f32 {
         match src {
             Source::Silence => 0.0,
             Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } | Source::Block { at, .. } => {
-                self.read(*at, BLOCK)[0]
+                self.read(*at, BLOCK)[BLOCK - 1]
             }
         }
     }

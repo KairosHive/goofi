@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use goofi_audio_sdk::BLOCK;
 use goofi_core::SlotType;
 use goofi_runtime::{param_of, scalar_of};
-use goofi_node::{BindingView, GraphView, NodeManifest, NodeView, Uid};
+use goofi_node::{BindingView, GraphView, NodeManifest, NodeView, ParamSpec, Uid};
 
 use crate::Instance;
 
@@ -28,12 +28,20 @@ pub enum Source {
     /// A multi input: its wires summed into a scratch region, each read through `Port::chan`'s
     /// one rule for a narrower part.
     Sum { at: Region, channels: u16, parts: Vec<(Region, u16)> },
-    /// A scalar-sourced param: its own one-channel region, refilled when its atomic moves.
-    Scalar { at: Region, param: usize },
-    /// A computed param: the worker's last `[C, BLOCK]` result, copied in as it lands and held.
-    Block { at: Region, channels: u16, param: usize },
+    /// A scalar-sourced param: its own one-channel region, glided to where its atomic moves. A
+    /// `step` kind — a pulse, a bool, an int — lands on the block's last sample instead.
+    Scalar { at: Region, param: usize, step: bool },
+    /// A computed param: the worker's last `[C, BLOCK]` result, copied in as it lands and held;
+    /// a shorter result glides to its value, or steps as a scalar would.
+    Block { at: Region, channels: u16, param: usize, step: bool },
     /// An Array input: filled from the node's inbox each block, one sample per sample entered.
     Inbox { at: Region, channels: u16, inbox: usize },
+}
+
+/// Whether a kind lands at once: only a continuous number is heard as a glide; a pulse, a bool,
+/// an int and a string are edges.
+fn steps(spec: &ParamSpec) -> bool {
+    !matches!(spec, ParamSpec::Num { int: false, .. })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,9 +243,9 @@ pub fn compile(
             .map(|i| match refs.get(&(*uid, i)).map(|p| outs_of.get(p)) {
                 Some(Some(part)) => source_of(vec![*part], &own, &mut plan.arena_len),
                 Some(None) => Source::Silence,
-                None => match block_width(*uid, i) {
-                    Some(channels) => Source::Block { at: alloc(channels, &mut plan.arena_len), channels, param: i },
-                    None => Source::Scalar { at: alloc(1, &mut plan.arena_len), param: i },
+                None => match (block_width(*uid, i), steps(&inst.manifest.params[i].spec)) {
+                    (Some(channels), step) => Source::Block { at: alloc(channels, &mut plan.arena_len), channels, param: i, step },
+                    (None, step) => Source::Scalar { at: alloc(1, &mut plan.arena_len), param: i, step },
                 },
             })
             .collect();

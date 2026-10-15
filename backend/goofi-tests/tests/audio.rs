@@ -1449,6 +1449,61 @@ fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
     heard
 }
 
+/// A param that moves is heard as a glide across the block, never as a step at its edge: the
+/// edge is a click. A level through `SignalIn` under a gain shows the move whole.
+#[test]
+fn a_moving_param_glides_across_the_block() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
+    let level = g.add("_TestConst");
+    g.set_param(level, "constant", "value", 1.0);
+    let dc = g.add("audio:SignalIn");
+    let fader = g.add("Gain");
+    let out = g.add("AudioOut");
+    g.link(level, "out", dc, "input");
+    g.link(dc, "out", fader, "input");
+    g.link(fader, "out", out, "input");
+    g.until("the level to enter", |g| {
+        let (x, _) = drive(g, TENTH);
+        x.iter().all(|v| (v - 1.0).abs() < 1e-3).then_some(())
+    });
+    // The steepest slope a glide of three quarters allows: the whole move across one block. Read
+    // across the tenths' seams too, where a step that landed on a drive's first block would hide.
+    let slope = 0.75 / goofi_audio_sdk::BLOCK as f32 + 1e-4;
+    let mut tail = 1.0f32;
+    let mut steepest = |x: &[f32]| {
+        let s = std::iter::once(tail).chain(x.iter().copied()).collect::<Vec<f32>>();
+        tail = x[x.len() - 1];
+        s.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max)
+    };
+
+    // Step: a constant edit.
+    for (what, target) in [("a quarter", 0.25f32), ("and back", 1.0)] {
+        g.set_param(fader, "gain", "gain", target as f64);
+        goofi_tests::applied(&g);
+        let (x, _) = drive(&g, TENTH);
+        assert!((x[x.len() - 1] - target).abs() < 1e-3, "{what}: the move lands within the tenth: {}", x[x.len() - 1]);
+        let jump = steepest(&x);
+        assert!(jump <= slope, "{what}: no sample jumps: {jump} per sample");
+    }
+
+    // Step: a computed value takes the same glide.
+    let knob = g.add("_TestConst");
+    let knob_name = g.doc()["nodes"][hex(knob)]["name"].as_str().unwrap().to_string();
+    g.set_param(knob, "constant", "value", 1.0);
+    g.call("node param edit", j!({ "node": hex(fader), "param": "gain/gain", "expression": format!("nd('{knob_name}')") }));
+    assert!(g.stays(|g| g.error(fader).is_none()), "the knob binds");
+    g.set_param(knob, "constant", "value", 0.25);
+    let mut jump = 0f32;
+    g.until("the computed move to be heard", |g| {
+        goofi_tests::applied(g);
+        let (x, _) = drive(g, TENTH);
+        jump = jump.max(steepest(&x));
+        ((x[x.len() - 1] - 0.25).abs() < 1e-3).then_some(())
+    });
+    assert!(jump <= slope, "a computed value: no sample jumps: {jump} per sample");
+}
+
 #[test]
 fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
