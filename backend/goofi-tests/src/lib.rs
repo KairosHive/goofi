@@ -1161,26 +1161,37 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
 /// the reader coerces as it does any frame — no interpreter, so a scenario runs in the default
 /// suite. It counts its compiles, so a test can tell a refreshed binding from a rebuilt one, and
 /// holds while `latch` is raised, so a test can see a stalled evaluation hold the value before it.
+/// A handle is live from its compile to its release, as the Python evaluator's is.
 #[derive(Default)]
 pub struct FirstVar {
     pub compiles: std::sync::atomic::AtomicUsize,
+    /// Evaluations begun, and evaluations answered: one more begun than answered is one stalled.
+    pub entered: std::sync::atomic::AtomicUsize,
     pub evals: std::sync::atomic::AtomicUsize,
     pub latch: std::sync::atomic::AtomicBool,
+    live: std::sync::Mutex<std::collections::HashSet<goofi_node::BindingId>>,
 }
 
 impl goofi_node::ExprEvaluator for FirstVar {
     fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
-        self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(goofi_node::Compiled { id: 1, code: std::sync::Arc::from(&b""[..]) })
+        let id = self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64 + 1;
+        self.live.lock().unwrap().insert(id);
+        Ok(goofi_node::Compiled { id, code: std::sync::Arc::from(&b""[..]) })
     }
-    fn eval(&self, _id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+    fn eval(&self, id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+        self.entered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !self.live.lock().unwrap().contains(&id) {
+            return Err(goofi_node::ExprError("expression not compiled".into()));
+        }
         first_var(ctx)
     }
-    fn release(&self, _id: goofi_node::BindingId) {}
+    fn release(&self, id: goofi_node::BindingId) {
+        self.live.lock().unwrap().remove(&id);
+    }
     fn run(&self, _code: &[u8], _ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
         Err(goofi_node::ExprError("the test evaluator runs no functional".into()))
     }

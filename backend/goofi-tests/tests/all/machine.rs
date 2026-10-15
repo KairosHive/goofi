@@ -228,17 +228,35 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // Saved and opened elsewhere: the model comes back whole, every playhead in its start state.
     g.call("machine jump", j!({ "machine": "seq", "playhead": "second", "state": "Start" }));
     at_rest_in(&g, "second", "Start");
+    // Two computed reads of a playhead variable ride along: one of them spells the very text a
+    // transition's `when` compiles, so the evaluator holds one function for both.
+    let computed = g.add("_TestScalar");
+    g.call("node param edit", j!({ "node": hex(computed), "param": "control/value", "expression": "variables.lead.level * 2 + 1" }));
+    let shared = g.add("_TestScalar");
+    g.call("node param edit", j!({ "node": hex(shared), "param": "control/value", "expression": "variables.lead.level >= 5.0" }));
+    write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "Start", "triggers": [{ "kind": "when", "expression": "variables.lead.level >= 5.0" }] }));
+    let bound = |g: &Goofi, step: &str, uid: goofi_tests::Uid, want: f32| {
+        let state = g.call("node state", j!({ "node": hex(uid) }))["text"].as_str().unwrap_or_default().to_string();
+        assert!(!state.contains("[error:"), "{step}: a computed read of a playhead variable stands: {state}");
+        let probe = g.probe(uid, "out");
+        g.until("the computed read to follow the playhead", |_| probe.latest().filter(|d| f32s(d) == [want]));
+    };
+    bound(&g, "before the save", computed, 1.4);
+    bound(&g, "before the save", shared, 0.0);
     let path = dir.path().join("machine.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     let manifest = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     assert!(manifest.contains("machines:") && !manifest.contains("lead.level:"), "the model rides, the playhead's variables are its to re-derive: {manifest}");
     let other = Goofi::new();
+    other.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
     other.call("session load", j!({ "path": path.to_string_lossy() }));
     assert_eq!(other.doc()["machines"], g.doc()["machines"]);
     at_rest_in(&other, "lead", "Start");
     at_rest_in(&other, "second", "C");
     assert_eq!(number(&other, "lead.level"), 0.2);
     assert_eq!(other.call("variable list", j!({}))["groups"]["lead"]["machine"], j!("seq"));
+    bound(&other, "loaded elsewhere", computed, 1.4);
+    bound(&other, "loaded elsewhere", shared, 0.0);
 
     // Undo walks every edit back; the groups go with the playheads and the root is empty.
     while g.call("undo", j!({}))["changed"] == true {}
@@ -248,6 +266,11 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     while g.call("redo", j!({}))["changed"] == true {}
     assert!(g.doc()["machines"]["seq"]["playheads"]["lead"].is_object(), "{}", g.doc()["machines"]);
     at_rest_in(&g, "lead", "Start");
+    // And loaded over ITSELF, which is the load that replaces a running patch's bindings.
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    at_rest_in(&g, "lead", "Start");
+    bound(&g, "loaded over itself", computed, 1.4);
+    bound(&g, "loaded over itself", shared, 0.0);
 }
 
 /// A playhead variable among an advance's writes.

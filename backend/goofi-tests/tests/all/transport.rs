@@ -141,7 +141,7 @@ impl Fleet {
     /// Every status the runtimes reported so far, by uid.
     fn reports(&self) -> Vec<(Uid, Status)> {
         let mut out = Vec::new();
-        self.shared.drain(&mut Vec::new(), &mut |uid, status| out.push((uid, status)));
+        self.shared.drain(&mut Vec::new(), &|_, _| true, &mut |uid, status| out.push((uid, status)));
         out
     }
 }

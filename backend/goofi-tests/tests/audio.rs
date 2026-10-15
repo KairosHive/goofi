@@ -616,6 +616,27 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(peaks.iter().any(|p| *p > 0.3 && *p < 0.95), "the ramp was heard on the way: {peaks:?}");
     assert!(g.stays(|g| (peak(&drive(g, TENTH).0) - 1.0).abs() < 0.002), "the target holds once the flight ends");
 
+    // Step: a load over the patch rebirths every node at its uid, and the outgoing half may be
+    // mid-evaluation when the load releases its handles: what it says once it is back is the
+    // corpse's, never the newborn's. The newborn, bound to the same text, reads clean.
+    let evaluator = Arc::new(FirstVar::default());
+    g.graph().set_evaluator(evaluator.clone());
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level * 1" }));
+    g.until("the computed gain to land", |g| g.error(gain3).is_none().then_some(()));
+    let keep = tempfile::tempdir().unwrap();
+    let target = keep.path().join("bound.gfi");
+    g.call("session save", j!({ "path": target.to_string_lossy() }));
+    let stalled = |e: &FirstVar| e.entered.load(std::sync::atomic::Ordering::Relaxed) > e.evals.load(std::sync::atomic::Ordering::Relaxed);
+    evaluator.latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    g.until("the half to stall in the evaluator", |_| stalled(&evaluator).then_some(()));
+    g.call("session load", j!({ "path": target.to_string_lossy() }));
+    evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
+    g.until("the stalled evaluation to answer", |_| (!stalled(&evaluator)).then_some(()));
+    assert!(g.stays(|g| g.error(gain3).is_none()), "the corpse's answer is not the newborn's: {:?}", g.error(gain3));
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level" }));
+    g.until("the gain back on the playhead", |g| g.error(gain3).is_none().then_some(()));
+
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names
     // it and the node reads silence — because a NaN is not a value a plan can carry.
     let poison = g.add("_TestConst");

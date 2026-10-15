@@ -1056,7 +1056,7 @@ impl Engine for AudioEngine {
             self.tried = None;
             self.dirty = true;
         }
-        self.shared.drain(&mut self.pending, apply)
+        self.shared.drain(&mut self.pending, &|u, born| self.live.get(&u).is_some_and(|i| i.control.born() == born), apply)
     }
 
     /// A refresh runs on the node's own thread, never under the graph lock.

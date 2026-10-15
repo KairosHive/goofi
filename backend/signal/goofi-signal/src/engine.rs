@@ -158,7 +158,6 @@ impl Engine for SignalEngine {
         // Dropping the handle halts the thread without waiting: it may be inside a long
         // `process()`, and every caller holds the graph mutex.
         self.hosts.remove(&uid);
-        self.shared.reports.lock().retain(|(u, _)| *u != uid);
     }
 
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
@@ -173,7 +172,7 @@ impl Engine for SignalEngine {
     }
 
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize {
-        self.shared.drain(&mut Vec::new(), apply)
+        self.shared.drain(&mut Vec::new(), &|u, born| self.hosts.get(&u).is_some_and(|h| h.born() == born), apply)
     }
 
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {

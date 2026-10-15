@@ -431,7 +431,6 @@ impl Engine for GraphicsEngine {
 
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
-            self.shared.reports.lock().retain(|(u, _)| *u != uid);
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
             gpu::give_back(inst);
@@ -483,7 +482,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize {
-        self.shared.drain(&mut self.pending, apply)
+        self.shared.drain(&mut self.pending, &|u, born| self.live.get(&u).is_some_and(|i| i.control.born() == born), apply)
     }
 
     fn request(&mut self, uid: Uid, request: goofi_node::Request) {

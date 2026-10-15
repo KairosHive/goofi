@@ -141,7 +141,8 @@ pub type SharedEvaluator = Arc<Mutex<Option<Arc<dyn ExprEvaluator>>>>;
 
 pub struct Shared {
     pub evaluator: SharedEvaluator,
-    pub reports: Mutex<Vec<(Uid, Status)>>,
+    /// Each report with the birth number of the half that said it.
+    reports: Mutex<Vec<(Uid, u64, Status)>>,
     pub waker: Arc<DrainWaker>,
     /// A runtime saw something only a settle can act on — a shape moved, a file opened.
     pub replan: AtomicBool,
@@ -152,10 +153,10 @@ impl Shared {
         Shared { evaluator: Arc::new(Mutex::new(None)), reports: Mutex::new(Vec::new()), waker, replan: AtomicBool::new(false) }
     }
 
-    fn report(&self, uid: Uid, status: Status) {
+    fn report(&self, uid: Uid, born: u64, status: Status) {
         // Values and rates are read on the drain's own paces; the rest are transitions it hears now.
         let paced = matches!(status, Status::ParamValues { .. } | Status::Ufreq { .. });
-        self.reports.lock().push((uid, status));
+        self.reports.lock().push((uid, born, status));
         if !paced {
             self.waker.notify();
         }
@@ -169,9 +170,11 @@ impl Shared {
 
     /// Hand the engine's own pending statuses and every runtime's reports to `apply`, and answer
     /// how many. ONE lock over the reports, so nothing lands between a read and a clear.
-    pub fn drain(&self, pending: &mut Vec<(Uid, Status)>, apply: &mut dyn FnMut(Uid, Status)) -> usize {
+    /// Apply the engine's own `pending`, then what the halves said — only the halves `current`
+    /// still names: a halted half can speak once more, after its uid was reborn, and that is the corpse's.
+    pub fn drain(&self, pending: &mut Vec<(Uid, Status)>, current: &dyn Fn(Uid, u64) -> bool, apply: &mut dyn FnMut(Uid, Status)) -> usize {
         let mut all = std::mem::take(pending);
-        all.append(&mut self.reports.lock());
+        all.extend(self.reports.lock().drain(..).filter(|(uid, born, _)| current(*uid, *born)).map(|(uid, _, status)| (uid, status)));
         let n = all.len();
         for (uid, status) in all {
             apply(uid, status);
@@ -372,6 +375,8 @@ struct Flush {
 
 /// The engine's end of one runtime.
 pub struct Handle {
+    /// Which half of its uid this is, so a report names the one that said it.
+    born: u64,
     mail: Arc<Mutex<Mail>>,
     halt: Arc<Halt>,
     bell: Doorbell,
@@ -380,6 +385,10 @@ pub struct Handle {
 }
 
 impl Handle {
+    pub fn born(&self) -> u64 {
+        self.born
+    }
+
     /// Acknowledge settled recording ports and one complete run. The caller waits outside the
     /// graph lock and never on the audio callback; a runtime that is gone drops the ack.
     pub fn flush(&self) -> std::sync::mpsc::Receiver<Result<(), String>> {
@@ -462,6 +471,8 @@ pub fn spawn<E: Executor + 'static>(
     bells: &IoxNode,
     make: impl FnOnce() -> E + Send + 'static,
 ) -> Result<Handle, String> {
+    static BORN: AtomicU64 = AtomicU64::new(0);
+    let born = BORN.fetch_add(1, Ordering::Relaxed);
     let node = iox.node()?;
     let door = event_service(&node, &door_service(&spawn.base))?;
     let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;
@@ -489,6 +500,7 @@ pub fn spawn<E: Executor + 'static>(
             let run = AssertUnwindSafe(move || {
                 let runtime = Runtime {
                     uid: spawn.uid,
+                    born,
                     engine: spawn.engine,
                     base: spawn.base,
                     record_door: record_door_service(&spawn.instance),
@@ -527,7 +539,7 @@ pub fn spawn<E: Executor + 'static>(
             thread_halt.release();
         })
         .map_err(|e| format!("could not start the node's runtime thread: {e}"))?;
-    Ok(Handle { mail, halt, bell, last: Mutex::new(None) })
+    Ok(Handle { born, mail, halt, bell, last: Mutex::new(None) })
 }
 
 /// One output's door out: who drinks from it, who to wake once something is on it, and — while the
@@ -576,6 +588,7 @@ impl Bind {
 
 struct Runtime<E: Executor> {
     uid: Uid,
+    born: u64,
     engine: &'static str,
     base: String,
     record_door: ServiceName,
@@ -647,7 +660,7 @@ impl<E: Executor> Runtime<E> {
             }
             for key in mail.refresh {
                 let options = self.index_of(&key).and_then(|i| self.exec.refresh(i));
-                self.shared.report(self.uid, Status::RefreshOptions { key, options });
+                self.shared.report(self.uid, self.born, Status::RefreshOptions { key, options });
             }
             for key in &mail.pulse {
                 if let Some(i) = self.index_of(key) {
@@ -933,10 +946,10 @@ impl<E: Executor> Runtime<E> {
     fn report(&self, pass: Pass) {
         if pass.values {
             let evaluated = self.evaluated.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            self.shared.report(self.uid, Status::ParamValues { evaluated });
+            self.shared.report(self.uid, self.born, Status::ParamValues { evaluated });
         }
         if !pass.errors.is_empty() {
-            self.shared.report(self.uid, Status::BindingErrors { errors: pass.errors });
+            self.shared.report(self.uid, self.born, Status::BindingErrors { errors: pass.errors });
         }
     }
 
@@ -954,7 +967,7 @@ impl<E: Executor> Runtime<E> {
             let now = Instant::now();
             if self.last_ufreq.is_none_or(|t| now - t >= UFREQ_REPORT) {
                 self.last_ufreq = Some(now);
-                self.shared.report(self.uid, Status::Ufreq { hz });
+                self.shared.report(self.uid, self.born, Status::Ufreq { hz });
             }
         }
     }
@@ -1054,7 +1067,7 @@ impl<E: Executor> Runtime<E> {
         let stage = self.exec.stage();
         if stage != self.stage {
             self.stage = stage;
-            self.shared.report(self.uid, Status::Stage { stage });
+            self.shared.report(self.uid, self.born, Status::Stage { stage });
         }
         let since = self.time.now();
         let fault = match self.exec.fault() {
@@ -1079,7 +1092,7 @@ impl<E: Executor> Runtime<E> {
         };
         if !same {
             self.fault = fault;
-            self.shared.report(self.uid, Status::Fault { fault: self.fault.clone() });
+            self.shared.report(self.uid, self.born, Status::Fault { fault: self.fault.clone() });
         }
     }
 
