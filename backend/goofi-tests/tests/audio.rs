@@ -1777,4 +1777,38 @@ fn nodes_that_do_not_feed_each_other_render_at_once() {
         g.link(meet, "out", out, "input");
     }
     sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
+    // The helpers sit on the performance cores where the machine has a slower kind too: the
+    // scheduler put a helper on an efficiency core, where a plugin rendered late every period.
+    seated_on_performance_cores();
 }
+
+/// Every pool helper's seat is the performance cores, or the process's own seat where every core
+/// is the same kind. Thread names in `/proc` are cut at fifteen characters.
+#[cfg(target_os = "linux")]
+fn seated_on_performance_cores() {
+    let cpus_of = |status: &str| -> Vec<usize> {
+        let list = status.lines().find_map(|l| l.strip_prefix("Cpus_allowed_list:\t")).unwrap_or_default();
+        list.split(',')
+            .flat_map(|part| match part.split_once('-') {
+                Some((lo, hi)) => (lo.parse().unwrap()..=hi.parse().unwrap()).collect::<Vec<usize>>(),
+                None => part.trim().parse().ok().into_iter().collect(),
+            })
+            .collect()
+    };
+    let own = cpus_of(&std::fs::read_to_string("/proc/self/status").unwrap());
+    let want = goofi_audio::performance_cores().unwrap_or(own);
+    let mut helpers = 0;
+    for entry in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
+        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
+        let name = status.lines().find_map(|l| l.strip_prefix("Name:\t")).unwrap_or_default();
+        if !name.starts_with("goofi-audio-poo") {
+            continue;
+        }
+        helpers += 1;
+        assert_eq!(cpus_of(&status), want, "{name} sits on the performance cores");
+    }
+    assert!(helpers > 0, "the pool's helpers are threads of this process");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn seated_on_performance_cores() {}

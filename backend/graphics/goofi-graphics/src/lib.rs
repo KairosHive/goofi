@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -31,14 +31,9 @@ use half::GraphicsHalf;
 use runtime::{Runtime, Stats};
 use scan::{Class, Compiler};
 
-/// The rate the engine renders at under its own clock, which is also the rate a viewer draws at
-/// and the rate a recording is encoded at. A tick the clock did not pace — the harness's `render`
-/// — is why every frame's instant is written beside the video rather than trusted to the
-/// container.
-pub const FPS: u32 = 30;
-
-/// The pace that rate asks of the clock thread.
-const PERIOD: Duration = Duration::from_nanos(1_000_000_000 / FPS as u64);
+/// What `graphics.fps`, the clock's pace, is held to. A tick the clock did not pace — the
+/// harness's `render` — is why every frame's instant is written beside the video.
+const FPS_RANGE: std::ops::RangeInclusive<u32> = 1..=240;
 
 pub use goofi_core::time::Clock;
 
@@ -48,8 +43,12 @@ pub struct GraphicsStatus {
     pub adapter: String,
     pub backend: String,
     pub clock: &'static str,
-    /// How many `Window` nodes have a window open on the machine's screen.
+    /// The rate the clock paces, as `graphics.fps` last settled.
+    pub fps: u32,
+    /// How many `Window` nodes have a window open on the machine's screen, and how many of
+    /// those the GPU presents into directly.
     pub windows: u64,
+    pub surfaces: u64,
     pub frames: u64,
     pub stages: u64,
     pub tick_max_us: u64,
@@ -72,11 +71,21 @@ impl Instance {
     }
 }
 
+/// A window node's window: the loop's name for it, the size it was last given, and the surface
+/// the GPU presents into it — none where the screen gives no handles, or the GPU refused one.
+pub(crate) struct Opened {
+    pub(crate) id: goofi_window::Id,
+    size: (u32, u32),
+    pub(crate) surface: Option<Arc<wgpu::Surface<'static>>>,
+}
+
 pub struct GraphicsEngine {
     iox: Arc<goofi_transport::Iox>,
     instance: String,
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
+    /// The pace the clock thread keeps, written at settle from `graphics.fps`.
+    fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
     pub(crate) compiler: Compiler,
     pub(crate) python: Option<goofi_python::catalog::Python>,
@@ -94,8 +103,7 @@ pub struct GraphicsEngine {
     ticker: Option<(Arc<AtomicBool>, goofi_supervisor::worker::Worker)>,
     faults: goofi_runtime::Faults,
     ui: Option<goofi_window::Ui>,
-    /// The window each window node has open, and the size it was last given.
-    windows: HashMap<Uid, (goofi_window::Id, (u32, u32))>,
+    windows: HashMap<Uid, Opened>,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
     /// What the render thread found an armed stage could not record; settled as a fault like any
@@ -153,6 +161,7 @@ impl GraphicsEngine {
         let shared = Arc::new(Shared::new(waker));
         let stats = Arc::new(Stats::default());
         let troubles = runtime::Troubles::default();
+        let fps = Arc::new(AtomicU32::new(fps_of(None)));
         let runtime = Arc::new(Mutex::new(Runtime::new(
             gpu.clone(),
             time.clone(),
@@ -160,11 +169,12 @@ impl GraphicsEngine {
             troubles.clone(),
             shared.clone(),
             recorder,
+            fps.clone(),
         )));
         let inbox = runtime.lock().inbox.clone();
         let ticker = (clock == Clock::Internal).then(|| {
             let stop = Arc::new(AtomicBool::new(false));
-            let (rt, halt) = (runtime.clone(), stop.clone());
+            let (rt, halt, pace) = (runtime.clone(), stop.clone(), fps.clone());
             let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
                 .spawn(move || {
                     let mut next = Instant::now();
@@ -174,7 +184,7 @@ impl GraphicsEngine {
                         if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.lock().tick())) {
                             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
                         }
-                        next += PERIOD;
+                        next += Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed)));
                         // A tick that overran does not try to catch up: the next one is now.
                         match next.checked_duration_since(Instant::now()) {
                             Some(left) => std::thread::sleep(left),
@@ -189,6 +199,7 @@ impl GraphicsEngine {
             instance,
             time,
             clock,
+            fps,
             compiler: Compiler::start(gpu.clone(), shared.clone()),
             gpu,
             shared,
@@ -237,15 +248,17 @@ impl GraphicsEngine {
 
     /// The window `uid` has open on the machine's screen, if it is a window node with one.
     pub fn window_of(&self, uid: Uid) -> Option<goofi_window::Id> {
-        self.windows.get(&uid).map(|(id, _)| *id)
+        self.windows.get(&uid).map(|o| o.id)
     }
 
     pub fn status(&self) -> GraphicsStatus {
         GraphicsStatus {
-            adapter: self.gpu.adapter.clone(),
+            adapter: self.gpu.adapter_name.clone(),
             backend: self.gpu.backend.clone(),
             clock: self.clock.name(),
+            fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
+            surfaces: self.windows.values().filter(|o| o.surface.is_some()).count() as u64,
             frames: self.stats.frames.load(Ordering::Relaxed),
             stages: self.stats.stages.load(Ordering::Relaxed),
             tick_max_us: self.stats.tick_max_us.load(Ordering::Relaxed),
@@ -271,26 +284,36 @@ impl GraphicsEngine {
             .collect();
         for uid in self.windows.keys().copied().collect::<Vec<_>>() {
             if !want.contains_key(&uid) {
-                let (id, _) = self.windows.remove(&uid).expect("just listed");
+                let opened = self.windows.remove(&uid).expect("just listed");
+                gpu::give_back(opened.surface);
+                let id = opened.id;
                 ui.post(move |host| host.close_window(id));
             }
         }
         for (uid, size) in want {
             match self.windows.get_mut(&uid) {
-                Some(held) if held.1 == size => {}
+                Some(held) if held.size == size => {}
                 Some(held) => {
-                    held.1 = size;
-                    let id = held.0;
+                    held.size = size;
+                    let id = held.id;
                     ui.post(move |host| host.resize_window(id, size));
                 }
                 None => {
                     // The node's own name, because a patch may open several.
                     let title = view.nodes.get(&uid).map_or_else(String::new, |nv| nv.name.to_string());
-                    let opened =
-                        ui.run(move |host| host.open_window(&title, size, Box::new(|_| {})).map(|w| w.id()));
+                    let gpu = self.gpu.clone();
+                    // The surface is made where the handles are valid: on the window thread.
+                    let opened = ui.run(move |host| {
+                        let id = host.open_window(&title, size, Box::new(|_| {}))?.id();
+                        let surface = host.handles(id).map(|h| gpu.surface(h)).transpose().unwrap_or_else(|why| {
+                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Warning, None, format!("graphics: `{title}` is presented through the CPU: {why}"));
+                            None
+                        });
+                        Ok::<_, String>((id, surface.map(Arc::new)))
+                    });
                     match opened {
-                        Ok(id) => {
-                            self.windows.insert(uid, (id, size));
+                        Ok((id, surface)) => {
+                            self.windows.insert(uid, Opened { id, size, surface });
                         }
                         Err(why) => self.pending.push((
                             uid,
@@ -422,6 +445,7 @@ impl Engine for GraphicsEngine {
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
         self.dirty = false;
         self.shared.replan.store(false, Ordering::Release);
+        self.fps.store(fps_of(view.variables.get("graphics.fps")), Ordering::Relaxed);
         for uid in self.live.keys().copied().collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
@@ -448,8 +472,7 @@ impl Engine for GraphicsEngine {
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         self.follow_windows(view, &plan::sizes(view, &self.live));
-        let open: HashMap<Uid, goofi_window::Id> = self.windows.iter().map(|(u, (id, _))| (*u, *id)).collect();
-        let (plan, mut faults) = plan::compile(view, &self.live, &open);
+        let (plan, mut faults) = plan::compile(view, &self.live, &self.windows);
         faults.extend(self.troubles.lock().iter().map(|(u, w)| (*u, w.clone())));
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
@@ -496,18 +519,28 @@ impl Engine for GraphicsEngine {
             let _ = thread.join();
         }
         self.compiler.stop();
+        goofi_runtime::stop_all(self.live.values().map(|i| &i.control));
+        // The surfaces go before their windows: the runtime's chains first, then the engine's.
+        self.runtime.lock().clear();
+        let windows = std::mem::take(&mut self.windows);
         if let Some(ui) = self.ui.take() {
-            for (id, _) in std::mem::take(&mut self.windows).into_values() {
+            for opened in windows.into_values() {
+                gpu::give_back(opened.surface);
+                let id = opened.id;
                 ui.post(move |host| host.close_window(id));
             }
         }
-        goofi_runtime::stop_all(self.live.values().map(|i| &i.control));
-        self.runtime.lock().clear();
         let gate = gpu::gate();
         self.live.clear();
         self.classes.clear();
         drop(gate);
     }
+}
+
+/// `graphics.fps` as the clock reads it: the variable held to [`FPS_RANGE`], or its default.
+fn fps_of(held: Option<&goofi_core::Data>) -> u32 {
+    let asked = held.map_or(goofi_core::variables::DEFAULT_FPS, |d| goofi_core::control::number_of(d) as i64);
+    asked.clamp(i64::from(*FPS_RANGE.start()), i64::from(*FPS_RANGE.end())) as u32
 }
 
 impl Drop for GraphicsEngine {

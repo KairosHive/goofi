@@ -2,7 +2,7 @@
 //! every demanded stage once and reads back the ones somebody is watching.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -40,6 +40,11 @@ pub struct Runtime {
     /// The window thread, where a stage with a window on the machine's screen sends its frame.
     pub ui: Option<goofi_window::Ui>,
     presenting: HashMap<goofi_window::Id, Arc<Present>>,
+    /// The swap chain configured on each presented window's surface, at the size it was last
+    /// drawn at.
+    chains: HashMap<goofi_window::Id, Chain>,
+    /// The rate the clock paces, as `graphics.fps` last settled: what a recording is stamped with.
+    pub fps: Arc<AtomicU32>,
     /// The one recorder, and the video stream each armed stage has open on it.
     recorder: Arc<Recorder>,
     taping: HashMap<Uid, Tape>,
@@ -62,6 +67,7 @@ impl Runtime {
         troubles: Troubles,
         shared: Arc<goofi_runtime::Shared>,
         recorder: Arc<Recorder>,
+        fps: Arc<AtomicU32>,
     ) -> Runtime {
         Runtime {
             gpu,
@@ -71,6 +77,8 @@ impl Runtime {
             stats,
             ui: None,
             presenting: HashMap::new(),
+            chains: HashMap::new(),
+            fps,
             recorder,
             taping: HashMap::new(),
             troubles,
@@ -101,6 +109,7 @@ impl Runtime {
         self.plan = Plan::default();
         self.states.clear();
         self.presenting.clear();
+        self.chains.clear();
     }
 
     fn set_plan(&mut self, plan: Plan) {
@@ -109,6 +118,37 @@ impl Runtime {
         // A closed window's entry would hold its waiting frame for the engine's life.
         let live: HashSet<_> = self.plan.stages.iter().filter_map(|s| s.window).collect();
         self.presenting.retain(|id, _| live.contains(id));
+        self.chains.retain(|id, _| live.contains(id));
+    }
+
+    /// The window's next frame to draw into, with its chain configured for `size`; none where the
+    /// surface has nothing to give this tick. A chain outgrown, lost or stuck is made again next tick.
+    fn acquire(&mut self, id: goofi_window::Id, surface: &Arc<wgpu::Surface<'static>>, size: (u32, u32)) -> Option<wgpu::SurfaceTexture> {
+        if !self.chains.get(&id).is_some_and(|c| c.size == size && !c.stale) {
+            match Chain::configure(&self.gpu, surface.clone(), size) {
+                Ok(chain) => {
+                    self.chains.insert(id, chain);
+                }
+                Err(why) => {
+                    self.chains.remove(&id);
+                    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("graphics: the window's surface refused {}x{}: {why}", size.0, size.1));
+                    return None;
+                }
+            }
+        }
+        use wgpu::CurrentSurfaceTexture as At;
+        match surface.get_current_texture() {
+            At::Success(frame) => Some(frame),
+            At::Suboptimal(frame) => {
+                self.chains.get_mut(&id).expect("just made").stale = true;
+                Some(frame)
+            }
+            At::Occluded => None,
+            At::Timeout | At::Outdated | At::Lost | At::Validation => {
+                self.chains.remove(&id);
+                None
+            }
+        }
     }
 
     /// Everything the graph asked for since the last tick, applied on this thread — every GPU
@@ -153,6 +193,7 @@ impl Runtime {
         self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut started: Vec<(Uid, Want, Slot)> = Vec::new();
+        let mut shown: Vec<(goofi_window::Id, wgpu::SurfaceTexture)> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
                 continue;
@@ -249,6 +290,17 @@ impl Runtime {
             let out_view = self.states[&stage.uid].out.as_ref().expect("output allocated").view.clone();
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
             self.states.get_mut(&stage.uid).expect("just borrowed").advance();
+            // Straight into the window's own swap chain: no readback, no copy, no X server.
+            if let (Some(id), Some(surface)) = (stage.window, stage.surface.clone()) {
+                let size = stage.size;
+                if let Some(frame) = self.acquire(id, &surface, size) {
+                    let chain = &self.chains[&id];
+                    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(chain.format), ..Default::default() });
+                    self.gpu.blit_with(&mut encoder, &chain.pipeline, &out_view, &view, &chain.out_size);
+                    shown.push((id, frame));
+                }
+            }
+            let stage = &self.plan.stages[i];
             for w in Want::ALL {
                 // A stage the recorder could not open a stream for is read back for nobody.
                 if w == Want::Record && !self.taping.get(&stage.uid).is_some_and(|t| t.live) {
@@ -276,6 +328,14 @@ impl Runtime {
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
+        for (id, frame) in shown {
+            self.gpu.queue.present(frame);
+            if let Some(ui) = &self.ui {
+                let cell = self.presenting.entry(id).or_default();
+                cell.drawn.fetch_add(1, Ordering::Relaxed);
+                post(cell, ui, id);
+            }
+        }
         for (uid, w, mut slot) in started {
             slot.at = t;
             let ready = slot.ready.clone();
@@ -341,8 +401,9 @@ impl Runtime {
             if self.taping.contains_key(&uid) || rec.is_open(&id) {
                 continue;
             }
-            let kind = Kind::Video { size, fps: f64::from(crate::FPS), quality };
-            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(f64::from(crate::FPS)))) {
+            let fps = f64::from(self.fps.load(Ordering::Relaxed));
+            let kind = Kind::Video { size, fps, quality };
+            let live = match rec.open(&id, kind, t, StreamMeta::measured(Some(fps))) {
                 Ok(()) => true,
                 // A stream that will not open is this NODE's failure and nobody else's: the
                 // recording keeps every other stream, and the entry the recorder filed says why.
@@ -462,20 +523,74 @@ pub type Troubles = Arc<Mutex<HashMap<Uid, String>>>;
 /// rewritten per frame would be the recording's own cost.
 const SAY_EVERY: Duration = Duration::from_secs(1);
 
-/// A frame as the screen takes it: its size, and its texels in the screen's own byte order.
-type Frame = ((u32, u32), Vec<u8>);
+/// A frame as the screen takes it: its size, its texels in the screen's own byte order, and
+/// where the buffer goes back to once drawn.
+type Frame = ((u32, u32), Vec<u8>, Spare);
 
-/// One window's frame in flight.
+/// One window's frame in flight, or the count of frames its surface showed since the window
+/// thread last heard.
 #[derive(Default)]
 struct Present {
     pending: Mutex<Option<Frame>>,
+    drawn: AtomicU64,
     posted: AtomicBool,
 }
 
-/// Hand the screen the newest frame, latest-wins, with at most ONE job outstanding. A job per
-/// frame on an unbounded queue starved every other job the window thread had — an op among them,
-/// because the clock always posted the next frame before the screen had finished the last. The
-/// drawn buffer goes back to `spare` rather than being freed.
+/// One swap chain: a window's surface configured at one size, and the pass into its format.
+struct Chain {
+    _surface: Arc<wgpu::Surface<'static>>,
+    size: (u32, u32),
+    /// The format the blit writes: the surface's own, less any sRGB suffix, so a linear value
+    /// lands as the readback path lands it.
+    format: wgpu::TextureFormat,
+    pipeline: Arc<wgpu::RenderPipeline>,
+    out_size: wgpu::Buffer,
+    /// The surface said its last frame was suboptimal: configured again before the next.
+    stale: bool,
+}
+
+impl Chain {
+    /// Configure `surface` for `size`: a non-sRGB format where one is offered, and no
+    /// transparency. A configuration the device refuses is this window's failure, said once.
+    fn configure(gpu: &Gpu, surface: Arc<wgpu::Surface<'static>>, size: (u32, u32)) -> Result<Chain, String> {
+        let caps = surface.get_capabilities(&gpu.adapter);
+        let native = caps.formats.iter().copied().find(|f| !f.is_srgb()).or(caps.formats.first().copied()).unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+        let format = native.remove_srgb_suffix();
+        // The clock never waits on a vblank: a mode that queues or replaces, never one that
+        // blocks the acquire until the display takes the last frame.
+        let present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo]
+            .into_iter()
+            .find(|m| caps.present_modes.contains(m))
+            .unwrap_or_default();
+        let alpha_mode = [wgpu::CompositeAlphaMode::Opaque, wgpu::CompositeAlphaMode::Auto].into_iter().find(|m| caps.alpha_modes.contains(m)).unwrap_or_default();
+        let refused = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        surface.configure(&gpu.device, &wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: native,
+            color_space: Default::default(),
+            width: size.0.max(1),
+            height: size.1.max(1),
+            present_mode,
+            desired_maximum_frame_latency: 1,
+            alpha_mode,
+            view_formats: if format == native { vec![] } else { vec![format] },
+        });
+        if let Some(refused) = pollster::block_on(refused.pop()) {
+            return Err(refused.to_string());
+        }
+        let out_size = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("screen size"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        gpu.queue.write_buffer(&out_size, 0, &[(size.0 as f32).to_le_bytes(), (size.1 as f32).to_le_bytes()].concat());
+        Ok(Chain { pipeline: gpu.screen_blit(format), _surface: surface, size, format, out_size, stale: false })
+    }
+}
+
+/// Hand the screen the newest frame, latest-wins. The drawn buffer goes back to `spare` rather
+/// than being freed.
 fn present(
     cell: &Arc<Present>,
     ui: &goofi_window::Ui,
@@ -484,20 +599,30 @@ fn present(
     texels: Vec<u8>,
     spare: Spare,
 ) {
-    if let Some((_, dropped)) = cell.pending.lock().replace((size, texels)) {
+    if let Some((_, dropped, spare)) = cell.pending.lock().replace((size, texels, spare)) {
         give_back(&spare, dropped);
     }
+    post(cell, ui, id);
+}
+
+/// Tell the window thread what the cell holds, with at most ONE job outstanding: a job per frame
+/// on an unbounded queue starved every other job the window thread had, an op among them.
+fn post(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id) {
     if cell.posted.swap(true, Ordering::AcqRel) {
         return;
     }
     let cell = cell.clone();
     ui.post(move |host| {
-        if let Some((size, texels)) = cell.pending.lock().take() {
+        if let Some((size, texels, spare)) = cell.pending.lock().take() {
             host.present(id, size, &texels);
             give_back(&spare, texels);
         }
+        let drawn = cell.drawn.swap(0, Ordering::Relaxed);
+        if drawn > 0 {
+            host.presented(id, drawn);
+        }
         // Cleared LAST, so the queue empties between two frames and the loop reaches its
-        // other jobs. What arrived while this drew is picked up by the next tick's post.
+        // other jobs. What arrived while this ran is picked up by the next tick's post.
         cell.posted.store(false, Ordering::Release);
     });
 }

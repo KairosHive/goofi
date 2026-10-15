@@ -21,6 +21,8 @@ mod chanmap;
 mod control;
 mod host;
 pub use host::{hosts, NO_ASIO_NOTE};
+pub use rt::performance_cores;
+pub(crate) use rt::Realtime;
 
 /// Open a stream through `$stream` in the sample format the DEVICE speaks, for input and output
 /// alike. DSD has no PCM conversion, and `$refused` words that.
@@ -47,6 +49,7 @@ pub(crate) use by_format;
 pub(crate) mod nodes;
 mod plan;
 mod pool;
+mod rt;
 mod runtime;
 mod scan;
 mod wav;
@@ -92,8 +95,24 @@ pub struct AudioStatus {
     /// Renders that took longer than their own block of frames: the host's underruns, which
     /// the sound-server backends do not report.
     pub late: u64,
+    /// What the clock thread has waited for its render helpers, in all and at worst.
+    pub pool_wait_us: u64,
+    pub pool_wait_max_us: u64,
     /// The frames the host hands each callback, as it granted them; absent without a device.
     pub period: Option<u32>,
+    /// The CPUs the render threads are seated on, on a machine with a slower kind of core too.
+    pub cores: Option<String>,
+    /// Per live node: what its `process` cost, mean and worst, over every block so far.
+    pub nodes: Vec<NodeCost>,
+}
+
+#[derive(serde::Serialize)]
+pub struct NodeCost {
+    pub uid: String,
+    pub type_name: &'static str,
+    pub blocks: u64,
+    pub mean_us: f64,
+    pub max_us: f64,
 }
 
 #[derive(Default)]
@@ -103,6 +122,8 @@ pub(crate) struct Stats {
     contended: AtomicU64,
     render_max_us: AtomicU64,
     late: AtomicU64,
+    pool_wait_ns: AtomicU64,
+    pool_wait_max_ns: AtomicU64,
     /// Raised by the stream's error callback; the drain closes the clock and tries the name once more.
     dead: AtomicBool,
 }
@@ -191,28 +212,6 @@ impl Drop for DeviceClock {
 /// The host default is what a `default` name means.
 pub(crate) const DEFAULT_DEVICE: &str = "default";
 
-/// The callback thread's real-time grant, asked for on its first run: cpal asks only under ALSA
-/// and WASAPI, and a callback left at ordinary priority loses its deadline to any busy thread.
-pub(crate) enum Realtime {
-    Unasked,
-    /// Granted or refused once: the grant outlives its handle, and a refusal is logged once.
-    Asked,
-}
-
-impl Realtime {
-    /// Promote the calling thread once, for `frames` per callback at `rate`; a refusal is logged
-    /// once and the stream plays on at ordinary priority, which is the deadline lost.
-    pub(crate) fn claim(&mut self, frames: usize, rate: u32) {
-        if matches!(self, Realtime::Asked) {
-            return;
-        }
-        if let Err(e) = audio_thread_priority::promote_current_thread_to_real_time(frames as u32, rate) {
-            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: the callback thread was refused real-time priority: {e}"));
-        }
-        *self = Realtime::Asked;
-    }
-}
-
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
@@ -271,6 +270,9 @@ where
                             scratch.fill(0.0);
                             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
                         }
+                        let (waited, worst) = rt.pool.waited();
+                        stats.pool_wait_ns.store(waited.as_nanos() as u64, Ordering::Relaxed);
+                        stats.pool_wait_max_ns.store(worst.as_nanos() as u64, Ordering::Relaxed);
                     }
                     None => {
                         scratch.fill(0.0);
@@ -351,6 +353,8 @@ pub(crate) struct Instance {
     minted: Minted,
     /// A plugin's params as its window was last told them, from the declared defaults on.
     shown: Vec<f64>,
+    /// The audio thread's tally of this occupant's `process` cost.
+    spent: Arc<runtime::Spent>,
 }
 
 #[derive(Default)]
@@ -443,6 +447,7 @@ impl AudioEngine {
                 waker,
                 anchor: anchor.clone(),
                 swaps: Mutex::new(HashMap::new()),
+                savers: Mutex::new(HashMap::new()),
             }),
             classes,
             vst3: None,
@@ -548,7 +553,25 @@ impl AudioEngine {
             contended: self.stats.contended.load(Ordering::Relaxed),
             render_max_us: self.stats.render_max_us.load(Ordering::Relaxed),
             late: self.stats.late.load(Ordering::Relaxed),
+            pool_wait_us: self.stats.pool_wait_ns.load(Ordering::Relaxed) / 1000,
+            pool_wait_max_us: self.stats.pool_wait_max_ns.load(Ordering::Relaxed) / 1000,
             period: self.device.as_ref().and_then(|d| d.period),
+            cores: rt::seat_name(),
+            nodes: self
+                .live
+                .iter()
+                .map(|(uid, inst)| {
+                    let blocks = inst.spent.blocks.load(Ordering::Relaxed);
+                    let nanos = inst.spent.nanos.load(Ordering::Relaxed);
+                    NodeCost {
+                        uid: uid.to_hex(),
+                        type_name: inst.manifest.type_name,
+                        blocks,
+                        mean_us: if blocks > 0 { nanos as f64 / blocks as f64 / 1000.0 } else { 0.0 },
+                        max_us: inst.spent.max_nanos.load(Ordering::Relaxed) as f64 / 1000.0,
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -810,14 +833,17 @@ impl Engine for AudioEngine {
         self.sweep = true;
     }
 
-    /// Every live node's state, under the runtime lock.
+    /// Every live node's state: an SDK node's under the runtime lock, where it is a copy, and a
+    /// plugin's through its saver after — measured at 4 to 6 contended callbacks per save before.
     fn persist(&mut self) {
-        let states: Vec<(Uid, &'static str, Vec<u8>)> = {
+        let savers: HashMap<Uid, control::Saver> = self.audio.savers.lock().clone();
+        let states: Vec<(Uid, &'static str, Option<Vec<u8>>)> = {
             let mut rt = self.runtime.lock();
             rt.apply_pending();
-            rt.slab.iter().flatten().map(|s| (s.uid, s.type_name, s.node.save())).collect()
+            rt.slab.iter().flatten().map(|s| (s.uid, s.type_name, (!savers.contains_key(&s.uid)).then(|| s.node.save()))).collect()
         };
         for (uid, type_name, bytes) in states {
+            let bytes = bytes.unwrap_or_else(|| savers[&uid]());
             self.write_state(uid, type_name, bytes);
         }
     }
@@ -862,6 +888,7 @@ impl Engine for AudioEngine {
         let param_chans: Vec<Arc<AtomicU16>> = manifest.params.iter().map(|_| Arc::new(AtomicU16::new(1))).collect();
         let ramps: Arc<[runtime::Ramps]> = manifest.params.iter().map(|_| runtime::Ramps::default()).collect();
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
+        let spent = Arc::new(runtime::Spent::default());
         let birth = control::Birth {
             uid,
             manifest,
@@ -907,12 +934,13 @@ impl Engine for AudioEngine {
             dead: false,
             overruns: 0,
             cost: None,
+            spent: spent.clone(),
             fault: None,
         };
         self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
         let shown = plugin.map(|d| d.params.iter().map(|k| k.default).collect()).unwrap_or_default();
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown, spent });
         self.dirty = true;
         self.shared.waker.notify();
         None

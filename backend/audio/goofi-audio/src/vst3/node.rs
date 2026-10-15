@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use goofi_supervisor::sync::Mutex;
 
 use goofi_audio_sdk::{high, AudioNode, Block, BLOCK};
 
@@ -88,14 +89,21 @@ pub struct Plugin {
     /// dead only once the fault is on its way and expects the next block to fault again.
     failed: Option<String>,
     /// What `load` was handed. Kept, so a failed instantiation cannot answer `save` with nothing
-    /// and have the engine delete the preset behind it.
-    blob: Vec<u8>,
+    /// and have the engine delete the preset behind it; shared with the saver for the same reason.
+    blob: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Plugin {
     pub fn new(class: Arc<Derived>, ui: Option<Ui>, uid: Option<Uid>, shared: Option<Arc<AudioShared>>) -> Plugin {
-        Plugin { class, ui, uid, shared, live: None, failed: None, blob: Vec::new() }
+        Plugin { class, ui, uid, shared, live: None, failed: None, blob: Arc::default() }
     }
+}
+
+/// The component's state as bytes, or nothing where it refused.
+fn state_of(component: &ComPtr<IComponent>) -> Option<Vec<u8>> {
+    let stream = ComWrapper::new(Stream::default());
+    let ptr = stream.to_com_ptr::<IBStream>().expect("a stream is an IBStream");
+    (unsafe { component.getState(ptr.as_ptr()) } == kResultOk).then(|| stream.bytes.take())
 }
 
 /// On the window thread where there is one — a JUCE plugin holds the thread that loaded it to be
@@ -109,6 +117,9 @@ fn on<T: Send>(ui: &Option<Ui>, f: impl FnOnce(Option<&mut ui::Host>) -> T + Sen
 
 impl Drop for Plugin {
     fn drop(&mut self) {
+        if let (Some(_), Some(uid), Some(shared)) = (&self.live, self.uid, &self.shared) {
+            shared.savers.lock().remove(&uid);
+        }
         let (live, uid) = (self.live.take(), self.uid);
         on(&self.ui, move |host| {
             if let (Some(host), Some(uid)) = (host, uid) {
@@ -135,11 +146,16 @@ impl AudioNode for Plugin {
         *failed = on(ui, |host| match live {
             Some(live) => live.retune(rate),
             None => Live::open(class, rate).map(|opened| {
-                if !blob.is_empty() {
-                    opened.load(blob);
+                let held = blob.lock().clone();
+                if !held.is_empty() {
+                    opened.load(&held);
                     if let (Some(uid), Some(shared)) = (*uid, shared.as_ref()) {
                         opened.read_back(class, uid, shared, Origin::Restored);
                     }
+                }
+                if let (Some(uid), Some(shared)) = (*uid, shared.as_ref()) {
+                    let (component, blob) = (opened.component.clone(), blob.clone());
+                    shared.savers.lock().insert(uid, Arc::new(move || state_of(&component).unwrap_or_else(|| blob.lock().clone())));
                 }
                 if let (Some(_), Some(uid), Some(shared), Some(controller)) = (host, *uid, shared.clone(), opened.controller()) {
                     editor::register(uid, controller, shared, class.clone(), opened.known.clone());
@@ -167,19 +183,13 @@ impl AudioNode for Plugin {
     }
 
     fn save(&self) -> Vec<u8> {
-        let Some(live) = &self.live else { return self.blob.clone() };
-        let stream = ComWrapper::new(Stream::default());
-        let ptr = stream.to_com_ptr::<IBStream>().expect("a stream is an IBStream");
-        if unsafe { live.component.getState(ptr.as_ptr()) } != kResultOk {
-            return self.blob.clone();
-        }
-        stream.bytes.take()
+        self.live.as_ref().and_then(|live| state_of(&live.component)).unwrap_or_else(|| self.blob.lock().clone())
     }
 
     /// The blob is the plugin's one stored state: both halves take it on the window thread, and
     /// the document is shown the values it holds.
     fn load(&mut self, bytes: &[u8]) {
-        self.blob = bytes.to_vec();
+        *self.blob.lock() = bytes.to_vec();
         let Plugin { class, ui, uid, shared, live, .. } = self;
         let Some(live) = live.as_mut() else { return };
         on(ui, move |_| {

@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::num::NonZeroIsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +15,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, INFINITE};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use super::{Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Pumped, Screen, Wake};
 
 pub struct Platform {
     class: Vec<u16>,
@@ -126,6 +127,15 @@ impl Screen for Platform {
 
     fn destroy(&mut self, id: Id) {
         unsafe { DestroyWindow(id as usize as HWND) };
+    }
+
+    fn handles(&self, id: Id) -> Option<Handles> {
+        let mut window = rwh::Win32WindowHandle::new(NonZeroIsize::new(id as isize)?);
+        window.hinstance = NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) } as isize);
+        Some(Handles {
+            display: rwh::RawDisplayHandle::Windows(rwh::WindowsDisplayHandle::new()),
+            window: rwh::RawWindowHandle::Win32(window),
+        })
     }
 
     /// One `SetDIBitsToDevice` a frame. `biHeight` is NEGATIVE, which is how a DIB says its first

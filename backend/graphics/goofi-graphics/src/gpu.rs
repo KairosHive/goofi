@@ -110,18 +110,26 @@ fn boxed(at: vec2f) -> vec4f {
 const TAP_MAX: u32 = 16;
 
 pub struct Gpu {
-    pub adapter: String,
+    pub adapter_name: String,
     pub backend: String,
     pub sampler: wgpu::Sampler,
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
     blits: [wgpu::RenderPipeline; 5],
+    /// The `screen` pass per surface format a window turned out to want, made at its first frame.
+    screens: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    blit_module: wgpu::ShaderModule,
+    blit_layout: wgpu::PipelineLayout,
     blit_group: wgpu::BindGroupLayout,
     group0: [wgpu::BindGroupLayout; 2],
     textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
     layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
+    /// Kept for the surfaces a window is presented through: a surface is made on the instance
+    /// and configured against the adapter.
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     /// The device's entry in the resource index; before the device, so it leaves first.
     _lease: goofi_supervisor::scope::Lease,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
@@ -281,11 +289,16 @@ impl Gpu {
             ),
             device,
             queue,
-            adapter: info.name.clone(),
+            instance,
+            adapter,
+            adapter_name: info.name.clone(),
             backend: info.backend.to_string(),
             sampler,
             blank,
             blits,
+            screens: Mutex::new(HashMap::new()),
+            blit_module: module,
+            blit_layout,
             blit_group,
             group0,
             textures: Mutex::new(HashMap::new()),
@@ -313,6 +326,32 @@ impl Gpu {
 
     fn blit_index(&self, encoder: &mut wgpu::CommandEncoder, index: usize, src: &wgpu::TextureView,
                   into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
+        self.blit_with(encoder, &self.blits[index], src, into, out_size);
+    }
+
+    /// A surface onto a window, from the handles its screen answered. Made where the handles
+    /// are valid — the window thread — and used from the render thread.
+    pub fn surface(&self, handles: goofi_window::Handles) -> Result<wgpu::Surface<'static>, String> {
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: Some(handles.display),
+            raw_window_handle: handles.window,
+        };
+        // SAFETY: the handles are the window's own, and the surface drops before the window does
+        // or the window's loss is answered as `Lost` at the next acquire.
+        unsafe { self.instance.create_surface_unsafe(target) }.map_err(|e| e.to_string())
+    }
+
+    /// The `screen` pass into a surface of `format`: linear colour composited over black.
+    pub fn screen_blit(&self, format: wgpu::TextureFormat) -> Arc<wgpu::RenderPipeline> {
+        self.screens
+            .lock()
+            .entry(format)
+            .or_insert_with(|| Arc::new(pipeline(&self.device, Some("screen"), &self.blit_module, &self.blit_layout, "screen", &[format])))
+            .clone()
+    }
+
+    pub fn blit_with(&self, encoder: &mut wgpu::CommandEncoder, with: &wgpu::RenderPipeline, src: &wgpu::TextureView,
+                     into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.blit_group,
@@ -322,7 +361,7 @@ impl Gpu {
             ],
         });
         let mut pass = clear_pass(encoder, std::slice::from_ref(into));
-        pass.set_pipeline(&self.blits[index]);
+        pass.set_pipeline(with);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }

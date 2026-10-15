@@ -235,7 +235,7 @@ fn list_variables_names_the_system_variables_an_expression_can_read() {
     assert_eq!(ufreq["lock"], j!({ "config": true, "value": false }));
     // Goofi's own groups come first, in the order they are seeded: the machine's, then one per engine.
     let groups: Vec<&str> = listed.as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().split('.').next().unwrap()).collect();
-    assert!(groups.starts_with(&["system", "system", "signal", "graphics", "graphics", "audio"]), "{groups:?}");
+    assert!(groups.starts_with(&["system", "system", "signal", "graphics", "graphics", "graphics", "audio"]), "{groups:?}");
 }
 
 #[test]

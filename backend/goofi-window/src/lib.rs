@@ -26,12 +26,21 @@ mod platform;
 #[path = "mac.rs"]
 mod platform;
 
+pub use raw_window_handle as rwh;
+
 type Job = Box<dyn FnOnce(&mut Host) + Send>;
 type Handler = Box<dyn FnMut()>;
 type OnClose = Box<dyn FnMut(&mut Host)>;
 
 /// A window as the loop names it, whatever the screen calls it.
 pub type Id = u64;
+
+/// What a GPU surface onto a window is made from. Valid for as long as the window stands.
+#[derive(Clone, Copy)]
+pub struct Handles {
+    pub display: rwh::RawDisplayHandle,
+    pub window: rwh::RawWindowHandle,
+}
 
 /// The COM apartment a plugin needs, opened on THIS thread. A Windows plugin is COM code, and one
 /// that reaches an apartment nobody opened crashes rather than refusing — so every thread that
@@ -56,6 +65,11 @@ trait Screen {
     fn destroy(&mut self, id: Id);
     /// Park until a window event, a wake, a readable plugin descriptor or `until`.
     fn pump(&mut self, until: Option<Instant>, fds: &[i32]) -> Pumped;
+    /// The window's native handles, for a GPU to present straight into it. None where the screen
+    /// has no desktop, and every frame then comes through `present`.
+    fn handles(&self, _id: Id) -> Option<Handles> {
+        None
+    }
     /// Draw one frame into the window, one texel to one pixel from the top-left. `texels` is
     /// `w * h * 4` bytes, row 0 the top, in the byte order THIS screen reads — BGRA on X11 and
     /// Win32, RGBA on macOS. Whoever renders the frame writes that order; nothing swizzles here.
@@ -277,15 +291,26 @@ impl Host {
             return;
         }
         self.screen.present(id, size, texels);
-        *self.presents.entry(id).or_default() += 1;
-        self.retitle(id);
+        self.presented(id, 1);
+    }
+
+    /// The window's handles, for a GPU that presents into it without this thread's help. Such a
+    /// GPU reports what it drew through `presented`.
+    pub fn handles(&self, id: Id) -> Option<Handles> {
+        (!self.dead).then(|| self.screen.handles(id)).flatten()
+    }
+
+    /// `frames` more frames reached the window, by whichever path.
+    pub fn presented(&mut self, id: Id, frames: u64) {
+        *self.presents.entry(id).or_default() += frames;
+        self.retitle(id, frames);
     }
 
     /// The window's own frame rate, in its title — what a viewer of the screen actually gets,
     /// counted where the frames are drawn rather than where they are asked for.
-    fn retitle(&mut self, id: Id) {
+    fn retitle(&mut self, id: Id, frames: u64) {
         let Some(title) = self.titles.get_mut(&id) else { return };
-        title.drawn += 1;
+        title.drawn += frames;
         let elapsed = title.since.elapsed();
         if elapsed < RETITLE {
             return;

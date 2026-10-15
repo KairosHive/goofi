@@ -249,6 +249,9 @@ pub struct VariableDef {
 /// graphics chain with nothing to follow falls back to it.
 pub const DEFAULT_SIZE: u32 = 1024;
 
+/// The rate the graphics clock starts at, in frames per second.
+pub const DEFAULT_FPS: i64 = 60;
+
 /// The frames an output device renders per callback unless `audio.buffer_size` says otherwise:
 /// 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
 pub const DEFAULT_BUFFER: u32 = 256;
@@ -282,6 +285,12 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
         name: "graphics.default_height",
         value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "graphics.fps",
+        value: || Data::number(DEFAULT_FPS as f64),
+        doc: "The rate the graphics engine renders at under its own clock: what a window shows and what a recording is encoded at. A viewer is capped by `system.viewer_fps` on top.",
         ephemeral: false,
     },
     VariableDef {

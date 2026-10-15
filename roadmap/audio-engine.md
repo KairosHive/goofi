@@ -34,12 +34,17 @@ The audio node contract is `sdk/README.md` and the code.
   is unknown), and the server's underflow events never reach cpal's error callback: `late` in
   `session status` is goofi's own count. A native PipeWire or ALSA output path removes both.
 - **A plugin's own threads run as the plugin asks.** Measured 2026-10-11 on `examples/laser.gfi`
-  with Vital's editor open: Vital calls `pthread_setschedparam` itself (the symbol is imported);
-  its OpenGL renderer (`Pool`) runs `SCHED_RR` 50 at 85–95% of a core, `JUCE Timer` at `RR` 69,
-  its gdbus/gmain/firebase threads at `RR` 50 — all above goofi's callback at `RR` 10 — and the
-  user's `rtprio` limit of 95 (audio group) lets every request through with no rtkit. Options:
-  lower `RLIMIT_RTPRIO` to 0 before the first plugin loads (goofi's callback keeps rtkit), or host
-  plugins out of process. Neither is built; measure the callback's `late` count with and without.
+  with Vital's editor open: its OpenGL renderer runs `SCHED_RR` 50 at 85–95% of a core, `JUCE
+  Timer` at `RR` 69, its gdbus/gmain/firebase threads at `RR` 50. The callback and the pool now
+  run at `RR` 80 on the performance cores (`rt.rs`), above all of them; the `late` count with the
+  editor open is unmeasured since. The PipeWire client's data-loop thread inside goofi still runs
+  at `TS`: a native PipeWire output path would give it the callback's priority.
+- **Two heavy plugins at 128 frames exceed the period on a power-limited laptop.** 2026-10-15:
+  under a build beside a browser the i9-13900HX held every core at ~2 GHz and Vital cost 1657 and
+  858 µs per 64-frame block (750 and 400 µs on the quiet machine), 100% late on P-cores at `RR` 80.
+  Seating cannot buy back a halved clock; the patch's answer is `audio.buffer_size` 256. Open:
+  whether `late` should raise a status the UI shows, with the per-node costs `session status`
+  already carries.
 - **`MidiIn` reads notes, bend and the sustain pedal** (`nodes/midi_in.rs`). Other CCs and
   aftertouch are absent, and a note-on for a held note moves its voice's velocity, not its
   envelope. A note lands at block start, up to 1.3 ms late; sample-accurate placement needs the

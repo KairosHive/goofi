@@ -87,7 +87,13 @@ pub struct AudioShared {
     pub anchor: Arc<crate::runtime::Anchor>,
     /// The control halves' ends of rings the engine grew, by node, taken at the half's next tick.
     pub swaps: Mutex<HashMap<goofi_node::Uid, Swap>>,
+    /// A plugin's state, readable OFF the runtime lock — VST3 lets a host read it beside
+    /// `process` — so a save never holds the callback's lock for the plugin's serialization.
+    pub savers: Mutex<HashMap<goofi_node::Uid, Saver>>,
 }
+
+/// What answers a plugin node's opaque state from any thread.
+pub type Saver = Arc<dyn Fn() -> Vec<u8> + Send + Sync>;
 
 /// The control half's ends of grown rings, by inbox or output index.
 #[derive(Default)]

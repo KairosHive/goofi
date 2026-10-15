@@ -85,8 +85,10 @@ pub struct Stage {
     pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
     pub cells: Arc<Cells>,
-    /// The window on the machine's own screen this stage draws into, once one is open.
+    /// The window on the machine's own screen this stage draws into, once one is open, and the
+    /// surface the GPU presents into it; without one the frame is read back for the window thread.
     pub window: Option<goofi_window::Id>,
+    pub surface: Option<Arc<wgpu::Surface<'static>>>,
     /// This output slot's arming, as the last settle left it.
     pub record: Option<Record>,
 }
@@ -97,7 +99,7 @@ impl Stage {
     /// and a subscriber on its data service. A screen is always the frame's own size.
     pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 4] {
         let mut wants = [None; 4];
-        wants[Want::Screen as usize] = self.window.map(|_| self.size);
+        wants[Want::Screen as usize] = self.window.filter(|_| self.surface.is_none()).map(|_| self.size);
         let asked = unpack(self.cells.tap_box.load(Ordering::Relaxed));
         let tap = asked.map_or(self.size, |w| goofi_view::fit(self.size, w.size));
         // The two taps are one reader in two formats, so at most one of them is ever wanted.
@@ -114,7 +116,7 @@ impl Stage {
 
     /// Whether anything reads this stage's output at all.
     pub fn read(&self, recording: bool) -> bool {
-        self.wants(recording).iter().any(|w| w.is_some())
+        self.surface.is_some() || self.wants(recording).iter().any(|w| w.is_some())
     }
 }
 
@@ -150,7 +152,7 @@ impl Plan {
 pub fn compile(
     view: &GraphView<'_>,
     live: &HashMap<Uid, Instance>,
-    windows: &HashMap<Uid, goofi_window::Id>,
+    windows: &HashMap<Uid, crate::Opened>,
 ) -> (Plan, Vec<(Uid, String)>) {
     let wires = texture_wires(view, live);
     let feeds = |consumer: Uid| -> Vec<Uid> {
@@ -211,7 +213,8 @@ pub fn compile(
             natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
             cells: inst.cells.clone(),
-            window: windows.get(uid).copied(),
+            window: windows.get(uid).map(|o| o.id),
+            surface: windows.get(uid).and_then(|o| o.surface.clone()),
             record: recorded(view, *uid, inst),
         });
     }

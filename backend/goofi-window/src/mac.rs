@@ -2,6 +2,7 @@
 //! carry a deadline. A window the user closed is one that is no longer visible.
 
 use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,7 +11,7 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, MainThreadMarker};
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 
-use super::{Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Pumped, Screen, Wake};
 
 // AppKit, linked by hand: `objc2-app-kit` is not in the offline registry, so nothing else in the
 // graph pulls the framework in — and `class!(NSApplication)` on a class the process never loaded
@@ -113,6 +114,15 @@ impl Screen for Platform {
         if let Some((_, window, _)) = self.windows.iter().find(|(i, ..)| *i == id) {
             let _: () = unsafe { msg_send![&**window, setContentSize: NSSize::new(w as f64, h as f64)] };
         }
+    }
+
+    fn handles(&self, id: Id) -> Option<Handles> {
+        let (_, window, _) = self.windows.iter().find(|(i, ..)| *i == id)?;
+        let view: *mut AnyObject = unsafe { msg_send![&**window, contentView] };
+        Some(Handles {
+            display: rwh::RawDisplayHandle::AppKit(rwh::AppKitDisplayHandle::new()),
+            window: rwh::RawWindowHandle::AppKit(rwh::AppKitWindowHandle::new(NonNull::new(view as *mut c_void)?)),
+        })
     }
 
     fn destroy(&mut self, id: Id) {

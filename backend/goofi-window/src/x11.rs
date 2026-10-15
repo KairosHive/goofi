@@ -1,8 +1,10 @@
-//! X11, over a connection of goofi's own: a plugin embeds into the window id it is handed and
-//! talks to the server on a connection of its own, which it registers with the run loop.
+//! X11, over a libxcb connection of goofi's own, which a GPU presents over too: a plugin embeds
+//! into the window id it is handed, over a connection of its own registered with the run loop.
 
 use std::ffi::c_void;
+use std::num::NonZeroU32;
 use std::os::fd::AsRawFd;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,14 +12,16 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::properties::WmSizeHints;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
-use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
+use x11rb::xcb_ffi::XCBConnection;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
-use super::{Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Pumped, Screen, Wake};
 
 pub struct Platform {
-    conn: RustConnection,
+    conn: XCBConnection,
+    screen: usize,
+    visual: u32,
     root: Window,
     black: u32,
     wm_protocols: Atom,
@@ -45,9 +49,10 @@ fn err(e: impl std::fmt::Display) -> String {
 
 impl Platform {
     pub fn open() -> Result<Platform, String> {
-        let (conn, screen) = x11rb::connect(None).map_err(|e| format!("no X display: {e}"))?;
-        let screen = &conn.setup().roots[screen];
-        let (root, black) = (screen.root, screen.black_pixel);
+        x11rb::xcb_ffi::load_libxcb().map_err(|e| format!("no libxcb: {e}"))?;
+        let (conn, screen_num) = XCBConnection::connect(None).map_err(|e| format!("no X display: {e}"))?;
+        let screen = &conn.setup().roots[screen_num];
+        let (root, black, visual) = (screen.root, screen.black_pixel, screen.root_visual);
         let atom = |name: &[u8]| conn.intern_atom(false, name).map_err(err)?.reply().map_err(err).map(|r| r.atom);
         let wm_protocols = atom(b"WM_PROTOCOLS")?;
         let wm_delete = atom(b"WM_DELETE_WINDOW")?;
@@ -60,6 +65,8 @@ impl Platform {
         let depth = screen.root_depth;
         Ok(Platform {
             conn,
+            screen: screen_num,
+            visual,
             root,
             black,
             wm_protocols,
@@ -121,6 +128,16 @@ impl Screen for Platform {
         let _ = self.conn.flush();
     }
 
+    fn handles(&self, id: Id) -> Option<Handles> {
+        let connection = NonNull::new(self.conn.get_raw_xcb_connection());
+        let mut window = rwh::XcbWindowHandle::new(NonZeroU32::new(id as u32)?);
+        window.visual_id = NonZeroU32::new(self.visual);
+        Some(Handles {
+            display: rwh::RawDisplayHandle::Xcb(rwh::XcbDisplayHandle::new(connection, self.screen as std::ffi::c_int)),
+            window: rwh::RawWindowHandle::Xcb(window),
+        })
+    }
+
     fn destroy(&mut self, id: Id) {
         if let Some(gc) = self.gcs.remove(&(id as Window)) {
             let _ = self.conn.free_gc(gc);
@@ -179,7 +196,7 @@ impl Screen for Platform {
 
     fn pump(&mut self, until: Option<Instant>, fds: &[i32]) -> Pumped {
         let dead = self.conn.flush().is_err();
-        let mut polled: Vec<libc::pollfd> = [self.conn.stream().as_raw_fd(), self.wake[0]]
+        let mut polled: Vec<libc::pollfd> = [self.conn.as_raw_fd(), self.wake[0]]
             .into_iter()
             .chain(fds.iter().copied())
             .map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 })

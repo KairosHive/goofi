@@ -56,8 +56,27 @@ pub struct Slot {
     pub overruns: u8,
     /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
     pub cost: Option<Duration>,
+    /// What every `process` so far cost, read off the control thread for `session status`.
+    pub spent: Arc<Spent>,
     /// What this block's run found wrong, for the audio thread to send once the level is done.
     pub fault: Option<Fault>,
+}
+
+/// A node's render cost, summed and maxed over its blocks: the audio thread adds, the status reads.
+#[derive(Default)]
+pub struct Spent {
+    pub blocks: AtomicU64,
+    pub nanos: AtomicU64,
+    pub max_nanos: AtomicU64,
+}
+
+impl Spent {
+    fn add(&self, took: Duration) {
+        let ns = took.as_nanos() as u64;
+        self.blocks.fetch_add(1, Ordering::Relaxed);
+        self.nanos.fetch_add(ns, Ordering::Relaxed);
+        self.max_nanos.fetch_max(ns, Ordering::Relaxed);
+    }
 }
 
 /// How many block boundaries a ramp carries: 16 blocks is 21 ms at 48 kHz, past the control
@@ -891,6 +910,9 @@ unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch:
     };
     // The outputs again, now the node is done with them: judged, silenced if need be, published.
     let mut outs = carve(arena, &wants[..stage.outs.len()]);
+    if ran.is_some() {
+        slot.spent.add(started.elapsed());
+    }
     let fault = match ran {
         None => None,
         Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),

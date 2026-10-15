@@ -32,6 +32,10 @@ struct Shared {
     /// Frames in the high half and rate in the low, once the clock's thread is real-time.
     realtime: AtomicU64,
     panicked: AtomicBool,
+    /// How long the clock thread has waited for the helpers' items after its own, in all and at
+    /// worst: what a helper late to its seat costs the block.
+    pub waited_ns: AtomicU64,
+    pub waited_max_ns: AtomicU64,
 }
 
 // SAFETY: `job` is the one non-Sync field, and the generation protocol above orders every access.
@@ -81,6 +85,8 @@ impl Pool {
             parked: (0..helpers).map(|_| AtomicBool::new(false)).collect(),
             realtime: AtomicU64::new(0),
             panicked: AtomicBool::new(false),
+            waited_ns: AtomicU64::new(0),
+            waited_max_ns: AtomicU64::new(0),
         });
         let mut workers = Vec::new();
         for k in 0..helpers {
@@ -92,6 +98,14 @@ impl Pool {
         }
         let threads = workers.iter().map(|w| w.thread().clone()).collect();
         Pool { shared, threads, workers, generation: 0 }
+    }
+
+    /// What the clock thread has waited on the helpers so far: in all, and the longest once.
+    pub fn waited(&self) -> (Duration, Duration) {
+        (
+            Duration::from_nanos(self.shared.waited_ns.load(Ordering::Relaxed)),
+            Duration::from_nanos(self.shared.waited_max_ns.load(Ordering::Relaxed)),
+        )
     }
 
     /// Ask every helper to take the clock thread's real-time grant, for `frames` at `rate`.
@@ -119,9 +133,13 @@ impl Pool {
             }
         }
         shared.drain(self.generation);
+        let waited = Instant::now();
         while shared.done.load(Ordering::Acquire) < count {
             std::hint::spin_loop();
         }
+        let ns = waited.elapsed().as_nanos() as u64;
+        shared.waited_ns.fetch_add(ns, Ordering::Relaxed);
+        shared.waited_max_ns.fetch_max(ns, Ordering::Relaxed);
         // SAFETY: every item is done, and a late helper's claim fails on the finished word.
         unsafe { *shared.job.get() = None };
         if shared.panicked.swap(false, Ordering::Relaxed) {
@@ -143,6 +161,7 @@ impl Drop for Pool {
 /// A helper's life: wait for a generation it has not seen, run what it can claim of it. Helper `k`
 /// joins only a level of more than `k + 1` items, so one the patch never needs stays parked.
 fn help(shared: &Shared, k: usize) {
+    crate::rt::seat();
     let (mut seen, mut promoted, mut idle) = (0u32, false, Instant::now());
     loop {
         if shared.stop.load(Ordering::SeqCst) {
@@ -155,9 +174,7 @@ fn help(shared: &Shared, k: usize) {
                 let realtime = shared.realtime.load(Ordering::Acquire);
                 if !promoted && realtime != 0 {
                     promoted = true;
-                    if let Err(e) = audio_thread_priority::promote_current_thread_to_real_time((realtime >> 32) as u32, realtime as u32) {
-                        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: a render helper was refused real-time priority: {e}"));
-                    }
+                    crate::rt::promote((realtime >> 32) as u32, realtime as u32);
                 }
                 shared.drain(generation);
                 idle = Instant::now();

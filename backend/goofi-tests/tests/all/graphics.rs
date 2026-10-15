@@ -979,7 +979,15 @@ fn shaders_render_on_the_gpu() {
         render(g, 1);
         opened(g)
     });
-    assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(1), "status names the window");
+    let status = g.call("session status", j!({}))["graphics"].clone();
+    assert_eq!(status["windows"], j!(1), "status names the window");
+    // The suite's screen answers no handles, so the frame goes through the window thread.
+    assert_eq!(status["surfaces"], j!(0), "and no GPU surface on a headless screen");
+    assert_eq!(status["fps"], j!(goofi_core::variables::DEFAULT_FPS), "and the clock's pace is the variable's default");
+    g.call("variable entry edit", j!({ "name": "graphics.fps", "value": 24 }));
+    assert_eq!(g.call("session status", j!({}))["graphics"]["fps"], j!(24), "`graphics.fps` sets the pace");
+    g.call("variable entry edit", j!({ "name": "graphics.fps", "value": 100000 }));
+    assert_eq!(g.call("session status", j!({}))["graphics"]["fps"], j!(240), "held to the range");
     let frames = g.until("and the screen is given frames", |g| {
         render(g, 1);
         let seen = ui.run(move |host| host.presents(id));
