@@ -53,9 +53,9 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "playback",
         name: "loop",
-        spec: ParamSpec::Bool { default: false },
+        spec: ParamSpec::Bool { default: true },
         expression: None,
-        doc: Some("Start over at the end."),
+        doc: Some("Start over at the end, instead of falling silent."),
         section: 0,
         show: &[],
         role: None,

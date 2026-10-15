@@ -37,7 +37,7 @@ goofi_audio_sdk::params! {
     LOOPING = ParamDecl {
         group: "play",
         name: "loop",
-        spec: ParamSpec::Bool { default: false },
+        spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("start again at the end, instead of falling silent"),
         section: 0,

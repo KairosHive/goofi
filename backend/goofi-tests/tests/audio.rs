@@ -388,6 +388,8 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("link remove", j!({ "from": ep(hex(gain3), "out"), "to": ep(hex(out), "input") }));
     g.link(player, "out", out, "input");
     g.set_param(player, "play", "file", "sweep");
+    // Looping is the default; this step is about what a take does without it.
+    g.set_param(player, "play", "loop", false);
     sounds(&g, "the take plays back from its head", |x| near(crossings(x), 88) && peak(x) > 0.5);
     sounds(&g, "…and reaches the octave it was recorded into", |x| near(crossings(x), 176));
     g.set_param(player, "play", "position", 0.05);

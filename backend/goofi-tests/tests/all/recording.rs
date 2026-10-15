@@ -1288,7 +1288,9 @@ fn a_recording_played_back_and_recorded_again_holds_the_same_data() {
     let first = record_streams(&g, &kinds.map(|(_, slot)| (take, slot)), || {}, None);
     let files: Vec<std::path::PathBuf> = kinds.iter().map(|(_, slot)| stream_file(&g, &first, take, slot)).collect();
     let players: Vec<goofi_tests::Uid> = kinds.iter().map(|(kind, _)| g.add(kind)).collect();
+    // Looping is the default; a replay that holds exactly the frames it was given does not loop.
     for uid in &players {
+        g.set_param(*uid, "playback", "loop", false);
         g.ready(*uid);
     }
     let counts: Vec<u64> = files.iter().map(|f| taken(f).1.len() as u64).collect();
@@ -1311,6 +1313,8 @@ fn a_recording_played_back_and_recorded_again_holds_the_same_data() {
     let (a, t) = (g.add("ArrayPlayback"), g.add("StringPlayback"));
     g.set_param(a, "fallback", "channels", 2);
     g.set_param(t, "fallback", "sfreq", 50.0);
+    g.set_param(a, "playback", "loop", false);
+    g.set_param(t, "playback", "loop", false);
     g.ready(a);
     g.ready(t);
     let exact = [taken(&array).0.len() as u64 / 2, taken(&text).0.len() as u64];
