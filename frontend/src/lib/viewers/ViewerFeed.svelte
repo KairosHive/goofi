@@ -46,8 +46,6 @@
 	let capH = $state(0);
 	// Bumped when this body or its card moved, so the plot rect is measured again.
 	let layout = $state(0);
-	// Below a readable zoom the viewer unsubscribes and keeps its last frame as a thumbnail.
-	let frozen = $state(false);
 	// Stable per-instance token so multiple viewers of one slot collect (not evict).
 	const token = $props.id();
 
@@ -91,7 +89,6 @@
 		untrack(() => {
 			capW = quantize(w * scale, capW);
 			capH = quantize(h * scale, capH);
-			frozen = zoom < (frozen ? 0.34 : 0.3);
 		});
 	});
 
@@ -128,7 +125,6 @@
 
 	/** ONE hook for this viewer's stream, visibility and reduction; the registry settles what is sent. */
 	$effect(() => {
-		if (frozen) return;
 		frame = null;
 		if (!visible || !slot) return;
 		// Kind is not part of the stream's identity, but it IS part of what this viewer needs.
@@ -158,13 +154,12 @@
 		};
 	});
 
-	// On screen, the drawing follows the stream; zoomed out past legibility it lets the stream go
-	// and keeps its last picture. Decided from the settled state, never in a teardown.
+	// On screen, the drawing follows the stream at whatever zoom: the reduction above shrinks with
+	// it. Decided from the settled state, never in a teardown.
 	$effect(() => {
 		const d = drawing;
 		if (!d) return;
-		if (frozen) d.detach(true);
-		else if (!visible || !slot) d.detach(false);
+		if (!visible || !slot) d.detach();
 		else d.attach(node, slot);
 	});
 

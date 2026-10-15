@@ -48,7 +48,7 @@ export type ToWorker =
 	| { op: 'background'; id: number; hex: string }
 	| { op: 'settings'; id: number; settings: SettingsMap; box: DrawBox }
 	| { op: 'attach'; id: number; node: string; slot: string }
-	| { op: 'detach'; id: number; keep: boolean }
+	| { op: 'detach'; id: number }
 	| { op: 'pointer'; id: number; at: { x: number; y: number; box: ProbeBox } | null }
 	| { op: 'drag'; id: number; dx: number; dy: number; box: ProbeBox };
 

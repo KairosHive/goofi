@@ -51,11 +51,11 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 	}
 });
 
-test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resumes it', async ({ page }) => {
-	// `ViewerFeed.svelte` unsubscribes below a 0.3 zoom and keeps the last frame; a pinch is how a
-	// phone gets there. The proof is on the wire: `/data` stops arriving for the slot, then arrives
-	// again. The fingers close ABOUT the card, so it shrinks in place and never leaves the viewport,
-	// which would let the stream go for a reason that is not the zoom.
+test('a pinch far out keeps a viewer\'s stream, however small the card draws', async ({ page }) => {
+	// `ViewerFeed.svelte` sizes its demand to the zoom and never lets the stream go for zoom alone;
+	// a pinch is how a phone gets far out. The proof is on the wire: `/data` keeps arriving for the
+	// slot past a 0.3 zoom. The fingers close ABOUT the card, so it shrinks in place and never leaves
+	// the viewport, which would let the stream go for a reason that is not the zoom.
 	await page.goto('/');
 	await waitForApp(page);
 	try {
@@ -73,7 +73,7 @@ test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resum
 			page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out') ?? 0, osc);
 		await expect.poll(rate, 'the viewer draws the stream').toBeGreaterThan(0);
 
-		// The pane's own scale, read off its transform: the number the freeze is decided from.
+		// The pane's own scale, read off its transform: the number the demand is sized from.
 		const zoom = () =>
 			page.locator('.svelte-flow__viewport').evaluate(
 				(el) => Number(/scale\(([\d.]+)\)/.exec(el.style.transform)?.[1] ?? 1)
@@ -92,10 +92,10 @@ test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resum
 				.toBe(true);
 		};
 		await pinchTo((z) => z < 0.28, 0.5);
-		await expect.poll(rate, 'past the threshold, nothing arrives for the slot').toBe(0);
-		await expect.poll(() => frameSummary(page, osc)).toBeNull();
+		await expect.poll(rate, 'far out, the stream still arrives for the slot').toBeGreaterThan(0);
+		await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
 		await pinchTo((z) => z > 0.4, 2);
-		await expect.poll(rate, 'and back above it, the stream is demanded again').toBeGreaterThan(0);
+		await expect.poll(rate, 'and back in, it still does').toBeGreaterThan(0);
 	} finally {
 		await tearDown(page);
 	}

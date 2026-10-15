@@ -217,11 +217,11 @@ function clearDrawing(d: DrawingState): void {
 	probe(d);
 }
 
-function detach(d: DrawingState, keep: boolean): void {
+function detach(d: DrawingState): void {
 	d.slot?.drawings.delete(d);
 	d.slot = null;
 	stale.delete(d);
-	if (!keep) clearDrawing(d);
+	clearDrawing(d);
 }
 
 // ── messages ─────────────────────────────────────────────────────────────────────────────────
@@ -358,7 +358,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 			const d = drawings.get(m.id);
 			if (!d) break;
 			const st = ensureSlot(m.node, m.slot);
-			if (d.slot !== st) detach(d, false);
+			if (d.slot !== st) detach(d);
 			d.slot = st;
 			st.drawings.add(d);
 			invalidate(d);
@@ -366,7 +366,7 @@ self.addEventListener('message', (e: MessageEvent) => {
 		}
 		case 'detach': {
 			const d = drawings.get(m.id);
-			if (d) detach(d, m.keep);
+			if (d) detach(d);
 			break;
 		}
 		case 'pointer': {

@@ -23,8 +23,8 @@ export interface DrawingHandle {
 	settings(settings: SettingsMap, box: DrawBox): void;
 	/** Feed the drawing from a stream; the worker replays the stream's latest frame at once. */
 	attach(node: string, slot: string): void;
-	/** Stop feeding it; `keep` leaves the picture standing, as a thumbnail does. */
-	detach(keep: boolean): void;
+	/** Stop feeding it and clear its picture. */
+	detach(): void;
 	pointer(at: { x: number; y: number; box: ProbeBox } | null): void;
 	drag(dx: number, dy: number, box: ProbeBox): void;
 	remove(): void;
@@ -78,7 +78,7 @@ export function createDrawing(
 		setBackground: (hex) => post({ op: 'background', id, hex }),
 		settings: (settings, box) => post({ op: 'settings', id, settings, box }),
 		attach: (node, slot) => post({ op: 'attach', id, node, slot }),
-		detach: (keep) => post({ op: 'detach', id, keep }),
+		detach: () => post({ op: 'detach', id }),
 		pointer: (at) => post({ op: 'pointer', id, at }),
 		drag: (dx, dy, box) => post({ op: 'drag', id, dx, dy, box }),
 		remove() {
