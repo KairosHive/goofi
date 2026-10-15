@@ -732,14 +732,22 @@ impl Runtime {
                 Some(Retired::Rings(rings))
             }
             Msg::Plan { plan, mut arena } => {
-                // A param region the new plan keeps starts where the old one ended: a swap is not
-                // a move, and the glide reads the block before.
+                // A param region the new plan keeps starts where the old one ended, and a fresh
+                // one at its param's value: a swap or a birth is not a move the glide should read.
                 for stage in &plan.stages {
-                    let Some(was) = self.plan.stages.iter().find(|s| s.idx == stage.idx && s.serial == stage.serial) else { continue };
-                    for (new, old) in stage.params.iter().zip(&was.params) {
-                        if let (Some((to, tc)), Some((from, fc))) = (param_region(new), param_region(old)) {
-                            let n = tc.min(fc) * BLOCK;
-                            arena[to..to + n].copy_from_slice(&self.arena[from..from + n]);
+                    let was = self.plan.stages.iter().find(|s| s.idx == stage.idx && s.serial == stage.serial);
+                    let slot = self.slab[stage.idx].as_ref().filter(|s| s.serial == stage.serial);
+                    for (i, new) in stage.params.iter().enumerate() {
+                        let Some((to, tc)) = param_region(new) else { continue };
+                        match was.and_then(|w| param_region(&w.params[i])) {
+                            Some((from, fc)) => {
+                                let n = tc.min(fc) * BLOCK;
+                                arena[to..to + n].copy_from_slice(&self.arena[from..from + n]);
+                            }
+                            None => {
+                                let v = slot.map_or(0.0, |s| f64::from_bits(s.params[i].load(Ordering::Relaxed)) as f32);
+                                arena[to..to + tc * BLOCK].fill(v);
+                            }
                         }
                     }
                 }
