@@ -79,6 +79,15 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(why.contains("does not set"), "{why}");
     let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 1.5, 0.3] } }));
     assert!(why.contains("sustain"), "{why}");
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 0.5, -2.0] } }));
+    assert!(why.contains("-1 to hold"), "{why}");
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 0.5, -1.0] } }));
+    // The interval is seconds, or -1 for none.
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "A", "interval": -0.5 }));
+    assert!(why.contains("-1 for none"), "{why}");
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "interval": -1.0 }));
+    assert_eq!(g.doc()["machines"]["seq"]["states"]["A"]["interval"], j!(-1.0));
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "interval": 1.0 }));
     write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "gain": null } }));
     assert!(g.doc()["machines"]["seq"]["states"]["A"]["envelopes"].get("gain").is_none(), "{}", g.doc()["machines"]["seq"]["states"]["A"]);
     write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "gain": 0.2 } }));
@@ -361,7 +370,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
 }
 
 #[test]
-fn an_attribute_lands_by_its_states_envelope_and_leaves_by_its_release_or_the_transitions_ease() {
+fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_eases_it_on() {
     let ev = Arc::new(PyExprEvaluator::new().unwrap());
     let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "m": {
         "attributes": {
@@ -370,12 +379,18 @@ fn an_attribute_lands_by_its_states_envelope_and_leaves_by_its_release_or_the_tr
         },
         "states": {
             "off": { "values": { "gain": 0.0 }, "mode": "expression", "expression": "-1" },
-            "on": { "values": { "gain": 1.0, "tint": [1.0, 0.0, 0.0, 1.0] }, "envelopes": { "gain": [0.2, 0.2, 0.5, 0.4], "tint": [0.0, 0.0, 1.0, 0.0] },
-                    "mode": "expression", "expression": "-1" }
+            "on": { "values": { "gain": 1.0, "tint": [1.0, 0.0, 0.0, 1.0] }, "envelopes": { "gain": [0.2, 0.2, 0.5, 0.4], "tint": [0.0, 0.0, 1.0, -1.0] },
+                    "mode": "expression", "expression": "-1" },
+            "held": { "values": { "gain": 0.8 }, "envelopes": { "gain": [0.2, 0.2, 0.5, -1.0] }, "mode": "expression", "expression": "-1" },
+            "beat": { "values": { "gain": 1.0 }, "envelopes": { "gain": [0.2, 0.2, 0.5, 0.4] }, "interval": 1.0 },
+            "still": { "values": { "gain": 1.0 }, "envelopes": { "gain": [0.2, 0.2, 0.5, 0.4] }, "interval": -1.0 }
         },
         "transitions": {
             "up": { "from": "off", "to": "on", "triggers": [{ "kind": "manual" }] },
-            "down": { "from": "on", "to": "off", "triggers": [{ "kind": "manual" }], "duration": 0.3, "curve": "linear" }
+            "down": { "from": "on", "to": "off", "triggers": [{ "kind": "manual" }], "duration": 0.3, "curve": "linear" },
+            "hold": { "from": "on", "to": "held", "triggers": [{ "kind": "manual" }] },
+            "let": { "from": "held", "to": "off", "triggers": [{ "kind": "manual" }], "duration": 0.3, "curve": "linear" },
+            "swap": { "from": "held", "to": "on", "triggers": [{ "kind": "manual" }], "duration": 0.4, "curve": "linear" }
         },
         "playheads": { "p": { "start": "off" } }
     } })).unwrap();
@@ -387,52 +402,93 @@ fn an_attribute_lands_by_its_states_envelope_and_leaves_by_its_release_or_the_tr
     let mut m = Machines::default();
     m.configure(model, Some(ev.clone()));
     m.advance(0.0, &none);
+    let gain_at = |m: &mut Machines, t: f64| -> Data { written(&m.advance(t, &none), "p.gain").clone() };
 
-    // An instant transition into a state with an envelope: the value is reached over the attack,
-    // falls to the sustain over the decay and rests there; a zero-length envelope lands at once.
+    // An instant transition into a state with an envelope: from arrival the value is scaled up from
+    // 0 over the attack, down to the sustain over the decay, and down to 0 over the release. An
+    // envelope with no times and a held release is the value itself, at once.
     m.fire(1.0, "m", "p", "up");
     let w = m.advance(1.0, &none);
     assert_eq!(written(&w, "p.state").as_str().unwrap(), "on");
     assert_eq!(written(&w, "p.progress"), &Data::number(1.0), "the move itself was instant");
     let gain = written(&w, "p.gain");
     assert!(gain.as_functional().is_some(), "{gain:?}");
-    for (t, want) in [(1.0, 0.0), (1.1, 0.5), (1.2, 1.0), (1.3, 0.75), (1.4, 0.5), (2.0, 0.5)] {
+    for (t, want) in [(1.0, 0.0), (1.1, 0.5), (1.2, 1.0), (1.3, 0.75), (1.4, 0.5), (1.6, 0.25), (1.8, 0.0), (2.0, 0.0)] {
         near(gain, t, want);
     }
     assert_eq!(written(&w, "p.tint"), &Data::numbers([1.0, 0.0, 0.0, 1.0]));
-    // The envelope's rest is an instant owed: once it is past, the sustain is a plain frame.
-    let w = m.advance(1.5, &none);
-    assert_eq!(written(&w, "p.gain"), &Data::number(0.5));
+    // Each stage's end is an instant owed; once the envelope is past, what it left is a plain frame.
+    near(&gain_at(&mut m, 1.5), 1.5, 0.375);
+    assert_eq!(&gain_at(&mut m, 2.0), &Data::number(0.0), "a played-out envelope leaves nothing of the value");
 
-    // Leaving at rest, the release carries the attribute to the next state's value over its own
-    // 0.4 s, not the transition's 0.3; an attribute the next state leaves out goes on untouched.
-    m.fire(2.0, "m", "p", "down");
-    let w = m.advance(2.0, &none);
-    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("off", "on"));
-    near(written(&w, "p.progress"), 2.15, 0.5);
+    // A release of -1 holds the sustain: 0.5 of the value, for ever.
+    m.fire(2.5, "m", "p", "hold");
+    let gain = &gain_at(&mut m, 2.5);
+    for (t, want) in [(2.5, 0.0), (2.7, 0.8), (2.9, 0.4), (10.0, 0.4)] {
+        near(gain, t, want);
+    }
+    assert_eq!(&gain_at(&mut m, 3.5), &Data::number(0.4));
+
+    // A transition eases the attribute from where the envelope left it to the next state's plain
+    // value over its own duration; one the next state leaves out goes on untouched.
+    m.fire(4.0, "m", "p", "let");
+    let w = m.advance(4.0, &none);
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("off", "held"));
+    near(written(&w, "p.progress"), 4.15, 0.5);
     let gain = written(&w, "p.gain");
-    for (t, want) in [(2.0, 0.5), (2.2, 0.25), (2.4, 0.0), (3.0, 0.0)] {
+    for (t, want) in [(4.0, 0.4), (4.15, 0.2), (4.3, 0.0), (5.0, 0.0)] {
         near(gain, t, want);
     }
     assert_eq!(written(&w, "p.tint"), &Data::numbers([1.0, 0.0, 0.0, 1.0]));
-    let w = m.advance(2.5, &none);
+    let w = m.advance(4.5, &none);
     assert_eq!(written(&w, "p.prev").as_str().unwrap(), "", "landed");
     assert_eq!(written(&w, "p.gain"), &Data::number(0.0));
 
-    // Leaving mid-attack, the transition's own ease carries it on from where it stands.
-    m.fire(4.0, "m", "p", "up");
-    m.advance(4.0, &none);
-    m.fire(4.1, "m", "p", "down");
-    let w = m.advance(4.1, &none);
-    let gain = written(&w, "p.gain");
-    for (t, want) in [(4.1, 0.5), (4.25, 0.25), (4.4, 0.0)] {
+    // Leaving mid-attack, the transition's ease carries it on from where it stands.
+    m.fire(5.0, "m", "p", "up");
+    m.advance(5.0, &none);
+    m.fire(5.1, "m", "p", "down");
+    let gain = &gain_at(&mut m, 5.1);
+    for (t, want) in [(5.1, 0.5), (5.25, 0.25), (5.4, 0.0)] {
         near(gain, t, want);
     }
 
-    // A jump lands the state's values at once: no envelope plays.
-    m.jump(5.0, "m", "p", "on");
-    let w = m.advance(5.0, &none);
-    assert_eq!(written(&w, "p.gain"), &Data::number(1.0));
+    // A jump is an arrival: the envelope plays.
+    m.jump(6.0, "m", "p", "on");
+    let gain = &gain_at(&mut m, 6.0);
+    for (t, want) in [(6.0, 0.0), (6.2, 1.0), (6.4, 0.5)] {
+        near(gain, t, want);
+    }
+
+    // A timed transition into a state whose envelope plays on the attribute eases it to 0 first,
+    // so the attack starts where the flight lands it.
+    m.jump(7.0, "m", "p", "held");
+    m.advance(7.5, &none);
+    m.fire(8.0, "m", "p", "swap");
+    let gain = &gain_at(&mut m, 8.0);
+    for (t, want) in [(8.0, 0.4), (8.2, 0.2), (8.4, 0.0)] {
+        near(gain, t, want);
+    }
+    let gain = &gain_at(&mut m, 8.4);
+    for (t, want) in [(8.4, 0.0), (8.5, 0.5), (8.6, 1.0)] {
+        near(gain, t, want);
+    }
+
+    // A state with no way out beats on its interval: its values land again and its envelopes
+    // play; an interval of -1 beats never.
+    m.jump(10.0, "m", "p", "beat");
+    m.advance(10.0, &none);
+    assert_eq!(&gain_at(&mut m, 10.9), &Data::number(0.0));
+    let gain = &gain_at(&mut m, 11.0);
+    for (t, want) in [(11.0, 0.0), (11.1, 0.5), (11.2, 1.0)] {
+        near(gain, t, want);
+    }
+    assert_eq!(&gain_at(&mut m, 11.9), &Data::number(0.0));
+    assert!(gain_at(&mut m, 12.0).as_functional().is_some(), "the beat goes on");
+    m.jump(13.0, "m", "p", "still");
+    m.advance(13.0, &none);
+    assert_eq!(&gain_at(&mut m, 14.5), &Data::number(0.0));
+    assert!(m.take_errors().is_empty());
 }
 
 #[test]
@@ -465,6 +521,7 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
     };
     let none = |_: &str| None;
     assert_eq!(walk(j!({ "mode": "sequence" }), &none).0, "XYZXYZ", "the next spoke in authored order, round the ring");
+    assert_eq!(walk(j!({ "mode": "sequence", "interval": -1.0 }), &none).0, "------", "an interval of -1 never decides by time");
     let (path, _) = walk(j!({}), &none);
     assert!(path.len() == 6 && !path.contains('-'), "a new state draws evenly and never waits: {path}");
     let (path, _) = walk(j!({ "noop": 0.0, "weights": { "hx": 1.0, "hy": 2.0 } }), &none);

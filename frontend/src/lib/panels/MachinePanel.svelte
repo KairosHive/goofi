@@ -1,7 +1,8 @@
 <!-- State machine panel: one machine on a canvas — its states as boxes, its transitions as lines,
      its playheads as dots that move as the manager moves them — with the editor's inspector pane
-     beside it for the selected states or transitions; the seed rides the tab bar. Every change
-     is a `machine` op, so the manager owns the model and this panel the drawing and the gesture. -->
+     beside it for the selected states; the seed rides the tab bar. A box dragged onto a param row
+     maps the row to one of its attributes. Every change is a `machine` op, so the manager owns the
+     model and this panel the drawing and the gesture. -->
 <script lang="ts">
 	import {
 		Background,
@@ -18,11 +19,12 @@
 		type Node,
 		type Viewport
 	} from '@xyflow/svelte';
-	import { asStateObject, createLongPress, type PanelProps } from 'panelty';
+	import { asStateObject, createLongPress, portal, workspace, type MenuItem, ContextMenu, type PanelProps } from 'panelty';
 	import { tick, untrack } from 'svelte';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { on } from 'svelte/events';
 	import { camera } from '$lib/editor/camera';
+	import { eventPoint } from '$lib/editor/eventPoint';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
@@ -37,7 +39,8 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { EmptyState, Icon, IconButton, NumberInput } from '$lib/ui';
+	import { ui } from '$lib/stores/ui.svelte';
+	import { EmptyState, Icon, IconButton, isTextEditingTarget, NumberInput } from '$lib/ui';
 	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
 
@@ -48,6 +51,8 @@
 	let { panelId, state: panelState, setState }: PanelProps = $props();
 	const g = graph();
 	const sel = selection();
+	const uiStore = ui();
+	const ws = workspace();
 
 	const name = $derived((asStateObject(panelState) as MachineState).machine ?? '');
 	const machine = $derived(name ? g.machines[name] : undefined);
@@ -240,9 +245,11 @@
 		}
 	}
 
-	/** The one delete path, for the Delete key: the transitions first, then the states, which take
-	 * their own transitions with them. */
-	function deleteElements({ nodes, edges }: { nodes: Node[]; edges: Edge[] }): void {
+	/** The one delete path: the selected transitions first, then the states, which take their own
+	 * transitions with them. */
+	function deleteSelection(): void {
+		const nodes = flowNodes.filter((n) => sel.nodes(panelId).has(n.id));
+		const edges = flowEdges.filter((e) => sel.edges(panelId).has(e.id));
 		const gone = new Set(nodes.map((n) => n.id));
 		for (const e of edges) {
 			if (!gone.has(e.source) && !gone.has(e.target)) void call('machine transition remove', { id: e.id });
@@ -251,17 +258,60 @@
 	}
 
 	// ---- a box drag previews the state's place and lands it, on the grid, as one edit. A hold
-	// that never moves leaves the box where it was.
+	// that never moves leaves the box where it was. Over a param row it is a mapping, not a move:
+	// the box snaps back, a chip follows the pointer, and the drop hands the row a playhead's
+	// variable for one of the state's attributes, picked from a menu when there are several.
 	const dragOrigin = new Map<string, { x: number; y: number }>();
+	let lifted = $state<{ x: number; y: number; state: string } | null>(null);
+	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function onNodeDragStart(args: { nodes: Node[] }): void {
 		for (const n of args.nodes) dragOrigin.set(n.id, { x: n.position.x, y: n.position.y });
+	}
+	/** The param row under the pointer, where a lone box is being dragged. */
+	function rowUnder(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): { el: Element; x: number; y: number } | null {
+		const p = args.nodes.length === 1 ? eventPoint(args.event) : null;
+		const el = p && document.elementFromPoint(p.clientX, p.clientY)?.closest('[data-variable-drop]');
+		return p && el ? { el, x: p.clientX, y: p.clientY } : null;
+	}
+	/** The box back where its drag began, the preview with it. */
+	function revert(n: Node): void {
+		const o = dragOrigin.get(n.id);
+		if (!o) return;
+		pinned.set(n.id, o);
+		flowNodes = flowNodes.map((f) => (f.id === n.id ? { ...f, position: o } : f));
+		g.previewState(name, n.id, { pos: [o.x, o.y] });
+	}
+	/** Hand `row` a variable of `state`'s: the one attribute it sets on the one playhead, or a pick. */
+	function offer(row: Element, state: string, at: { x: number; y: number }): void {
+		const m = machine;
+		if (!m) return;
+		const playheads = Object.keys(m.playheads);
+		const set = Object.keys(m.states[state]?.values ?? {});
+		const attrs = set.length > 0 ? set : Object.keys(m.attributes);
+		if (playheads.length === 0) return notify().failure('Map state', 'no playhead travels this machine; add one in the state inspector');
+		if (attrs.length === 0) return notify().failure('Map state', 'the machine has no attribute to read');
+		const send = (ph: string, a: string): void => void row.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${ph}.${a}` }));
+		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
+		if (choices.length === 1) return send(choices[0].ph, choices[0].a);
+		picker = { x: at.x, y: at.y, items: choices.map(({ ph, a }) => ({ label: playheads.length > 1 ? `${ph}.${a}` : a, action: () => send(ph, a) })) };
 	}
 	function snapped(n: Node): [number, number] {
 		const o = dragOrigin.get(n.id);
 		if (o && o.x === n.position.x && o.y === n.position.y) return [o.x, o.y];
 		return [Math.round(n.position.x / GRID) * GRID, Math.round(n.position.y / GRID) * GRID];
 	}
-	function onNodeDrag(args: { nodes: Node[] }): void {
+	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
+		const row = rowUnder(args);
+		if (row) {
+			revert(args.nodes[0]);
+			lifted = { x: row.x, y: row.y, state: args.nodes[0].id };
+			uiStore.variableDrag = { name: args.nodes[0].id, x: row.x, y: row.y, target: row.el };
+			return;
+		}
+		if (lifted) {
+			lifted = null;
+			uiStore.variableDrag = null;
+		}
 		for (const n of args.nodes) {
 			const [x, y] = snapped(n);
 			pinned.set(n.id, { x, y });
@@ -272,7 +322,15 @@
 			return p && args.nodes.some((d) => d.id === n.id) ? { ...n, position: p } : n;
 		});
 	}
-	function onNodeDragStop(args: { nodes: Node[] }): void {
+	function onNodeDragStop(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
+		const row = rowUnder(args);
+		lifted = null;
+		uiStore.variableDrag = null;
+		if (row) {
+			revert(args.nodes[0]);
+			pinned.delete(args.nodes[0].id);
+			return offer(row.el, args.nodes[0].id, row);
+		}
 		for (const n of args.nodes) {
 			const pos = snapped(n);
 			pinned.set(n.id, { x: pos[0], y: pos[1] });
@@ -285,10 +343,21 @@
 		return call('machine arrange', {});
 	}
 
+	/** The keys of the active panel, outside its text fields and dialogs: Escape drops a lift or the
+	 * selection, Delete takes the selection. Nothing reaches a panel that is not the active one. */
 	function onKeydown(e: KeyboardEvent): void {
-		if (e.key === 'Escape' && (sel.nodes(panelId).size || sel.edges(panelId).size)) {
+		const t = e.target as HTMLElement | null;
+		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(t) || t?.closest?.('dialog[open]')) return;
+		const selected = sel.nodes(panelId).size || sel.edges(panelId).size;
+		if (e.key === 'Escape' && lifted) {
+			lifted = null;
+			uiStore.variableDrag = null;
+		} else if (e.key === 'Escape' && selected) {
 			sel.clear(panelId);
 			e.preventDefault();
+		} else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
+			e.preventDefault();
+			deleteSelection();
 		}
 	}
 
@@ -310,7 +379,7 @@
 			on(root, 'pointermove', panePress.move),
 			on(root, 'pointerup', panePress.cancel),
 			on(root, 'pointercancel', panePress.cancel),
-			on(root, 'keydown', onKeydown)
+			on(document, 'keydown', onKeydown)
 		];
 		return () => {
 			offs.forEach((off) => off());
@@ -318,6 +387,13 @@
 		};
 	});
 </script>
+
+{#if lifted}
+	<div class="link-ghost" use:portal style="left: {lifted.x}px; top: {lifted.y}px" aria-hidden="true">variables.⟨playhead⟩.{lifted.state}…</div>
+{/if}
+{#if picker}
+	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => (picker = null)} />
+{/if}
 
 <div class="wrap" data-testid="machine-panel" data-machine={name}>
 	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}
@@ -344,8 +420,6 @@
 					connectionMode={ConnectionMode.Loose}
 					connectionLineType={ConnectionLineType.Straight}
 					connectionRadius={CARD_W / 2 + 20}
-					deleteKey={['Delete', 'Backspace']}
-					ondelete={deleteElements}
 					onbeforeconnect={onConnect}
 					onnodedragstart={onNodeDragStart}
 					onnodedrag={onNodeDrag}
@@ -452,6 +526,20 @@
 				bottom: calc(var(--space-6) + var(--hit));
 			}
 		}
+	}
+	/* The chip that follows a box lifted over a param row: what the drop maps. */
+	.link-ghost {
+		position: fixed;
+		z-index: var(--z-drag-ghost);
+		transform: translate(12px, 12px);
+		pointer-events: none;
+		padding: var(--space-2);
+		background: var(--surface-3);
+		color: var(--text);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-sm);
+		font-family: var(--font-mono);
+		font-size: var(--fs-small);
 	}
 	.empty-hint {
 		position: absolute;

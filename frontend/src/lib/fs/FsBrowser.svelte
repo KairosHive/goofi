@@ -207,10 +207,8 @@
 	const busy = $derived(working !== null && failure === null);
 </script>
 
-<!-- `nokey`: SvelteFlow's delete key is a bare window listener, so Backspace here would delete the canvas selection. -->
 <Dialog
 	open
-	class="nokey"
 	onClose={() => !busy && onClose()}
 	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(1100px, 94vw); width: 100%"
 	aria-label={title}

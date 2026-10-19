@@ -4,7 +4,7 @@ import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap, placeholder, tooltips, type KeyBinding } from '@codemirror/view';
 import { syntaxHighlighting } from '@codemirror/language';
 import { python } from '@codemirror/lang-python';
-import { acceptCompletion, autocompletion, closeCompletion } from '@codemirror/autocomplete';
+import { acceptCompletion, autocompletion, closeCompletion, completionKeymap } from '@codemirror/autocomplete';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { setDiagnostics } from '@codemirror/lint';
 import { MARGIN, overlayViewport } from 'panelty';
@@ -41,17 +41,20 @@ export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): Ex
 		committed = next;
 		opts.onCommit(next);
 	};
-	/* Escape must fall THROUGH once there is no popup: it is the app's, and it dismisses the auto
-	   inspector pane. */
+	/* Tab takes the completion and nothing else, the moment the popup shows: the delay that guards an
+	   Enter from an unseen option guards nothing once Enter only commits the text as typed. Escape
+	   must fall THROUGH once there is no popup: it is the app's, and dismisses the pane. */
 	const keys: KeyBinding[] = [
 		{ key: 'Escape', run: (view) => closeCompletion(view) },
-		{ key: 'Enter', run: (view) => acceptCompletion(view) || (commit(view), true) }
+		{ key: 'Tab', run: (view) => acceptCompletion(view) },
+		{ key: 'Enter', run: (view) => (closeCompletion(view), commit(view), true) }
 	];
 	const extensions: Extension[] = [
 		python(),
 		goofiLanguageData(opts.catalogue),
 		syntaxHighlighting(exprHighlight),
-		autocompletion(),
+		autocompletion({ defaultKeymap: false, interactionDelay: 0 }),
+		keymap.of(completionKeymap.filter((b) => b.key !== 'Enter')),
 		history(),
 		exprTheme,
 		/* Parented to `document.body` because an inspector panel clips its overflow, and sized against

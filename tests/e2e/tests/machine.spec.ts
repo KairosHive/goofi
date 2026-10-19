@@ -1,13 +1,16 @@
 // One state machine, built with the pointer the project gives: two boxes from a double-click or a
 // held finger, a transition dragged from one box's edge to the other, and everything else in the
 // inspector of the selected state — its playheads, its attributes and their envelopes, its
-// decision and its transitions — and the dot that crosses when a transition is fired. Runs on
-// the desktop and the phone, and sweeps the scene.
+// decision and its transitions, each out carrying its share — and the dot that crosses when a
+// transition is fired. Runs on the desktop and the phone, and sweeps the scene. A second test,
+// desktop only, drops a box on a node's param row to map it, completes an expression with Tab,
+// and sends the Delete key to the active panel alone.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { restorePanelType, waitForApp } from '../lib/app';
+import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { addNode, nodeParams, nodes, selectNode, waitForNoNode, waitForNode } from '../lib/goofi';
 import { expectIntact } from '../lib/invariants';
-import { rawCall } from '../lib/raw';
+import { backendDoc, rawCall } from '../lib/raw';
 import { swipe, touchSession } from '../lib/touch';
 
 /** Whether `dot`'s centre sits on `card`'s top edge. */
@@ -222,9 +225,9 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 
 		await page.screenshot({ path: testInfo.outputPath('machine.png') });
 
-		// A box decides each interval, set in its inspector: a drawn share moves the others with it
-		// so they sum to one, and its label carries it. The interval is typed; the mode toggle
-		// switches to a sequence, and the card's line says so.
+		// A box decides each interval, set in its inspector: a share drawn on a transition's row moves
+		// the others with it so they sum to one, and its label carries it. The interval is typed; the
+		// mode toggle switches to a sequence, and the card's line and the row say so.
 		const decision = async (): Promise<{ noop: number; weights: Record<string, number>; interval: number; mode: string }> =>
 			(await rawCall(page, 'session state')).result.machines.machine0.states.state0;
 		await expect(card0).toHaveAttribute('data-mode', 'random');
@@ -241,7 +244,8 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await press(inspector.getByTestId('state-mode-sequence'));
 		await expect(card0).toHaveAttribute('data-mode', 'sequence');
 		await expect(card0.getByTestId('state-card-summary')).toContainText('seq · 1.05s');
-		await expect(inspector.getByTestId('state-share-t1')).toContainText('1 → state1');
+		await expect(inspector.getByTestId('state-share-t1')).toHaveCount(0);
+		await expect(inspector.getByTestId('transition-row-t1')).toContainText('#1 | manual');
 		await expect(label).toHaveText('#1 | manual');
 		await tapCorner();
 
@@ -338,6 +342,94 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 
 		await expectIntact(page, 'the machine panel');
 	} finally {
+		await restorePanelType(page);
+		await rawCall(page, 'session new');
+	}
+});
+
+test('a box dropped on a param maps an attribute, Tab completes, and Delete takes the active panel alone', async ({ page, hasTouch }) => {
+	test.skip(hasTouch, 'a box onto a row is a mouse drag between two panels; the phone has one');
+	await page.goto('/');
+	await waitForApp(page);
+	let osc: string | null = null;
+	try {
+		// The editor on the left, a machine on the right: one state that sets two numbers, and a
+		// playhead born in it, whose variables a param can read.
+		await splitRight(page);
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[1].panelId, 'machine');
+		});
+		const panel = page.getByTestId('machine-panel');
+		await expect(panel).toHaveAttribute('data-machine', 'machine0');
+		const num = { type: 'num', vmin: 0, vmax: 1 };
+		await rawCall(page, 'machine attribute add', { machine: 'machine0', name: 'gain', value: 0.5, kind: num });
+		await rawCall(page, 'machine attribute add', { machine: 'machine0', name: 'rate', value: 2, kind: { ...num, vmax: 10 } });
+		await rawCall(page, 'machine state add', { machine: 'machine0', name: 'state0', values: { gain: 0.5, rate: 2 } });
+		await rawCall(page, 'machine playhead add', { machine: 'machine0', name: 'beat', start: 'state0' });
+		const card = page.getByTestId('state-card-state0');
+		await expect(card).toBeVisible();
+		const placed = async (): Promise<number[]> => (await backendDoc(page)).machines.machine0.states.state0.pos;
+		const before = await placed();
+
+		osc = await addNode(page, 'LFO');
+		await waitForNode(page, osc);
+		await selectNode(page, osc);
+		const row = page.getByTestId('param-field-frequency');
+		await row.scrollIntoViewIfNeeded();
+
+		// The box dragged over the row is a mapping, not a move: the row lights, and the drop offers
+		// the attributes the state sets; the one picked maps the row to the playhead's variable.
+		// The box is back where it was.
+		const name = card.getByTestId('state-card-name');
+		const [a, b] = await Promise.all([name.boundingBox(), row.boundingBox()]);
+		await page.mouse.move(a!.x + a!.width / 2, a!.y + a!.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(a!.x + a!.width / 2 + 30, a!.y + a!.height / 2 + 30, { steps: 4 });
+		await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
+		await expect(row).toHaveClass(/over/);
+		await page.mouse.up();
+		const item = page.locator('.context-menu .item', { hasText: 'rate' });
+		await expect(item).toBeVisible();
+		await item.click();
+		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('variables.beat.rate');
+		expect(await placed()).toEqual(before);
+
+		// In the row's editor, under its label, Tab takes the completion the editor offers, and
+		// Enter commits the line.
+		await row.getByRole('button', { name: 'frequency', exact: true }).click();
+		const editor = row.getByTestId('param-expr-input');
+		await expect(editor).toBeVisible();
+		await editor.click();
+		await page.keyboard.press('Control+a');
+		await page.keyboard.type('variables.beat.ga');
+		await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+		await page.keyboard.press('Tab');
+		await expect(editor).toHaveText('variables.beat.gain');
+		await page.keyboard.press('Enter');
+		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('variables.beat.gain');
+
+		// Delete goes to the active panel alone: with the box selected in the machine panel it takes
+		// the box and leaves the node selected in the editor; with the editor active, the reverse.
+		// The playhead moves first: a state it starts in refuses to go.
+		await rawCall(page, 'machine state add', { machine: 'machine0', name: 'state1' });
+		await rawCall(page, 'machine playhead edit', { machine: 'machine0', name: 'beat', start: 'state1' });
+		const card1 = page.getByTestId('state-card-state1');
+		await expect(card1).toBeVisible();
+		await name.click();
+		await expect(page.getByTestId('machine-inspector').getByTestId('state-name')).toHaveText('state0');
+		await page.keyboard.press('Delete');
+		await expect(card).toHaveCount(0);
+		expect((await nodes(page)).some((n) => n.uid === osc)).toBe(true);
+		await card1.getByTestId('state-card-name').click();
+		await selectNode(page, osc);
+		await page.keyboard.press('Delete');
+		await waitForNoNode(page, osc);
+		osc = null;
+		await expect(card1).toBeVisible();
+		await expectIntact(page, 'the machine panel beside the editor');
+	} finally {
+		await closeSplit(page);
 		await restorePanelType(page);
 		await rawCall(page, 'session new');
 	}

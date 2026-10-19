@@ -698,7 +698,6 @@
 	{/if}
 
 	<ConfirmDialog
-		class="nokey"
 		open={!!replacing}
 		question="Replace the node in your library?"
 		detail={replacing

@@ -35,12 +35,13 @@ export type Attribute = { default: Literal, kind: AttributeKind, };
 export type Decision = "sequence" | "random" | "expression";
 export type State = { pos: [number, number], values?: Record<string, Literal>, 
 /**
- * Per attribute set here, the ADSR its value lands by: attack, decay and release in seconds,
- * sustain in 0..1 of the way from what the playhead held to the value.
+ * Per attribute set here, the ADSR that scales its value from a playhead's arrival: attack, decay
+ * and release in seconds, sustain in 0..1; a release of -1 holds the sustain.
  */
 envelopes?: Record<string, [number, number, number, number]>, 
 /**
- * Seconds between decisions, from arrival; 0 decides once, on arrival.
+ * Seconds between decisions, from arrival; 0 decides once, on arrival; -1 never. With no
+ * transition out, each interval lands the values again and plays the envelopes.
  */
 interval: number, mode: Decision, 
 /**

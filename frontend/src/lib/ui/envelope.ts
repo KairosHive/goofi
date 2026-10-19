@@ -11,25 +11,25 @@ export const ENVELOPE_BORN: number[] = [0.01, 0.1, 1, 0.3];
 export const withStage = (adsr: number[], i: number, v: number): number[] =>
 	[0, 1, 2, 3].map((k) => (k === i ? v : adsr[k] ?? (k === 2 ? 1 : 0)));
 
-/** A stage's reading: seconds for the times, a percentage for the sustain. */
+/** A release of -1 holds the sustain for ever. */
+export const HOLD = -1;
+
+/** A stage's reading: seconds for the times, a percentage for the sustain, ∞ for a hold. */
 export function readout(i: number, v: number): string {
-	return i === 2 ? `${Math.round(v * 100)}%` : `${v.toFixed(2)}s`;
+	if (i === 2) return `${Math.round(v * 100)}%`;
+	return v < 0 ? '∞' : `${v.toFixed(2)}s`;
 }
 
-/** The outline in a `w × h` box: up over the attack, down to the sustain over the decay, a hold a
- * quarter of the whole, then down over the release. The times share the width in proportion. */
+/** The outline in a `w × h` box: up over the attack, down to the sustain over the decay, then
+ * down over the release; a hold runs at the sustain to the edge. The times share the width. */
 export function envelopePoints([a, d, s, r]: number[], w: number, h: number): [number, number][] {
-	const times = Math.max(a + d + r, 1e-6);
-	const hold = times / 3;
+	const held = r < 0;
+	const times = Math.max(a + d + (held ? 0 : r), 1e-6);
+	const hold = held ? times : times / 3;
 	const k = w / (times + hold);
 	const level = (x: number): number => h - Math.min(1, Math.max(0, x)) * h;
-	return [
-		[0, h],
-		[a * k, level(1)],
-		[(a + d) * k, level(s)],
-		[(a + d + hold) * k, level(s)],
-		[w, h]
-	];
+	const tail: [number, number][] = held ? [[w, level(s)], [w, h]] : [[(a + d + hold) * k, level(s)], [w, h]];
+	return [[0, h], [a * k, level(1)], [(a + d) * k, level(s)], ...tail];
 }
 
 /** `points` as one SVG polyline path. */

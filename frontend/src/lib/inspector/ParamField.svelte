@@ -130,8 +130,8 @@
 	class="pf-param"
 	bind:this={row}
 	use:acceptVariable
-	data-variable-drop
-	class:armed={dropZone !== null || uiStore.variableDrag !== null}
+	data-variable-drop={literal ? undefined : ''}
+	class:armed={dropZone !== null || (!literal && uiStore.variableDrag !== null)}
 	class:over
 	class:open
 	data-node-drop={dropZone}
@@ -178,9 +178,11 @@
 				/>
 				{@render viewSwitch()}
 			{:else if num && plan.face === 'envelope'}
+				<!-- A range that admits -1 lets the release hold. -->
 				<Envelope
 					value={numValues(num)}
 					max={num.vmax}
+					hold={num.vmin < 0}
 					onChange={onCommit}
 					onInput={onPreview}
 					disabled={plan.disabled}

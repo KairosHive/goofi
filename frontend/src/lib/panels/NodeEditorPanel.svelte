@@ -784,13 +784,16 @@
 		} else if (e.key === 'Escape' && escapeLadder()) {
 			// A consumed Escape says so; unconsumed, it reaches the shell, which ends a panel maximize.
 			e.preventDefault();
+		} else if ((e.key === 'Delete' || e.key === 'Backspace') && hasSelection()) {
+			e.preventDefault();
+			deleteSelection();
 		} else if (e.key.toLowerCase() === 'f') {
 			fitView();
 		}
 	}
 
-	/** The single delete path, for SvelteFlow's `ondelete` and the header's Delete row. Nodes go as
-	 * ONE batch, ports included, so undo restores them all BEFORE their links. */
+	/** The single delete path, for the Delete key and the header's Delete row. Nodes go as ONE
+	 * batch, ports included, so undo restores them all BEFORE their links. */
 	async function deleteElements({ nodes, edges }: { nodes: Node[]; edges: Edge[] }): Promise<void> {
 		const nodeIds = nodes.map((n) => n.id);
 		const deleted = new Set(nodeIds);
@@ -1058,7 +1061,7 @@
 			bind:nodes={flowNodes}
 			bind:edges={flowEdges}
 			{nodeTypes}
-			deleteKey={['Delete', 'Backspace']}
+			deleteKey={null}
 			onconnect={onConnect}
 			onreconnect={onReconnect}
 			onconnectstart={onCableStart}
@@ -1073,7 +1076,6 @@
 			onselectionstart={() => (boxSelecting = true)}
 			onselectionend={onSelectionEnd}
 			onedgeclick={onEdgeClick}
-			ondelete={deleteElements}
 			fitViewOptions={FIT_OPTIONS}
 			minZoom={MIN_ZOOM}
 			maxZoom={MAX_ZOOM}

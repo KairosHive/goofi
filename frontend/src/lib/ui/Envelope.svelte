@@ -1,15 +1,17 @@
 <!-- Envelope — an ADSR as four knobs under the shape they make: attack, decay and release in
-     seconds up to `max`, sustain in 0..1. A turn previews through `onInput`; its release commits. -->
+     seconds up to `max`, sustain in 0..1. A turn previews through `onInput`; its release commits.
+     With `hold`, the release's cap is a switch to ∞: a release of -1, which holds the sustain. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import Knob from './Knob.svelte';
-	import { ADSR, ADSR_SHORT, envelopePoints, pathOf, readout, withStage } from './envelope';
+	import { ADSR, ADSR_SHORT, HOLD, envelopePoints, pathOf, readout, withStage } from './envelope';
 
 	let {
 		value,
 		onChange,
 		onInput,
 		max = 10,
+		hold = false,
 		disabled = false,
 		label,
 		class: klass = '',
@@ -22,6 +24,8 @@
 		onInput?: (adsr: number[]) => unknown;
 		/** The longest time a knob reaches, in seconds. */
 		max?: number;
+		/** Whether the release may hold the sustain for ever. */
+		hold?: boolean;
 		disabled?: boolean;
 		label?: string;
 	} = $props();
@@ -44,6 +48,9 @@
 		draft = null;
 		onChange(next);
 	}
+	const held = $derived(adsr[3] < 0);
+	/** A hold let go lands the release where a fresh envelope has it. */
+	const toggleHold = (): void => land(3, held ? 0.3 : HOLD);
 </script>
 
 <div {...rest} class={`ui-envelope ${klass}`.trim()} class:disabled role="group" aria-label={label}>
@@ -54,9 +61,14 @@
 	<div class="ui-envelope-knobs">
 		{#each ADSR as stage, i (stage)}
 			<div class="ui-envelope-knob" data-stage={stage}>
-				<Knob value={adsr[i]} min={0} max={i === 2 ? 1 : max} step={0} {disabled} label={label ? `${label} ${stage}` : stage}
+				<Knob value={adsr[i]} min={0} max={i === 2 ? 1 : max} step={0} disabled={disabled || (i === 3 && held)} label={label ? `${label} ${stage}` : stage}
 					onInput={(v) => turn(i, v)} onChange={(v) => land(i, v)} />
-				<span class="ui-envelope-cap"><b>{ADSR_SHORT[i]}</b> {readout(i, adsr[i])}</span>
+				{#if hold && i === 3}
+					<button type="button" class="ui-envelope-cap ui-envelope-hold" aria-pressed={held} {disabled} title={held ? 'Let the release go' : 'Hold the sustain: no release'}
+						onclick={toggleHold}><b>{ADSR_SHORT[i]}</b> {readout(i, adsr[i])}</button>
+				{:else}
+					<span class="ui-envelope-cap"><b>{ADSR_SHORT[i]}</b> {readout(i, adsr[i])}</span>
+				{/if}
 			</div>
 		{/each}
 	</div>
@@ -107,6 +119,21 @@
 		font-variant-numeric: tabular-nums;
 		color: var(--text-muted);
 		white-space: nowrap;
+	}
+	.ui-envelope-hold {
+		appearance: none;
+		border: 0;
+		background: none;
+		padding: 0;
+		cursor: pointer;
+		border-radius: var(--radius-sm);
+	}
+	.ui-envelope-hold[aria-pressed='true'] {
+		color: var(--accent);
+	}
+	.ui-envelope-hold:focus-visible {
+		outline: var(--focus-width) solid var(--focus-ink);
+		outline-offset: 2px;
 	}
 	.ui-envelope.disabled .ui-envelope-line {
 		opacity: var(--disabled-opacity);

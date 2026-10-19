@@ -1,8 +1,8 @@
 <!-- What the machine panel's side pane shows: the selected states. One state is edited whole —
-     its name, its decision with the shares of its draw, every attribute it sets and the envelope
-     each lands by, the playheads that start in it, and the transitions in and out of it, each row
-     opening on its own settings. Several states show what they share, and an edit writes to each.
-     Laid out as the node inspector lays out a node: Field rows, slot blocks, rules. -->
+     its name, how it decides, every attribute it sets and the envelope each lands by, the playheads
+     that start in it, and the transitions in and out of it, each row opening on its own settings
+     and each row out carrying its share of the state's draw. Several states show what they share,
+     and an edit writes to each. Laid out as the node inspector lays out a node. -->
 <script lang="ts">
 	import type { Attribute, Decision, Machine } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
@@ -63,10 +63,9 @@
 		editStates(weightsOf(p, out));
 	}
 	const percent = (p: number): string => `${Math.round(p * 100)}%`;
-	const target = (t: string): string => m.transitions[t].to;
 
 	// ---- the attributes: a name typed makes one, set in every selected state, as ONE step; a set
-	// number may land by an envelope, drawn under its value.
+	// number may play an envelope on arrival, drawn under its value.
 	let fresh = $state('');
 	const creatable = $derived(isValidIdentifier(fresh.trim()) && !(fresh.trim() in m.attributes));
 	async function create(): Promise<void> {
@@ -114,11 +113,28 @@
 		{#if list.length === 0}
 			<div class="empty">None</div>
 		{/if}
+		<!-- A random state's draw: the wait leads the rows out, and each row out carries its share;
+		     a drag moves the others in their own ratio, so the shares always sum to one. -->
+		{#if addable && s?.mode === 'random' && list.length > 0}
+			<div class="line" data-testid="state-share-wait">
+				<span class="to muted">wait</span>
+				<Slider value={shown[0]} min={0} max={1} step={0.01} bounds={false} aria-label="wait" onInput={(v) => drag(0, v)} onChange={(v) => land(0, v)} />
+				<span class="pct">{percent(shown[0])}</span>
+			</div>
+		{/if}
 		{#each list as [id, t] (id)}
+			{@const k = out.indexOf(id)}
 			<Disclosure class="transition-row" open={subject.open.includes(id)} data-testid={`transition-row-${id}`}>
 				{#snippet summary()}
 					<span class="arrow">{arrow(t)}</span>
 					<span class="when">{triggerSummary(m, id)}</span>
+				{/snippet}
+				{#snippet aside()}
+					{#if addable && s?.mode === 'random' && k >= 0}
+						<span class="share" data-testid={`state-share-${id}`}>
+							<Slider value={shown[k + 1]} min={0} max={1} step={0.01} bounds={false} aria-label={`share of ${id}`} onInput={(v) => drag(k + 1, v)} onChange={(v) => land(k + 1, v)} />
+						</span>
+					{/if}
 				{/snippet}
 				{#snippet children()}
 					<TransitionForm {name} {m} {id} />
@@ -150,32 +166,13 @@
 							<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
 						</Field>
 					</div>
-					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, 0, 10, 1)} literal
-						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Math.max(0, Number(v)) })} />
-					{#if s && one}
-						{#if s.mode === 'random'}
-							<div class="line" data-testid="state-share-wait">
-								<span class="to muted">wait</span>
-								<Slider value={shown[0]} min={0} max={1} step={0.01} bounds={false} aria-label="wait" onInput={(v) => drag(0, v)} onChange={(v) => land(0, v)} />
-								<span class="pct">{percent(shown[0])}</span>
-							</div>
-						{:else if s.mode === 'expression'}
-							<ExprEditor value={s.expression} onCommit={(e) => editStates({ expression: e })} label="decision" placeholder="index, e.g. int(variables.desk.pick)" testid="state-expression" />
-						{:else}
-							<div class="line"><span class="muted">in turn, each interval</span></div>
-						{/if}
-						{#each out as t, k (t)}
-							<div class="line" data-testid={`state-share-${t}`} title={t}>
-								{#if s.mode === 'random'}
-									<span class="to">→ {target(t)}</span>
-									<Slider value={shown[k + 1]} min={0} max={1} step={0.01} bounds={false} aria-label={`share of ${t}`} onInput={(v) => drag(k + 1, v)} onChange={(v) => land(k + 1, v)} />
-									<span class="pct">{percent(shown[k + 1])}</span>
-								{:else}
-									<span class="index">{s.mode === 'sequence' ? k + 1 : k}</span>
-									<span class="to">→ {target(t)}</span>
-								{/if}
-							</div>
-						{/each}
+					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. -->
+					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1)} literal
+						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })} />
+					{#if s?.mode === 'expression'}
+						<ExprEditor value={s.expression} onCommit={(e) => editStates({ expression: e })} label="decision" placeholder="index, e.g. int(variables.desk.pick)" testid="state-expression" />
+					{:else if s}
+						<div class="line"><span class="muted">{s.mode === 'random' ? 'a draw by the shares on the transitions out' : 'the transitions out in turn, by their number'}</span></div>
 					{/if}
 				</section>
 				<hr class="rule" />
@@ -191,21 +188,21 @@
 					</div>
 					{#each Object.entries(m.attributes) as [attr, a], k (attr)}
 						{@const h = held(m, ids, attr)}
-						{@const env = h.set ? envelopeOf(attr) : null}
+						{@const env = envelopeOf(attr)}
 						<div class="slot" class:alt={k % 2 === 1} class:unset={!h.set} data-testid={`state-attribute-${attr}`} data-set={h.set} data-mixed={h.mixed} data-envelope={env !== null}>
 							<div class="slot-head">
 								<ParamField paramName={attr} label={h.mixed ? `${attr} (mixed)` : attr} descriptor={descriptorFor(a, h.value)} literal viewKey={`${name}/selection/${attr}`}
 									onCommit={(v) => editStates({ values: { [attr]: literalOf(v) } })}
 									onPreview={(v) => preview({ values: { [attr]: v } })} />
-								{#if h.set && shapable(a)}
-									<IconButton variant="ghost" size="sm" label={env ? `Land ${attr} plain` : `Shape ${attr}`} aria-pressed={env !== null} data-testid="state-envelope"
-										title={env ? 'Remove the envelope: the value lands by the transition' : 'Add an envelope: the value lands by an attack, decay, sustain and release'}
+								<!-- The row keeps its buttons set or not, so the value's track never changes width under
+								     a pointer; unset, they wait for the value. -->
+								{#if shapable(a)}
+									<IconButton variant="ghost" size="sm" label={env ? `Land ${attr} plain` : `Shape ${attr}`} aria-pressed={env !== null} data-testid="state-envelope" disabled={!h.set}
+										title={env ? 'Remove the envelope: the value lands plain' : 'Add an envelope: on arrival the value plays an attack, decay, sustain and release'}
 										onclick={() => editStates({ envelopes: { [attr]: env ? null : ENVELOPE_BORN } })}><Icon name="activity" /></IconButton>
 								{/if}
-								{#if h.set}
-									<IconButton variant="ghost" size="sm" label={`Unset ${attr}`} title="Unset: a playhead entering keeps what it holds" data-testid="state-clear"
-										onclick={() => editStates({ values: { [attr]: null } })}><Icon name="minus" /></IconButton>
-								{/if}
+								<IconButton variant="ghost" size="sm" label={`Unset ${attr}`} title="Unset: a playhead entering keeps what it holds" data-testid="state-clear" disabled={!h.set}
+									onclick={() => editStates({ values: { [attr]: null } })}><Icon name="minus" /></IconButton>
 								<IconButton variant="ghost" size="sm" label={`Define ${attr}`} title="Its name, kind, range and default, for every state" data-testid="attribute-edit"
 									aria-expanded={defining === attr} onclick={() => (defining = defining === attr ? null : attr)}><Icon name="pencil" /></IconButton>
 							</div>
@@ -349,7 +346,7 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	/* The decision's lines: the wait and each transition out, with its share or its place. */
+	/* The decision's line, and the wait that leads the transitions out. */
 	.line {
 		display: flex;
 		align-items: center;
@@ -367,8 +364,12 @@
 		white-space: nowrap;
 		font-family: var(--font-mono);
 	}
-	.pct,
-	.index {
+	.share {
+		display: inline-flex;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.pct {
 		flex: 0 0 auto;
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
@@ -397,7 +398,7 @@
 		display: inline-flex;
 	}
 	/* A playhead's row: swatch, name, where it is, where it starts, and its removal. */
-	.playhead {
+	.rows :global(.slot.playhead) {
 		flex-direction: row;
 		align-items: center;
 		gap: var(--space-2);

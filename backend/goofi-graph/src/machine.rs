@@ -154,7 +154,7 @@ pub struct Attribute {
 }
 
 /// A state: where its card sits, the attributes it sets (one left out is kept on entry) and the
-/// envelopes they land by, and how a playhead resting in it picks a transition out, once per `interval`.
+/// envelopes that play on them, and how a playhead resting in it picks a transition out, once per `interval`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct State {
     #[serde(default)]
@@ -162,12 +162,13 @@ pub struct State {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     #[ts(type = "Record<string, Literal>")]
     pub values: IndexMap<String, Data>,
-    /// Per attribute set here, the ADSR its value lands by: attack, decay and release in seconds,
-    /// sustain in 0..1 of the way from what the playhead held to the value.
+    /// Per attribute set here, the ADSR that scales its value from a playhead's arrival: attack, decay
+    /// and release in seconds, sustain in 0..1; a release of -1 holds the sustain.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     #[ts(type = "Record<string, [number, number, number, number]>")]
     pub envelopes: IndexMap<String, [f64; 4]>,
-    /// Seconds between decisions, from arrival; 0 decides once, on arrival.
+    /// Seconds between decisions, from arrival; 0 decides once, on arrival; -1 never. With no
+    /// transition out, each interval lands the values again and plays the envelopes.
     #[serde(default = "one")]
     pub interval: f64,
     #[serde(default)]
@@ -304,12 +305,12 @@ impl Machine {
                 if !matches!(self.attributes.get(attr).map(|a| &a.kind), Some(AttributeKind::Num { .. })) {
                     return Err(format!("state `{name}`: `{attr}` is no number; an envelope shapes numbers alone"));
                 }
-                if e.iter().any(|v| !(v.is_finite() && *v >= 0.0)) || e[2] > 1.0 {
-                    return Err(format!("state `{name}`: `{attr}`'s envelope is three times of at least 0 and a sustain in 0..1"));
+                if e[..3].iter().any(|v| !(v.is_finite() && *v >= 0.0)) || e[2] > 1.0 || !(e[3].is_finite() && (e[3] >= 0.0 || e[3] == -1.0)) {
+                    return Err(format!("state `{name}`: `{attr}`'s envelope is an attack and a decay of at least 0, a sustain in 0..1 and a release of at least 0, or -1 to hold"));
                 }
             }
-            if !(state.interval.is_finite() && state.interval >= 0.0) {
-                return Err(format!("state `{name}`: interval is seconds of at least 0"));
+            if !(state.interval.is_finite() && (state.interval >= 0.0 || state.interval == -1.0)) {
+                return Err(format!("state `{name}`: interval is seconds of at least 0, or -1 for none"));
             }
             if !(state.noop.is_finite() && state.noop >= 0.0) || state.weights.values().any(|w| !(w.is_finite() && *w >= 0.0)) {
                 return Err(format!("state `{name}`: a weight is at least 0"));
@@ -445,8 +446,8 @@ struct Head {
     held: IndexMap<String, Data>,
     motions: IndexMap<String, Motion>,
     flight: Option<Flight>,
-    /// The state's next decision, at infinity once a 0 interval has decided; none in a state with
-    /// no transition out.
+    /// The state's next beat, at infinity once a 0 interval has decided; none where the interval
+    /// is off, or 0 with no transition out.
     due: Option<Due>,
     /// Per state, where `sequence` takes up again: the index of the next transition out.
     cursor: HashMap<String, usize>,
@@ -749,19 +750,37 @@ fn ramp(now: f64, duration: f64, cur: &Data, target: &Data, curve: Curve) -> Opt
     Some(Motion { legs, rest: target.clone() })
 }
 
-/// `cur` toward `target` by an ADSR from `now`: up to the target over the attack, down to the
-/// sustain over the decay, at rest there. The release plays on departure.
-fn adsr(now: f64, cur: &Data, target: &Data, [a, d, s, _]: [f64; 4]) -> Option<Motion> {
-    let sustain = if s >= 1.0 { target.clone() } else { lerp(cur, target, s)? };
-    lerp(cur, target, 0.0)?;
+/// `v` times `k`, elementwise; None where it is no array.
+fn scale(v: &Data, k: f64) -> Option<Data> {
+    let Value::Array(p) = v.value() else { return None };
+    let bytes: Vec<u8> = p.values().flat_map(|x| ((f64::from(x) * k) as f32).to_le_bytes()).collect();
+    Data::array_f32(p.shape().to_vec(), bytes, Meta::default()).ok()
+}
+
+/// `target` scaled by an ADSR from `now`: up from nothing over the attack, down to the sustain
+/// over the decay, then down to nothing over the release — held at the sustain by a release of -1.
+fn adsr(now: f64, target: &Data, [a, d, s, r]: [f64; 4]) -> Option<Motion> {
+    let (zero, sustain) = (scale(target, 0.0)?, scale(target, s)?);
     let mut legs = Vec::new();
-    if a > 0.0 {
-        legs.push(Leg { start: now, end: now + a, from: cur.clone(), to: target.clone(), curve: Curve::Linear });
+    let mut t = now;
+    for (span, from, to) in [(a, &zero, target), (d, target, &sustain), (r, &sustain, &zero)] {
+        if span > 0.0 {
+            legs.push(Leg { start: t, end: t + span, from: from.clone(), to: to.clone(), curve: Curve::Linear });
+            t += span;
+        }
     }
-    if d > 0.0 && s < 1.0 {
-        legs.push(Leg { start: now + a, end: now + a + d, from: target.clone(), to: sustain.clone(), curve: Curve::Linear });
+    Some(Motion { legs, rest: if r < 0.0 { sustain } else { zero } })
+}
+
+/// `a` takes motion `m` from `now`: at its rest at once where it has no leg, else on its way.
+fn put(head: &mut Head, a: &str, m: Motion, now: f64) {
+    if m.legs.is_empty() {
+        head.held.insert(a.to_string(), m.rest);
+        head.motions.shift_remove(a);
+    } else {
+        head.held.insert(a.to_string(), m.at(now));
+        head.motions.insert(a.to_string(), m);
     }
-    Some(Motion { legs, rest: sustain })
 }
 
 /// Settle the head's motions to `now`: a leg that ended is behind it, and a motion done rests.
@@ -880,15 +899,26 @@ fn place(head: &mut Head, machine: &Machine, state: &str) {
     }
 }
 
-/// Put `head` at rest in `state` at `at`: its decisions and triggers arm.
+/// Put `head` at rest in `state` at `at`: its envelopes play, its decisions and triggers arm.
 fn arrive(head: &mut Head, machine: &Machine, state: &str, at: f64, ctx: &Ctx, events: &mut Events) {
     head.state = state.to_string();
     head.prev.clear();
     head.flight = None;
     head.arrived = at;
     head.fire = None;
+    play(head, machine, state, at);
     arm(head, machine, ctx, true);
     events.arrived.push(state.to_string());
+}
+
+/// Every envelope of `state` plays from `at` on the value it scales.
+fn play(head: &mut Head, machine: &Machine, state: &str, at: f64) {
+    let Some(s) = machine.states.get(state) else { return };
+    for (a, e) in &s.envelopes {
+        if let Some(m) = s.values.get(a).filter(|_| head.held.contains_key(a)).and_then(|v| adsr(at, v, *e)) {
+            put(head, a, m, at);
+        }
+    }
 }
 
 /// A jump: the head leaves where it rests and arrives at once, both seen by `meet` and `alone`.
@@ -912,12 +942,13 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
     head.gates.retain(|id, _| machine.transitions.get(id).is_some_and(|t| leaves(t, &state)));
     let interval = machine.states.get(&state).map_or(0.0, |s| s.interval);
     let from = if fresh { head.arrived } else { ctx.now };
-    head.due = match (machine.outgoing(&state).next(), head.due) {
-        (None, _) => None,
-        (Some(_), None) => Some(Due { at: from + interval, interval }),
-        (Some(_), Some(d)) if d.interval == interval => Some(d),
-        (Some(_), Some(d)) if d.at.is_infinite() => Some(Due { at: ctx.now + interval, interval }),
-        (Some(_), Some(d)) => Some(Due { at: (d.at - d.interval + interval).max(ctx.now), interval }),
+    let beats = interval >= 0.0 && (interval > 0.0 || machine.outgoing(&state).next().is_some());
+    head.due = match (beats, head.due) {
+        (false, _) => None,
+        (true, None) => Some(Due { at: from + interval, interval }),
+        (true, Some(d)) if d.interval == interval => Some(d),
+        (true, Some(d)) if d.at.is_infinite() => Some(Due { at: ctx.now + interval, interval }),
+        (true, Some(d)) => Some(Due { at: (d.at - d.interval + interval).max(ctx.now), interval }),
     };
     for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &state)) {
         for trigger in &t.triggers {
@@ -963,41 +994,29 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
     }
 }
 
-/// Take `t` out of the head's state at `ctx.now`. Each attribute the next state sets moves from
-/// where it stands now, so a redirection is continuous: by the state's envelope where it has one;
-/// else by the state left behind's release, once its envelope had come to rest; else by the
-/// transition's own duration and curve. One the next state leaves out goes on untouched.
+/// Take `t` out of the head's state at `ctx.now`. Each attribute the next state sets eases from
+/// where it stands now, mid-envelope or not, by the transition's own duration and curve: to the
+/// value, or to nothing where the state's envelope plays on it from arrival. One the next state
+/// leaves out goes on untouched.
 fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut Events) {
     let t = &machine.transitions[id];
     let prev = head.state.clone();
     events.left.push(prev.clone());
     fold(head, ctx.now);
-    let leaving = machine.states.get(&prev);
     let entering = machine.states.get(&t.to);
     let mut landing = IndexMap::new();
     let attrs: Vec<String> = head.held.keys().cloned().collect();
     for a in attrs {
         let Some(target) = entering.and_then(|s| s.values.get(&a)) else { continue };
         let cur = head.motions.get(&a).map_or_else(|| head.held[&a].clone(), |m| m.at(ctx.now));
-        let unfinished = head.motions.contains_key(&a);
-        let envelope = entering.and_then(|s| s.envelopes.get(&a)).copied();
-        let release = leaving.and_then(|s| s.envelopes.get(&a)).map(|e| e[3]).filter(|_| !unfinished);
-        let motion = match (envelope, release) {
-            (Some(e), _) => adsr(ctx.now, &cur, target, e),
-            (None, Some(r)) => ramp(ctx.now, r, &cur, target, Curve::Linear),
-            (None, None) => ramp(ctx.now, t.duration, &cur, target, t.curve),
+        let level = match entering.and_then(|s| s.envelopes.get(&a)) {
+            Some(_) => scale(target, 0.0).unwrap_or_else(|| target.clone()),
+            None => target.clone(),
         };
-        match motion {
-            Some(m) if m.legs.is_empty() => {
-                head.held.insert(a.clone(), m.rest);
-                head.motions.shift_remove(&a);
-            }
-            Some(m) => {
-                head.held.insert(a.clone(), cur);
-                head.motions.insert(a, m);
-            }
+        match ramp(ctx.now, t.duration, &cur, &level, t.curve) {
+            Some(m) => put(head, &a, m, ctx.now),
             None => {
-                landing.insert(a, target.clone());
+                landing.insert(a, level);
             }
         }
     }
@@ -1039,13 +1058,20 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
             if head.flight.is_some() {
                 continue;
             }
-            // A decision due now is taken, and re-armed from its due; a `when` rising at this
-            // instant goes first, the draw among them by weight.
+            // A beat due now decides, and re-arms from its due; a `when` rising at this instant
+            // goes first, the draw among them by weight. With no way out, the beat plays the state again.
             let decided = match head.due.filter(|d| d.at <= ctx.now) {
                 Some(d) => {
                     let at = if d.interval > 0.0 { d.at + d.interval } else { f64::INFINITY };
                     head.due = Some(Due { at, interval: d.interval });
-                    decide(machine, head, ctx, &mut run.rng)
+                    if machine.outgoing(&head.state).next().is_none() {
+                        let state = head.state.clone();
+                        place(head, machine, &state);
+                        play(head, machine, &state, ctx.now);
+                        None
+                    } else {
+                        decide(machine, head, ctx, &mut run.rng)
+                    }
                 }
                 None => None,
             };

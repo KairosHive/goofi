@@ -48,10 +48,11 @@ export function numberDescriptor(value: number, vmin: number, vmax: number, fall
 	return { ...constant(fallback), type: 'num', value, vmin, vmax, int: false, options: [], face: 'plain' };
 }
 
-/** Four ADSR numbers as a constant envelope param, its times up to `vmax` seconds: a state's
+/** Four ADSR numbers as a constant envelope param, its times up to `vmax` seconds and its
+ * release down to -1, the hold: a state's
  * envelope over one of its attributes. */
 export function envelopeDescriptor(value: number[], vmax: number): ParamDescriptor {
-	return { ...constant(null), type: 'num', value, vmin: 0, vmax, int: false, options: [], face: 'envelope' };
+	return { ...constant(null), type: 'num', value, vmin: -1, vmax, int: false, options: [], face: 'envelope' };
 }
 
 /** `value` of attribute `a` as a constant param, for ParamField to draw. */
