@@ -11,7 +11,7 @@ function param(doc: string | null = null): ParamDescriptor {
 		vmax: 1,
 		int: false,
 		options: [],
-		color: false,
+		face: 'plain',
 		doc,
 		refreshable: false,
 		mode: 'constant',

@@ -3,7 +3,7 @@
 //! run together whenever each was made.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
 
 /// The waveform's value at `t` cycles in `[0, 1)`, in `[-1, 1]`.
 fn wave(kind: &str, t: f64, duty: f64) -> f64 {
@@ -135,7 +135,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Cycles per second."),
         section: 0,
@@ -145,7 +145,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "amplitude",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
         section: 0,
@@ -155,7 +155,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "offset",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
         section: 0,
@@ -165,7 +165,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "phase",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Where in the cycle the wave reads, in cycles; 0.25 is a quarter turn ahead."),
         section: 0,
@@ -175,7 +175,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "duty",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Fraction of the cycle a square wave spends high; the other waveforms ignore it."),
         section: 0,
@@ -208,7 +208,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
         section: 0,
@@ -220,7 +220,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "common",
         name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: Some(ExprDecl { source: "variables.signal.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \

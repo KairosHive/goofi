@@ -146,9 +146,13 @@ pub fn errors(g: &Graph) -> Vec<Value> {
 fn param_line(p: &goofi_core::Param, source: Option<&goofi_graph::SourceInfo>) -> String {
     use goofi_core::Param as P;
     let (value, ty) = match p {
-        P::Num { value, vmin, vmax, int, color, .. } => {
+        P::Num { value, vmin, vmax, int, face, .. } => {
             let shown: Vec<String> = value.iter().map(|v| if *int { (v.round() as i64).to_string() } else { v.to_string() }).collect();
-            let kind = if *color { "color" } else if *int { "int" } else { "num" };
+            let kind = match face {
+                goofi_core::Face::Plain if *int => "int",
+                goofi_core::Face::Plain => "num",
+                face => face.as_str(),
+            };
             let dims = if value.len() > 1 { format!("{}d ", value.len()) } else { String::new() };
             (if value.len() > 1 { format!("[{}]", shown.join(", ")) } else { shown.join("") }, format!("{dims}{kind} {vmin}..{vmax}"))
         }

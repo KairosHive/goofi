@@ -2,7 +2,7 @@
 //! cannot show. Per frame, so it follows a Buffer.
 
 use goofi_core::{resolve_axis, stream, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Wavelet {
@@ -124,7 +124,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "wavelet",
         name: "cycles",
-        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 50.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 50.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How many cycles the Morlet shape spans. More cycles tell frequencies apart better and \
@@ -137,7 +137,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "wavelet",
         name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
         section: 0,
@@ -147,7 +147,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "low",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.01, max: 10_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The lowest frequency to look for, in Hz."),
         section: 0,
@@ -157,7 +157,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "high",
-        spec: ParamSpec::Num { default: &[40.0], min: 0.01, max: 10_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[40.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The highest frequency to look for, in Hz."),
         section: 0,
@@ -167,7 +167,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "range",
         name: "count",
-        spec: ParamSpec::Num { default: &[40.0], min: 2.0, max: 512.0, int: true, options: &[16, 32, 64, 128], color: false },
+        spec: ParamSpec::Num { default: &[40.0], min: 2.0, max: 512.0, int: true, options: &[16, 32, 64, 128], face: Face::Plain },
         expression: None,
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
         section: 0,

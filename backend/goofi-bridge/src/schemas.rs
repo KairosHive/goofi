@@ -1,7 +1,7 @@
 //! JSON projections of the engine graph into the shapes the frontend mirrors (`control.ts`).
 //! These are the wire contract: co-edit the frontend when a field or shape changes.
 
-use goofi_core::{control, Data, Param};
+use goofi_core::{control, Data, Face, Param};
 use goofi_graph::{Graph, Mode, Origin, Uid};
 use serde::Serialize;
 use ts_rs::TS;
@@ -85,7 +85,7 @@ pub enum ParamKind {
         vmax: f64,
         int: bool,
         options: Vec<i64>,
-        color: bool,
+        face: Face,
     },
     Bool { value: bool },
     #[serde(rename = "string")]
@@ -130,13 +130,13 @@ pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDe
         error: None,
     };
     let kind = match p {
-        Param::Num { vmin, vmax, int, options, color, .. } => ParamKind::Num {
+        Param::Num { vmin, vmax, int, options, face, .. } => ParamKind::Num {
             value: control::data_of(p).expect("a number"),
             vmin: *vmin,
             vmax: *vmax,
             int: *int,
             options: options.clone(),
-            color: *color,
+            face: *face,
         },
         Param::Bool { value } => ParamKind::Bool { value: *value },
         Param::Str { value, options, .. } => ParamKind::Str { value: value.clone(), options: options.clone() },
@@ -394,6 +394,7 @@ pub fn typescript() -> String {
         serde_json::Value::decl(&cfg),
         // The literal of a frame: a number, a string, a bool or a list, nested for a wider array.
         "type Literal = number | string | boolean | Literal[];".to_string(),
+        Face::decl(&cfg),
         Mode::decl(&cfg),
         ParamEntry::decl(&cfg),
         VideoQuality::decl(&cfg),

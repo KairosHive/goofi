@@ -136,7 +136,7 @@ pub enum ParamSpec {
         #[serde(default)]
         options: Vec<i64>,
         #[serde(default)]
-        color: bool,
+        face: crate::Face,
     },
     Bool { default: bool },
     Str {

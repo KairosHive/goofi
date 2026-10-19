@@ -2,7 +2,7 @@
 //! anywhere in the patch becomes an array of the shape a node downstream wants.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
 
 #[derive(Default)]
 struct Constant;
@@ -45,7 +45,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "value",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The number every entry carries; in reference mode it follows another node's output."),
         section: 0,

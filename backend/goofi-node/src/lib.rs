@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use goofi_core::{Data, Param, SlotType};
+pub use goofi_core::Face;
 use indexmap::IndexMap;
 
 pub mod abi;
@@ -201,7 +202,7 @@ pub enum ExprMode {
 #[derive(Clone, Copy)]
 pub enum ParamSpec {
     /// A number, or a vector of them: `default` holds one value per dimension.
-    Num { default: &'static [f64], min: f64, max: f64, int: bool, options: &'static [i64], color: bool },
+    Num { default: &'static [f64], min: f64, max: f64, int: bool, options: &'static [i64], face: Face },
     Bool { default: bool },
     Str { default: &'static str, options: &'static [&'static str], refresh: bool },
     Pulse,
@@ -210,13 +211,17 @@ pub enum ParamSpec {
 impl ParamSpec {
     /// An RGBA colour.
     pub const fn color(default: &'static [f64; 4]) -> ParamSpec {
-        ParamSpec::Num { default, min: 0.0, max: 1.0, int: false, options: &[], color: true }
+        ParamSpec::Num { default, min: 0.0, max: 1.0, int: false, options: &[], face: Face::Color }
+    }
+    /// An ADSR envelope: three times in seconds up to `max`, and a sustain in 0..1.
+    pub const fn envelope(default: &'static [f64; 4], max: f64) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Envelope }
     }
 
     pub fn to_param(self) -> Param {
         match self {
-            ParamSpec::Num { default, min, max, int, options, color } => {
-                Param::Num { value: default.to_vec(), vmin: min, vmax: max, int, options: options.to_vec(), color }
+            ParamSpec::Num { default, min, max, int, options, face } => {
+                Param::Num { value: default.to_vec(), vmin: min, vmax: max, int, options: options.to_vec(), face }
             }
             ParamSpec::Bool { default } => Param::boolean(default),
             ParamSpec::Str { default, options, refresh } => Param::Str {

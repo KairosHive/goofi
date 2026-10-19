@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 /// The most voices a `MidiIn` deals out.
 const VOICES: u16 = 64;
@@ -24,7 +24,7 @@ goofi_audio_sdk::params! {
     BEND = ParamDecl {
         group: "midi",
         name: "bend_range",
-        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how many semitones a full pitch wheel reaches, up and down"),
         section: 0,
@@ -34,7 +34,7 @@ goofi_audio_sdk::params! {
     VOICES = ParamDecl {
         group: "midi",
         name: "voices",
-        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",

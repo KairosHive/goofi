@@ -8,14 +8,15 @@
 	let {
 		summary,
 		children,
+		open = $bindable(false),
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		summary: Snippet;
 		children?: Snippet;
+		/** Whether the body shows; a parent may open a row, and the caret toggles it either way. */
+		open?: boolean;
 	} = $props();
-
-	let open = $state(false);
 	const bodyId = $props.id();
 </script>
 

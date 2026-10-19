@@ -1,7 +1,7 @@
 //! The universal `common` scheduling group and the policy a host node reads off it.
 
 use goofi_core::Param;
-use goofi_node::{param, ExprDecl, ExprMode, NodeManifest, ParamDecl, ParamGroups, ParamSpec};
+use goofi_node::{Face, param, ExprDecl, ExprMode, NodeManifest, ParamDecl, ParamGroups, ParamSpec};
 
 use crate::COMMON;
 
@@ -52,7 +52,7 @@ pub fn common_decls(m: &NodeManifest) -> [ParamDecl; 4] {
         ),
         decl(
             "max_frequency",
-            ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
+            ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain },
             Some(ExprDecl { source: "variables.signal.default_ufreq", mode: if m.producer { ExprMode::On } else { ExprMode::Off } }),
             "Rate cap for this node, read through `frequency_mode`. 0 means uncapped — the node \
              runs as often as the scheduler and its inputs allow.",

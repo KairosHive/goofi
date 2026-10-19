@@ -8,7 +8,7 @@ use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
-use goofi_audio_sdk::{AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
 use goofi_core::SlotType;
 use goofi_node::{
     DrainWaker, Engine, EventId, GraphView, LibraryEntry, NodeManifest, NodeStage,
@@ -301,7 +301,7 @@ goofi_audio_sdk::params! {
     LEVEL = ParamDecl {
         group: "tone",
         name: "level",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         doc: Some("the block's level"),
         expression: None,
         section: 0,

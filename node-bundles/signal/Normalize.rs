@@ -3,8 +3,7 @@
 
 use goofi_core::normalize::{apply, scale_with, Scale};
 use goofi_core::{resolve_axis, Data, SlotType};
-use goofi_signal_sdk::{
-    Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 
@@ -171,7 +170,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "normalization",
         name: "clip",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Limit the result to this many standard deviations either side of zero. 0 is no limit."),
         section: 0,
@@ -181,7 +180,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "normalization",
         name: "quantile",
-        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 0.5, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 0.5, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "The spread is the distance between this quantile and its mirror above the median: 0.25 \
@@ -194,7 +193,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "normalization",
         name: "range",
-        spec: ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "Where 0 and 1 of the measure land: for `minmax` the minimum and the maximum, for \
@@ -246,7 +245,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "window",
         name: "size",
-        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e6, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How much of the past the buffer keeps, in `unit`."),
         section: 0,

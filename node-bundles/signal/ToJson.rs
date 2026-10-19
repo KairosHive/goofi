@@ -1,7 +1,7 @@
 //! ToJson — a table becomes JSON text. A table is an object, an array a list, a string a string.
 
 use goofi_core::{Data, Meta, SlotType, Value};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct ToJson;
@@ -132,7 +132,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "indent",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], face: Face::Plain },
         expression: None,
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
         section: 0,
@@ -142,7 +142,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "decimals",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
         section: 0,

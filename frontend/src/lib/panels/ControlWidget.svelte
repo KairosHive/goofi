@@ -4,7 +4,7 @@
 	import type { Literal } from '$lib/api/generated';
 	import type { ControlView } from '$lib/crdt/graphDoc';
 	import type { ArrayData } from '$lib/codec/decode';
-	import { ColorPicker, Knob, NumberInput, PaintPad, Select, Slider, TextInput, Toggle } from '$lib/ui';
+	import { ColorPicker, Envelope, Knob, NumberInput, PaintPad, Select, Slider, TextInput, Toggle } from '$lib/ui';
 
 	let {
 		control: c,
@@ -63,6 +63,8 @@
 	</div>
 {:else if c.kind === 'color'}
 	<ColorPicker value={nums(value)} {disabled} aria-label={label} {onChange} {onInput} />
+{:else if c.kind === 'envelope'}
+	<Envelope value={nums(value)} max={c.max ?? 10} {disabled} {label} {onChange} {onInput} />
 {:else}
 	<TextInput multiline value={String(value ?? '')} {disabled} aria-label={label} {onChange} {onInput} />
 {/if}

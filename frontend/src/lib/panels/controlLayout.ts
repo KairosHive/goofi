@@ -4,28 +4,31 @@
 import { CONTROL_KINDS, type ControlKindId, type ControlKindInfo } from '$lib/api/vocab';
 import type { Literal } from '$lib/api/generated';
 import type { Form } from '$lib/stores/variableValues.svelte';
+import { ENVELOPE_BORN } from '$lib/ui/envelope';
 
 export type Kind = ControlKindId;
 /** Each widget kind's value type and the box it is born in, by id. */
 export const KIND = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k])) as Record<Kind, ControlKindInfo>;
 
 /** Whether a widget of kind `k` can draw a value of `form`, as the manager's `Control::fits` says:
- * a vector any list of numbers, a colour a list of four. */
+ * a vector any list of numbers, a colour or an envelope a list of four. */
 export function kindFits(k: ControlKindInfo, form: Form, value: Literal | null): boolean {
 	if (k.draws === 'any') return true;
-	if (k.draws === 'vector' || k.draws === 'color') {
+	if (k.draws === 'vector' || k.draws === 'color' || k.draws === 'envelope') {
 		const numbers = form === 'list' && Array.isArray(value) && value.every((v) => typeof v === 'number');
 		return numbers && (k.draws === 'vector' || (value as Literal[]).length === 4);
 	}
 	return k.draws === form;
 }
 
-/** The value a widget of kind `k` starts with when a reader switches an attribute to it. */
+/** The value a widget of kind `k` starts with when a reader switches an attribute to it, as the
+ * manager's `Control::born_value` says. */
 export function bornValue(k: ControlKindInfo): Literal {
 	switch (k.draws) {
 		case 'text': return '';
 		case 'vector': return [0, 0, 0];
 		case 'color': return [0, 0, 0, 1];
+		case 'envelope': return ENVELOPE_BORN;
 		default: return 0;
 	}
 }

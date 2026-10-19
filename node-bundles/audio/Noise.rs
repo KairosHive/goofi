@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "noise",
         name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 256.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
         section: 0,

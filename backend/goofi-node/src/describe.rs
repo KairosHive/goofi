@@ -105,18 +105,26 @@ fn camel(stem: &str) -> String {
 
 /// Parse the introspection JSON. A `params` entry may be a SECTION rather than a param: it names
 /// its members' group, and with `repeat` it is a list, declared once and stored per slot. A
-/// param of kind `color` is a four-dimensional `num` from 0 to 1, white unless it says.
+/// param of kind `color` is a four-dimensional `num` from 0 to 1, white unless it says; one of kind
+/// `envelope` is a `num` of four ADSR values, its times up to `max` (10 unless it says).
 pub fn parse_introspection(json: &str) -> Result<probe::Introspection, String> {
     let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if let Some(entries) = value.get_mut("params").and_then(|p| p.as_array_mut()) {
         let mut flat = crate::sections::expand(std::mem::take(entries))?;
-        for p in flat.iter_mut().filter(|p| p.get("kind").and_then(|k| k.as_str()) == Some("color")) {
+        for p in flat.iter_mut() {
+            let (face, max, born) = match p.get("kind").and_then(|k| k.as_str()) {
+                Some("color") => ("color", 1.0, [1.0, 1.0, 1.0, 1.0]),
+                Some("envelope") => ("envelope", 10.0, goofi_core::ENVELOPE_BORN),
+                _ => continue,
+            };
             p["kind"] = serde_json::json!("num");
-            p["color"] = serde_json::json!(true);
+            p["face"] = serde_json::json!(face);
             p["min"] = serde_json::json!(0.0);
-            p["max"] = serde_json::json!(1.0);
+            if p.get("max").is_none() || face == "color" {
+                p["max"] = serde_json::json!(max);
+            }
             if p.get("default").is_none() {
-                p["default"] = serde_json::json!([1.0, 1.0, 1.0, 1.0]);
+                p["default"] = serde_json::json!(born);
             }
         }
         *entries = flat;
@@ -176,8 +184,8 @@ pub fn describe(
                     crate::Role::Held => probe::Role::Held,
                 }),
                 spec: match p.spec {
-                    ParamSpec::Num { default, min, max, int, options, color } => {
-                        probe::ParamSpec::Num { default: default.to_vec(), min, max, int, options: options.to_vec(), color }
+                    ParamSpec::Num { default, min, max, int, options, face } => {
+                        probe::ParamSpec::Num { default: default.to_vec(), min, max, int, options: options.to_vec(), face }
                     }
                     ParamSpec::Bool { default } => probe::ParamSpec::Bool { default },
                     ParamSpec::Str { default, options, refresh } => probe::ParamSpec::Str {
@@ -352,13 +360,13 @@ pub fn leak_manifest(
 
 fn param_decl(p: &probe::Param) -> ParamDecl {
     let spec = match &p.spec {
-        probe::ParamSpec::Num { default, min, max, int, options, color } => ParamSpec::Num {
+        probe::ParamSpec::Num { default, min, max, int, options, face } => ParamSpec::Num {
             default: Box::leak(default.clone().into_boxed_slice()),
             min: *min,
             max: *max,
             int: *int,
             options: Box::leak(options.clone().into_boxed_slice()),
-            color: *color,
+            face: *face,
         },
         probe::ParamSpec::Bool { default } => ParamSpec::Bool { default: *default },
         probe::ParamSpec::Str { default, options, refresh } => {

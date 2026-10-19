@@ -4,7 +4,7 @@
 
 use goofi_core::reduce::{note_reduced, origin_of, reduce_axis};
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// Rec. 709 luminance, over whatever of R, G and B the frame has.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
@@ -108,7 +108,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "graphics",
         name: "size",
-        spec: ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "The most texels either picture axis keeps, averaged into blocks. Zero takes the \

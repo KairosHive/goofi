@@ -869,16 +869,17 @@ impl Graph {
             return Err(format!("attribute `{to}` already exists in machine `{machine}`"));
         }
         let mut next = m.clone();
-        let rekey = |map: &mut IndexMap<String, Data>| {
+        fn rekey<V>(map: &mut IndexMap<String, V>, from: &str, to: &str) {
             if let Some(at) = map.get_index_of(from) {
                 let v = map.shift_remove(from).expect("the index answered");
                 map.shift_insert(at, to.to_string(), v);
             }
-        };
-        let at = next.attributes.get_index_of(from).expect("checked");
-        let attr = next.attributes.shift_remove(from).expect("checked");
-        next.attributes.shift_insert(at, to.to_string(), attr);
-        next.states.values_mut().for_each(|s| rekey(&mut s.values));
+        }
+        rekey(&mut next.attributes, from, to);
+        for s in next.states.values_mut() {
+            rekey(&mut s.values, from, to);
+            rekey(&mut s.envelopes, from, to);
+        }
         let moved: Vec<(String, String)> = m.playheads.keys().map(|ph| (format!("{ph}.{from}"), format!("{ph}.{to}"))).collect();
         self.set_machine(machine, Some(next), None)?;
         Ok(self.rewrite_variable_reads(&moved))

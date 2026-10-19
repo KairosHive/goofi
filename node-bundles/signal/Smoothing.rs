@@ -2,8 +2,7 @@
 //! (`buffer`), as an exponential or a simple moving average, or as a kernel convolution.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType};
-use goofi_signal_sdk::{
-    Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 
@@ -243,7 +242,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: G,
         name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
         section: 1,
@@ -253,7 +252,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: G,
         name: "alpha",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How far each new value pulls the average towards itself: 1 follows the input exactly, \
@@ -266,7 +265,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: G,
         name: "size",
-        spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 1001.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 1001.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How many steps the mean, or the kernel, spans: frames across ticks, samples along an \
@@ -302,7 +301,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: G,
         name: "sigma",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The width of the gaussian bell, in samples."),
         section: 1,

@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     MIN = ParamDecl {
         group: "graphics",
         name: "min",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the value a mapped range starts at; a texture's own window is 0 to 1"),
         section: 0,
@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     MAX = ParamDecl {
         group: "graphics",
         name: "max",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the value it ends at"),
         section: 0,

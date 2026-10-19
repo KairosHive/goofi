@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use goofi_bridge::ops::{find, registry, typescript};
 use goofi_bridge::vocab;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
+use goofi_node::{Face, NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
 use goofi_tests::{fixtures::LibraryEngine, hex, j, Client, Goofi};
 use serde_json::Value;
 
@@ -185,7 +185,7 @@ static MULTI_IN: &[SlotDecl] = &[
 ];
 static TRANSFORM: NodeManifest = manifest("MultiThing", MULTI_IN, &[], false);
 static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "welch", name: "nperseg", spec: ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], color: false },
+    group: "welch", name: "nperseg", spec: ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], face: Face::Plain },
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
     section: 0,
@@ -213,12 +213,12 @@ const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section:
     ParamDecl { group, name, spec, expression: None, doc: None, section, show, role: None }
 }
 const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
-const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false };
+const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain };
 /// Three sections of `filter`, each shown for its own mode, and a page shown only for `iir`.
 static SECTIONED_PARAMS: &[ParamDecl] = &[
     decl("filter", "mode", MODE, 0, &[]),
-    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], color: false }, 1, &[Show { param: "mode", any_of: &["fir"] }]),
-    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], color: false }, 2, &[Show { param: "mode", any_of: &["iir"] }]),
+    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], face: Face::Plain }, 1, &[Show { param: "mode", any_of: &["fir"] }]),
+    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], face: Face::Plain }, 2, &[Show { param: "mode", any_of: &["iir"] }]),
     decl("filter", "ripple", LEVEL, 2, &[Show { param: "order", any_of: &["4", "8"] }]),
     decl("shape", "gate", ParamSpec::Bool { default: false }, 0, &[Show { param: "filter.mode", any_of: &["iir"] }]),
 ];

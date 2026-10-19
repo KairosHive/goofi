@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { controlKind, rowPlan } from './controlKind';
+import { controlKind, elementName, rowPlan } from './controlKind';
 import type {
 	ParamDescriptor,
 	ParamBase,
@@ -37,7 +37,7 @@ const floatParam = (over: Partial<NumParam> = {}): NumParam => ({
 	vmax: 1,
 	int: false,
 	options: [],
-	color: false,
+	face: 'plain',
 	...over
 });
 const intParam = (over: Partial<NumParam> = {}): NumParam => ({
@@ -130,11 +130,21 @@ describe('rowPlan', () => {
 	const list = { individual: false };
 	const entries = { individual: true };
 	const colour = (over: Partial<NumParam> = {}): NumParam =>
-		floatParam({ value: [1, 0, 0, 1], color: true, ...over });
+		floatParam({ value: [1, 0, 0, 1], face: 'color', ...over });
 
 	it('shows a scalar as its control, with no switch and the whole foot', () => {
 		const p = rowPlan(floatParam(), list);
 		expect(p).toMatchObject({ face: 'numeric', viewSwitch: false, list: false, elements: false, source: false, foot: true });
+	});
+
+	it('shows an envelope as its knobs over its list, opening as entries named by stage', () => {
+		const env = floatParam({ value: [0.01, 0.1, 1, 0.3], face: 'envelope' });
+		expect(controlKind(env)).toBe('envelope');
+		expect(rowPlan(env, list)).toMatchObject({ face: 'envelope', viewSwitch: true, list: true, elements: false, foot: true });
+		expect(rowPlan(env, entries)).toMatchObject({ face: 'vector', elements: true, foot: false });
+		expect([0, 1, 2, 3].map((i) => elementName(env, i))).toEqual(['A', 'D', 'S', 'R']);
+		expect(elementName(colour(), 3)).toBe('A');
+		expect(elementName(floatParam({ value: [1, 2] }), 1)).toBe('[1]');
 	});
 
 	it('shows a constant colour as the picker over its list, with the foot beside the list', () => {

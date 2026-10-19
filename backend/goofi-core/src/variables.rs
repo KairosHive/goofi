@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{control, Data, Meta, Value};
+use crate::{control, Data, Meta, Value, ENVELOPE_BORN};
 
 /// Where a variable's frames go: the data plane the store publishes on. A value write is a
 /// publish and nothing else; a removed variable retires its wire.
@@ -26,11 +26,12 @@ pub enum ControlKind {
     Paint,
     Vector,
     Color,
+    Envelope,
 }
 
 impl ControlKind {
     /// Every kind, in the order a palette offers them.
-    pub const ALL: [ControlKind; 9] = [
+    pub const ALL: [ControlKind; 10] = [
         ControlKind::Knob,
         ControlKind::Slider,
         ControlKind::Number,
@@ -40,6 +41,7 @@ impl ControlKind {
         ControlKind::Paint,
         ControlKind::Vector,
         ControlKind::Color,
+        ControlKind::Envelope,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -53,11 +55,12 @@ impl ControlKind {
             ControlKind::Paint => "paint",
             ControlKind::Vector => "vector",
             ControlKind::Color => "color",
+            ControlKind::Envelope => "envelope",
         }
     }
 
-    /// What a widget of this kind draws: one `number`, a `text`, an `image` (an `[h, w, 4]` RGBA
-    /// array in 0..1), a `vector` (an `[n]` array), a `color` (an `[4]` RGBA in 0..1), or `any` frame's truth.
+    /// What a widget of this kind draws: one `number`, a `text`, an `image` (an `[h, w, 4]` RGBA array
+    /// in 0..1), a `vector` (`[n]`), a `color` (`[4]` RGBA in 0..1), an `envelope` (`[4]` ADSR), or `any` frame's truth.
     pub fn draws(self) -> &'static str {
         match self {
             ControlKind::Knob | ControlKind::Slider | ControlKind::Number => "number",
@@ -66,6 +69,7 @@ impl ControlKind {
             ControlKind::Paint => "image",
             ControlKind::Vector => "vector",
             ControlKind::Color => "color",
+            ControlKind::Envelope => "envelope",
         }
     }
 
@@ -83,6 +87,7 @@ impl ControlKind {
             ControlKind::Paint => (8.0, 8.0),
             ControlKind::Vector => (8.0, 2.0),
             ControlKind::Color => (2.0, 2.0),
+            ControlKind::Envelope => (8.0, 4.0),
         }
     }
 }
@@ -144,7 +149,7 @@ impl Control {
         match (self.kind.draws(), value.value()) {
             ("number", Value::Array(a)) => a.shape() == [1],
             ("vector", Value::Array(a)) => a.shape().len() == 1,
-            ("color", Value::Array(a)) => a.shape() == [4],
+            ("color" | "envelope", Value::Array(a)) => a.shape() == [4],
             ("image", Value::Array(a)) => matches!(a.shape(), [_, _, 4]),
             ("any", _) | ("text", Value::Str(_)) => true,
             _ => false,
@@ -152,12 +157,13 @@ impl Control {
     }
 
     /// The value a widget of this kind is born holding: a paint pad, a clear `[side, side, 4]` sheet;
-    /// a vector three zeros; a colour opaque black.
+    /// a vector three zeros; a colour opaque black; an envelope a short pluck.
     pub fn born_value(&self) -> Data {
         match self.kind {
             ControlKind::Text | ControlKind::Dropdown => Data::text(""),
             ControlKind::Vector => Data::array_f32(vec![3], vec![0; 12], Meta::default()).expect("three numbers"),
-            ControlKind::Color => Data::array_f32(vec![4], vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63], Meta::default()).expect("four numbers"),
+            ControlKind::Color => Data::numbers([0.0, 0.0, 0.0, 1.0]),
+            ControlKind::Envelope => Data::numbers(ENVELOPE_BORN),
             ControlKind::Paint => {
                 let side = self.resolution.unwrap_or(128).clamp(1, 1024) as usize;
                 Data::array_f32(vec![side, side, 4], vec![0; side * side * 16], Meta::default()).expect("a whole number of texels")

@@ -2,7 +2,7 @@
 //! a phase. A limit cycle, an excitable cell, a double well, and the bifurcation between them.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -194,7 +194,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Roughly how many cycles a second. It scales the whole model's time, not one term."),
         section: 0,
@@ -204,7 +204,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "nonlinearity",
-        spec: ParamSpec::Num { default: &[1.0], min: -2.0, max: 5.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: -2.0, max: 5.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "The model's own shape knob: `vanderpol` reads it as mu, `duffing` as the cubic term, \
@@ -218,7 +218,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "damping",
-        spec: ParamSpec::Num { default: &[0.2], min: 0.0, max: 5.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.2], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Friction. `duffing` and `pendulum` read it; the others set their own."),
         section: 0,
@@ -228,7 +228,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "drive",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Amplitude of a periodic forcing, added to whatever the `drive` input carries."),
         section: 0,
@@ -238,7 +238,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "drive_frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Frequency of that forcing, relative to the oscillator's own."),
         section: 0,
@@ -248,7 +248,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "oscillator",
         name: "noise",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Jitter on both state variables, which is what makes an excitable model fire on its own."),
         section: 0,
@@ -258,7 +258,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "dt",
-        spec: ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 0.1, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Model seconds per step. Too large and the integration leaves the cycle."),
         section: 0,
@@ -268,7 +268,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Nudges the start and seeds the noise. Negative takes a fresh one from the clock."),
         section: 0,
@@ -298,7 +298,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,

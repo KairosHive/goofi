@@ -2,7 +2,7 @@
 //! gives one answer; in updates it holds whole frames and hands back the one from further back.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Delay {
@@ -61,7 +61,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "delay",
         name: "size",
-        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e7, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e7, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How far back to read, in the unit below. Never a sleep: the node answers at once."),
         section: 0,
@@ -81,7 +81,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "delay",
         name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis the delay runs along when it counts samples. -1 is time."),
         section: 0,

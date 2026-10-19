@@ -5,6 +5,7 @@
 
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
 export type Literal = number | string | boolean | Literal[];
+export type Face = "plain" | "color" | "envelope";
 export type Mode = "constant" | "expression";
 export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, };
 export type VideoQuality = "small" | "high" | "very_high";
@@ -15,7 +16,7 @@ export type NodeRecord = { type: string, name: string, pos: [number, number],
  */
 scope?: string, params: { [key in string]: { [key in string]: ParamEntry } }, viewers?: JsonValue, baseline?: JsonValue, record: Array<RecordedOutput>, };
 export type Link = { node_out: string, slot_out: string, node_in: string, slot_in: string, };
-export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint" | "vector" | "color";
+export type ControlKind = "knob" | "slider" | "number" | "text" | "toggle" | "dropdown" | "paint" | "vector" | "color" | "envelope";
 export type Control = { kind: ControlKind, min?: number, max?: number, step?: number, options: Array<string>, 
 /**
  * A paint pad's side in texels; absent is 128.
@@ -29,10 +30,15 @@ export type VariableRecord = { value?: Literal, control?: Control,
 expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
-export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, color: boolean, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
+export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, face: Face, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
 export type Attribute = { default: Literal, kind: AttributeKind, };
 export type Decision = "sequence" | "random" | "expression";
 export type State = { pos: [number, number], values?: Record<string, Literal>, 
+/**
+ * Per attribute set here, the ADSR its value lands by: attack, decay and release in seconds,
+ * sustain in 0..1 of the way from what the playhead held to the value.
+ */
+envelopes?: Record<string, [number, number, number, number]>, 
 /**
  * Seconds between decisions, from arrival; 0 decides once, on arrival.
  */
@@ -106,4 +112,4 @@ refreshable: boolean, mode: Mode, expression: string | null,
  * The active source's bind, compile or arrival error.
  */
 error: string | null, };
-export type ParamKind = { "type": "num", value: number | number[], vmin: number, vmax: number, int: boolean, options: Array<number>, color: boolean, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };
+export type ParamKind = { "type": "num", value: number | number[], vmin: number, vmax: number, int: boolean, options: Array<number>, face: Face, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };

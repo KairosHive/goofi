@@ -39,7 +39,7 @@
 		<Field label="kind" row>
 			<Select data-testid="attribute-kind" aria-label="kind" value={faceOf(a)} options={FACES.map((f) => f.id)} onChange={setFace} />
 		</Field>
-		{#if a.kind.type === 'num' && !a.kind.color}
+		{#if a.kind.type === 'num' && a.kind.face === 'plain'}
 			<Field label="range" doc="The slider's bounds; a typed value may pass them" row>
 				<span class="pair">
 					<NumberInput value={a.kind.vmin} aria-label="min" onChange={(v) => editKind({ vmin: v })} />
@@ -48,6 +48,10 @@
 			</Field>
 			<Field label="integer" row>
 				<Toggle value={a.kind.int} aria-label="integer" onChange={(v) => editKind({ int: v })} />
+			</Field>
+		{:else if a.kind.type === 'num' && a.kind.face === 'envelope'}
+			<Field label="longest" doc="The seconds a time knob reaches" row>
+				<NumberInput value={a.kind.vmax} min={0.01} aria-label="max" onChange={(v) => editKind({ vmax: Math.max(0.01, v) })} />
 			</Field>
 		{:else if a.kind.type === 'string' && a.kind.options}
 			<Field label="options" doc="The choices, comma-separated" row>

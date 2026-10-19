@@ -1,11 +1,11 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     TIME = ParamDecl {
         group: "delay",
         name: "time",
-        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 5.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds behind the input; move it while it sounds and the echoes bend with it"),
         section: 0,
@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     FEEDBACK = ParamDecl {
         group: "delay",
         name: "feedback",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how much of each echo goes back in; at 1 it repeats without fading"),
         section: 0,
@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     MIX = ParamDecl {
         group: "delay",
         name: "mix",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how much of what leaves is the echo rather than the input"),
         section: 0,

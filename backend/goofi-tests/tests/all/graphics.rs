@@ -742,11 +742,11 @@ fn shaders_render_on_the_gpu() {
     g.call("node remove", j!({ "node": hex(stops) }));
 
     // Step: a colour is a four-dimensional number: the shader reads a `vec4f`, the palette says
-    // `num` with `color`, a list sets every dimension and one number fills them all.
+    // `num` with the `color` face, a list sets every dimension and one number fills them all.
     std::fs::write(dir.join("Inked.wgsl"), INKED).unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Inked"]));
     let ink = &g.call("library get", j!({ "type": "graphics:Inked" }))["params"]["look"]["ink"];
-    assert_eq!((&ink["type"], &ink["color"], &ink["value"]), (&j!("num"), &j!(true), &j!([1, 0, 0, 1])));
+    assert_eq!((&ink["type"], &ink["face"], &ink["value"]), (&j!("num"), &j!("color"), &j!([1, 0, 0, 1])));
     let inked = g.add("graphics:Inked");
     g.ready(inked);
     g.set_param(inked, "common", "width", 8);

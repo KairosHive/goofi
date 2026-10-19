@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{Face, high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     GATE = ParamDecl {
@@ -15,7 +15,7 @@ goofi_audio_sdk::params! {
     ATTACK = ParamDecl {
         group: "env",
         name: "attack",
-        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds to full"),
         section: 0,
@@ -25,7 +25,7 @@ goofi_audio_sdk::params! {
     DECAY = ParamDecl {
         group: "env",
         name: "decay",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds from full to `sustain`"),
         section: 0,
@@ -35,7 +35,7 @@ goofi_audio_sdk::params! {
     SUSTAIN = ParamDecl {
         group: "env",
         name: "sustain",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the level held while the gate stays HIGH"),
         section: 0,
@@ -45,7 +45,7 @@ goofi_audio_sdk::params! {
     RELEASE = ParamDecl {
         group: "env",
         name: "release",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds from full to silence once the gate drops"),
         section: 0,

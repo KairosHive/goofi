@@ -1,6 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{
-    band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+use goofi_audio_sdk::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
     BLOCK,
 };
 
@@ -8,7 +7,7 @@ goofi_audio_sdk::params! {
     PITCH = ParamDecl {
         group: "band",
         name: "pitch",
-        spec: ParamSpec::Num { default: &[0.0], min: -6.0, max: 6.5, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
         section: 0,
@@ -18,7 +17,7 @@ goofi_audio_sdk::params! {
     GATE = ParamDecl {
         group: "band",
         name: "gate",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
         section: 0,
@@ -28,7 +27,7 @@ goofi_audio_sdk::params! {
     BANDS = ParamDecl {
         group: "band",
         name: "bands",
-        spec: ParamSpec::Num { default: &[16.0], min: 2.0, max: 128.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[16.0], min: 2.0, max: 128.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how many bands leave, one per channel; `BandFilter` needs the same count"),
         section: 0,
@@ -38,7 +37,7 @@ goofi_audio_sdk::params! {
     LOW = ParamDecl {
         group: "band",
         name: "low",
-        spec: ParamSpec::Num { default: &[-1.5], min: -6.0, max: 6.5, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[-1.5], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
         section: 0,
@@ -48,7 +47,7 @@ goofi_audio_sdk::params! {
     HIGH = ParamDecl {
         group: "band",
         name: "high",
-        spec: ParamSpec::Num { default: &[4.25], min: -6.0, max: 6.5, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[4.25], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
         section: 0,
@@ -58,7 +57,7 @@ goofi_audio_sdk::params! {
     Q = ParamDecl {
         group: "band",
         name: "q",
-        spec: ParamSpec::Num { default: &[4.0], min: 0.5, max: 20.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[4.0], min: 0.5, max: 20.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
         section: 0,
@@ -68,7 +67,7 @@ goofi_audio_sdk::params! {
     ATTACK = ParamDecl {
         group: "band",
         name: "attack",
-        spec: ParamSpec::Num { default: &[0.005], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.005], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds to follow a band that gets louder; short keeps the consonants"),
         section: 0,
@@ -78,7 +77,7 @@ goofi_audio_sdk::params! {
     RELEASE = ParamDecl {
         group: "band",
         name: "release",
-        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds to follow a band that gets quieter; long smears one word into the next"),
         section: 0,

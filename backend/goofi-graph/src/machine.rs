@@ -7,7 +7,7 @@ use std::sync::Arc;
 use goofi_core::control;
 use goofi_core::ease::Curve;
 use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
-use goofi_core::{Data, Meta, Param, Value};
+use goofi_core::{Data, Face, Meta, Param, Value};
 use goofi_node::{EvalCtx, ExprEvaluator, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -44,8 +44,8 @@ pub struct Machine {
     pub seed: Option<u64>,
 }
 
-/// What an attribute is, as a node's param is: a number — one, a vector, or a colour — a bool, or a
-/// text, maybe one of some options. The inspector draws it with the param widget of that kind.
+/// What an attribute is, as a node's param is: a number — one, a vector, a colour or an envelope —
+/// a bool, or a text, maybe one of some options. The inspector draws it with that param's widget.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AttributeKind {
@@ -55,7 +55,7 @@ pub enum AttributeKind {
         #[serde(default)]
         int: bool,
         #[serde(default)]
-        color: bool,
+        face: Face,
     },
     Bool,
     #[serde(rename = "string")]
@@ -71,16 +71,15 @@ impl AttributeKind {
     pub fn of(value: &Data) -> Self {
         match value.value() {
             Value::Str(_) => AttributeKind::Str { options: None },
-            _ => AttributeKind::Num { vmin: 0.0, vmax: 1.0, int: false, color: false },
+            _ => AttributeKind::Num { vmin: 0.0, vmax: 1.0, int: false, face: Face::Plain },
         }
     }
 
-    /// Whether `value` is one this kind holds: numbers in one dimension (four for a colour), a bool
-    /// as one number, a text (one of the options, where there are some).
+    /// Whether `value` is one this kind holds: numbers in one dimension (four for a colour or an
+    /// envelope), a bool as one number, a text (one of the options, where there are some).
     pub fn fits(&self, value: &Data) -> bool {
         match (self, value.value()) {
-            (AttributeKind::Num { color: true, .. }, Value::Array(a)) => a.shape() == [4],
-            (AttributeKind::Num { .. }, Value::Array(a)) => a.shape().len() == 1,
+            (AttributeKind::Num { face, .. }, Value::Array(a)) => face.dims().is_none_or(|d| a.shape() == [d]) && a.shape().len() == 1,
             (AttributeKind::Bool, Value::Array(a)) => a.shape() == [1],
             (AttributeKind::Str { options: Some(o) }, Value::Str(s)) => o.iter().any(|x| x.as_str() == s.as_ref()),
             (AttributeKind::Str { .. }, Value::Str(_)) => true,
@@ -92,9 +91,9 @@ impl AttributeKind {
     /// as `default` holds; a value the kind still cannot hold is `default`.
     pub fn read(&self, value: &Data, default: &Data) -> Data {
         let target = match self {
-            AttributeKind::Num { vmin, vmax, int, color } => {
+            AttributeKind::Num { vmin, vmax, int, face } => {
                 let dims = control::numbers(default).count().max(1);
-                Param::Num { value: vec![0.0; dims], vmin: *vmin, vmax: *vmax, int: *int, options: Vec::new(), color: *color }
+                Param::Num { value: vec![0.0; dims], vmin: *vmin, vmax: *vmax, int: *int, options: Vec::new(), face: *face }
             }
             AttributeKind::Bool => Param::Bool { value: false },
             AttributeKind::Str { options } => Param::Str { value: String::new(), options: options.clone(), refresh: false },
@@ -104,8 +103,8 @@ impl AttributeKind {
 
     pub fn mismatch(&self, value: &Data) -> String {
         let kind = match self {
-            AttributeKind::Num { color: true, .. } => "colour",
-            AttributeKind::Num { .. } => "num",
+            AttributeKind::Num { face: Face::Plain, .. } => "num",
+            AttributeKind::Num { face, .. } => face.as_str(),
             AttributeKind::Bool => "bool",
             AttributeKind::Str { options: Some(_) } => "string of the options",
             AttributeKind::Str { .. } => "string",
@@ -120,7 +119,8 @@ impl AttributeKind {
             _ => 1,
         };
         let (kind, range, options) = match self {
-            AttributeKind::Num { color: true, .. } => (ControlKind::Color, None, Vec::new()),
+            AttributeKind::Num { face: Face::Color, .. } => (ControlKind::Color, None, Vec::new()),
+            AttributeKind::Num { face: Face::Envelope, vmin, vmax, .. } => (ControlKind::Envelope, Some((*vmin, *vmax, 0.01)), Vec::new()),
             AttributeKind::Num { vmin, vmax, int, .. } => {
                 let range = Some((*vmin, *vmax, if *int { 1.0 } else { 0.01 }));
                 (if dims > 1 { ControlKind::Vector } else { ControlKind::Knob }, range, Vec::new())
@@ -153,8 +153,8 @@ pub struct Attribute {
     pub kind: AttributeKind,
 }
 
-/// A state: where its card sits, the attributes it sets (one left out is kept on entry), and how
-/// a playhead resting in it picks a transition out, once per `interval`.
+/// A state: where its card sits, the attributes it sets (one left out is kept on entry) and the
+/// envelopes they land by, and how a playhead resting in it picks a transition out, once per `interval`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct State {
     #[serde(default)]
@@ -162,6 +162,11 @@ pub struct State {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     #[ts(type = "Record<string, Literal>")]
     pub values: IndexMap<String, Data>,
+    /// Per attribute set here, the ADSR its value lands by: attack, decay and release in seconds,
+    /// sustain in 0..1 of the way from what the playhead held to the value.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    #[ts(type = "Record<string, [number, number, number, number]>")]
+    pub envelopes: IndexMap<String, [f64; 4]>,
     /// Seconds between decisions, from arrival; 0 decides once, on arrival.
     #[serde(default = "one")]
     pub interval: f64,
@@ -181,7 +186,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        State { pos: [0.0; 2], values: IndexMap::new(), interval: 1.0, mode: Decision::default(), noop: 0.0, weights: IndexMap::new(), expression: String::new() }
+        State { pos: [0.0; 2], values: IndexMap::new(), envelopes: IndexMap::new(), interval: 1.0, mode: Decision::default(), noop: 0.0, weights: IndexMap::new(), expression: String::new() }
     }
 }
 
@@ -292,6 +297,17 @@ impl Machine {
             if let Some(attr) = state.values.keys().find(|a| !self.attributes.contains_key(*a)) {
                 return Err(format!("state `{name}` sets `{attr}`, which is no attribute of the machine"));
             }
+            for (attr, e) in &state.envelopes {
+                if !state.values.contains_key(attr) {
+                    return Err(format!("state `{name}` shapes `{attr}` with an envelope but does not set it"));
+                }
+                if !matches!(self.attributes.get(attr).map(|a| &a.kind), Some(AttributeKind::Num { .. })) {
+                    return Err(format!("state `{name}`: `{attr}` is no number; an envelope shapes numbers alone"));
+                }
+                if e.iter().any(|v| !(v.is_finite() && *v >= 0.0)) || e[2] > 1.0 {
+                    return Err(format!("state `{name}`: `{attr}`'s envelope is three times of at least 0 and a sustain in 0..1"));
+                }
+            }
             if !(state.interval.is_finite() && state.interval >= 0.0) {
                 return Err(format!("state `{name}`: interval is seconds of at least 0"));
             }
@@ -358,13 +374,59 @@ struct Expr {
     error: Option<String>,
 }
 
-/// A move under way: when it left and when it lands, and what it blends between.
+/// A playhead's travel along a transition: when it left and lands, for `progress`, and the values
+/// that cannot blend, which switch on arrival.
 struct Flight {
     start: f64,
     end: f64,
+    landing: IndexMap<String, Data>,
+}
+
+/// One leg of an attribute's motion: `from` toward `to` over `start..end`, by `curve`.
+struct Leg {
+    start: f64,
+    end: f64,
+    from: Data,
+    to: Data,
     curve: Curve,
-    origin: IndexMap<String, Data>,
-    target: IndexMap<String, Data>,
+}
+
+/// An attribute on the move: its legs in order, then what it rests at.
+struct Motion {
+    legs: Vec<Leg>,
+    rest: Data,
+}
+
+impl Motion {
+    /// Where the motion stands at `t`: its origin before it, the blend inside a leg, its rest after.
+    fn at(&self, t: f64) -> Data {
+        for leg in &self.legs {
+            if t < leg.start {
+                return leg.from.clone();
+            }
+            if t < leg.end {
+                return lerp(&leg.from, &leg.to, leg.curve.at((t - leg.start) / (leg.end - leg.start))).unwrap_or_else(|| leg.from.clone());
+            }
+        }
+        self.rest.clone()
+    }
+
+    /// When the last leg lands.
+    fn end(&self) -> Option<f64> {
+        self.legs.last().map(|l| l.end)
+    }
+
+    /// The whole motion as Python over `t`: each leg while it lasts, then the rest.
+    fn source(&self) -> Option<String> {
+        let mut out = String::new();
+        for leg in &self.legs {
+            let (a, b) = (py_list(&leg.from)?, py_list(&leg.to)?);
+            let x = format!("min(max((t - {:?}) / {:?}, 0.0), 1.0)", leg.start, leg.end - leg.start);
+            out.push_str(&format!("(lambda x: np.array({a}) + (np.array({b}) - np.array({a})) * ({}))({x}) if t < {:?} else ", curve_source(leg.curve), leg.end));
+        }
+        out.push_str(&format!("np.array({})", py_list(&self.rest)?));
+        Some(out)
+    }
 }
 
 /// A decision armed: when it is due, and the interval it was armed with.
@@ -374,12 +436,14 @@ struct Due {
     interval: f64,
 }
 
-/// One playhead's run: at rest in `state` since `arrived`, or in flight toward it.
+/// One playhead's run: at rest in `state` since `arrived`, or in flight toward it; what it holds,
+/// and the attributes still on their way.
 struct Head {
     state: String,
     prev: String,
     arrived: f64,
     held: IndexMap<String, Data>,
+    motions: IndexMap<String, Motion>,
     flight: Option<Flight>,
     /// The state's next decision, at infinity once a 0 interval has decided; none in a state with
     /// no transition out.
@@ -520,11 +584,14 @@ impl Machines {
         out
     }
 
-    /// The next instant something is owed: a landing, a decision due, or a request — what the
-    /// thread sleeps toward. None while nothing is armed.
+    /// The next instant something is owed: a landing, a motion's rest, a decision due, or a
+    /// request — what the thread sleeps toward. None while nothing is armed.
     pub fn next_deadline(&self) -> Option<f64> {
         let heads = self.runs.values().flat_map(|r| r.heads.values());
-        let owed = heads.flat_map(|h| h.flight.as_ref().map(|f| f.end).or_else(|| h.due.map(|d| d.at).filter(|at| at.is_finite())));
+        let owed = heads.flat_map(|h| {
+            let due = h.flight.as_ref().map(|f| f.end).or_else(|| h.due.map(|d| d.at).filter(|at| at.is_finite()));
+            due.into_iter().chain(h.motions.values().filter_map(Motion::end))
+        });
         owed.chain(self.requests.iter().map(|(at, _)| *at)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
     }
 
@@ -566,21 +633,17 @@ impl Machines {
                 out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
                 out.push((format!("{ph}.prev"), Data::text(head.prev.as_str())));
                 out.push((format!("{ph}.arrived"), Data::number(head.arrived)));
-                match &head.flight {
-                    None => {
-                        out.push((format!("{ph}.progress"), Data::number(1.0)));
-                        out.extend(head.held.iter().map(|(a, v)| (format!("{ph}.{a}"), v.clone())));
-                    }
-                    Some(f) => {
-                        out.push((format!("{ph}.progress"), functional(progress_source(f))));
-                        for (a, origin) in &f.origin {
-                            let value = match f.target.get(a).and_then(|target| blend_source(origin, target, f)) {
-                                Some(source) => functional(source),
-                                None => origin.clone(),
-                            };
-                            out.push((format!("{ph}.{a}"), value));
-                        }
-                    }
+                let progress = match &head.flight {
+                    None => Data::number(1.0),
+                    Some(f) => functional(progress_source(f)),
+                };
+                out.push((format!("{ph}.progress"), progress));
+                for (a, held) in &head.held {
+                    let value = match head.motions.get(a).and_then(Motion::source) {
+                        Some(source) => functional(source),
+                        None => held.clone(),
+                    };
+                    out.push((format!("{ph}.{a}"), value));
                 }
             }
         }
@@ -667,18 +730,52 @@ fn progress_source(f: &Flight) -> String {
     format!("min(max((t - {:?}) / {:?}, 0.0), 1.0)", f.start, f.end - f.start)
 }
 
-/// `origin` toward `target` along the flight's curve, elementwise for arrays of one shape; past
-/// the end it is the target exactly. None for what switches on arrival instead.
-fn blend_source(origin: &Data, target: &Data, f: &Flight) -> Option<String> {
-    if origin.as_array().ok()?.shape() != target.as_array().ok()?.shape() {
-        return None;
+/// `a` toward `b` by `x` in 0..1, elementwise; None where the two are not arrays of one shape.
+fn lerp(a: &Data, b: &Data, x: f64) -> Option<Data> {
+    match (a.value(), b.value()) {
+        (Value::Array(p), Value::Array(q)) if p.shape() == q.shape() => {
+            let bytes: Vec<u8> = p.values().zip(q.values()).flat_map(|(p, q)| ((f64::from(p) + (f64::from(q) - f64::from(p)) * x) as f32).to_le_bytes()).collect();
+            Data::array_f32(p.shape().to_vec(), bytes, Meta::default()).ok()
+        }
+        _ => None,
     }
-    let (a, b) = (py_list(origin)?, py_list(target)?);
-    Some(format!(
-        "(lambda x: np.array({a}) + (np.array({b}) - np.array({a})) * ({}))({})",
-        curve_source(f.curve),
-        progress_source(f)
-    ))
+}
+
+/// `cur` toward `target` over `duration` by `curve` from `now`: no leg for an instant move. None
+/// for what cannot blend, which switches on arrival instead.
+fn ramp(now: f64, duration: f64, cur: &Data, target: &Data, curve: Curve) -> Option<Motion> {
+    lerp(cur, target, 0.0)?;
+    let legs = if duration > 0.0 { vec![Leg { start: now, end: now + duration, from: cur.clone(), to: target.clone(), curve }] } else { Vec::new() };
+    Some(Motion { legs, rest: target.clone() })
+}
+
+/// `cur` toward `target` by an ADSR from `now`: up to the target over the attack, down to the
+/// sustain over the decay, at rest there. The release plays on departure.
+fn adsr(now: f64, cur: &Data, target: &Data, [a, d, s, _]: [f64; 4]) -> Option<Motion> {
+    let sustain = if s >= 1.0 { target.clone() } else { lerp(cur, target, s)? };
+    lerp(cur, target, 0.0)?;
+    let mut legs = Vec::new();
+    if a > 0.0 {
+        legs.push(Leg { start: now, end: now + a, from: cur.clone(), to: target.clone(), curve: Curve::Linear });
+    }
+    if d > 0.0 && s < 1.0 {
+        legs.push(Leg { start: now + a, end: now + a + d, from: target.clone(), to: sustain.clone(), curve: Curve::Linear });
+    }
+    Some(Motion { legs, rest: sustain })
+}
+
+/// Settle the head's motions to `now`: a leg that ended is behind it, and a motion done rests.
+fn fold(head: &mut Head, now: f64) {
+    let Head { held, motions, .. } = head;
+    motions.retain(|a, m| {
+        while m.legs.first().is_some_and(|l| l.end <= now) {
+            m.legs.remove(0);
+        }
+        if m.legs.is_empty() {
+            held.insert(a.clone(), m.rest.clone());
+        }
+        !m.legs.is_empty()
+    });
 }
 
 /// What a step reads and evaluates against.
@@ -759,30 +856,37 @@ fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head 
         prev: String::new(),
         arrived: ctx.now,
         held: machine.attributes.iter().map(|(a, attr)| (a.clone(), attr.default.clone())).collect(),
+        motions: IndexMap::new(),
         flight: None,
         due: None,
         cursor: HashMap::new(),
         gates: HashMap::new(),
         fire: None,
     };
+    place(&mut head, machine, state);
     arrive(&mut head, machine, state, ctx.now, ctx, events);
     head
 }
 
-/// Put `head` in `state` at `at`: the state's values land, its decisions and triggers arm.
+/// `state`'s values land at once, no easing: what a birth, a jump and a reset do.
+fn place(head: &mut Head, machine: &Machine, state: &str) {
+    if let Some(s) = machine.states.get(state) {
+        for (a, v) in &s.values {
+            if head.held.contains_key(a) {
+                head.held.insert(a.clone(), v.clone());
+                head.motions.shift_remove(a);
+            }
+        }
+    }
+}
+
+/// Put `head` at rest in `state` at `at`: its decisions and triggers arm.
 fn arrive(head: &mut Head, machine: &Machine, state: &str, at: f64, ctx: &Ctx, events: &mut Events) {
     head.state = state.to_string();
     head.prev.clear();
     head.flight = None;
     head.arrived = at;
     head.fire = None;
-    if let Some(s) = machine.states.get(state) {
-        for (a, v) in &s.values {
-            if head.held.contains_key(a) {
-                head.held.insert(a.clone(), v.clone());
-            }
-        }
-    }
     arm(head, machine, ctx, true);
     events.arrived.push(state.to_string());
 }
@@ -792,6 +896,7 @@ fn relocate(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: 
     if head.flight.is_none() {
         events.left.push(head.state.clone());
     }
+    place(head, machine, state);
     arrive(head, machine, state, ctx.now, ctx, events);
 }
 
@@ -838,16 +943,17 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
             }
             Some(head) => {
                 head.held.retain(|a, _| machine.attributes.contains_key(a));
+                head.motions.retain(|a, _| machine.attributes.contains_key(a));
                 for (a, attr) in &machine.attributes {
                     if !head.held.contains_key(a) {
                         head.held.insert(a.clone(), attr.default.clone());
                     }
                 }
                 if let Some(f) = &mut head.flight {
-                    f.origin.retain(|a, _| machine.attributes.contains_key(a));
-                    f.target.retain(|a, _| machine.attributes.contains_key(a));
+                    f.landing.retain(|a, _| machine.attributes.contains_key(a));
                 }
                 if !machine.states.contains_key(&head.state) {
+                    place(head, machine, &p.start);
                     arrive(head, machine, &p.start, ctx.now, ctx, &mut events);
                 } else {
                     arm(head, machine, ctx, false);
@@ -857,58 +963,66 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
     }
 }
 
-/// Where a flight stands at `t`, for a redirection: the blend of its origin and target, so the
-/// next flight leaves from here and is continuous.
-fn sample(f: &Flight, t: f64) -> IndexMap<String, Data> {
-    let b = f.curve.at(((t - f.start) / (f.end - f.start)).clamp(0.0, 1.0));
-    f.origin
-        .iter()
-        .map(|(a, origin)| {
-            let value = match (origin.value(), f.target.get(a).map(Data::value)) {
-                (Value::Array(x), Some(Value::Array(y))) if x.shape() == y.shape() => {
-                    let bytes: Vec<u8> = x
-                        .values()
-                        .zip(y.values())
-                        .flat_map(|(p, q)| ((f64::from(p) + (f64::from(q) - f64::from(p)) * b) as f32).to_le_bytes())
-                        .collect();
-                    Data::array_f32(x.shape().to_vec(), bytes, Meta::default()).unwrap_or_else(|_| origin.clone())
-                }
-                _ => origin.clone(),
-            };
-            (a.clone(), value)
-        })
-        .collect()
-}
-
-/// Take `t` out of the head's state at `ctx.now`: instant when it has no duration, else a flight
-/// from what the head holds now, so a redirection mid-flight is continuous.
+/// Take `t` out of the head's state at `ctx.now`. Each attribute the next state sets moves from
+/// where it stands now, so a redirection is continuous: by the state's envelope where it has one;
+/// else by the state left behind's release, once its envelope had come to rest; else by the
+/// transition's own duration and curve. One the next state leaves out goes on untouched.
 fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut Events) {
     let t = &machine.transitions[id];
     let prev = head.state.clone();
     events.left.push(prev.clone());
-    if let Some(f) = &head.flight {
-        head.held = sample(f, ctx.now);
+    fold(head, ctx.now);
+    let leaving = machine.states.get(&prev);
+    let entering = machine.states.get(&t.to);
+    let mut landing = IndexMap::new();
+    let attrs: Vec<String> = head.held.keys().cloned().collect();
+    for a in attrs {
+        let Some(target) = entering.and_then(|s| s.values.get(&a)) else { continue };
+        let cur = head.motions.get(&a).map_or_else(|| head.held[&a].clone(), |m| m.at(ctx.now));
+        let unfinished = head.motions.contains_key(&a);
+        let envelope = entering.and_then(|s| s.envelopes.get(&a)).copied();
+        let release = leaving.and_then(|s| s.envelopes.get(&a)).map(|e| e[3]).filter(|_| !unfinished);
+        let motion = match (envelope, release) {
+            (Some(e), _) => adsr(ctx.now, &cur, target, e),
+            (None, Some(r)) => ramp(ctx.now, r, &cur, target, Curve::Linear),
+            (None, None) => ramp(ctx.now, t.duration, &cur, target, t.curve),
+        };
+        match motion {
+            Some(m) if m.legs.is_empty() => {
+                head.held.insert(a.clone(), m.rest);
+                head.motions.shift_remove(&a);
+            }
+            Some(m) => {
+                head.held.insert(a.clone(), cur);
+                head.motions.insert(a, m);
+            }
+            None => {
+                landing.insert(a, target.clone());
+            }
+        }
     }
-    let target: IndexMap<String, Data> =
-        machine.states.get(&t.to).map(|s| s.values.iter().filter(|(a, _)| head.held.contains_key(*a)).map(|(a, v)| (a.clone(), v.clone())).collect()).unwrap_or_default();
     head.fire = None;
     if t.duration <= 0.0 {
+        head.held.extend(landing);
         return arrive(head, machine, &t.to, ctx.now, ctx, events);
     }
     head.prev = prev;
     head.state = t.to.clone();
     head.due = None;
     head.gates.clear();
-    head.flight = Some(Flight { start: ctx.now, end: ctx.now + t.duration, curve: t.curve, origin: head.held.clone(), target });
+    head.flight = Some(Flight { start: ctx.now, end: ctx.now + t.duration, landing });
 }
 
 /// Land the flights that are done by this instant, then let what fires out of each rest state
 /// take its playhead, a bounded number of hops; a chain still going past the bound is an error.
 fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
     for head in run.heads.values_mut() {
+        fold(head, ctx.now);
         let Some(f) = &head.flight else { continue };
         if f.end <= ctx.now {
             let (state, end) = (head.state.clone(), f.end);
+            let landing = std::mem::take(&mut head.flight).map(|f| f.landing).unwrap_or_default();
+            head.held.extend(landing);
             arrive(head, machine, &state, end, ctx, &mut events);
         }
     }

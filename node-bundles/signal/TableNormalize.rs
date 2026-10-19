@@ -2,7 +2,7 @@
 
 use goofi_core::normalize::{apply, scale_of, validate, Running};
 use goofi_core::{indexmap::IndexMap, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Member {
@@ -97,7 +97,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "window",
         name: "size",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How many past values each member is measured against. 0 keeps running statistics \

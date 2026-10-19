@@ -1,6 +1,6 @@
 use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, NOTES, SCALES};
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     SCALE = ParamDecl {
@@ -36,7 +36,7 @@ goofi_audio_sdk::params! {
     GENERATOR = ParamDecl {
         group: "scale",
         name: "generator",
-        spec: ParamSpec::Num { default: &[700.0], min: 0.0, max: 4800.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[700.0], min: 0.0, max: 4800.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
         section: 0,
@@ -46,7 +46,7 @@ goofi_audio_sdk::params! {
     STEPS = ParamDecl {
         group: "scale",
         name: "steps",
-        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 53.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 53.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
         section: 0,
@@ -56,7 +56,7 @@ goofi_audio_sdk::params! {
     MASK = ParamDecl {
         group: "scale",
         name: "mask",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: ((1 << MASK_BITS) - 1) as f64, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: ((1 << MASK_BITS) - 1) as f64, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
         section: 0,
@@ -66,7 +66,7 @@ goofi_audio_sdk::params! {
     MODE = ParamDecl {
         group: "scale",
         name: "mode",
-        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 52.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 52.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
         section: 0,

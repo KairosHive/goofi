@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_audio_sdk::{Face, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 pub const TYPE: &str = "AudioPlayback";
 
@@ -17,7 +17,7 @@ goofi_audio_sdk::params! {
     POSITION = ParamDecl {
         group: "play",
         name: "position",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("where in the file to play from; playback runs on its own, and a MOVE of this skips"),
         section: 0,

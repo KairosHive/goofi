@@ -12,8 +12,7 @@ use std::time::{Duration, Instant};
 
 use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
 use goofi_core::SlotType;
-use goofi_node::{
-    DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
+use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
     ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Touched, Uid,
 };
 
@@ -119,7 +118,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
     ParamDecl {
         group: "common",
         name,
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], face: Face::Plain },
         expression: Some(ExprDecl {
             source,
             mode: if m.producer { ExprMode::On } else { ExprMode::Off },

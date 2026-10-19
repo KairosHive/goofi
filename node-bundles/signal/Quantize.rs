@@ -3,7 +3,7 @@
 
 use goofi_core::scale::{Recipe, C4_HZ, MAX_DEGREES, NOTES, OCTAVE, PRESET_NAMES};
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Quantize;
@@ -98,7 +98,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "quantize",
         name: "strength",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How far towards the note each pitch is pulled. Zero passes the signal through."),
         section: 0,

@@ -1,8 +1,6 @@
-<!-- The controls of one transition, or of several at once: how the move goes, with the button that
-     fires one by hand, then the triggers that fire it besides its state's decision. Several show the
-     first's values, a field they do not share marked mixed, and an edit writes it to each. Shown for
-     the selected transitions, and inside a state's lists, and dressed by the inspector's own rules
-     (`.fields`, `.slot`, `.section-head`). -->
+<!-- The controls of one transition: the buttons that fire it by hand and delete it, how the move
+     goes, then the triggers that fire it besides its state's decision. Shown open inside a state's
+     transition lists, and dressed by the inspector's own rules (`.fields`, `.slot`, `.section-head`). -->
 <script lang="ts">
 	import type { Machine, Policy, Trigger } from '$lib/api/generated';
 	import { ContextMenu, type MenuItem } from 'panelty';
@@ -13,21 +11,16 @@
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { Button, Field, Icon, IconButton, Segmented, Select } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
-	import { editEach, mixed } from './batch';
 	import { CURVES, POLICIES, TRIGGER_KINDS, blankTrigger, type TriggerKind } from './triggers';
 
-	let { name, m, ids }: { name: string; m: Machine; ids: string[] } = $props();
+	let { name, m, id }: { name: string; m: Machine; id: string } = $props();
 
 	const g = graph();
-	const id = $derived(ids[0]);
 	const t = $derived(m.transitions[id]);
-	const all = $derived(ids.map((i) => m.transitions[i]).filter(Boolean));
-	const differ = (pick: (t: Machine['transitions'][string]) => unknown): boolean => mixed(all.map(pick));
-	const tag = (label: string, pick: (t: Machine['transitions'][string]) => unknown): string => (differ(pick) ? `${label} (mixed)` : label);
 	const playheads = $derived(Object.keys(m.playheads));
 	watchVariables(() => playheads.map((p) => `${p}.state`));
 
-	const call = (op: MachineOp, patch: Record<string, unknown>): void => void editEach(name, op, 'id', ids, patch);
+	const call = (op: MachineOp, patch: Record<string, unknown>): void => void g.machine(op, { machine: name, id, ...patch }).catch((e) => notify().failure(op, e));
 	const edit = (patch: Record<string, unknown>): void => call('machine transition edit', patch);
 	const setTriggers = (triggers: Trigger[]): void => edit({ triggers });
 	const replaceAt = (list: Trigger[], i: number, tr: Trigger): Trigger[] => list.map((held, k) => (k === i ? tr : held));
@@ -39,7 +32,7 @@
 	}
 
 	// ---- firing by hand: the playheads resting in `from` (anywhere, for `*`); one goes at once, several ask.
-	const candidates = $derived(ids.length > 1 ? [] : playheads.filter((p) => t && (t.from === '*' || String(variableValue(`${p}.state`) ?? m.playheads[p].start) === t.from)));
+	const candidates = $derived(playheads.filter((p) => t && (t.from === '*' || String(variableValue(`${p}.state`) ?? m.playheads[p].start) === t.from)));
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function fire(e: MouseEvent): void {
 		const go = (p: string): void => void g.machine('machine fire', { machine: name, playhead: p, transition: id }).catch((err) => notify().failure('Fire', err));
@@ -59,15 +52,15 @@
 {#if t}
 	<div class="form" data-testid="machine-transition">
 		<div class="section-head">
-			<span class="section-name">transition</span>
 			<Button variant="ghost" size="sm" disabled={candidates.length === 0}
-				title={ids.length > 1 ? 'Fires one transition at a time' : candidates.length === 0 ? 'No playhead is in its from state' : candidates.length === 1 ? `Fire it for ${candidates[0]}` : 'Fire it for one of the playheads there'}
+				title={candidates.length === 0 ? 'No playhead is in its from state' : candidates.length === 1 ? `Fire it for ${candidates[0]}` : 'Fire it for one of the playheads there'}
 				data-testid="transition-fire" onclick={fire}><Icon name="play" />fire</Button>
+			<Button variant="danger" size="sm" data-testid="transition-remove" onclick={() => call('machine transition remove', {})}>delete</Button>
 		</div>
-		<ParamField paramName="duration" label={tag('duration', (t) => t.duration)} descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}
+		<ParamField paramName="duration" descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}
 			data-testid="transition-duration" onCommit={(v) => edit({ duration: Math.max(0, Number(v)) })} />
 		<div class="fields">
-			<Field label={tag('curve', (t) => t.curve)} doc="How the values ease on the way" row>
+			<Field label="curve" doc="How a value eases on the way, where no envelope carries it" row>
 				<Select aria-label="curve" value={t.curve} options={[...CURVES]} onChange={(v) => edit({ curve: v })} />
 			</Field>
 		</div>
@@ -76,9 +69,6 @@
 			<span class="section-name">triggers</span>
 			<IconButton variant="ghost" size="sm" label="Add a trigger" title="Add a trigger" data-testid="transition-add-trigger" onclick={() => setTriggers([...(t.triggers ?? []), blankTrigger('manual')])}><Icon name="plus" /></IconButton>
 		</div>
-		{#if differ((t) => t.triggers ?? [])}
-			<div class="empty" data-testid="triggers-mixed">Their triggers differ: these are the first's, and an edit gives each of them these.</div>
-		{/if}
 		{#if (t.triggers ?? []).length === 0}
 			<div class="empty">Taken when its state's decision picks it, or by the fire button.</div>
 		{/if}
@@ -90,6 +80,8 @@
 				</div>
 				{#if tr.kind === 'when'}
 					<ExprEditor value={tr.expression} onCommit={(e) => setTriggers(replaceAt(t.triggers ?? [], i, { ...tr, expression: e }))} label="when" placeholder="variables.sensor.level > 0.5" testid="trigger-when" />
+					<ParamField paramName="weight" descriptor={numberDescriptor(tr.weight, 0, 10, 1)} literal viewKey={`${name}/${id}/${i}/weight`}
+						onCommit={(v) => setTriggers(replaceAt(t.triggers ?? [], i, { ...tr, weight: Math.max(0, Number(v)) }))} />
 				{:else if tr.kind === 'meet'}
 					<div class="fields">
 						<Field label="policy" doc="Who goes when a second playhead arrives: the longest resident, the newest, or all" row>
@@ -97,16 +89,8 @@
 						</Field>
 					</div>
 				{/if}
-				{#if tr.kind === 'when'}
-					<ParamField paramName="weight" descriptor={numberDescriptor(tr.weight, 0, 10, 1)} literal viewKey={`${name}/${id}/${i}/weight`}
-						onCommit={(v) => setTriggers(replaceAt(t.triggers ?? [], i, { ...tr, weight: Math.max(0, Number(v)) }))} />
-				{/if}
 			</div>
 		{/each}
-
-		<div class="actions">
-			<Button variant="danger" size="sm" data-testid="transition-remove" onclick={() => call('machine transition remove', {})}>delete</Button>
-		</div>
 	</div>
 {/if}
 

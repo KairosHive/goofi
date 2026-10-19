@@ -11,10 +11,11 @@ use goofi_graph::machine::{Attribute, AttributeKind, Machine, Decision, Playhead
 use goofi_graph::{Command, Graph};
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
+const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: the value is reached over `attack` seconds, falls over `decay` seconds to `sustain` (0..1 of the way from what the playhead held to the value) and rests there; leaving the state, the attribute moves on over `release` seconds, and one left mid-envelope follows the transition's own ease instead";
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, interval, mode, noop, weights, expression}}, transitions: {id: {from, to, triggers, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, mode, noop, weights, expression}}, transitions: {id: {from, to, triggers, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -49,7 +50,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, color?}` holding a number or a list of them (four for a colour), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state`, `prev` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state`, `prev` and `progress` are the machine's own and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -82,8 +83,9 @@ op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub name: Option<String>,
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
+    pub envelopes: Option<Value>,
 },
-    "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas, in flow px on its 24 px grid; leave it out and the card goes to the clear cells nearest the machine's others. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it.",
+    "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas, in flow px on its 24 px grid; leave it out and the card goes to the clear cells nearest the machine's others. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it. `envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: the value is reached over `attack` seconds, falls over `decay` seconds to `sustain` (0..1 of the way from what the playhead held to the value) and rests there; leaving the state, the attribute moves on over `release` seconds, and one left mid-envelope follows the transition's own ease instead.",
     "{name} — the state as stored");
 
 op!(StateEdit, "machine state edit", 2, StateEditArgs {
@@ -91,6 +93,7 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub name: String,
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
+    pub envelopes: Option<Value>,
     pub interval: Option<f64>,
     #[schemars(with = "Option<String>")]
     pub mode: Option<Decision>,
@@ -98,7 +101,7 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub weights: Option<std::collections::BTreeMap<String, f64>>,
     pub expression: Option<String>,
 },
-    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival) which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` over `variables.*` and `t` to the index of the transition out to take, a negative index waiting. A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. Previewable: a card drag sends `pos` as a preview.",
+    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. `envelopes` keys shape an attribute's landing each (see `machine state add`), and a key set to `null` lands it plain again; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival) which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` over `variables.*` and `t` to the index of the transition out to take, a negative index waiting. A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
 
 op!(Arrange, "machine arrange", 1, ArrangeArgs {
@@ -130,7 +133,7 @@ op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub duration: Option<f64>,
     pub curve: Option<String>,
 },
-    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), or when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or the inspector's fire button; `{kind: when, expression, weight?}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. When several `when` triggers out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn); a firing trigger goes before a decision due at the same instant. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival.",
+    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), or when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or the inspector's fire button; `{kind: when, expression, weight?}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. When several `when` triggers out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn); a firing trigger goes before a decision due at the same instant. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival; an attribute the entering state shapes with an envelope, or one the leaving state's envelope has at rest, moves by that envelope instead (see `machine state add`).",
     "{id} — the transition's id, `t1`, `t2`, …, which every later op addresses it by");
 
 op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
@@ -230,14 +233,29 @@ fn set(tx: &mut Txn, name: &str, mut next: Machine) -> Result<(), String> {
     Ok(())
 }
 
+/// The envelopes an op names, each four numbers; a `null` clears, as `values_of` answers one.
+fn envelopes_of(values: Option<Value>) -> Result<Edits<[f64; 4]>, String> {
+    let Some(values) = values else { return Ok(Vec::new()) };
+    let map = values.as_object().ok_or(ENVELOPES)?;
+    map.iter()
+        .map(|(attr, v)| match v {
+            Value::Null => Ok((attr.clone(), None)),
+            v => serde_json::from_value::<[f64; 4]>(v.clone()).map(|e| (attr.clone(), Some(e))).map_err(|_| format!("attribute `{attr}`: {ENVELOPES}")),
+        })
+        .collect()
+}
+
 /// A kind must hold every value it will be handed.
 fn fits(kind: &AttributeKind, value: &Data) -> Result<(), String> {
     if kind.fits(value) { Ok(()) } else { Err(kind.mismatch(value)) }
 }
 
+/// Per attribute an op names, what it sets or, for a `null`, clears.
+type Edits<T> = Vec<(String, Option<T>)>;
+
 /// The attribute values an op names, each checked against the attribute and its widget. A `null`
 /// is answered as `None`: the caller decides whether that clears or is refused.
-fn values_of(m: &Machine, values: Option<Value>) -> Result<Vec<(String, Option<Data>)>, String> {
+fn values_of(m: &Machine, values: Option<Value>) -> Result<Edits<Data>, String> {
     let Some(values) = values else { return Ok(Vec::new()) };
     let map = values.as_object().ok_or(VALUES)?;
     let mut out = Vec::with_capacity(map.len());
@@ -367,6 +385,9 @@ impl WriteOp for AttributeEdit {
                 if let Some(v) = s.values.get_mut(&a.name) {
                     *v = kind.read(v, &default);
                 }
+                if !matches!(kind, AttributeKind::Num { .. }) {
+                    s.envelopes.shift_remove(&a.name);
+                }
             }
         }
         set(tx, &a.machine, m)?;
@@ -384,6 +405,7 @@ impl WriteOp for AttributeRemove {
         m.attributes.shift_remove(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
         for s in m.states.values_mut() {
             s.values.shift_remove(&a.name);
+            s.envelopes.shift_remove(&a.name);
         }
         set(tx, &a.machine, m)?;
         Ok(json!({ "removed": true }))
@@ -416,8 +438,9 @@ impl WriteOp for StateAdd {
             return Err(format!("state `{name}` already exists — `machine state edit` changes it"));
         }
         let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+        let envelopes = envelopes_of(a.envelopes)?.into_iter().filter_map(|(k, e)| Some((k, e?))).collect();
         let pos = a.pos.unwrap_or_else(|| goofi_graph::canvas::place_state(&m));
-        m.states.insert(name.clone(), State { pos, values, ..State::default() });
+        m.states.insert(name.clone(), State { pos, values, envelopes, ..State::default() });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": name }))
     }
@@ -430,10 +453,11 @@ impl WriteOp for StateAdd {
 impl WriteOp for StateEdit {
     fn run(tx: &mut Txn, a: StateEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
-        if a.pos.is_none() && a.values.is_none() && a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
-            return Err("nothing to change — give a pos, values, interval, mode, noop, weights or expression".into());
+        if a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
+            return Err("nothing to change — give a pos, values, envelopes, interval, mode, noop, weights or expression".into());
         }
         let values = values_of(&m, a.values)?;
+        let envelopes = envelopes_of(a.envelopes)?;
         if let Some(id) = a.weights.iter().flat_map(|w| w.keys()).find(|id| !m.outgoing(&a.name).any(|o| o == *id)) {
             return Err(format!("state `{}` weighs `{id}`, which is no transition out of it", a.name));
         }
@@ -455,6 +479,17 @@ impl WriteOp for StateEdit {
                 }
                 None => {
                     s.values.shift_remove(&attr);
+                    s.envelopes.shift_remove(&attr);
+                }
+            }
+        }
+        for (attr, e) in envelopes {
+            match e {
+                Some(e) => {
+                    s.envelopes.insert(attr, e);
+                }
+                None => {
+                    s.envelopes.shift_remove(&attr);
                 }
             }
         }
@@ -464,7 +499,7 @@ impl WriteOp for StateEdit {
 
     fn label(a: &StateEditArgs, _: &Value) -> String {
         match (&a.pos, &a.values) {
-            (Some(_), None) if a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", a.name),
+            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", a.name),
             _ => format!("Edit state {}", a.name),
         }
     }

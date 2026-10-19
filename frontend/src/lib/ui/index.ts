@@ -33,3 +33,5 @@ export { default as Wave } from './Wave.svelte';
 export { default as ChoiceGrid, type Choice } from './ChoiceGrid.svelte';
 export { default as PaintPad } from './PaintPad.svelte';
 export { default as ColorPicker } from './ColorPicker.svelte';
+export { default as Envelope } from './Envelope.svelte';
+export { ADSR, ADSR_SHORT, ENVELOPE_BORN } from './envelope';

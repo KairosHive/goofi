@@ -60,7 +60,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     let kinds = [
         (j!({ "type": "string" }), j!(""), j!("0.7")),
         (num.clone(), j!(0.0), j!(0.7)),
-        (j!({ "type": "num", "vmin": 0.0, "vmax": 1.0, "color": true }), j!([0.0, 0.0, 0.0, 1.0]), j!([0.7, 0.7, 0.7, 0.7])),
+        (j!({ "type": "num", "vmin": 0.0, "vmax": 1.0, "face": "color" }), j!([0.0, 0.0, 0.0, 1.0]), j!([0.7, 0.7, 0.7, 0.7])),
         (j!({ "type": "bool" }), j!(0), j!(1)),
         (j!({ "type": "string", "options": ["calm", "wild"] }), j!("calm"), j!("calm")),
     ];
@@ -69,6 +69,19 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
         assert_eq!(mood(&g), want, "a state's value follows the kind {kind}");
     }
     write("machine attribute remove", j!({ "machine": "seq", "name": "mood" }));
+    // An envelope shapes a number the state sets: a text takes none, a sustain is in 0..1, and a
+    // value cleared takes its envelope with it.
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 0.5, 0.3] } }));
+    assert_eq!(g.doc()["machines"]["seq"]["states"]["A"]["envelopes"]["gain"], j!([0.1, 0.2, 0.5, 0.3]));
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "label": [0.1, 0.2, 0.5, 0.3] } }));
+    assert!(why.contains("no number"), "{why}");
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "B", "envelopes": { "label": [0.1, 0.2, 0.5, 0.3] } }));
+    assert!(why.contains("does not set"), "{why}");
+    let why = g.refuse("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 1.5, 0.3] } }));
+    assert!(why.contains("sustain"), "{why}");
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "gain": null } }));
+    assert!(g.doc()["machines"]["seq"]["states"]["A"]["envelopes"].get("gain").is_none(), "{}", g.doc()["machines"]["seq"]["states"]["A"]);
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "gain": 0.2 } }));
     // These states hold until fired: a new state would draw evenly among its transitions out.
     for name in ["A", "B", "C"] {
         write("machine state edit", j!({ "machine": "seq", "name": name, "mode": "expression", "expression": "-1" }));
@@ -345,6 +358,81 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let w = m.advance(1.9 * period, &none);
     assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("A", "B"), "left B at 1.4 periods");
     assert!((value_at(&ev, written(&w, "p.progress"), 1.9 * period) - 0.5).abs() < 1e-9, "halfway through a one-period flight begun at 1.4");
+}
+
+#[test]
+fn an_attribute_lands_by_its_states_envelope_and_leaves_by_its_release_or_the_transitions_ease() {
+    let ev = Arc::new(PyExprEvaluator::new().unwrap());
+    let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "m": {
+        "attributes": {
+            "gain": { "default": 0.0, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } },
+            "tint": { "default": [0.0, 0.0, 0.0, 1.0], "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0, "face": "color" } }
+        },
+        "states": {
+            "off": { "values": { "gain": 0.0 }, "mode": "expression", "expression": "-1" },
+            "on": { "values": { "gain": 1.0, "tint": [1.0, 0.0, 0.0, 1.0] }, "envelopes": { "gain": [0.2, 0.2, 0.5, 0.4], "tint": [0.0, 0.0, 1.0, 0.0] },
+                    "mode": "expression", "expression": "-1" }
+        },
+        "transitions": {
+            "up": { "from": "off", "to": "on", "triggers": [{ "kind": "manual" }] },
+            "down": { "from": "on", "to": "off", "triggers": [{ "kind": "manual" }], "duration": 0.3, "curve": "linear" }
+        },
+        "playheads": { "p": { "start": "off" } }
+    } })).unwrap();
+    let none = |_: &str| None;
+    let near = |d: &Data, t: f64, want: f64| {
+        let got = value_at(&ev, d, t);
+        assert!((got - want).abs() < 1e-6, "at {t}: {got}, wanted {want}");
+    };
+    let mut m = Machines::default();
+    m.configure(model, Some(ev.clone()));
+    m.advance(0.0, &none);
+
+    // An instant transition into a state with an envelope: the value is reached over the attack,
+    // falls to the sustain over the decay and rests there; a zero-length envelope lands at once.
+    m.fire(1.0, "m", "p", "up");
+    let w = m.advance(1.0, &none);
+    assert_eq!(written(&w, "p.state").as_str().unwrap(), "on");
+    assert_eq!(written(&w, "p.progress"), &Data::number(1.0), "the move itself was instant");
+    let gain = written(&w, "p.gain");
+    assert!(gain.as_functional().is_some(), "{gain:?}");
+    for (t, want) in [(1.0, 0.0), (1.1, 0.5), (1.2, 1.0), (1.3, 0.75), (1.4, 0.5), (2.0, 0.5)] {
+        near(gain, t, want);
+    }
+    assert_eq!(written(&w, "p.tint"), &Data::numbers([1.0, 0.0, 0.0, 1.0]));
+    // The envelope's rest is an instant owed: once it is past, the sustain is a plain frame.
+    let w = m.advance(1.5, &none);
+    assert_eq!(written(&w, "p.gain"), &Data::number(0.5));
+
+    // Leaving at rest, the release carries the attribute to the next state's value over its own
+    // 0.4 s, not the transition's 0.3; an attribute the next state leaves out goes on untouched.
+    m.fire(2.0, "m", "p", "down");
+    let w = m.advance(2.0, &none);
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("off", "on"));
+    near(written(&w, "p.progress"), 2.15, 0.5);
+    let gain = written(&w, "p.gain");
+    for (t, want) in [(2.0, 0.5), (2.2, 0.25), (2.4, 0.0), (3.0, 0.0)] {
+        near(gain, t, want);
+    }
+    assert_eq!(written(&w, "p.tint"), &Data::numbers([1.0, 0.0, 0.0, 1.0]));
+    let w = m.advance(2.5, &none);
+    assert_eq!(written(&w, "p.prev").as_str().unwrap(), "", "landed");
+    assert_eq!(written(&w, "p.gain"), &Data::number(0.0));
+
+    // Leaving mid-attack, the transition's own ease carries it on from where it stands.
+    m.fire(4.0, "m", "p", "up");
+    m.advance(4.0, &none);
+    m.fire(4.1, "m", "p", "down");
+    let w = m.advance(4.1, &none);
+    let gain = written(&w, "p.gain");
+    for (t, want) in [(4.1, 0.5), (4.25, 0.25), (4.4, 0.0)] {
+        near(gain, t, want);
+    }
+
+    // A jump lands the state's values at once: no envelope plays.
+    m.jump(5.0, "m", "p", "on");
+    let w = m.advance(5.0, &none);
+    assert_eq!(written(&w, "p.gain"), &Data::number(1.0));
 }
 
 #[test]

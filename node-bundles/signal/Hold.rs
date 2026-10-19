@@ -8,7 +8,7 @@
 //! smooth as the input is fast — a ramp longer than a few frames of the source is what this is for.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Hold {
@@ -91,7 +91,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "hold",
         name: "ramp",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 600.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 600.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
         section: 0,

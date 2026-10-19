@@ -186,7 +186,7 @@ pub fn form(d: &Data) -> String {
 /// string is the text. The one conversion from the data plane to a param.
 pub fn read(d: &Data, target: &Param) -> Param {
     match target {
-        Param::Num { value, vmin, vmax, int, options, color } => {
+        Param::Num { value, vmin, vmax, int, options, face } => {
             // One element fills every dimension; fewer than the dimensions fill with the last.
             let got: Vec<f64> = numbers(d).take(value.len().max(1)).collect();
             let fill = got.last().copied().unwrap_or(0.0);
@@ -194,7 +194,7 @@ pub fn read(d: &Data, target: &Param) -> Param {
                 .map(|i| if got.len() == 1 { fill } else { got.get(i).copied().unwrap_or(fill) })
                 .map(|v| if *int { v.round() } else { v })
                 .collect();
-            Param::Num { value, vmin: *vmin, vmax: *vmax, int: *int, options: options.clone(), color: *color }
+            Param::Num { value, vmin: *vmin, vmax: *vmax, int: *int, options: options.clone(), face: *face }
         }
         Param::Bool { .. } | Param::Pulse => Param::Bool { value: truth(d) },
         Param::Str { options, refresh, .. } => Param::Str { value: text(d), options: options.clone(), refresh: *refresh },

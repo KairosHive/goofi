@@ -2,7 +2,7 @@
 //! signal chooses the route.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Switch;
@@ -31,7 +31,7 @@ impl Node for Switch {
 static PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "switch",
     name: "index",
-    spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 63.0, int: true, options: &[], color: false },
+    spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 63.0, int: true, options: &[], face: Face::Plain },
     expression: None,
     doc: Some(
         "Which wire passes, counted in the order they were connected. In reference mode another \

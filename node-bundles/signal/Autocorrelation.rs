@@ -2,7 +2,7 @@
 //! the frame it is handed. It keeps no past: put a `Buffer` in front for the window it should see.
 
 use goofi_core::{resolve_axis, stream, Axis, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Autocorrelation {
@@ -78,7 +78,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "autocorrelation",
         name: "lags",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many lags to answer, from zero up. 0 is every lag the axis has."),
         section: 0,
@@ -111,7 +111,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "autocorrelation",
         name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis to correlate along. -1 is time."),
         section: 0,

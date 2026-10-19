@@ -3,7 +3,7 @@
 
 use goofi_core::replay::{open, Fallback, Kind, Player};
 use goofi_core::SlotType;
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Tag};
 
 /// The file and fallback a player was opened with, and what opening it gave.
 type Loaded = ((String, usize, u64), Result<Player, String>);
@@ -61,7 +61,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "common",
         name: "max_frequency",
-        spec: ParamSpec::Num { default: &[500.0], min: 0.0, max: 1000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[500.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How often to look for a due frame. One frame leaves per run, so this bounds the replayed rate."),
         section: 0,

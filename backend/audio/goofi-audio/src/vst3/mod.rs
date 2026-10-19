@@ -398,7 +398,7 @@ const AUTOMATABLE: i32 = ParameterInfo_::ParameterFlags_::kCanAutomate;
 /// its params reaches the plugin.
 fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<Knob>) {
     let audio = goofi_core::SlotType::Audio.name().to_string();
-    let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Num { default: vec![default], min, max, int: false, options: vec![], color: false };
+    let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Num { default: vec![default], min, max, int: false, options: vec![], face: goofi_core::Face::Plain };
     let voice = |name: &str, doc: &str, spec: probe::ParamSpec| probe::Param {
         group: "voice".into(),
         name: name.into(),
@@ -443,7 +443,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
                 (probe::ParamSpec::Str { default, options, refresh: false }, p.steps as f64, p.title.clone())
             } else {
                 let default = (p.default * p.steps as f64).round() as i64;
-                (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], color: false }, p.steps as f64, p.title.clone())
+                (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], face: goofi_core::Face::Plain }, p.steps as f64, p.title.clone())
             };
             (Knob::new(p.id, steps, p.default), probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: Vec::new(), role: Some(probe::Role::Held), spec })
         })

@@ -88,12 +88,13 @@ export type ControlKindId =
 	| 'dropdown'
 	| 'paint'
 	| 'vector'
-	| 'color';
+	| 'color'
+	| 'envelope';
 
 export interface ControlKindInfo {
 	readonly id: ControlKindId;
-	/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, or any frame's truth. */
-	readonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'any';
+	/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, an envelope, or any frame's truth. */
+	readonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'envelope' | 'any';
 	/** The box it is born in, in grid units. */
 	readonly w: number;
 	readonly h: number;
@@ -110,6 +111,7 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 	{ id: 'paint', draws: 'image', w: 8, h: 8 },
 	{ id: 'vector', draws: 'vector', w: 8, h: 2 },
 	{ id: 'color', draws: 'color', w: 2, h: 2 },
+	{ id: 'envelope', draws: 'envelope', w: 8, h: 4 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

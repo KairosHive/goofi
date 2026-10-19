@@ -192,8 +192,10 @@ as well as a hand-built one.
 ## State machines
 
 A patch can carry state machines beside its graph: boxes on a second canvas, transitions between
-them, and playheads that step through them and set the patch's variables as they go. `goofi machine add`, `machine
-state add` and `machine arrange` build one from the CLI or an agent; the same ops drive the panel.
+them, and playheads that step through them and set the patch's variables as they go. A state's
+value may land by an ADSR envelope, and a transition eases what no envelope carries. `goofi machine
+add`, `machine state add` and `machine arrange` build one from the CLI or an agent; the same ops
+drive the panel, where every setting is reached from the selected state's inspector.
 
 ## Testing
 

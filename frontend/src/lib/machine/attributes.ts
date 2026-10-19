@@ -2,16 +2,21 @@
  * value with the param widget of the attribute's kind. */
 import type { Attribute, AttributeKind, Literal } from '$lib/api/generated';
 import type { ParamDescriptor } from '$lib/api/types';
+import { KIND, bornValue } from '$lib/panels/controlLayout';
 
-export type Face = 'number' | 'vector' | 'color' | 'toggle' | 'text' | 'select';
+export type Face = 'number' | 'vector' | 'color' | 'envelope' | 'toggle' | 'text' | 'select';
 
-/** Every face, with the kind and the default an attribute is born with when it takes it. */
+const num = (face: 'plain' | 'color' | 'envelope', vmax = 1): AttributeKind => ({ type: 'num', vmin: 0, vmax, int: false, face });
+
+/** Every face, with the kind and the default an attribute is born with when it takes it: the
+ * defaults are the control panel's, so a widget placed anywhere starts the same. */
 export const FACES: { id: Face; kind: AttributeKind; born: Literal }[] = [
-	{ id: 'number', kind: { type: 'num', vmin: 0, vmax: 1, int: false, color: false }, born: 0 },
-	{ id: 'vector', kind: { type: 'num', vmin: 0, vmax: 1, int: false, color: false }, born: [0, 0, 0] },
-	{ id: 'color', kind: { type: 'num', vmin: 0, vmax: 1, int: false, color: true }, born: [0, 0, 0, 1] },
-	{ id: 'toggle', kind: { type: 'bool' }, born: 0 },
-	{ id: 'text', kind: { type: 'string' }, born: '' },
+	{ id: 'number', kind: num('plain'), born: bornValue(KIND.knob) },
+	{ id: 'vector', kind: num('plain'), born: bornValue(KIND.vector) },
+	{ id: 'color', kind: num('color'), born: bornValue(KIND.color) },
+	{ id: 'envelope', kind: num('envelope', 10), born: bornValue(KIND.envelope) },
+	{ id: 'toggle', kind: { type: 'bool' }, born: bornValue(KIND.toggle) },
+	{ id: 'text', kind: { type: 'string' }, born: bornValue(KIND.text) },
 	{ id: 'select', kind: { type: 'string', options: ['a', 'b'] }, born: 'a' }
 ];
 
@@ -20,7 +25,7 @@ export function faceOf(a: Attribute): Face {
 	const k = a.kind;
 	if (k.type === 'bool') return 'toggle';
 	if (k.type === 'string') return k.options?.length ? 'select' : 'text';
-	if (k.color) return 'color';
+	if (k.face !== 'plain') return k.face;
 	return Array.isArray(a.default) && a.default.length > 1 ? 'vector' : 'number';
 }
 
@@ -40,7 +45,13 @@ const constant = (fallback: Literal | null) => ({
 
 /** A bare number as a constant param with a slider over `vmin..vmax`: a transition's setting. */
 export function numberDescriptor(value: number, vmin: number, vmax: number, fallback = value): ParamDescriptor {
-	return { ...constant(fallback), type: 'num', value, vmin, vmax, int: false, options: [], color: false };
+	return { ...constant(fallback), type: 'num', value, vmin, vmax, int: false, options: [], face: 'plain' };
+}
+
+/** Four ADSR numbers as a constant envelope param, its times up to `vmax` seconds: a state's
+ * envelope over one of its attributes. */
+export function envelopeDescriptor(value: number[], vmax: number): ParamDescriptor {
+	return { ...constant(null), type: 'num', value, vmin: 0, vmax, int: false, options: [], face: 'envelope' };
 }
 
 /** `value` of attribute `a` as a constant param, for ParamField to draw. */
@@ -49,7 +60,7 @@ export function descriptorFor(a: Attribute, value: Literal): ParamDescriptor {
 	const k = a.kind;
 	switch (k.type) {
 		case 'num':
-			return { ...base, type: 'num', value: value as number | number[], vmin: k.vmin, vmax: k.vmax, int: k.int, options: [], color: k.color };
+			return { ...base, type: 'num', value: value as number | number[], vmin: k.vmin, vmax: k.vmax, int: k.int, options: [], face: k.face };
 		case 'bool':
 			return { ...base, type: 'bool', value: Boolean(value) };
 		default:

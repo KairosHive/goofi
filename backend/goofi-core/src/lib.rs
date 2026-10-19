@@ -829,18 +829,53 @@ impl SlotType {
     }
 }
 
+/// What four numbers are to their reader: plain, an RGBA colour the inspector picks, or an ADSR
+/// envelope (attack, decay and release in seconds, sustain in 0..1) it draws with four knobs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Face {
+    #[default]
+    Plain,
+    Color,
+    Envelope,
+}
+
+/// The envelope a widget or an attribute is born with: a short pluck, held at full level.
+pub const ENVELOPE_BORN: [f64; 4] = [0.01, 0.1, 1.0, 0.3];
+
+impl Face {
+    pub const ALL: [Face; 3] = [Face::Plain, Face::Color, Face::Envelope];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Face::Plain => "plain",
+            Face::Color => "color",
+            Face::Envelope => "envelope",
+        }
+    }
+
+    /// The dimensions a face fixes: four for a colour or an envelope; none for plain numbers.
+    pub fn dims(self) -> Option<usize> {
+        match self {
+            Face::Plain => None,
+            Face::Color | Face::Envelope => Some(4),
+        }
+    }
+}
+
 /// A typed parameter descriptor; the `common` scheduling group is a RunPolicy, not a `Param`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Param {
     /// A number, or a vector of them: one value per dimension, inside bounds they all share.
-    /// `int` rounds every value; `color` says the four are RGBA, which the inspector picks.
+    /// `int` rounds every value; `face` says what four of them are, a colour or an envelope.
     Num {
         value: Vec<f64>,
         vmin: f64,
         vmax: f64,
         int: bool,
         options: Vec<i64>,
-        color: bool,
+        #[serde(default)]
+        face: Face,
     },
     Bool {
         value: bool,
@@ -858,16 +893,20 @@ pub enum Param {
 
 impl Param {
     pub fn float(value: f64, vmin: f64, vmax: f64) -> Param {
-        Param::Num { value: vec![value], vmin, vmax, int: false, options: Vec::new(), color: false }
+        Param::Num { value: vec![value], vmin, vmax, int: false, options: Vec::new(), face: Face::Plain }
     }
     pub fn int(value: i64, vmin: i64, vmax: i64) -> Param {
-        Param::Num { value: vec![value as f64], vmin: vmin as f64, vmax: vmax as f64, int: true, options: Vec::new(), color: false }
+        Param::Num { value: vec![value as f64], vmin: vmin as f64, vmax: vmax as f64, int: true, options: Vec::new(), face: Face::Plain }
     }
     pub fn vec(value: Vec<f64>, vmin: f64, vmax: f64) -> Param {
-        Param::Num { value, vmin, vmax, int: false, options: Vec::new(), color: false }
+        Param::Num { value, vmin, vmax, int: false, options: Vec::new(), face: Face::Plain }
     }
     pub fn color(rgba: [f64; 4]) -> Param {
-        Param::Num { value: rgba.to_vec(), vmin: 0.0, vmax: 1.0, int: false, options: Vec::new(), color: true }
+        Param::Num { value: rgba.to_vec(), vmin: 0.0, vmax: 1.0, int: false, options: Vec::new(), face: Face::Color }
+    }
+    /// An ADSR envelope; `vmax` bounds the three times in seconds, the sustain is in 0..1.
+    pub fn envelope(adsr: [f64; 4], vmax: f64) -> Param {
+        Param::Num { value: adsr.to_vec(), vmin: 0.0, vmax, int: false, options: Vec::new(), face: Face::Envelope }
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }
@@ -931,7 +970,7 @@ impl Param {
                 vmax: *vmax,
                 int: *int,
                 options: options.clone(),
-                color: false,
+                face: Face::Plain,
             },
             other => other.clone(),
         }

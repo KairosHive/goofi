@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
 
 pub const TYPE: &str = "AudioOut";
 
@@ -9,7 +9,7 @@ goofi_audio_sdk::params! {
     GAIN = ParamDecl {
         group: "audio",
         name: "gain",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,

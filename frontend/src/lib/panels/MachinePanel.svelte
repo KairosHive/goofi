@@ -87,15 +87,19 @@
 	}
 
 	// ---- the selection and the inspector: the editor's store, so a dismissed pane re-arms the same way.
+	// A selected transition is read through the state it leaves (a `*` one through the state it
+	// enters), its row open there: every setting of the machine is reached from a state.
 	const inspectorOn = $derived(sel.inspectorVisibleFor(panelId));
 	const subject = $derived.by<Subject | null>(() => {
 		const m = machine;
 		if (!m) return null;
-		const nodes = [...sel.nodes(panelId)].filter((id) => id in m.states);
 		const edges = [...sel.edges(panelId)].filter((id) => id in m.transitions);
-		if (nodes.length > 0 && edges.length === 0) return { kind: 'state', ids: nodes };
-		if (edges.length > 0 && nodes.length === 0) return { kind: 'transition', ids: edges };
-		return null;
+		const ids = new Set([...sel.nodes(panelId)].filter((id) => id in m.states));
+		for (const id of edges) {
+			const t = m.transitions[id];
+			ids.add(t.from in m.states ? t.from : t.to);
+		}
+		return ids.size > 0 ? { ids: [...ids], open: edges } : null;
 	});
 	const dismiss = (): void => sel.dismissInspectorFor(panelId);
 

@@ -3,7 +3,7 @@
 //! signal node wants, cut from the samples themselves.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct AudioIn {
@@ -108,7 +108,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "audio",
         name: "size",
-        spec: ParamSpec::Num { default: &[1024.0], min: 0.001, max: 1_000_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1024.0], min: 0.001, max: 1_000_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Window length, or length behind each level, in the selected unit."),
         section: 0,

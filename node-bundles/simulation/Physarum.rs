@@ -2,7 +2,7 @@
 //! the strongest scent, and leaves more behind; the trail spreads and fades. Networks grow.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -215,7 +215,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "agents",
-        spec: ParamSpec::Num { default: &[5000.0], min: 1.0, max: 200_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[5000.0], min: 1.0, max: 200_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many agents crawl the field."),
         section: 0,
@@ -225,7 +225,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "size",
-        spec: ParamSpec::Num { default: &[128.0], min: 16.0, max: 512.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[128.0], min: 16.0, max: 512.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Width and height of the scent field in cells. The cost of spreading it grows with the square."),
         section: 0,
@@ -235,7 +235,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "speed",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 8.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 8.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Cells an agent moves each step."),
         section: 0,
@@ -245,7 +245,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "sensor_distance",
-        spec: ParamSpec::Num { default: &[6.0], min: 0.5, max: 64.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[6.0], min: 0.5, max: 64.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How far ahead an agent smells. Larger makes coarser, straighter veins."),
         section: 0,
@@ -255,7 +255,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "sensor_angle",
-        spec: ParamSpec::Num { default: &[0.6], min: 0.0, max: 1.6, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.6], min: 0.0, max: 1.6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How wide apart the left and right senses are, in radians."),
         section: 0,
@@ -265,7 +265,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "turn",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.6, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How sharply an agent turns towards the stronger side, in radians per step."),
         section: 0,
@@ -275,7 +275,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "deposit",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How much scent an agent leaves where it lands."),
         section: 0,
@@ -285,7 +285,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "decay",
-        spec: ParamSpec::Num { default: &[0.08], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.08], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How much of the field fades each step. This is what stops the network filling in."),
         section: 0,
@@ -295,7 +295,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "diffuse",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How much the scent spreads to its neighbours each step."),
         section: 0,
@@ -305,7 +305,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "physarum",
         name: "wander",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 2.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Random turn added every step, which is what breaks a symmetric field."),
         section: 0,
@@ -315,7 +315,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Seeds where the agents start and how they wander. Negative takes a fresh one from the clock."),
         section: 0,
@@ -335,7 +335,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Num { default: &[30.0], min: 1.0, max: 240.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[30.0], min: 1.0, max: 240.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Steps per second of real time. The field is a picture, so there is no block mode."),
         section: 0,

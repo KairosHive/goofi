@@ -2,7 +2,7 @@
 //! list of positions, numpy slices, labels and EEG groups.
 
 use goofi_core::{resolve_axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Select;
@@ -220,7 +220,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "select",
         name: "axis",
-        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
         section: 0,

@@ -2,7 +2,7 @@
 //! `c` scale each system's own canonical constants, so 1 is always the textbook figure.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -246,7 +246,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "attractor",
         name: "a",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Scales the system's first canonical constant. 1 is the textbook figure."),
         section: 0,
@@ -256,7 +256,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "attractor",
         name: "b",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Scales the second canonical constant; a system with only one ignores it."),
         section: 0,
@@ -266,7 +266,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "attractor",
         name: "c",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Scales the third canonical constant; a system with fewer ignores it."),
         section: 0,
@@ -276,7 +276,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "dt",
-        spec: ParamSpec::Num { default: &[0.01], min: 1.0e-6, max: 0.1, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.01], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Model seconds per step, for the flows. Too large and the integration leaves the attractor."),
         section: 0,
@@ -286,7 +286,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Nudges the starting point. Negative takes a fresh one from the clock."),
         section: 0,
@@ -316,7 +316,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "output",
         name: "sfreq",
-        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
         section: 0,

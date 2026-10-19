@@ -1,21 +1,25 @@
-<!-- What the machine panel's side pane shows: the selected states — the name and the transitions in
-     and out of one, the decision of several, and the attributes of either, each value written to
-     every selected state and each attribute's definition under its pencil — or the selected
-     transitions. One state's decision and playheads are its card's. Laid out as the node inspector
-     lays out a node: Field rows, slot blocks, rules. -->
+<!-- What the machine panel's side pane shows: the selected states. One state is edited whole —
+     its name, its decision with the shares of its draw, every attribute it sets and the envelope
+     each lands by, the playheads that start in it, and the transitions in and out of it, each row
+     opening on its own settings. Several states show what they share, and an edit writes to each.
+     Laid out as the node inspector lays out a node: Field rows, slot blocks, rules. -->
 <script lang="ts">
-	import type { Decision, Machine } from '$lib/api/generated';
+	import type { Attribute, Decision, Machine } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import IdentityBar from '$lib/inspector/IdentityBar.svelte';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
-	import { graph } from '$lib/stores/graph.svelte';
+	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { Disclosure, Field, Icon, IconButton, ScrollArea, Segmented } from '$lib/ui';
+	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
+	import { ColorPicker, Disclosure, ENVELOPE_BORN, Field, Icon, IconButton, ScrollArea, Segmented, Select, Slider, TextInput } from '$lib/ui';
 	import AttributeForm from './AttributeForm.svelte';
-	import { descriptorFor, literalOf, numberDescriptor } from './attributes';
+	import { FACES, descriptorFor, envelopeDescriptor, literalOf, numberDescriptor } from './attributes';
 	import { editEach, held, mixed } from './batch';
-	import { DECISIONS } from './decision';
+	import { DECISIONS, outgoing as outgoingOf, relink, shares, weightsOf } from './decision';
+	import { dotColor, hexToRgba, rgbaToHex } from './layout';
 	import type { Subject } from './subject';
 	import TransitionForm from './TransitionForm.svelte';
 	import { summary as triggerSummary } from './triggers';
@@ -23,53 +27,114 @@
 	let { name, m, subject, onClose }: { name: string; m: Machine; subject: Subject; onClose: () => void } = $props();
 
 	const g = graph();
-	function rename(from: string, to: string): void {
-		void g.machine('machine state rename', { machine: name, name: from, to }).catch((e) => notify().failure('Rename state', e));
+	function call(op: MachineOp, payload: Record<string, unknown>): void {
+		void g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
 	}
 
-	const ids = $derived(subject.ids.filter((id) => (subject.kind === 'state' ? id in m.states : id in m.transitions)));
+	const ids = $derived(subject.ids.filter((id) => id in m.states));
 	const one = $derived(ids.length === 1 ? ids[0] : null);
+	const s = $derived(one ? m.states[one] : null);
 	const transitions = $derived(Object.entries(m.transitions));
-	const incoming = $derived(subject.kind === 'state' && one ? transitions.filter(([, t]) => t.to === one) : []);
-	const outgoing = $derived(subject.kind === 'state' && one ? transitions.filter(([, t]) => t.from === one || t.from === '*') : []);
+	const incoming = $derived(one ? transitions.filter(([, t]) => t.to === one) : []);
+	const outgoing = $derived(one ? transitions.filter(([, t]) => t.from === one || t.from === '*') : []);
 	const arrow = (t: Machine['transitions'][string]): string => `${t.from === '*' ? 'any' : t.from} → ${t.to}`;
 
 	// ---- the selected states, edited as one.
-	const states = $derived(subject.kind === 'state' ? ids.map((id) => m.states[id]) : []);
+	const states = $derived(ids.map((id) => m.states[id]));
 	const editStates = (patch: Record<string, unknown>): void => void editEach(name, 'machine state edit', 'name', ids, patch);
-	const previewValue = (attr: string, v: number | number[]): void => ids.forEach((id) => g.previewState(name, id, { values: { [attr]: v } }));
+	const preview = (patch: Parameters<typeof g.previewState>[2]): void => ids.forEach((id) => g.previewState(name, id, patch));
 	const tag = (label: string, values: unknown[]): string => (mixed(values) ? `${label} (mixed)` : label);
+	const SEGMENTS = DECISIONS.map((d) => ({ id: d.id, label: d.label, title: d.title, testid: `state-mode-${d.id}` }));
+
+	// ---- one state's draw: a dragged share moves the others in their own ratio, and the release
+	// lands all of them as one edit. The drag reads from the shares it started on, so nothing drifts.
+	const out = $derived(one ? outgoingOf(m, one) : []);
+	let draft = $state<{ base: number[]; now: number[] } | null>(null);
+	const committed = $derived(s ? shares(s, out) : [1]);
+	const shown = $derived(draft?.now ?? committed);
+	function drag(k: number, v: number): void {
+		const base = draft?.base ?? committed;
+		draft = { base, now: relink(base, k, v) };
+		preview(weightsOf(draft.now, out));
+	}
+	function land(k: number, v: number): void {
+		const p = relink(draft?.base ?? committed, k, v);
+		draft = null;
+		editStates(weightsOf(p, out));
+	}
+	const percent = (p: number): string => `${Math.round(p * 100)}%`;
+	const target = (t: string): string => m.transitions[t].to;
+
+	// ---- the attributes: a name typed makes one, set in every selected state, as ONE step; a set
+	// number may land by an envelope, drawn under its value.
+	let fresh = $state('');
+	const creatable = $derived(isValidIdentifier(fresh.trim()) && !(fresh.trim() in m.attributes));
+	async function create(): Promise<void> {
+		const attr = fresh.trim();
+		if (!creatable) return;
+		try {
+			await history().transaction(`Add attribute ${attr}`, async (step) => {
+				await g.machine('machine attribute add', { machine: name, name: attr, value: FACES[0].born, kind: FACES[0].kind }, step);
+				for (const id of ids) await g.machine('machine state edit', { machine: name, name: id, values: { [attr]: FACES[0].born } }, step);
+			});
+			fresh = '';
+		} catch (e) {
+			notify().failure('Add attribute', e);
+		}
+	}
 	let defining = $state<string | null>(null);
-	const SEGMENTS = DECISIONS.map((d) => ({ id: d.id, label: d.label, title: d.title }));
+	const shapable = (a: Attribute): boolean => a.kind.type === 'num';
+	/** The envelope the selected states give `attr`: the first's, or none. */
+	const envelopeOf = (attr: string): number[] | null => ids.map((id) => m.states[id]?.envelopes?.[attr]).find((e) => e !== undefined) ?? null;
+	/** The longest time an envelope's knobs reach, in seconds. */
+	const LONGEST = 10;
+
+	// ---- the playheads that start in the one state, and where each is now.
+	const playheads = $derived(Object.keys(m.playheads));
+	const here = $derived(one ? playheads.filter((p) => m.playheads[p].start === one) : []);
+	watchVariables(() => here.map((p) => `${p}.state`));
+
+	// ---- a transition out, added here rather than dragged: to a state picked from the list.
+	function addTransition(to: string): void {
+		if (one && to) void g.machine('machine transition add', { machine: name, from: one, to, triggers: [{ kind: 'manual' }] }).catch((e) => notify().failure('Add transition', e));
+	}
 </script>
 
-{#snippet transitionList(title: string, list: [string, Machine['transitions'][string]][], testid: string)}
+{#snippet transitionList(title: string, list: [string, Machine['transitions'][string]][], testid: string, addable: boolean)}
 	<section class="section" data-testid={testid}>
-		<div class="section-head"><span class="section-name">{title}</span></div>
+		<div class="section-head">
+			<span class="section-name">{title}</span>
+			{#if addable}
+				<span class="add-to">
+					<Select aria-label="Add a transition to" density="chrome" value="" options={['', ...Object.keys(m.states)]} labels={{ '': '+ to…' }}
+						data-testid="transition-add-to" onChange={addTransition} />
+				</span>
+			{/if}
+		</div>
 		{#if list.length === 0}
 			<div class="empty">None</div>
 		{/if}
 		{#each list as [id, t] (id)}
-			<Disclosure class="transition-row" data-testid={`transition-row-${id}`}>
+			<Disclosure class="transition-row" open={subject.open.includes(id)} data-testid={`transition-row-${id}`}>
 				{#snippet summary()}
 					<span class="arrow">{arrow(t)}</span>
 					<span class="when">{triggerSummary(m, id)}</span>
 				{/snippet}
 				{#snippet children()}
-					<TransitionForm {name} {m} ids={[id]} />
+					<TransitionForm {name} {m} {id} />
 				{/snippet}
 			</Disclosure>
 		{/each}
 	</section>
 {/snippet}
 
-<div class="inspector" data-testid="machine-inspector" data-subject={subject.kind} data-count={ids.length}>
-	{#if subject.kind === 'state' && ids.length > 0}
+<div class="inspector" data-testid="machine-inspector" data-subject="state" data-count={ids.length} data-open={subject.open.join(' ')}>
+	{#if ids.length > 0}
 		{#key one}
 			<IdentityBar type={one ? 'state' : 'states'} {onClose}>
 				{#snippet title()}
 					{#if one}
-						<RenameField value={one} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => rename(one, to)} />
+						<RenameField value={one} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => call('machine state rename', { name: one, to })} />
 					{:else}
 						<span class="mono" data-testid="state-name">{ids.length} states</span>
 					{/if}
@@ -78,28 +143,65 @@
 		{/key}
 		<ScrollArea>
 			<div class="rows">
-				{#if !one}
-					<section class="section" data-testid="states-decision">
-						<div class="section-head"><span class="section-name">decision</span></div>
-						<div class="fields">
-							<Field label={tag('mode', states.map((s) => s.mode))} row>
-								<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="states-mode" fill />
-							</Field>
-						</div>
-						<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, 0, 10, 1)} literal
-							viewKey={`${name}/states/interval`} data-testid="states-interval" onCommit={(v) => editStates({ interval: Math.max(0, Number(v)) })} />
-					</section>
-					<hr class="rule" />
-				{/if}
+				<section class="section" data-testid="state-decision">
+					<div class="section-head"><span class="section-name">decision</span></div>
+					<div class="fields">
+						<Field label={tag('mode', states.map((s) => s.mode))} row>
+							<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
+						</Field>
+					</div>
+					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, 0, 10, 1)} literal
+						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Math.max(0, Number(v)) })} />
+					{#if s && one}
+						{#if s.mode === 'random'}
+							<div class="line" data-testid="state-share-wait">
+								<span class="to muted">wait</span>
+								<Slider value={shown[0]} min={0} max={1} step={0.01} bounds={false} aria-label="wait" onInput={(v) => drag(0, v)} onChange={(v) => land(0, v)} />
+								<span class="pct">{percent(shown[0])}</span>
+							</div>
+						{:else if s.mode === 'expression'}
+							<ExprEditor value={s.expression} onCommit={(e) => editStates({ expression: e })} label="decision" placeholder="index, e.g. int(variables.desk.pick)" testid="state-expression" />
+						{:else}
+							<div class="line"><span class="muted">in turn, each interval</span></div>
+						{/if}
+						{#each out as t, k (t)}
+							<div class="line" data-testid={`state-share-${t}`} title={t}>
+								{#if s.mode === 'random'}
+									<span class="to">→ {target(t)}</span>
+									<Slider value={shown[k + 1]} min={0} max={1} step={0.01} bounds={false} aria-label={`share of ${t}`} onInput={(v) => drag(k + 1, v)} onChange={(v) => land(k + 1, v)} />
+									<span class="pct">{percent(shown[k + 1])}</span>
+								{:else}
+									<span class="index">{s.mode === 'sequence' ? k + 1 : k}</span>
+									<span class="to">→ {target(t)}</span>
+								{/if}
+							</div>
+						{/each}
+					{/if}
+				</section>
+				<hr class="rule" />
 				<section class="section" data-testid="state-attributes">
-					<div class="section-head"><span class="section-name">attributes</span></div>
+					<div class="section-head">
+						<span class="section-name">attributes</span>
+						<span class="add-attr">
+							<TextInput class="add-attr-name" inputmode="search" placeholder="name a new attribute…" aria-label="New attribute" data-testid="attribute-name-new"
+								value={fresh} onInput={(v) => (fresh = v)} onChange={(v) => { fresh = v; void create(); }} />
+							<IconButton variant="ghost" size="sm" label="Add the attribute" title="Add an attribute of that name, set in the selected states" disabled={!creatable}
+								data-testid="attribute-create" onclick={() => void create()}><Icon name="plus" /></IconButton>
+						</span>
+					</div>
 					{#each Object.entries(m.attributes) as [attr, a], k (attr)}
 						{@const h = held(m, ids, attr)}
-						<div class="slot" class:alt={k % 2 === 1} class:unset={!h.set} data-testid={`state-attribute-${attr}`} data-set={h.set} data-mixed={h.mixed}>
+						{@const env = h.set ? envelopeOf(attr) : null}
+						<div class="slot" class:alt={k % 2 === 1} class:unset={!h.set} data-testid={`state-attribute-${attr}`} data-set={h.set} data-mixed={h.mixed} data-envelope={env !== null}>
 							<div class="slot-head">
 								<ParamField paramName={attr} label={h.mixed ? `${attr} (mixed)` : attr} descriptor={descriptorFor(a, h.value)} literal viewKey={`${name}/selection/${attr}`}
 									onCommit={(v) => editStates({ values: { [attr]: literalOf(v) } })}
-									onPreview={(v) => previewValue(attr, v)} />
+									onPreview={(v) => preview({ values: { [attr]: v } })} />
+								{#if h.set && shapable(a)}
+									<IconButton variant="ghost" size="sm" label={env ? `Land ${attr} plain` : `Shape ${attr}`} aria-pressed={env !== null} data-testid="state-envelope"
+										title={env ? 'Remove the envelope: the value lands by the transition' : 'Add an envelope: the value lands by an attack, decay, sustain and release'}
+										onclick={() => editStates({ envelopes: { [attr]: env ? null : ENVELOPE_BORN } })}><Icon name="activity" /></IconButton>
+								{/if}
 								{#if h.set}
 									<IconButton variant="ghost" size="sm" label={`Unset ${attr}`} title="Unset: a playhead entering keeps what it holds" data-testid="state-clear"
 										onclick={() => editStates({ values: { [attr]: null } })}><Icon name="minus" /></IconButton>
@@ -107,27 +209,44 @@
 								<IconButton variant="ghost" size="sm" label={`Define ${attr}`} title="Its name, kind, range and default, for every state" data-testid="attribute-edit"
 									aria-expanded={defining === attr} onclick={() => (defining = defining === attr ? null : attr)}><Icon name="pencil" /></IconButton>
 							</div>
+							{#if env}
+								<ParamField paramName={`${attr} envelope`} label="envelope" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/selection/${attr}/envelope`}
+									data-testid="state-attribute-envelope"
+									onCommit={(v) => editStates({ envelopes: { [attr]: v } })}
+									onPreview={(v) => preview({ envelopes: { [attr]: v as number[] } })} />
+							{/if}
 							{#if defining === attr}<AttributeForm {name} {attr} {a} />{/if}
 						</div>
 					{:else}
-						<div class="empty">No attributes yet: name one in a state's menu.</div>
+						<div class="empty">No attributes yet: name one above.</div>
 					{/each}
 				</section>
 				{#if one}
 					<hr class="rule" />
-					{@render transitionList('incoming', incoming, 'transitions-in')}
+					<section class="section" data-testid="state-playheads">
+						<div class="section-head">
+							<span class="section-name">playheads starting here</span>
+							<IconButton variant="ghost" size="sm" label="Add a playhead here" title="Add a playhead that starts in this state" data-testid="machine-add-playhead"
+								onclick={() => call('machine playhead add', { start: one, color: dotColor('', playheads.length) })}><Icon name="plus" /></IconButton>
+						</div>
+						{#each here as p, k (p)}
+							{@const ph = m.playheads[p]}
+							<div class="slot playhead" class:alt={k % 2 === 1} data-testid={`playhead-${p}`}>
+								<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${p} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
+								<span class="label"><RenameField value={p} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
+								<span class="now mono" title="Where it is now" data-testid="playhead-state">{String(variableValue(`${p}.state`) ?? ph.start)}</span>
+								<Select data-testid="playhead-start" aria-label="start state" density="chrome" value={ph.start} options={Object.keys(m.states)} onChange={(v) => call('machine playhead edit', { name: p, start: v })} />
+								<IconButton variant="ghost" size="sm" label={`Remove ${p}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
+							</div>
+						{:else}
+							<div class="empty">A playhead travels the states; its values are the variables a param reads.</div>
+						{/each}
+					</section>
 					<hr class="rule" />
-					{@render transitionList('outgoing', outgoing, 'transitions-out')}
+					{@render transitionList('transitions out', outgoing, 'transitions-out', true)}
+					<hr class="rule" />
+					{@render transitionList('transitions in', incoming, 'transitions-in', false)}
 				{/if}
-			</div>
-		</ScrollArea>
-	{:else if subject.kind === 'transition' && ids.length > 0}
-		<IdentityBar type={one ? `transition ${one}` : 'transitions'} {onClose}>
-			{#snippet title()}<span class="mono">{one ? arrow(m.transitions[one]) : `${ids.length} transitions`}</span>{/snippet}
-		</IdentityBar>
-		<ScrollArea>
-			<div class="rows">
-				<TransitionForm {name} {m} {ids} />
 			</div>
 		</ScrollArea>
 	{/if}
@@ -166,11 +285,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: var(--space-3);
 		min-height: var(--chrome-control-h);
 	}
 	.rows :global(.section-name) {
 		color: var(--text-muted);
 		font-size: var(--fs-small);
+		white-space: nowrap;
 	}
 	.rows :global(.rule) {
 		margin: var(--space-3) 0;
@@ -194,7 +315,8 @@
 	.rows :global(.slot.alt) {
 		background: var(--surface-3);
 	}
-	.slot-head > :global(.pf-param) {
+	.slot-head > :global(.pf-param),
+	.slot > :global(.pf-param) {
 		flex: 1 1 auto;
 		min-width: 0;
 		margin-inline: 0;
@@ -226,6 +348,74 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+	/* The decision's lines: the wait and each transition out, with its share or its place. */
+	.line {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-height: var(--chrome-control-h);
+		min-width: 0;
+		font-size: var(--fs-small);
+	}
+	.to {
+		flex: 0 1 auto;
+		width: 6em;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-family: var(--font-mono);
+	}
+	.pct,
+	.index {
+		flex: 0 0 auto;
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+		color: var(--text-muted);
+	}
+	.pct {
+		width: 2.8em;
+		text-align: right;
+	}
+	.muted {
+		color: var(--text-muted);
+	}
+	.add-attr {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		flex: 1 1 auto;
+		min-width: 0;
+		justify-content: flex-end;
+	}
+	.add-attr > :global(.add-attr-name) {
+		flex: 1 1 8rem;
+		min-width: 0;
+	}
+	.add-to {
+		display: inline-flex;
+	}
+	/* A playhead's row: swatch, name, where it is, where it starts, and its removal. */
+	.playhead {
+		flex-direction: row;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.playhead .label {
+		flex: 1 1 auto;
+		min-width: 0;
+		font-family: var(--font-mono);
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.swatch {
+		display: inline-flex;
+		flex: 0 0 auto;
+		width: var(--chrome-control-h);
+	}
+	.now {
+		color: var(--text-muted);
 	}
 	.rows :global(.transition-row) {
 		--disclosure-surface: var(--surface-2);

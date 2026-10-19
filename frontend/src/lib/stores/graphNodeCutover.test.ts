@@ -38,7 +38,7 @@ function catalog(): NodeTypeInfo[] {
 						vmax: 1000,
 						int: false,
 						options: [],
-						color: false,
+						face: 'plain',
 						doc: null,
 						refreshable: false,
 						expression: null,

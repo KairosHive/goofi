@@ -2,11 +2,12 @@
 //! and return its declaration constants and GIL state as [`goofi_core::probe`] JSON.
 
 use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Show, Slot};
+use goofi_core::Face;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::loader::{find_node_class, module_from_path};
-use crate::params::{BoolParam, ColorParam, DataType, InputSlot, NumParam, PulseParam, StringParam};
+use crate::params::{BoolParam, ColorParam, DataType, EnvelopeParam, InputSlot, NumParam, PulseParam, StringParam};
 
 #[pyfunction]
 pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
@@ -108,6 +109,7 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
 enum ParamDescr<'py> {
     Num(Bound<'py, NumParam>),
     Color(Bound<'py, ColorParam>),
+    Envelope(Bound<'py, EnvelopeParam>),
     Bool(Bound<'py, BoolParam>),
     Str(Bound<'py, StringParam>),
     Pulse(Bound<'py, PulseParam>),
@@ -119,7 +121,7 @@ fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, 
         ParamDescr::Num(p) => {
             let p = p.borrow();
             (
-                ParamSpec::Num { default: p.default.clone(), min: p.min, max: p.max, int: p.int, options: p.options.clone(), color: p.color },
+                ParamSpec::Num { default: p.default.clone(), min: p.min, max: p.max, int: p.int, options: p.options.clone(), face: Face::Plain },
                 p.doc.clone(),
                 p.expression.clone(),
                 p.show.clone(),
@@ -128,7 +130,16 @@ fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, 
         ParamDescr::Color(p) => {
             let p = p.borrow();
             (
-                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: 1.0, int: false, options: Vec::new(), color: true },
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: 1.0, int: false, options: Vec::new(), face: Face::Color },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Envelope(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: p.max, int: false, options: Vec::new(), face: Face::Envelope },
                 p.doc.clone(),
                 p.expression.clone(),
                 p.show.clone(),

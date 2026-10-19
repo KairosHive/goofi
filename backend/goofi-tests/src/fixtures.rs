@@ -9,8 +9,7 @@ use goofi_supervisor::sync::{Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
-use goofi_node::{
-    EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
+use goofi_node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
     ParamKey, ParamSpec, Params, SlotDecl, Status, Touched, Uid,
 };
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
@@ -267,7 +266,7 @@ impl Node for Busy {
 static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "control",
     name: "value",
-    spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
+    spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
     expression: None,
     doc: None,
     section: 0,
@@ -375,8 +374,8 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: &[], role: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false }, expression: None, doc: None, section: 0, show: &[], role: None },
+    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
+    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
 ];
 
 static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -552,7 +551,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "value",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The value every element of the emitted array carries."),
         section: 0,
@@ -562,7 +561,7 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "length",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many elements the emitted array has."),
         section: 0,
@@ -604,7 +603,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "sfreq",
-        spec: ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,
@@ -614,7 +613,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "length",
-        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,
@@ -624,7 +623,7 @@ static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
         name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,

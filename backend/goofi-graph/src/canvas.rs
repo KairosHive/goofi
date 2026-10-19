@@ -13,11 +13,9 @@ const NODE_W: f64 = 233.0;
 const HEADER: f64 = 36.0;
 const SLOT: f64 = 24.0;
 const VIEWER: f64 = 144.0;
-/// A state card: `CARD_W` and `cardHeight` in `machine/layout.ts`. Its name and controls, then a
-/// line for the decision and one per transition out.
+/// A state card: `CARD_W` and `CARD_H` in `machine/layout.ts`: its band, its name and one line.
 const CARD_W: f64 = 240.0;
-const CARD_HEAD: f64 = 96.0;
-const CARD_LINE: f64 = 28.0;
+const CARD_H: f64 = 96.0;
 /// Cells kept clear around a packed card.
 const GAP: i64 = 2;
 
@@ -55,9 +53,8 @@ pub fn node_size(g: &Graph, uid: Uid) -> (i64, i64) {
     (cells(NODE_W), cells(HEADER + out_h.max(ins as f64 * SLOT)))
 }
 
-fn state_size(m: &Machine, state: &str) -> (i64, i64) {
-    let lines = 1 + m.outgoing(state).count();
-    (cells(CARD_W), cells(CARD_HEAD + CARD_LINE * lines as f64))
+fn state_size() -> (i64, i64) {
+    (cells(CARD_W), cells(CARD_H))
 }
 
 fn clear_of(taken: &[Rect], r: Rect) -> bool {
@@ -133,8 +130,8 @@ pub fn place_node(g: &Graph, scope: Option<Uid>, uid: Uid) -> [f64; 2] {
 
 /// Where a new state's card goes: the clear cell nearest the machine's other cards.
 pub fn place_state(m: &Machine) -> [f64; 2] {
-    let taken: Vec<Rect> = m.states.iter().map(|(name, s)| rect_of(s.pos, state_size(m, name))).collect();
-    pack_around(&taken, state_size(m, ""))
+    let taken: Vec<Rect> = m.states.values().map(|s| rect_of(s.pos, state_size())).collect();
+    pack_around(&taken, state_size())
 }
 
 /// The edges `items` make among themselves, by index; a back edge of a cycle is left out so the
@@ -301,8 +298,7 @@ pub fn arrange_machine(m: &Machine) -> Machine {
             walk(i, &succ, &mut seen, &mut order);
         }
     }
-    // One footprint for the ring, the tallest card's.
-    let (w, h) = names.iter().map(|s| state_size(m, s)).fold((0, 0), |a, b| (a.0.max(b.0), a.1.max(b.1)));
+    let (w, h) = state_size();
     if n == 1 {
         next.states[names[0]].pos = px(0, 0);
         return next;

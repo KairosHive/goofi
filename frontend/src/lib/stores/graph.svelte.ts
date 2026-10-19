@@ -642,7 +642,7 @@ export class GraphStore {
 
 	/** A card drag or a widget turn in flight: the state's place or values, previewed under the
 	 * machine's key. */
-	previewState(machine: string, name: string, patch: { pos?: [number, number]; values?: Record<string, Literal>; interval?: number; noop?: number; weights?: Record<string, number> }): void {
+	previewState(machine: string, name: string, patch: { pos?: [number, number]; values?: Record<string, Literal>; envelopes?: Record<string, number[]>; interval?: number; noop?: number; weights?: Record<string, number> }): void {
 		this.ctl.preview(`machine ${machine}`, 'machine state edit', { machine, name, ...patch });
 	}
 

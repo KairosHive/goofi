@@ -1,11 +1,11 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     PITCH = ParamDecl {
         group: "osc",
         name: "pitch",
-        spec: ParamSpec::Num { default: &[0.75], min: -10.0, max: 10.0, int: false, options: &[], color: false },
+        spec: ParamSpec::Num { default: &[0.75], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("volts per octave, 0 at C4 (0.75 is A4); an audio reference is one voice per channel"),
         section: 0,

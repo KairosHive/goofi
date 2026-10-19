@@ -7,6 +7,7 @@
 		Field,
 		Slider,
 		ColorPicker,
+		Envelope,
 		NumberInput,
 		Toggle,
 		Select,
@@ -17,7 +18,7 @@
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { stepOf } from '$lib/ui/knob';
-	import { isNumeric, rowPlan } from './controlKind';
+	import { elementName as nameOf, isNumeric, rowPlan } from './controlKind';
 	import { numValue, numValues } from '$lib/api/types';
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
@@ -89,7 +90,7 @@
 	const elements = $derived(descriptor.elements ?? []);
 	const elementDisabled = (i: number): boolean => driven || (elements[i]?.mode ?? 'constant') !== 'constant';
 
-	const elementName = (i: number): string => (isNumeric(descriptor) && descriptor.color ? ['R', 'G', 'B', 'A'][i] : `[${i}]`);
+	const elementName = (i: number): string => nameOf(descriptor, i);
 	function chooseElement(i: number, mode: ParamMode): void {
 		const el = elements[i];
 		if (!el || mode === el.mode) return;
@@ -174,6 +175,18 @@
 					title={plan.disabled && !driven ? 'An entry has a source of its own; see the individual view' : undefined}
 					data-param-edit
 					data-testid="param-color"
+				/>
+				{@render viewSwitch()}
+			{:else if num && plan.face === 'envelope'}
+				<Envelope
+					value={numValues(num)}
+					max={num.vmax}
+					onChange={onCommit}
+					onInput={onPreview}
+					disabled={plan.disabled}
+					label={paramName}
+					data-param-edit
+					data-testid="param-envelope"
 				/>
 				{@render viewSwitch()}
 			{:else if num && plan.face === 'vector'}

@@ -192,12 +192,16 @@ Backend `pyproject.toml` dependencies belong to its private service environment 
 packages into node interpreters.
 
 A number param is `goofi.NumParam(default, min, max, int=False, options=None)` in Python, a
-`ParamSpec::Num { default: &[…], min, max, int, options, color }` in Rust and `"kind": "num"` with
+`ParamSpec::Num { default: &[…], min, max, int, options, face }` in Rust and `"kind": "num"` with
 `"int": true` where it rounds in a WGSL header. A `default` of several numbers makes it a VECTOR:
 the node reads a list, a shader a `vec2f`, `vec3f` or `vec4f` (`vec…i` for an int), the inspector
 one field per dimension, and an expression gives a sequence of that length or one number for
 every dimension. `goofi.ColorParam(default=(1, 1, 1, 1))`, `ParamSpec::color(&[…])` and
 `"kind": "color"` are the four-dimensional RGBA number from 0 to 1 that the inspector picks.
+`goofi.EnvelopeParam(default=(0.01, 0.1, 1, 0.3), max=10)`, `ParamSpec::envelope(&[…], max)` and
+`"kind": "envelope"` are the four ADSR numbers the inspector draws with four knobs: attack, decay
+and release in seconds up to `max`, sustain in 0..1. Both are `face` on a `num`, and the same
+widgets draw a control panel's `color` and `envelope` and a machine attribute of either kind.
 One ELEMENT of a vector is addressed `name[i]`: its literal is that dimension of the list, and a
 source on it — an expression or a reference — drives that dimension alone, over whatever the whole
 param's source gives the others. The inspector's vector view shows one row per element.

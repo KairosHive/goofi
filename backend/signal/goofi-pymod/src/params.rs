@@ -115,8 +115,6 @@ pub struct NumParam {
     #[pyo3(get)]
     pub options: Vec<i64>,
     #[pyo3(get)]
-    pub color: bool,
-    #[pyo3(get)]
     pub doc: Option<String>,
     #[pyo3(get)]
     pub expression: Option<String>,
@@ -135,7 +133,7 @@ impl NumParam {
         if default.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err("a NumParam default is a number or a sequence of them"));
         }
-        Ok(NumParam { default, min, max, int, options, color: false, doc, expression, show: show_text(show) })
+        Ok(NumParam { default, min, max, int, options, doc, expression, show: show_text(show) })
     }
 }
 
@@ -162,6 +160,34 @@ impl ColorParam {
             return Err(pyo3::exceptions::PyValueError::new_err("a ColorParam default is four numbers, RGBA"));
         }
         Ok(ColorParam { default, doc, expression, show: show_text(show) })
+    }
+}
+
+/// `goofi.EnvelopeParam(default=(0.01, 0.1, 1.0, 0.3), max=10.0, …)` — an ADSR envelope: attack,
+/// decay and release in seconds up to `max`, sustain in 0..1, drawn with four knobs.
+#[pyclass]
+pub struct EnvelopeParam {
+    #[pyo3(get)]
+    pub default: Vec<f64>,
+    #[pyo3(get)]
+    pub max: f64,
+    #[pyo3(get)]
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
+}
+
+#[pymethods]
+impl EnvelopeParam {
+    #[new]
+    #[pyo3(signature = (default=goofi_core::ENVELOPE_BORN.to_vec(), max=10.0, doc=None, expression=None, show=None))]
+    fn new(default: Vec<f64>, max: f64, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<EnvelopeParam> {
+        if default.len() != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("an EnvelopeParam default is four numbers, ADSR"));
+        }
+        Ok(EnvelopeParam { default, max, doc, expression, show: show_text(show) })
     }
 }
 
