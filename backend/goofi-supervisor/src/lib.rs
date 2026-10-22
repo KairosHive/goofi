@@ -12,4 +12,5 @@ pub mod progress;
 pub mod scope;
 pub mod session;
 pub mod sync;
+pub mod timing;
 pub mod worker;

@@ -20,7 +20,7 @@ struct DynType {
 
 pub struct SignalEngine {
     /// What every port of this engine and its nodes is built against.
-    pub(crate) iox: Arc<goofi_transport::Iox>,
+    pub(crate) hub: Arc<goofi_transport::Hub>,
     /// What service names are scoped by — handed down from the graph, whose resolver inputs it is.
     instance: String,
     time: Arc<goofi_core::time::Time>,
@@ -35,9 +35,6 @@ pub struct SignalEngine {
     pub(crate) booted: bool,
     /// The executable that hosts a node built after boot — goofi's own binary, or the harness's.
     pub(crate) host: Option<std::path::PathBuf>,
-    /// The engine's own iceoryx2 node, which every runtime's bell is opened on. Declared LAST: it
-    /// must drop after every port built from it, or it leaves its own directory behind.
-    bells: Option<goofi_transport::IoxNode>,
 }
 
 impl SignalEngine {
@@ -46,10 +43,10 @@ impl SignalEngine {
         self.host = Some(exe);
     }
 
-    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
+    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
         Ok(SignalEngine {
             shared: Arc::new(Shared::new(waker)),
-            iox,
+            hub,
             instance,
             time,
             hosts: HashMap::new(),
@@ -58,7 +55,6 @@ impl SignalEngine {
             python: None,
             booted: false,
             host: None,
-            bells: None,
         })
     }
 
@@ -121,12 +117,6 @@ impl Engine for SignalEngine {
             return Some(format!("no node type `{type_name}` in the signal library"));
         };
         let (manifest, factory) = (dt.manifest, dt.factory.clone());
-        if self.bells.is_none() {
-            match self.iox.node() {
-                Ok(node) => self.bells = Some(node),
-                Err(e) => return Some(e),
-            }
-        }
         let decls = Self::decls_of(manifest);
         let atomics: Arc<[AtomicU64]> = goofi_runtime::cells_of(params, &decls).into();
         let spawn = goofi_runtime::Spawn {
@@ -144,7 +134,7 @@ impl Engine for SignalEngine {
             let build: goofi_runtime::NodeBuild = Box::new(move |p| factory(p));
             HostExecutor::new(manifest, decls, build, &params)
         };
-        match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), self.bells.as_ref().expect("opened above"), make) {
+        match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
             Ok(handle) => {
                 self.hosts.insert(uid, handle);
                 self.dirty = true;

@@ -111,15 +111,15 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         }
         let n: usize = shape.iter().product();
         let body: Vec<u8> = (0..n).flat_map(|_| fill.to_le_bytes()).collect();
-        goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame")).expect("a frame that crosses")
+        goofi_core::Data::array_f32(shape, body, meta).expect("a frame")
     };
-    let open = |bytes: &[u8]| {
-        let kind = goofi_record::frame::read(bytes, None).expect("a frame the recorder reads").kind;
+    let open = |frame: &goofi_core::Data| {
+        let kind = goofi_record::frame::read(frame, None).expect("a frame the recorder reads").kind;
         rec.open(&id, kind, 0.0, goofi_record::StreamMeta::measured(Some(256.0))).expect("opened");
     };
-    let hand = |bytes: &[u8]| {
+    let hand = |frame: &goofi_core::Data| {
         assert!(
-            rec.take_frame(&id, bytes, None, goofi_record::Timeline::Measured, 0.0, false),
+            rec.take_frame(&id, frame, None, goofi_record::Timeline::Measured, 0.0, false),
             "the writer took the frame"
         );
     };
@@ -224,9 +224,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         ("left,right".into(), goofi_core::Data::string("a,b", goofi_core::Meta::empty())),
         ("value \"quoted\"\nline".into(), goofi_core::Data::string("say \"yes\"", goofi_core::Meta::empty())),
     ].into_iter().collect(), goofi_core::Meta::empty());
-    assert!(rec.take_frame(
-        &id, &goofi_codec::encode(&table).expect("a table frame"), None, goofi_record::Timeline::Measured, 4.0, true,
-    ));
+    assert!(rec.take_frame(&id, &table, None, goofi_record::Timeline::Measured, 4.0, true));
     let folder = rec.stop().expect("table stopped").expect("table folder");
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(folder.join("manifest.json")).expect("table manifest"),
@@ -248,9 +246,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         ));
         let values: Vec<u8> = (0..channels * samples).flat_map(|n| (n as f32).to_le_bytes()).collect();
         let data = goofi_core::Data::array_f32(vec![channels, samples], values, meta).expect("audio block");
-        assert!(rec.take_frame(
-            &id, &goofi_codec::encode(&data).expect("a frame that crosses"), Some(rate), goofi_record::Timeline::Derived, i as f64, true,
-        ));
+        assert!(rec.take_frame(&id, &data, Some(rate), goofi_record::Timeline::Derived, i as f64, true));
     }
     let folder = rec.stop().expect("audio stopped").expect("audio folder");
     let manifest: serde_json::Value = serde_json::from_slice(
@@ -489,7 +485,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let refused = |folder: &str| mine(folder, &src_name).iter().any(|e| e["closed_because"].as_str().is_some_and(|w| w.starts_with("the frame could not be written")));
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
     g.until("the re-armed slot to reach the disk", |g| (frames(g, &src_name) > 0).then_some(()));
-    assert!(g.state.recorder.take_frame(&id, b"not a frame", None, goofi_record::Timeline::Measured, 0.0, true), "the lane takes what it cannot yet read");
+    let unwritable = goofi_core::Data::functional(Vec::new(), goofi_core::Meta::empty());
+    assert!(g.state.recorder.take_frame(&id, &unwritable, None, goofi_record::Timeline::Measured, 0.0, true), "the lane takes what it cannot yet write");
     g.until("the refused frame to end the stream", |_| refused(&folder).then_some(()));
     let late_before = frames(&g, &late_name);
     g.until("a sweep after the end", |g| (frames(g, &late_name) > late_before).then_some(()));
@@ -1040,28 +1037,6 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a json line")["meta"]["index"].as_u64().expect("the engine stamps every frame"))
         .collect();
     assert!((from..=to).all(|i| seen.contains(&i)), "the recording service loses no tick: {from}..={to} in {seen:?}");
-
-    // Step: a frame over the recording service's ceiling is a COUNTED drop the node says, never a
-    // segment quietly grown to hold it — which is what holds an armed slot to `RECORD_BUDGET`.
-    let wide = g.add("_TestRamp");
-    let wide_out = goofi_tests::ep(goofi_tests::hex(wide), "out");
-    g.set_param(wide, "ramp", "channels", 2);
-    g.set_param(wide, "ramp", "length", 600_000);
-    g.set_param(wide, "common", "max_frequency", 5.0);
-    g.ready(wide);
-    g.call("record arm", j!({ "output": &wide_out }));
-    let said = g.until("the node to wear what the recording cost", |g| g.error(wide));
-    assert!(said.starts_with("recording dropped"), "the drop is counted, not swallowed: {said}");
-    assert!(
-        said.contains(&goofi_transport::RECORD_SLICE.to_string()),
-        "and the ceiling it broke is named: {said}"
-    );
-
-    // A re-arm is what clears the complaint, and a frame under the ceiling records again.
-    g.set_param(wide, "ramp", "length", 512);
-    g.call("record disarm", j!({ "output": &wide_out }));
-    g.call("record arm", j!({ "output": &wide_out }));
-    g.until("the recording complaint to clear", |g| g.error(wide).is_none().then_some(()));
 }
 
 /// A stream's sidecar, read as the instants it carries — the one sidecar shape every kind has.

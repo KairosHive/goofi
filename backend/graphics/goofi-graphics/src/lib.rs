@@ -79,7 +79,7 @@ pub(crate) struct Opened {
 }
 
 pub struct GraphicsEngine {
-    iox: Arc<goofi_transport::Iox>,
+    hub: Arc<goofi_transport::Hub>,
     instance: String,
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
@@ -110,8 +110,6 @@ pub struct GraphicsEngine {
     troubles: runtime::Troubles,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
-    /// Last: every bell onto a control half is built from it, and fields drop in order.
-    bells: goofi_transport::IoxNode,
 }
 
 fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> ParamDecl {
@@ -149,7 +147,7 @@ fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
 impl GraphicsEngine {
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
-        iox: Arc<goofi_transport::Iox>,
+        hub: Arc<goofi_transport::Hub>,
         instance: String,
         time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
@@ -218,8 +216,7 @@ impl GraphicsEngine {
             pending: Vec::new(),
             dirty: false,
             troubles,
-            bells: iox.node()?,
-            iox,
+            hub,
         })
     }
 
@@ -417,7 +414,7 @@ impl Engine for GraphicsEngine {
             });
             GraphicsHalf::new(shared, size, producer)
         };
-        let control = match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, make) {
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };

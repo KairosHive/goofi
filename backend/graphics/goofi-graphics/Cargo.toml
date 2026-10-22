@@ -8,6 +8,8 @@ license.workspace = true
 embed = ["goofi-python/embed"]
 
 [dependencies]
+# The 8-bit tap goes out as the GOOF frame it is.
+bytes = "1"
 goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 goofi-python = { path = "../../signal/goofi-python" }

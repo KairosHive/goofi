@@ -12,7 +12,6 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 
 use crate::stream::{StreamMeta, Timeline};
@@ -22,16 +21,17 @@ use crate::StreamId;
 /// lane, shallow enough that a disk which cannot keep up says so instead of eating memory.
 const LANE: usize = 1024;
 
-/// Buffers finished with, at most `cap`, kept so a frame costs a copy and never an allocation.
+/// Buffers finished with, at most `cap`, kept so a readback costs a copy and never an allocation
+/// — the video path's, whose texels come off the GPU as rows and not as a frame.
 #[derive(Clone)]
 pub(crate) struct Pool {
-    free: Arc<Mutex<Vec<Vec<u8>>>>,
+    free: std::sync::Arc<Mutex<Vec<Vec<u8>>>>,
     cap: usize,
 }
 
 impl Pool {
     pub(crate) fn new(cap: usize) -> Pool {
-        Pool { free: Arc::default(), cap }
+        Pool { free: std::sync::Arc::default(), cap }
     }
 
     /// A buffer that holds a copy of `bytes`.
@@ -52,7 +52,8 @@ impl Pool {
 
 pub struct Queued {
     pub id: StreamId,
-    pub bytes: Vec<u8>,
+    /// The frame as it arrived: the `Arc` the engine made, copied nowhere on the way here.
+    pub frame: goofi_core::Data,
     pub rate: Option<f64>,
     pub timeline: Timeline,
     pub at: f64,
@@ -73,13 +74,12 @@ struct Lane {
 pub struct Writer {
     rec: std::sync::Weak<crate::Recorder>,
     lanes: Mutex<HashMap<StreamId, Lane>>,
-    free: Pool,
 }
 
 impl Writer {
     /// WEAK, because the recorder owns the writer: an `Arc` back would be a cycle neither drops.
     pub fn new(rec: std::sync::Weak<crate::Recorder>) -> Writer {
-        Writer { rec, lanes: Mutex::new(HashMap::new()), free: Pool::new(LANE) }
+        Writer { rec, lanes: Mutex::new(HashMap::new()) }
     }
 
     /// Take one frame off the caller. `false` is a lane that is full or DEAD — which the CALLER
@@ -88,13 +88,13 @@ impl Writer {
     pub fn take(
         &self,
         id: &StreamId,
-        bytes: &[u8],
+        frame: &goofi_core::Data,
         rate: Option<f64>,
         timeline: Timeline,
         at: f64,
         wait: bool,
     ) -> bool {
-        let queued = Queued { id: id.clone(), bytes: self.free.filled(bytes), rate, timeline, at };
+        let queued = Queued { id: id.clone(), frame: frame.clone(), rate, timeline, at };
         let mut lanes = self.lanes.lock();
         let lane = lanes.entry(id.clone()).or_insert_with(|| self.lane());
         if wait {
@@ -102,20 +102,15 @@ impl Writer {
         }
         match lane.jobs.try_send(Job::Frame(queued)) {
             Ok(()) => true,
-            Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
-                if let Job::Frame(q) = job {
-                    self.free.give_back(q.bytes);
-                }
-                false
-            }
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
         }
     }
 
     fn lane(&self) -> Lane {
         let (tx, rx) = sync_channel(LANE);
-        let (rec, free) = (self.rec.clone(), self.free.clone());
+        let rec = self.rec.clone();
         let thread = goofi_supervisor::worker::thread("goofi-record-write")
-            .spawn(move || run(rx, &rec, &free))
+            .spawn(move || run(rx, &rec))
             .ok();
         Lane { jobs: tx, thread }
     }
@@ -162,16 +157,14 @@ fn end(mut lane: Lane) {
     }
 }
 
-fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>, free: &Pool) {
+fn run(rx: Receiver<Job>, rec: &std::sync::Weak<crate::Recorder>) {
     // A stream that could not be written is DEAD and its lane ends with it, so every later frame
     // is refused at `take` instead of counted as written; the close is what files the reason.
     for job in rx.iter() {
         match job {
             Job::Frame(q) => {
                 let Some(rec) = rec.upgrade() else { return };
-                let written = rec.write_queued(&q);
-                free.give_back(q.bytes);
-                if let Err(why) = written {
+                if let Err(why) = rec.write_queued(&q) {
                     rec.close_now(&q.id, &format!("the frame could not be written: {why}"));
                     return;
                 }

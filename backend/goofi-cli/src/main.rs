@@ -100,7 +100,6 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let shutdown = watch_shutdown(cli.shell);
     goofi_supervisor::process::fine_timer();
-    explain_transport_fatal();
     let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
     if goofi_provision::DIST {
         report("Preparing goofi's runtime");
@@ -125,9 +124,9 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, shell: cli.shell };
     report("Cleaning up after earlier sessions");
-    // The session is held BEFORE the engines exist: every iceoryx2 port they open is its. What
-    // dead sessions left is swept once it is held, so the sweep can never take this one.
-    let (session, iox) = match hold_session() {
+    // The session is held BEFORE the engines exist: every slot, door and exchange they open is
+    // its. What dead sessions left is swept once it is held, so the sweep can never take this one.
+    let (session, hub) = match hold_session() {
         Ok(held) => held,
         Err(e) => {
             eprintln!("Could not hold a session: {e}");
@@ -139,7 +138,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         (0, 0) => "nothing left behind".to_string(),
         (d, s) => format!("removed {d} directories and {s} shared-memory segments of dead sessions"),
     });
-    let mut config = Config::new(iox, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal);
+    let mut config = Config::new(hub, mode, goofi_bridge::Clock::Internal, goofi_bridge::Clock::Internal);
     config.instance = Some(session);
     config.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     config.demo_base = named_env("GOOFI_DEMO_BASE");
@@ -149,39 +148,9 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     if let Some(window) = window {
         window.stop();
     }
-    // Last, after every port is gone: the record, then the ephemeral directory and shared memory.
+    // Last, after every engine is gone: the record, then the ephemeral directory and shared memory.
     release_session();
     std::process::exit(code);
-}
-
-/// iceoryx2 ends a condition it cannot recover from with a panic it calls fatal, and on Windows
-/// the unwinding that follows overflows the stack, so the process dies as `STATUS_STACK_OVERFLOW`
-/// with nothing said. The one such condition seen is its per-process handle table (1024 entries,
-/// about 50 nodes). This hook says so on the terminal, releases the session and exits before the
-/// unwinding starts; every other panic keeps the default handling.
-fn explain_transport_fatal() {
-    let default = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        default(info);
-        let text = info.to_string();
-        if !text.contains("This should never happen") {
-            return;
-        }
-        let why = if cfg!(windows) {
-            "On Windows, goofi's transport (iceoryx2) allows 1024 handles per process, which is \
-             about 50 nodes with their viewers. This patch reached that limit, and the transport \
-             cannot continue."
-        } else {
-            "goofi's transport (iceoryx2) hit a condition it cannot recover from."
-        };
-        let _ = goofi_supervisor::log::terminal_line(&format!(
-            "\ngoofi stopped: {why}\n  Please open an issue at {} with this message, your platform and \
-             the patch you were running.\n  {text}",
-            goofi_supervisor::ISSUES
-        ));
-        release_session();
-        std::process::exit(1);
-    }));
 }
 
 /// One line when a newer release is out, from a thread of its own: the check may wait on the
@@ -565,13 +534,13 @@ async fn run(
 /// The session this process holds, from `hold_session` to its release on every exit path.
 static SESSION: goofi_supervisor::sync::Mutex<Option<goofi_supervisor::session::Session>> = goofi_supervisor::sync::Mutex::new(None);
 
-/// Hold the process's session and build the transport every port is minted against.
-fn hold_session() -> Result<(String, std::sync::Arc<goofi_transport::Iox>), String> {
+/// Hold the process's session and make the hub every slot and door is found through.
+fn hold_session() -> Result<(String, std::sync::Arc<goofi_transport::Hub>), String> {
     let session = goofi_supervisor::session::Session::hold()?;
-    let iox = std::sync::Arc::new(goofi_transport::Iox::new(&session)?);
+    let hub = std::sync::Arc::new(goofi_transport::Hub::new(session.id()));
     let id = session.id().to_string();
     *SESSION.lock() = Some(session);
-    Ok((id, iox))
+    Ok((id, hub))
 }
 
 /// Idempotent: the first exit path to get here releases; the rest find nothing.

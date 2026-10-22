@@ -16,7 +16,7 @@ pub type Register = Box<dyn FnOnce(&mut goofi_graph::Graph)>;
 
 /// What a boot is asked for. A field left at its default asks for nothing.
 pub struct Config {
-    pub iox: Arc<goofi_transport::Iox>,
+    pub hub: Arc<goofi_transport::Hub>,
     /// The instance name; none mints a fresh id.
     pub instance: Option<String>,
     pub mode: Mode,
@@ -40,9 +40,9 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(iox: Arc<goofi_transport::Iox>, mode: Mode, clock: Clock, render: Clock) -> Config {
+    pub fn new(hub: Arc<goofi_transport::Hub>, mode: Mode, clock: Clock, render: Clock) -> Config {
         Config {
-            iox,
+            hub,
             instance: None,
             mode,
             clock,
@@ -83,13 +83,13 @@ impl Drop for Manager {
 /// Boot: the engines, the plugins, the requirements, the scan, then the workers. An error on the
 /// way shuts down what was started.
 pub fn boot(config: Config) -> Result<Manager, String> {
-    let Config { iox, instance, mode, clock, render, python, host, vst3_dirs, ui, evaluator, plugins, roots, load, demo_base, requirements, register } = config;
+    let Config { hub, instance, mode, clock, render, python, host, vst3_dirs, ui, evaluator, plugins, roots, load, demo_base, requirements, register } = config;
     report("Starting signal, audio and graphics engines");
     let instance = match instance {
         Some(instance) => instance,
         None => goofi_supervisor::session::fresh_id()?,
     };
-    let mut state = AppState::with_instance(iox, instance, mode, clock, render)?;
+    let mut state = AppState::with_instance(hub, instance, mode, clock, render)?;
     state.load = load;
     state.demo_base = demo_base;
     let mut manager = Manager { state };

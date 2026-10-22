@@ -16,7 +16,7 @@ pub type RemoteNode = CodecNode<Spawned>;
 
 /// The child interpreter that runs `source`. The source rides stdin, never the environment:
 /// Windows caps a whole environment block at 32767 characters.
-pub fn subproc(iox: Arc<goofi_transport::Iox>, python: impl Into<String>, source: impl Into<String>) -> Spawned {
+pub fn subproc(hub: Arc<goofi_transport::Hub>, python: impl Into<String>, source: impl Into<String>) -> Spawned {
     let python = python.into();
     let name = format!("python node ({python})");
     let command = move || {
@@ -24,7 +24,7 @@ pub fn subproc(iox: Arc<goofi_transport::Iox>, python: impl Into<String>, source
         cmd.arg("-c").arg("import goofi; goofi.serve()").env("PYTHONUNBUFFERED", "1");
         cmd
     };
-    Spawned::new(iox, name, command, Some(source.into()))
+    Spawned::new(hub, name, command, Some(source.into()))
 }
 
 /// Probe one file for this tier, reporting all three outcomes.

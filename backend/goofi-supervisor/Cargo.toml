@@ -17,14 +17,13 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 # The liveness pipe's inheritable HANDLE, the timed wait on a child, the job a child's tree lives
 # in, the console break that asks it to leave, the console close handler, the timer resolution,
-# the error mode, and taking a DACL back.
+# the error mode, and the readable-wait on a socket.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_System_JobObjects",
-    "Win32_Security",
-    "Win32_Security_Authorization",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
     "Win32_Media",
+    "Win32_Networking_WinSock",
 ] }

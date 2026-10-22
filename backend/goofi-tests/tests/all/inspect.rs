@@ -73,11 +73,9 @@ names: a node's mermaid id is its name, which every op takes.
     assert_eq!(errs[0]["path"], "testfail0");
     assert_eq!(errs[0]["error"], "the sensor is unplugged");
     assert!(errs[0]["standing"].as_f64().is_some(), "and how long it has stood: {health}");
-    // What the process HOLDS: every running node has a port of its own, each one an entry in
+    // What the process HOLDS: every running node has a thread of its own, each one an entry in
     // the resource index a lease enters and leaves.
     let held = health["resources"].as_array().cloned().unwrap_or_default();
-    let ports = held.iter().filter(|r| r["kind"] == "port").count();
-    assert!(ports >= 3, "a port per running node, and the graph's own: {held:?}");
     let workers: Vec<&str> = held.iter().filter(|r| r["kind"] == "worker").filter_map(|r| r["name"].as_str()).collect();
     assert!(workers.iter().any(|n| n.starts_with("goofi-status-drain")), "the manager's own threads: {workers:?}");
     assert!(workers.iter().any(|n| n.to_lowercase().contains("lfo")), "each node's thread: {workers:?}");

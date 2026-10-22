@@ -17,8 +17,6 @@ pub enum Kind {
     Child,
     /// A thread of this process that outlives the call that started it.
     Worker,
-    /// An iceoryx2 node, with the ports it owns.
-    Port,
     /// A file or directory this process made and will remove.
     Path,
     /// A hardware door: an audio stream, a MIDI port, a GPU device, a window loop.

@@ -1,37 +1,9 @@
 # Windows cleanup
 
 Defects found in a Windows audit on 2026-09-24, repaired on 2026-10-11 as far as goofi's own
-code goes. What remains lives in iceoryx2, or needs a Windows CI runner to prove. Related:
-`iceoryx2-windows-noise-and-leak.md`, `windows-agent-quoting.md`.
-
-## In iceoryx2 (version 0.9.3), not fixable here without a fork
-
-- `iceoryx2-pal-posix` permits 1024 handles per process (`MAX_SUPPORTED_FD_HANDLES` in
-  `win32_handle_translator.rs`). A full table panics in `Directory::new` ("This should never
-  happen"), and the panic ends the process as `STATUS_STACK_OVERFLOW`. Seen in the `tests/all`
-  binary whenever its situations run in parallel on Windows (one process, many sessions); serial
-  (`--test-threads=1`) passes. A headless goofi with nothing else open dies with
-  `STATUS_STACK_OVERFLOW` while about the 50th `signal:Clock` is added (2026-10-11, twice, at 47
-  and between 50 and 60); built against a copy of the crate with the table at 16384 it took 130
-  (once). That exit code is what a user's goofi died with twice that day. Three later fills
-  degraded instead: nodes past the table report `iox node: InternalError`. Both modes now name
-  the limit and the issue tracker (`goofi_transport::explained`, and the panic hook in
-  `goofi-cli/src/main.rs`); the hook's message is not yet seen on a real death. A viewer
-  attached to a patch of 15 hosted nodes logged `ServiceInCorruptedState` on two view doors,
-  hundreds of times a minute; whether that is the same table is not proven.
-- `open_with_mode` (`fcntl.rs`) leaks the `CreateFileA` handle when the table is full; every later
-  open of that service fails with `HangsInCreation` until the session ends.
-- The shared-memory and root directories are compile-time constants in
-  `iceoryx2-pal-configuration` (`C:\Temp\iceoryx2\...`). goofi's session base sits beside them on
-  purpose; a machine without a writable drive C cannot run iceoryx2 at all.
-- `win32call!` prints each unignored Win32 error with its full 1024-byte buffer into stderr; each
-  boot adds NUL-filled records to the process log (a stderr filter deadlocks the Python tier, see
-  the noise file).
-- Each iceoryx2 wait is a UDP socket whose option changes scan the handle table under one
-  process-wide lock; the cost grows with nodes times rate.
-
-Decided 2026-10-11: wait upstream rather than fork. Report the table and the leak to
-eclipse-iceoryx; a `[patch.crates-io]` copy with the table raised is the fallback if that stalls.
+code goes. What was iceoryx2's (the handle table, the `C:\Temp` root, the DACL on its files, the
+socket per wait) went with it (`data-layer.md`); what remains needs a Windows CI runner to prove.
+Related: `windows-agent-quoting.md`.
 
 ## Open defects in goofi
 

@@ -49,10 +49,8 @@ fn the_filter_answers_what_scipy_answers_in_either_phase() {
     let g = Goofi::new();
     install(&g, "golden.py", &chunks_of(&input, input.len(), false));
     let src = g.add("Golden");
+    // The source's own slot, whose readers are the filters wired to it.
     let service = goofi_bridge::output_service_of(&g.graph(), src, "out");
-    let readers = goofi_transport::PortBundle::open(&g.state.iox, |node| {
-        goofi_transport::stream_service(node, &service, goofi_transport::ServiceKind::Data)
-    }).unwrap();
     g.ready(src);
 
     // Born configured: each golden is the first pass, not another pass with a previous block's state.
@@ -82,7 +80,7 @@ fn the_filter_answers_what_scipy_answers_in_either_phase() {
             g.link(src, "out", flt, "input");
             g.ready(flt);
             g.until("the filter to subscribe before the one block", |_| {
-                (goofi_transport::subscribers(&readers) == 1).then_some(())
+                (g.state.hub.readers(&service) == 1).then_some(())
             });
             g.call("node param request", j!({ "node": hex(src), "param": "chunks/start", "request": "pulse" }));
             let out = g.until(&format!("{name} {phase}"), |_| probe.latest());
@@ -92,7 +90,7 @@ fn the_filter_answers_what_scipy_answers_in_either_phase() {
             assert!(g.error(flt).is_none(), "{name} {phase}: {:?}", g.error(flt));
             g.call("node remove", j!({ "node": hex(flt) }));
             g.until("the old filter to release its input", |_| {
-                (goofi_transport::subscribers(&readers) == 0).then_some(())
+                (g.state.hub.readers(&service) == 0).then_some(())
             });
         }
     }

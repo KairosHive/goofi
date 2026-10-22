@@ -447,17 +447,13 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
                    || g.state.reducers.subscribers(&key) == 0).await;
     }
 
-    // An idle gap closes the feed, and the attach after is the re-open — the only path that mints,
-    // and one mint per attach panicked a reducer thread on Windows, where a birth is a directory create.
-    let iox = g.state.reducers.iox_node_id();
-    assert!(iox.is_some(), "the feeds so far minted the one node they share");
+    // An idle gap closes the feed, and the attach after is the re-open.
     for round in 0..3 {
         eventually(&format!("round {round}: the idle feed to close"),
                    || !g.graph().view_watched(osc, "out")).await;
         let mut v = Viewer::open(&base, &hex(osc), "out").await;
         v.view(spec(32)).await;
         v.until(|d| !f32s(d).is_empty()).await;
-        assert_eq!(g.state.reducers.iox_node_id(), iox, "round {round}: the re-open minted a node");
         drop(v);
     }
 

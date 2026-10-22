@@ -8,9 +8,10 @@ use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
 use goofi_core::time::Time;
+use goofi_core::Data;
 use goofi_graph::{Graph, Uid};
 use goofi_record::{Recorder, StreamId, Timeline};
-use goofi_transport::{record_shape, Halt};
+use goofi_transport::{record_shape, Door, Halt, Hub, RecordSubscriber};
 
 /// The longest a sweep waits on the door — a CEILING on the park, never a cadence.
 const WAKE: Duration = Duration::from_millis(20);
@@ -28,9 +29,9 @@ fn timeline(engine: &str) -> Option<Timeline> {
 struct Feed {
     id: StreamId,
     service: String,
-    subscriber: goofi_transport::ByteSubscriber,
+    subscriber: RecordSubscriber,
     /// The one frame the writer's lane refused, kept for the next sweep.
-    held: Option<Vec<u8>>,
+    held: Option<Data>,
     /// How this engine dates a frame.
     timeline: Timeline,
 }
@@ -39,13 +40,11 @@ struct Drain {
     graph: Arc<Mutex<Graph>>,
     recorder: Arc<Recorder>,
     time: Arc<Time>,
-    ports: goofi_transport::PortBundle<Ports>,
-}
-
-/// The drain's ports: the recorder's door, and one subscriber per armed slot.
-struct Ports {
+    hub: Arc<Hub>,
+    /// One subscriber per armed slot.
     feeds: HashMap<(Uid, String), Feed>,
-    listener: goofi_transport::Listener,
+    /// The recorder's door, rung by every armed slot once its frame is queued.
+    listener: Arc<Door>,
 }
 
 struct AudioCapture(std::sync::Weak<Mutex<Graph>>);
@@ -106,15 +105,15 @@ fn armed(g: &Graph) -> HashMap<(Uid, String), (String, StreamId)> {
 /// One frame onto the writer, read for what only this thread can read. The file it belongs in, and
 /// every byte of formatting, is the writer's: formatting here made the drain slower than a fast
 /// producer, and a drain that falls behind its transport loses another stream's frames.
-fn hand(recorder: &Recorder, time: &Time, feed: &Feed, bytes: &[u8], finally: bool, drift: &mut Option<f64>) -> bool {
-    let meta = goofi_codec::frame_meta(bytes).ok();
-    let at = meta.as_ref().and_then(|m| m.time()).unwrap_or_else(|| time.now());
+fn hand(recorder: &Recorder, time: &Time, feed: &Feed, frame: &Data, finally: bool, drift: &mut Option<f64>) -> bool {
+    let meta = frame.meta();
+    let at = meta.time().unwrap_or_else(|| time.now());
     // AUDIO is the one stream kind that is a wav.
-    let rate = (feed.id.engine == "audio").then(|| meta.as_ref().and_then(|m| m.sfreq()).unwrap_or_default());
-    if let Some(goofi_core::MetaValue::Float(d)) = meta.as_ref().and_then(|m| m.get(goofi_core::META_DRIFT)) {
+    let rate = (feed.id.engine == "audio").then(|| meta.sfreq().unwrap_or_default());
+    if let Some(goofi_core::MetaValue::Float(d)) = meta.get(goofi_core::META_DRIFT) {
         *drift = Some(*d);
     }
-    recorder.take_frame(&feed.id, bytes, rate, feed.timeline, at, finally)
+    recorder.take_frame(&feed.id, frame, rate, feed.timeline, at, finally)
 }
 
 /// Take every frame the feed holds, in one pass, and write each straight through. A recorder that
@@ -133,10 +132,9 @@ fn drain_feed(recorder: &Recorder, time: &Time, feed: &mut Feed, finally: bool) 
         }
         taken += 1;
     }
-    while let Ok(Some(sample)) = feed.subscriber.receive() {
-        let bytes = sample.payload();
-        if !hand(recorder, time, feed, bytes, finally, &mut drift) {
-            feed.held = Some(bytes.to_vec());
+    while let Some(frame) = feed.subscriber.receive() {
+        if !hand(recorder, time, feed, &frame, finally, &mut drift) {
+            feed.held = Some(frame);
             break;
         }
         taken += 1;
@@ -159,31 +157,29 @@ impl Drain {
     fn resolve(&mut self) -> bool {
         let wanted = armed(&self.graph.lock());
         let expected = wanted.len();
-        for key in self.ports.feeds.keys().cloned().collect::<Vec<_>>() {
+        for key in self.feeds.keys().cloned().collect::<Vec<_>>() {
             let why = match wanted.get(&key) {
-                Some((service, _)) if *service == self.ports.feeds[&key].service => continue,
+                Some((service, _)) if *service == self.feeds[&key].service => continue,
                 Some(_) => "reborn",
                 None => "disarmed",
             };
-            let mut feed = self.ports.feeds.remove(&key).expect("a key just read");
+            let mut feed = self.feeds.remove(&key).expect("a key just read");
             drain_feed(&self.recorder, &self.time, &mut feed, true);
             self.recorder.close(&feed.id, why);
         }
         for (key, (service, id)) in wanted {
-            if self.ports.feeds.contains_key(&key) {
+            if self.feeds.contains_key(&key) {
                 continue;
             }
-            let shape = record_shape(id.engine);
             let timeline = timeline(id.engine).expect("armed filtered the engines above");
-            if let Ok(subscriber) = goofi_transport::open_record_subscriber(self.ports.node(), &service, shape) {
-                self.ports.feeds.insert(key, Feed { id, service, subscriber, held: None, timeline });
-            }
+            let subscriber = self.hub.record_subscriber(&service, record_shape(id.engine).buffer);
+            self.feeds.insert(key, Feed { id, service, subscriber, held: None, timeline });
         }
-        self.ports.feeds.len() == expected
+        self.feeds.len() == expected
     }
 
     fn sweep(&mut self, finally: bool) {
-        for feed in self.ports.feeds.values_mut() {
+        for feed in self.feeds.values_mut() {
             drain_feed(&self.recorder, &self.time, feed, finally);
         }
     }
@@ -191,14 +187,14 @@ impl Drain {
     /// Every feed drained to exhaustion and let go. A stop asks for this before it closes a file,
     /// so the frames the last sweep did not reach are not the tail this recording loses.
     fn release(&mut self) {
-        for (_, mut feed) in self.ports.feeds.drain().collect::<Vec<_>>() {
+        for (_, mut feed) in self.feeds.drain().collect::<Vec<_>>() {
             drain_feed(&self.recorder, &self.time, &mut feed, true);
         }
     }
 }
 
 /// Start the one drain. `halt` is what stops it; the worker handed back is what a stop joins.
-pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_supervisor::worker::Worker> {
+pub fn spawn(hub: Arc<Hub>, graph: Arc<Mutex<Graph>>, recorder: Arc<Recorder>, halt: Arc<Halt>) -> Option<goofi_supervisor::worker::Worker> {
     recorder.set_capture(Arc::new(AudioCapture(Arc::downgrade(&graph))));
     let (instance, time) = {
         let g = graph.lock();
@@ -207,17 +203,9 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
     let draining = recorder.draining();
     let started = goofi_supervisor::worker::thread("goofi-record").spawn(move || {
         let _draining = draining;
-        let ports = goofi_transport::PortBundle::open(&iox, |node| {
-            let door = goofi_transport::event_service(node, &goofi_transport::record_door_service(&instance))?;
-            let listener = door.listener_builder().create().map_err(|e| e.to_string())?;
-            Ok(Ports { feeds: HashMap::new(), listener })
-        });
-        let Ok(ports) = ports else {
-            halt.release();
-            return;
-        };
+        let listener = hub.door(&goofi_transport::record_door_service(&instance));
         let epoch = graph.lock().epoch();
-        let mut drain = Drain { graph, recorder, time, ports };
+        let mut drain = Drain { graph, recorder, time, hub, feeds: HashMap::new(), listener };
         // The graph epoch the feeds were resolved against; `None` once they were let go. The lock
         // is taken to resolve ONLY when that epoch moved — never per wake, which is the publish rate.
         let mut resolved: Option<u64> = None;
@@ -226,7 +214,7 @@ pub fn spawn(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, recorder:
         while !halt.stopped() {
             // The event id is ignored, which spends none of the id budget: a burst across every
             // armed slot coalesces into one sweep.
-            goofi_transport::wait_within(&drain.ports.listener, WAKE, |_| {});
+            goofi_transport::wait_within(&drain.listener, WAKE, |_| {});
             // Read BEFORE the sweep: a sweep already under way when a stop asked is not an answer
             // to it.
             let mark = drain.recorder.sweeping();

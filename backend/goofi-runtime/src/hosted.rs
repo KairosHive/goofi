@@ -5,18 +5,17 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use goofi_codec::rpc::{self, Entry};
 use goofi_node::NodeManifest;
 use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
-use goofi_transport::{Exchange, Iox, Served};
+use goofi_transport::{Exchange, Hub, Served};
 
 /// Load a native host type. After boot, its library belongs to a child of `host`.
 pub fn load(
-    iox: Arc<Iox>,
+    hub: Arc<Hub>,
     artifact: PathBuf,
     type_name: &str,
     own: Option<goofi_core::SlotType>,
@@ -34,7 +33,7 @@ pub fn load(
     };
     let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, own)?;
     let (factory, tier): (goofi_host_sdk::NodeFactory, _) = match host {
-        Some(host) => (Box::new(move |_| Box::new(node(iox.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
+        Some(host) => (Box::new(move |_| Box::new(node(hub.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
         None => {
             let loaded = unsafe { goofi_host_sdk::host::Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
             (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
@@ -42,9 +41,6 @@ pub fn load(
     };
     Ok((manifest, factory, tier))
 }
-
-/// Makes each exchange's service names unique, so concurrent children never collide.
-static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// How long a describe may take: a one-shot probe, bounded like a build.
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -66,20 +62,20 @@ fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
 }
 
 /// A node whose library runs in a child of `host`, so this process never loads it.
-fn node(iox: Arc<Iox>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> CodecNode<Spawned> {
+fn node(hub: Arc<Hub>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> CodecNode<Spawned> {
     let type_name = manifest.type_name;
     let command = move || {
         let mut cmd = Command::new(&host);
         cmd.arg("host").arg("serve").arg(&artifact).arg(type_name);
         cmd
     };
-    CodecNode::new(Spawned::new(iox, format!("native node {type_name} (hosted)"), command, None), in_slots(manifest))
+    CodecNode::new(Spawned::new(hub, format!("native node {type_name} (hosted)"), command, None), in_slots(manifest))
 }
 
-/// A node's child, called over the exchange its `GOOFI_IOX_BASE` names: spawned on the first
-/// call, replaced after a failed one, and handed `stdin` once if there is one.
+/// A node's child, called over the exchange its environment names: spawned on the first call,
+/// replaced after a failed one, and handed `stdin` once if there is one.
 pub struct Spawned {
-    iox: Arc<Iox>,
+    hub: Arc<Hub>,
     name: String,
     command: Box<dyn Fn() -> Command + Send>,
     stdin: Option<String>,
@@ -87,16 +83,15 @@ pub struct Spawned {
 }
 
 impl Spawned {
-    pub fn new(iox: Arc<Iox>, name: String, command: impl Fn() -> Command + Send + 'static, stdin: Option<String>) -> Spawned {
-        Spawned { iox, name, command: Box::new(command), stdin, live: None }
+    pub fn new(hub: Arc<Hub>, name: String, command: impl Fn() -> Command + Send + 'static, stdin: Option<String>) -> Spawned {
+        Spawned { hub, name, command: Box::new(command), stdin, live: None }
     }
 
     fn spawn(&self) -> Result<(Child, Exchange), String> {
-        let base = format!("goofi_child_{}_{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed));
         // The parent's end stands first, so the child's ready ring finds a listener.
-        let exchange = Exchange::open(&self.iox, &base)?;
+        let exchange = Exchange::open(&self.hub)?;
         let mut cmd = (self.command)();
-        cmd.env("GOOFI_IOX_BASE", base);
+        cmd.env(goofi_transport::ENV, exchange.env());
         let mut run = goofi_supervisor::child::run(self.name.clone(), &mut cmd).source(goofi_supervisor::log::source());
         if self.stdin.is_some() {
             run = run.stdin_piped();

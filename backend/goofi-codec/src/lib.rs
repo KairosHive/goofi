@@ -78,7 +78,7 @@ impl<'a> Out<'a> for Count {
     }
 }
 
-/// A sink over uninitialised memory — an iceoryx2 loan — sized by [`encoded_len`] beforehand.
+/// A sink over uninitialised memory, sized by [`encoded_len`] beforehand.
 pub struct Fill<'m> {
     buf: &'m mut [MaybeUninit<u8>],
     at: usize,

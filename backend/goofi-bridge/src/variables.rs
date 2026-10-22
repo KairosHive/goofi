@@ -1,24 +1,23 @@
-//! The patch's own producer, `variables`: one data service per variable, a history of one, written
-//! from the store under its lock and nothing else. Its door is rung by a subscriber that just
-//! opened, and answered with the frame held and a ring on every consumer's door.
+//! The patch's own producer, `variables`: one slot per variable, held, written from the store
+//! under its lock and nothing else. Its door is rung by a settle that moved the bindings, and
+//! answered with a ring on every consumer's door.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use goofi_graph::{Graph, Uid};
-use goofi_supervisor::sync::Mutex;
 use goofi_node::EventId;
+use goofi_supervisor::sync::Mutex;
 use goofi_transport::{
-    deliver_held, door_service, event_service, output_service, publisher, service_base, stream_service, variables_base,
-    view_door_service, BytePublisher, ByteService, Doorbell, IoxNode, ServiceKind, INITIAL_SLICE, VIEW_EVENT_ID,
+    door_service, output_service, service_base, variables_base, view_door_service, Door, Doorbell, Hub, Payload, Publisher,
+    VIEW_EVENT_ID,
 };
 
 /// One variable's wire: its publisher, and the bell on its view door for the reducer parked there.
 struct Port {
-    publisher: BytePublisher,
+    publisher: Publisher,
     view: Doorbell,
-    _service: ByteService,
 }
 
 struct Inner {
@@ -26,61 +25,49 @@ struct Inner {
     /// Per variable, the doors its consumers park on and the id each is rung with — the graph's
     /// bindings, re-read on every wake of the door below.
     ringers: HashMap<String, Vec<(String, EventId)>>,
-    /// One bell per consumer door, opened once: a door opened twice on one node is a second state.
+    /// One bell per consumer door, taken once.
     bells: HashMap<String, Doorbell>,
-    /// Declared LAST: fields drop in order, and a node dropped before its ports cannot remove its
-    /// own directory.
-    node: Arc<IoxNode>,
 }
 
 pub struct Variables {
     instance: String,
-    /// The producer's own bell on its door, so a settle and the stop wake the thread.
-    own: Doorbell,
-    /// The door's listener, taken by the thread that serves it.
-    listener: Mutex<Option<goofi_transport::Listener>>,
-    /// Declared LAST: it holds the node, and the ports above must drop first.
+    hub: Arc<Hub>,
+    /// The producer's own door: a settle and the stop wake the thread through it.
+    door: Arc<Door>,
     inner: Mutex<Inner>,
 }
 
 impl Variables {
-    pub fn new(iox: &goofi_transport::Iox, instance: &str) -> Result<Variables, String> {
-        let node = Arc::new(iox.node()?);
-        // The door is opened ONCE on this node: a listener and a bell from the one service.
-        let door = event_service(&node, &door_service(&variables_base(instance)))?;
-        let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;
-        let own = Doorbell::on(&door, "variables")?;
-        let inner = Inner { ports: HashMap::new(), ringers: HashMap::new(), bells: HashMap::new(), node };
-        Ok(Variables { instance: instance.to_string(), own, listener: Mutex::new(Some(listener)), inner: Mutex::new(inner) })
+    pub fn new(hub: Arc<Hub>, instance: &str) -> Variables {
+        let door = hub.door(&door_service(&variables_base(instance)));
+        let inner = Inner { ports: HashMap::new(), ringers: HashMap::new(), bells: HashMap::new() };
+        Variables { instance: instance.to_string(), hub, door, inner: Mutex::new(inner) }
     }
 
     /// Wake the thread: a settle moved the bindings, or the manager is leaving.
     pub fn poke(&self) {
-        let _ = self.own.ring(0);
+        self.door.ring(0);
     }
 
-    /// Park on the door until `stopping`: each wake re-reads the ringers from the graph, hands the
-    /// held frames to whoever subscribed since, and rings every door. A spurious ring costs a wake.
+    /// Park on the door until `stopping`: each wake re-reads the ringers from the graph and rings
+    /// every consumer's door, so one that subscribed since takes the held frame. A spurious ring
+    /// costs a wake.
     pub fn serve(&self, graph: &Mutex<Graph>, stopping: &goofi_transport::Halt) {
-        let Some(listener) = self.listener.lock().take() else { return };
         while !stopping.stopped() {
-            goofi_transport::wait_within(&listener, Duration::from_millis(500), |_| {});
+            goofi_transport::wait_within(&self.door, Duration::from_millis(500), |_| {});
             if stopping.stopped() {
                 return;
             }
             let ringers = doors_of(&graph.lock(), &self.instance);
             let mut inner = self.inner.lock();
             inner.ringers = ringers;
-            let Inner { ports, ringers, bells, node } = &mut *inner;
+            let Inner { ports, ringers, bells } = &mut *inner;
             bells.retain(|door, _| ringers.values().flatten().any(|(d, _)| d == door));
             for (name, port) in ports.iter() {
-                deliver_held(&port.publisher);
                 for (door, id) in ringers.get(name).into_iter().flatten() {
-                    if let Some(bell) = bell(bells, node, door) {
-                        let _ = bell.ring(*id);
-                    }
+                    bell(bells, &self.hub, door).ring(*id);
                 }
-                let _ = port.view.ring(VIEW_EVENT_ID);
+                port.view.ring(VIEW_EVENT_ID);
             }
         }
     }
@@ -95,58 +82,25 @@ fn doors_of(g: &Graph, instance: &str) -> HashMap<String, Vec<(String, EventId)>
     out
 }
 
-/// The one bell on `door`, opened now if this is its first ring.
-fn bell<'a>(bells: &'a mut HashMap<String, Doorbell>, node: &IoxNode, door: &str) -> Option<&'a Doorbell> {
-    if !bells.contains_key(door) {
-        match Doorbell::open(node, door) {
-            Ok(bell) => {
-                bells.insert(door.to_string(), bell);
-            }
-            Err(e) => {
-                trouble(&format!("bell onto `{door}` did not open: {e}"));
-                return None;
-            }
-        }
-    }
-    bells.get(door)
-}
-
-fn trouble(why: &str) {
-    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("variables"), goofi_supervisor::log::Level::Error, None, why.to_string());
+/// The one bell on `door`, taken now if this is its first ring.
+fn bell<'a>(bells: &'a mut HashMap<String, Doorbell>, hub: &Hub, door: &str) -> &'a Doorbell {
+    bells.entry(door.to_string()).or_insert_with(|| Doorbell::on(hub.door(door)))
 }
 
 impl goofi_core::variables::Plane for Variables {
     fn publish(&self, name: &str, value: &goofi_core::Data) {
-        let bytes = match goofi_codec::encode(value) {
-            Ok(bytes) => bytes,
-            Err(e) => return trouble(&format!("`{name}` cannot cross: {e}")),
-        };
         let mut inner = self.inner.lock();
-        let Inner { ports, ringers, bells, node } = &mut *inner;
-        if !ports.contains_key(name) {
-            let service = stream_service(node, &output_service(&variables_base(&self.instance), name), ServiceKind::Held);
-            let port = service.and_then(|service| {
-                let publisher = publisher(&service, name, INITIAL_SLICE)?;
-                let view = Doorbell::open(node, &view_door_service(&self.instance, Uid::VARIABLES, name))?;
-                Ok(Port { publisher, view, _service: service })
-            });
-            match port {
-                Ok(port) => {
-                    ports.insert(name.to_string(), port);
-                }
-                Err(e) => return trouble(&format!("`{name}` has no wire: {e}")),
-            }
+        let Inner { ports, ringers, bells } = &mut *inner;
+        let port = ports.entry(name.to_string()).or_insert_with(|| Port {
+            publisher: self.hub.publisher(&output_service(&variables_base(&self.instance), name), true),
+            view: Doorbell::on(self.hub.door(&view_door_service(&self.instance, Uid::VARIABLES, name))),
+        });
+        port.publisher.publish(Payload::Data(value.clone()));
+        // The frame first, then every bell: a consumer woken first finds nothing and parks.
+        for (door, id) in ringers.get(name).cloned().unwrap_or_default() {
+            bell(bells, &self.hub, &door).ring(id);
         }
-        let port = &ports[name];
-        let doors: Vec<(String, EventId)> = ringers.get(name).cloned().unwrap_or_default();
-        for (door, _) in &doors {
-            bell(bells, node, door);
-        }
-        let rung = doors.iter().filter_map(|(door, id)| Some((bells.get(door)?, *id)));
-        let rung = rung.chain(std::iter::once((&port.view, VIEW_EVENT_ID)));
-        if let Err(e) = goofi_transport::publish(&port.publisher, &bytes, rung) {
-            trouble(&format!("`{name}` did not go out: {e}"));
-        }
+        port.view.ring(VIEW_EVENT_ID);
     }
 
     fn retire(&self, name: &str) {

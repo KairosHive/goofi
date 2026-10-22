@@ -90,8 +90,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
-      # Windows only boots: iceoryx2 cannot create a listener under the session's root there yet,
-      # and every situation opens one. Drop both conditions once it can.
+      # Windows only boots: the situations are not yet proven there (roadmap/windows-cleanup.md).
+      # Drop the condition once a watched run passes.
       - name: Situations
         if: runner.os != 'Windows'
         run: >

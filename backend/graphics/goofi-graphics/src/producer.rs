@@ -38,7 +38,7 @@ impl crate::GraphicsEngine {
             let base = goofi_supervisor::layout::runtime().build();
             let artifact = goofi_build::built(&goofi_build::GRAPHICS, path, &base)?;
             let (manifest, factory, tier) = goofi_runtime::hosted::load(
-                self.iox.clone(), artifact, name, Some(SlotType::Texture), self.host.as_deref(), self.booted,
+                self.hub.clone(), artifact, name, Some(SlotType::Texture), self.host.as_deref(), self.booted,
             )?;
             (manifest, Arc::from(factory), tier)
         } else {
@@ -48,7 +48,7 @@ impl crate::GraphicsEngine {
             match probed {
                 Probed::InProcess(d) | Probed::Subprocess(d) => {
                     let subproc = self.python.as_ref().map(|p| p.subproc.as_str()).unwrap_or_default();
-                    let (manifest, factory, tier) = routed(self.iox.clone(), d, subproc);
+                    let (manifest, factory, tier) = routed(self.hub.clone(), d, subproc);
                     (manifest, Arc::from(factory), tier)
                 }
                 Probed::Unavailable(why) => return Err(why),

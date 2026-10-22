@@ -366,7 +366,7 @@ struct Minted {
 }
 
 pub struct AudioEngine {
-    iox: Arc<goofi_transport::Iox>,
+    hub: Arc<goofi_transport::Hub>,
     instance: String,
     time: Arc<goofi_core::time::Time>,
     clock: Clock,
@@ -402,15 +402,13 @@ pub struct AudioEngine {
     pending: Vec<(Uid, Status)>,
     dirty: bool,
     last: Plan,
-    /// Every bell onto a control half is built from it — last, because fields drop in order.
-    bells: goofi_transport::IoxNode,
 }
 
 const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(iox: Arc<goofi_transport::Iox>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> Result<AudioEngine, String> {
+    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> Result<AudioEngine, String> {
         host::warm();
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
@@ -466,8 +464,7 @@ impl AudioEngine {
             pending: Vec::new(),
             dirty: false,
             last: Plan::default(),
-            bells: iox.node()?,
-            iox,
+            hub,
         })
     }
 
@@ -913,7 +910,7 @@ impl Engine for AudioEngine {
             params: atomics.clone(),
             time: self.time.clone(),
         };
-        let control = match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, move || AudioHalf::new(birth)) {
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), move || AudioHalf::new(birth)) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };

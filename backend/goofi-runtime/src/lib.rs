@@ -15,9 +15,8 @@ use goofi_node::{
 };
 use goofi_supervisor::sync::Mutex;
 use goofi_transport::{
-    door_service, event_service, open_output_subscriber, output_service, publisher, record_door_service,
-    record_service, record_shape, stream_service, take_where, BytePublisher, ByteService, ByteSubscriber, Doorbell,
-    Halt, Iox, IoxNode, Listener, ServiceKind, ServiceName, INITIAL_SLICE,
+    door_service, output_service, record_door_service, record_service, record_shape, take_where, Door, Doorbell, Halt,
+    Hub, Listener, Payload, Publisher, RecordPort, ServiceName, Subscriber,
 };
 use indexmap::IndexMap;
 
@@ -279,15 +278,18 @@ pub struct Cx<'a> {
     pub uid: Uid,
 }
 
-/// What an executor puts on one output.
+/// What an executor puts on one output. Nothing is encoded to cross a wire: a frame goes out as
+/// the `Arc` it is, and only a producer whose product IS bytes puts bytes on it.
 pub enum Out<'a> {
-    /// Encoded, for the wire alone.
-    Bytes(&'a [u8]),
+    /// A frame for the wire alone.
+    Wire(&'a Data),
+    /// A GOOF frame already encoded, for the wire alone: the 8-bit texture tap.
+    Bytes(bytes::Bytes),
     /// A frame for the wire and, while the slot is armed, its recording.
     Frame(&'a Data),
-    /// Encoded, for the recording alone. A frame the segment refuses is a gap in `Meta::index`,
-    /// which is what the recorder counts drops by.
-    Record(&'a [u8]),
+    /// A frame for the recording alone. The queue drops its oldest when the recorder falls
+    /// behind, a gap in `Meta::index`, which is what the recorder counts drops by.
+    Record(&'a Data),
 }
 
 /// What is wrong with the executor's node: its `setup` failed and nothing runs until a retry
@@ -400,14 +402,14 @@ impl Handle {
             mail.flush.push(Flush { armed, ack });
         }
         drop(mail);
-        let _ = self.bell.ring(0);
+        self.bell.ring(0);
         done
     }
 
     fn send(&self, desired: Desired) {
         *self.last.lock() = Some(desired.clone());
         self.mail.lock().desired = Some(desired);
-        let _ = self.bell.ring(0);
+        self.bell.ring(0);
     }
 
     /// Send only what is new, and say whether it did.
@@ -426,12 +428,12 @@ impl Handle {
             goofi_node::RequestKind::Pulse => mail.pulse.push(request.key),
         }
         drop(mail);
-        let _ = self.bell.ring(0);
+        self.bell.ring(0);
     }
 
     pub fn stop(&self) {
         self.halt.stop();
-        let _ = self.bell.ring(0);
+        self.bell.ring(0);
     }
 }
 
@@ -462,27 +464,25 @@ pub struct Spawn {
     pub time: Arc<goofi_core::time::Time>,
 }
 
-/// Create the node's services on the caller's thread, where a failure can be reported, and park the
-/// runtime on them. `make` builds the executor ON that thread, so it may hold what cannot cross one.
+/// Open the node's slots and door on the caller's thread and park the runtime on them. `make`
+/// builds the executor ON that thread, so it may hold what cannot cross one.
 pub fn spawn<E: Executor + 'static>(
-    iox: &Iox,
+    hub: &Arc<Hub>,
     spawn: Spawn,
     shared: Arc<Shared>,
-    bells: &IoxNode,
     make: impl FnOnce() -> E + Send + 'static,
 ) -> Result<Handle, String> {
     static BORN: AtomicU64 = AtomicU64::new(0);
     let born = BORN.fetch_add(1, Ordering::Relaxed);
-    let node = iox.node()?;
-    let door = event_service(&node, &door_service(&spawn.base))?;
-    let listener = door.listener_builder().create().map_err(|e| format!("listener: {e}"))?;
-    let bell = Doorbell::open(bells, &door_service(&spawn.base))?;
-    let mut outs = Vec::with_capacity(spawn.manifest.outputs.len());
-    for out in spawn.manifest.outputs {
-        let service = stream_service(&node, &output_service(&spawn.base, out.name), ServiceKind::Data)?;
-        let publisher = publisher(&service, out.name, INITIAL_SLICE)?;
-        outs.push(Out_ { service, publisher, bells: Vec::new(), record: None });
-    }
+    let listener = hub.door(&door_service(&spawn.base));
+    let bell = Doorbell::on(listener.clone());
+    let outs = spawn
+        .manifest
+        .outputs
+        .iter()
+        .map(|out| Out_ { publisher: hub.publisher(&output_service(&spawn.base, out.name), false), bells: Vec::new(), record: None })
+        .collect();
+    let hub = hub.clone();
     let mail = Arc::new(Mutex::new(Mail::default()));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
@@ -505,7 +505,6 @@ pub fn spawn<E: Executor + 'static>(
                     base: spawn.base,
                     record_door: record_door_service(&spawn.instance),
                     record_bell: None,
-                    held_bells: Vec::new(),
                     manifest: spawn.manifest,
                     decls: spawn.decls,
                     time: spawn.time.clone(),
@@ -514,8 +513,6 @@ pub fn spawn<E: Executor + 'static>(
                     values: Vec::new(),
                     outs,
                     retired: Vec::new(),
-                    trouble: None,
-                    reopen: None,
                     slots: Vec::new(),
                     binds: Vec::new(),
                     evaluated: IndexMap::new(),
@@ -530,7 +527,7 @@ pub fn spawn<E: Executor + 'static>(
                     last_ufreq: None,
                     listener,
                     exec: make(),
-                    node,
+                    hub,
                 };
                 runtime.run(&inner);
             });
@@ -542,14 +539,13 @@ pub fn spawn<E: Executor + 'static>(
     Ok(Handle { born, mail, halt, bell, last: Mutex::new(None) })
 }
 
-/// One output's door out: who drinks from it, who to wake once something is on it, and — while the
-/// slot is armed — the recorder's own deep-buffered second publisher.
+/// One output's door out: its slot, who to wake once something is on it, and — while the slot
+/// is armed — the recorder's own queue.
 struct Out_ {
-    service: ByteService,
-    publisher: BytePublisher,
+    publisher: Publisher,
     bells: Vec<(String, Doorbell, EventId)>,
     /// The armed port and the arming it serves; a new arming replaces it under a new name.
-    record: Option<(u64, goofi_transport::RecordPort)>,
+    record: Option<(u64, RecordPort)>,
 }
 
 struct SlotSub {
@@ -557,7 +553,7 @@ struct SlotSub {
     wire: usize,
     service: String,
     source: String,
-    subscriber: ByteSubscriber,
+    subscriber: Subscriber,
 }
 
 /// Per inbox, the wires it holds in order: what the executor is told.
@@ -576,7 +572,7 @@ struct Bind {
     key: ParamKey,
     expr: Expression,
     /// Per stream variable: its name, the service, and this runtime's subscriber on it.
-    streams: Vec<(String, String, ByteSubscriber)>,
+    streams: Vec<(String, String, Subscriber)>,
 }
 
 impl Bind {
@@ -592,11 +588,8 @@ struct Runtime<E: Executor> {
     engine: &'static str,
     base: String,
     record_door: ServiceName,
-    /// The node's one bell on that door, opened by the first arming and kept for its life.
-    record_bell: Option<Arc<Doorbell>>,
-    /// One bell per producer door this node asks a held frame of, opened once and kept: a door
-    /// opened twice on one node is a second service state.
-    held_bells: Vec<(String, Doorbell)>,
+    /// The recorder's door, taken by the first arming and kept for the node's life.
+    record_bell: Option<Arc<Door>>,
     manifest: &'static NodeManifest,
     decls: Vec<ParamDecl>,
     time: Arc<goofi_core::time::Time>,
@@ -624,19 +617,17 @@ struct Runtime<E: Executor> {
     listener: Listener,
     exec: E,
     /// Ports a newer arming replaced, each kept until the recorder has let go of it.
-    retired: Vec<goofi_transport::RecordPort>,
-    /// What the recording last cost and why: the drops, and the cause the node wears as a fault.
-    trouble: Option<(u64, String)>,
-    /// What the engine last wanted, kept while a port of it failed to open: the next tick applies
-    /// it again, so a service that was not there yet is reached when it is.
-    reopen: Option<Desired>,
-    /// Last: every port above is built from it, and fields drop in declaration order.
-    node: IoxNode,
+    retired: Vec<RecordPort>,
+    /// Where every slot, door and queue this runtime reaches is found by name.
+    hub: Arc<Hub>,
 }
 
-/// A runtime's trouble, logged under its engine; the log groups a repeat.
-fn trouble(engine: &str, text: &str) {
-    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("runtime"), goofi_supervisor::log::Level::Error, None, format!("{engine}: {text}"));
+/// A payload as a frame: the `Data` it is, or the bytes it crossed as, decoded.
+fn decode(payload: Payload) -> Result<Data, String> {
+    match payload {
+        Payload::Data(frame) => Ok(frame),
+        Payload::Wire(bytes) => goofi_codec::decode(&bytes),
+    }
 }
 
 impl<E: Executor> Runtime<E> {
@@ -655,7 +646,7 @@ impl<E: Executor> Runtime<E> {
                 held
             });
             let mail = std::mem::take(&mut *self.mail.lock());
-            if let Some(d) = mail.desired.or_else(|| self.reopen.take()) {
+            if let Some(d) = mail.desired {
                 self.apply(d);
             }
             for key in mail.refresh {
@@ -716,26 +707,19 @@ impl<E: Executor> Runtime<E> {
         };
         match due {
             None => {
-                let _ = self.listener.blocking_wait_all(|_| {});
+                self.listener.wait();
             }
             Some(at) => {
-                let wait = at.saturating_duration_since(Instant::now());
-                // A due run takes what already rang; a wait still ahead is floored by the transport.
-                if wait.is_zero() {
-                    let _ = self.listener.try_wait_all(|_| {});
-                } else {
-                    goofi_transport::wait_within(&self.listener, wait, |_| {});
-                }
+                self.listener.wait_until(at);
             }
         }
     }
 
     fn apply(&mut self, d: Desired) {
-        let wanted = d.clone();
         self.consts = d.consts;
         let (slots, binds): (Vec<Sub>, Vec<Sub>) = d.subs.into_iter().partition(|s| matches!(s, Sub::Slot { .. }));
-        let opened = self.apply_slots(slots) & self.apply_bells(d.targets);
-        self.reopen = (!opened).then_some(wanted);
+        self.apply_slots(slots);
+        self.apply_bells(d.targets);
         self.apply_binds(binds);
         self.apply_records(&d.record);
         // Every literal goes in first, then each binding writes what it owns over it: a whole
@@ -754,22 +738,14 @@ impl<E: Executor> Runtime<E> {
         self.sync();
     }
 
-    /// Answers whether every wire opened; one that did not is logged and tried again next tick.
-    /// An inbox whose wire set moved is told the whole set.
-    fn apply_slots(&mut self, subs: Vec<Sub>) -> bool {
+    /// A surviving wire keeps its subscription; an inbox whose wire set moved is told the whole set.
+    fn apply_slots(&mut self, subs: Vec<Sub>) {
         let before = wiring(&self.slots);
         let mut old = std::mem::take(&mut self.slots);
-        let mut opened = true;
         for sub in subs {
             let Sub::Slot { inbox, wire, service, source } = sub else { continue };
-            let kept = take_where(&mut old, |s| s.service == service).map(|s| Ok(s.subscriber));
-            match kept.unwrap_or_else(|| open_output_subscriber(&self.node, &service)) {
-                Ok(subscriber) => self.slots.push(SlotSub { inbox, wire, service, source, subscriber }),
-                Err(e) => {
-                    trouble(self.engine, &format!("wire `{service}` did not open: {e}"));
-                    opened = false;
-                }
-            }
+            let subscriber = take_where(&mut old, |s| s.service == service).map(|s| s.subscriber).unwrap_or_else(|| self.hub.subscribe(&service));
+            self.slots.push(SlotSub { inbox, wire, service, source, subscriber });
         }
         self.slots.sort_by_key(|s| (s.inbox, s.wire));
         let after = wiring(&self.slots);
@@ -778,7 +754,6 @@ impl<E: Executor> Runtime<E> {
                 self.exec.rewire(*inbox, after.get(inbox).map_or(&[], Vec::as_slice));
             }
         }
-        opened
     }
 
     /// Replace the bindings, keeping the subscriptions and arrivals of one re-sent unchanged.
@@ -792,25 +767,18 @@ impl<E: Executor> Runtime<E> {
             let mut resolved = Vec::with_capacity(vars.len());
             for (var, v) in vars {
                 let v = match v {
-                    Var::Stream { service, held } => {
+                    Var::Stream { service } => {
                         let kept = previous
                             .as_mut()
                             .and_then(|p| take_where(&mut p.streams, |(n, s, _)| *n == var && *s == service));
                         if kept.is_some() {
                             kept_names.push(var.clone());
                         }
-                        let fresh = kept.is_none();
-                        match kept.map(|(_, _, s)| Ok(s)).unwrap_or_else(|| open_output_subscriber(&self.node, &service)) {
-                            Ok(subscriber) => {
-                                streams.push((var.clone(), service.clone(), subscriber));
-                                // Subscribed: a producer holding its last frame is asked for it now.
-                                if let (true, Some(door)) = (fresh, &held) {
-                                    self.ring_held(door);
-                                }
-                                Var::Stream { service, held }
-                            }
-                            Err(e) => Var::Missing(e),
-                        }
+                        // A fresh subscription on a held slot is handed its newest frame at the
+                        // next receive, so nothing has to be asked of the producer.
+                        let subscriber = kept.map(|(_, _, s)| s).unwrap_or_else(|| self.hub.subscribe(&service));
+                        streams.push((var.clone(), service.clone(), subscriber));
+                        Var::Stream { service }
                     }
                     other => other,
                 };
@@ -835,54 +803,29 @@ impl<E: Executor> Runtime<E> {
         self.report(pass);
     }
 
-    /// Ring a producer's door for the frame it holds, through this node's one bell on it.
-    fn ring_held(&mut self, door: &str) {
-        if !self.held_bells.iter().any(|(d, _)| d == door) {
-            match Doorbell::open(&self.node, door) {
-                Ok(bell) => self.held_bells.push((door.to_string(), bell)),
-                Err(e) => return trouble(self.engine, &format!("bell onto `{door}` did not open: {e}")),
-            }
-        }
-        if let Some((_, bell)) = self.held_bells.iter().find(|(d, _)| d == door) {
-            let _ = bell.ring(0);
-        }
-    }
-
-    /// Answers whether every bell opened; one that did not is logged and tried again next tick. A
-    /// bell just opened rings once: a frame published before it hung is on the wire unannounced.
-    fn apply_bells(&mut self, targets: Vec<Vec<(String, EventId)>>) -> bool {
-        let mut opened = true;
+    /// A bell just hung rings once: a frame published before it hung is on the wire unannounced.
+    fn apply_bells(&mut self, targets: Vec<Vec<(String, EventId)>>) {
         for (out, targets) in self.outs.iter_mut().zip(targets) {
             let mut old = std::mem::take(&mut out.bells);
             for (door, id) in targets {
                 match take_where(&mut old, |(d, _, _)| *d == door) {
                     Some((_, bell, _)) => out.bells.push((door, bell, id)),
-                    None => match Doorbell::open(&self.node, &door) {
-                        Ok(bell) => {
-                            let _ = bell.ring(id);
-                            out.bells.push((door, bell, id));
-                        }
-                        Err(e) => {
-                            trouble(self.engine, &format!("bell onto `{door}` did not open: {e}"));
-                            opened = false;
-                        }
-                    },
+                    None => {
+                        let bell = Doorbell::on(self.hub.door(&door));
+                        bell.ring(id);
+                        out.bells.push((door, bell, id));
+                    }
                 }
             }
         }
-        opened
     }
 
-    /// The recorder's second publisher on every armed output: opened by arming, because a segment
-    /// is a whole budget, and released by the recorder's read, so delivered frames stay.
+    /// The recorder's queue on every armed output: opened by the arming, released by the
+    /// recorder's read, so delivered frames stay.
     fn apply_records(&mut self, armed: &[(String, u64)]) {
         let shape = record_shape(self.engine);
-        let mut failed = Vec::new();
         if !armed.is_empty() && self.record_bell.is_none() {
-            match Doorbell::open(&self.node, &self.record_door) {
-                Ok(bell) => self.record_bell = Some(Arc::new(bell)),
-                Err(e) => failed.push(format!("could not reach the recorder's door: {e}")),
-            }
+            self.record_bell = Some(self.hub.door(&self.record_door));
         }
         for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
             let wanted = armed.iter().find(|(slot, _)| slot == decl.name).map(|(_, serial)| *serial);
@@ -910,19 +853,9 @@ impl<E: Executor> Runtime<E> {
             }
             let serial = wanted.expect("armed above");
             let Some(bell) = &self.record_bell else { continue };
-            let opened = goofi_transport::RecordPort::open(
-                &self.node,
-                &record_service(&self.base, decl.name, serial),
-                bell,
-                decl.name,
-                shape,
-            );
-            match opened {
-                Ok(port) => out.record = Some((serial, port)),
-                Err(e) => failed.push(format!("could not arm `{}`: {e}", decl.name)),
-            }
+            let port = self.hub.record_port(&record_service(&self.base, decl.name, serial), shape.buffer, bell.clone());
+            out.record = Some((serial, port));
         }
-        self.trouble = (!failed.is_empty()).then(|| (0, failed.join("; ")));
     }
 
     fn index_of(&self, key: &ParamKey) -> Option<usize> {
@@ -991,36 +924,21 @@ impl<E: Executor> Runtime<E> {
         }
     }
 
-    /// Every frame that arrived, in order into the executor — or the newest alone, where the
-    /// executor says only that one matters — and every binding a frame reached is evaluated once.
+    /// The newest frame on every wire into the executor — a slot holds one, latest wins — and
+    /// every binding a frame reached is evaluated once.
     fn receive(&mut self) {
         let mut moved = false;
-        let latest_only = self.exec.latest_only();
         let (exec, bad) = (&mut self.exec, &mut self.bad_inputs);
-        let mut arrived = |inbox: usize, wire: usize, payload: &[u8]| match goofi_codec::decode(payload) {
-            Ok(frame) => {
-                bad.shift_remove(&inbox);
-                moved |= exec.arrive(inbox, wire, &frame);
-            }
-            Err(why) => {
-                bad.insert(inbox, why);
-            }
-        };
-        for s in &self.slots {
-            // Taking a sample is free where decoding it is not, and only the last one survives:
-            // a producer running flat out otherwise outruns this thread out of its own tick.
-            if latest_only {
-                let mut newest = None;
-                while let Ok(Some(sample)) = s.subscriber.receive() {
-                    newest = Some(sample);
+        for s in &mut self.slots {
+            let Some(payload) = s.subscriber.receive() else { continue };
+            match decode(payload) {
+                Ok(frame) => {
+                    bad.shift_remove(&s.inbox);
+                    moved |= exec.arrive(s.inbox, s.wire, &frame);
                 }
-                if let Some(sample) = newest {
-                    arrived(s.inbox, s.wire, sample.payload());
+                Err(why) => {
+                    bad.insert(s.inbox, why);
                 }
-                continue;
-            }
-            while let Ok(Some(sample)) = s.subscriber.receive() {
-                arrived(s.inbox, s.wire, sample.payload());
             }
         }
         if moved {
@@ -1029,12 +947,8 @@ impl<E: Executor> Runtime<E> {
         let mut touched = Vec::new();
         let mut undecodable = Vec::new();
         for (i, b) in self.binds.iter_mut().enumerate() {
-            for (var, _, subscriber) in &b.streams {
-                let mut newest = None;
-                while let Ok(Some(sample)) = subscriber.receive() {
-                    newest = Some(goofi_codec::decode(sample.payload()));
-                }
-                match newest {
+            for (var, _, subscriber) in &mut b.streams {
+                match subscriber.receive().map(decode) {
                     Some(Ok(frame)) => {
                         b.expr.deliver(var, frame);
                         touched.push(i);
@@ -1062,7 +976,7 @@ impl<E: Executor> Runtime<E> {
     }
 
     /// Report the stage and the fault the node wears, when either moved. The fault is the
-    /// executor's, else the first bad inbox, else what the recording costs.
+    /// executor's, else the first bad inbox.
     fn wear(&mut self) {
         let stage = self.exec.stage();
         if stage != self.stage {
@@ -1076,14 +990,7 @@ impl<E: Executor> Runtime<E> {
             None => self
                 .bad_inputs
                 .first()
-                .map(|(inbox, why)| format!("input {inbox} does not decode: {why}"))
-                .or_else(|| {
-                    self.trouble.as_ref().map(|(dropped, why)| match dropped {
-                        0 => format!("recording: {why}"),
-                        n => format!("recording dropped {n} frames: {why}"),
-                    })
-                })
-                .map(|msg| NodeFault::Process { msg, since }),
+                .map(|(inbox, why)| NodeFault::Process { msg: format!("input {inbox} does not decode: {why}"), since }),
         };
         let same = match (&self.fault, &fault) {
             (Some(a), Some(b)) => std::mem::discriminant(a) == std::mem::discriminant(b) && a.msg() == b.msg(),
@@ -1096,18 +1003,9 @@ impl<E: Executor> Runtime<E> {
         }
     }
 
-    /// Why a recording loan was refused: an outsized frame, or shared memory that ran out.
-    fn loan_refused(engine: &str, len: usize) -> String {
-        let ceiling = record_shape(engine).slice;
-        match len > ceiling {
-            true => format!("a {len} byte frame is over the {ceiling} byte ceiling"),
-            false => "no shared memory left".to_string(),
-        }
-    }
-
     /// The run: the executor says what goes out on each output, onto the wire and its recording.
     fn tick(&mut self) {
-        let readers: Vec<bool> = self.outs.iter().map(|o| goofi_transport::subscribers(&o.service) > 0).collect();
+        let readers: Vec<bool> = self.outs.iter().map(|o| o.publisher.readers() > 0).collect();
         let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|(_, r)| !r.retired())).collect();
         let cx = Cx {
             values: &self.values,
@@ -1119,7 +1017,7 @@ impl<E: Executor> Runtime<E> {
             time: &self.time,
             uid: self.uid,
         };
-        let (outs, engine, trouble_) = (&mut self.outs, self.engine, &mut self.trouble);
+        let outs = &mut self.outs;
         // A retired port is dropped HERE rather than at the disarm, so the release follows the
         // recorder's own reading and never outruns it.
         for out in outs.iter_mut() {
@@ -1129,32 +1027,21 @@ impl<E: Executor> Runtime<E> {
         }
         let ticked = self.exec.run(&cx, &mut |i, out| {
             let Some(port) = outs.get(i) else { return };
-            let encoded;
             let (wire, record) = match out {
-                Out::Bytes(bytes) => (Some(bytes), None),
-                Out::Record(bytes) => (None, Some(bytes)),
-                Out::Frame(frame) => match goofi_codec::encode(frame) {
-                    Ok(bytes) => {
-                        encoded = bytes;
-                        (Some(&encoded[..]), Some(&encoded[..]))
-                    }
-                    Err(e) => {
-                        trouble(engine, &format!("output {i} cannot cross: {e}"));
-                        return;
-                    }
-                },
+                Out::Wire(frame) => (Some(Payload::Data(frame.clone())), None),
+                Out::Bytes(bytes) => (Some(Payload::Wire(bytes)), None),
+                Out::Frame(frame) => (Some(Payload::Data(frame.clone())), Some(frame)),
+                Out::Record(frame) => (None, Some(frame)),
             };
-            if let Some(bytes) = wire {
-                if let Err(e) = goofi_transport::publish(&port.publisher, bytes, port.bells.iter().map(|(_, bell, id)| (bell, *id))) {
-                    trouble(engine, &format!("output {i} was not published: {e}"));
+            // The frame first, then every bell: a consumer woken first finds nothing and parks.
+            if let Some(payload) = wire {
+                port.publisher.publish(payload);
+                for (_, bell, id) in &port.bells {
+                    bell.ring(*id);
                 }
             }
-            if let (Some(bytes), Some((_, rec))) = (record, port.record.as_ref()) {
-                let ok = rec.send(bytes.len(), |loan| goofi_transport::write_parts(loan, [bytes]));
-                if !ok && !rec.retired() {
-                    let (dropped, _) = trouble_.get_or_insert_with(|| (0, Self::loan_refused(engine, bytes.len())));
-                    *dropped += 1;
-                }
+            if let (Some(frame), Some((_, rec))) = (record, port.record.as_ref()) {
+                rec.send(frame.clone());
             }
         });
         self.absorb(ticked);

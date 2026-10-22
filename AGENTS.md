@@ -100,10 +100,15 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   a path or tool from the environment. `goofi-init` provisions a development build and removes
   `target/` artifacts untouched for three days.
 - A session (`goofi_supervisor::session`) owns every ephemeral resource; its lock is the one
-  aliveness answer. Children, long-lived threads, iceoryx2 nodes, scratch paths and devices are
-  minted through `goofi_supervisor::{child, worker, scope}` and `goofi_transport`, and listed by
-  `session status`. Declare an iceoryx2 node after its ports. A child's output goes to the process
-  log unless its owner wires a pipe or a file. `AppState::shutdown` is the one release order.
+  aliveness answer. Children, long-lived threads, scratch paths and devices are minted through
+  `goofi_supervisor::{child, worker, scope}`, and listed by `session status`. A child's output
+  goes to the process log unless its owner wires a pipe or a file. `AppState::shutdown` is the one
+  release order.
+- `goofi_transport` is the data layer: a `Hub` per session hands every end its slot, door or
+  recording queue by a name derived from the graph. A slot is one latest-wins cell of `Arc`
+  payloads; a door is a `goofi_supervisor::timing::Event`. A child (a hosted Rust node, a Python
+  subprocess) is called over an exchange: shared-memory mailboxes and a loopback doorbell.
+  `goofi_supervisor::timing` is the one place anything waits with a deadline or on a grid.
 - `plugins/` ships plugins as source, loaded from `~/.goofi/plugins/<id>`; `sdk/README.md` is the
   plugin interface. `skills/` holds agent guides, embedded at build and seeded into a patch's
   workspace when it has none.

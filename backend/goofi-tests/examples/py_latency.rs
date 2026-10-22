@@ -34,7 +34,7 @@ static PY_MANIFEST: NodeManifest = NodeManifest {
 };
 
 fn build(n: usize, src: &'static str, len: i64) -> (Graph, Vec<OutputProbe>) {
-    let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::iox(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
+    let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::hub(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
     // Every producer's rate cap is `variables.signal.default_ufreq`; the patch default measures 30 Hz.
     g.apply_variable_change("signal.default_ufreq", Some(goofi_core::Data::number(1e6)), None, None).unwrap();
@@ -50,7 +50,7 @@ fn build(n: usize, src: &'static str, len: i64) -> (Graph, Vec<OutputProbe>) {
     for _ in 0..n {
         let py = g.add_node("PyNode", None).unwrap();
         g.settle();
-        probes.push(OutputProbe::open(&goofi_tests::iox(), &g, py, "out"));
+        probes.push(OutputProbe::open(&goofi_tests::hub(), &g, py, "out"));
         g.add_link(osc, "out", py, "data").unwrap();
     }
     (g, probes)

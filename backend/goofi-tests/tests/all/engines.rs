@@ -63,19 +63,17 @@ type Rings = Vec<(goofi_transport::Doorbell, EventId)>;
 struct Feed {
     generation: u64,
     /// One entry per output slot: its publisher, and who to wake.
-    outs: Vec<(&'static str, goofi_transport::BytePublisher, Rings)>,
+    outs: Vec<(&'static str, goofi_transport::Publisher, Rings)>,
     /// The boundary wires feeding `in`, drained latest-wins before each tick.
-    ins: Vec<goofi_transport::ByteSubscriber>,
-    /// The freshest boundary frame, kept ENCODED — the echo republishes it verbatim.
-    latest_in: Option<Vec<u8>>,
+    ins: Vec<goofi_transport::Subscriber>,
+    /// The freshest boundary frame, as it came — the echo republishes it verbatim.
+    latest_in: Option<goofi_transport::Payload>,
 }
 
 struct Shared {
     feeds: HashMap<Uid, Feed>,
-    /// The static payload every non-echo slot publishes, pre-encoded once.
-    block: Vec<u8>,
-    /// Last: every port above is built from it, and fields drop in declaration order.
-    iox: goofi_transport::IoxNode,
+    /// The static payload every non-echo slot publishes.
+    block: goofi_transport::Payload,
 }
 
 /// A scheduled engine: one thread, one fixed tick, static data. No doorbells in — it drains its
@@ -102,8 +100,7 @@ impl Skeleton {
     ) -> Skeleton {
         let shared = Arc::new(Mutex::new(Shared {
             feeds: HashMap::new(),
-            block: goofi_codec::encode(block).expect("a frame that crosses"),
-            iox: goofi_tests::iox().node().expect("an iceoryx2 node for the skeleton"),
+            block: goofi_transport::Payload::Data(block.clone()),
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let tick = {
@@ -131,31 +128,31 @@ impl Skeleton {
 /// One tick: drain every boundary input to its freshest frame, then publish and ring.
 fn tick_once(shared: &Mutex<Shared>) {
     let mut s = shared.lock();
-    let mut fresh: HashMap<Uid, Vec<u8>> = HashMap::new();
-    for (uid, feed) in &s.feeds {
+    for feed in s.feeds.values_mut() {
         let mut newest = None;
-        for sub in &feed.ins {
-            while let Ok(Some(sample)) = sub.receive() {
-                newest = Some(sample.payload().to_vec());
+        for sub in &mut feed.ins {
+            if let Some(payload) = sub.receive() {
+                newest = Some(payload);
             }
         }
-        if let Some(bytes) = newest {
-            fresh.insert(*uid, bytes);
+        if newest.is_some() {
+            feed.latest_in = newest;
         }
     }
-    for (uid, bytes) in fresh {
-        s.feeds.get_mut(&uid).expect("just seen").latest_in = Some(bytes);
-    }
+    let block = s.block.clone();
     for feed in s.feeds.values() {
         for (slot, publisher, rings) in &feed.outs {
             let payload = match *slot {
                 "echo" => match &feed.latest_in {
-                    Some(bytes) => bytes.as_slice(),
+                    Some(payload) => payload.clone(),
                     None => continue,
                 },
-                _ => s.block.as_slice(),
+                _ => block.clone(),
             };
-            goofi_transport::publish(publisher, payload, rings.iter().map(|(b, id)| (b, *id))).expect("published");
+            publisher.publish(payload);
+            for (bell, id) in rings {
+                bell.ring(*id);
+            }
         }
     }
 }
@@ -200,8 +197,9 @@ impl Engine for Skeleton {
 
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
         self.dirty = false;
+        let hub = goofi_tests::hub();
         let mut s = self.shared.lock();
-        let Shared { feeds, block, iox } = &mut *s;
+        let Shared { feeds, block } = &mut *s;
         for (uid, node) in &view.nodes {
             if node.engine != self.id {
                 continue;
@@ -211,7 +209,7 @@ impl Engine for Skeleton {
             // A rebirth renamed every service, so its publishers are rebuilt; a same-generation
             // settle reuses each slot's publisher, taken by NAME before anything is created —
             // two publishers on one one-publisher service, however briefly, is a refusal.
-            let mut held: HashMap<&'static str, goofi_transport::BytePublisher> =
+            let mut held: HashMap<&'static str, goofi_transport::Publisher> =
                 if feed.generation == node.generation {
                     std::mem::take(&mut feed.outs).into_iter().map(|(n, p, _)| (n, p)).collect()
                 } else {
@@ -221,13 +219,9 @@ impl Engine for Skeleton {
             feed.generation = node.generation;
             let mut outs = Vec::new();
             for out in node.manifest.outputs {
-                let publisher = held.remove(out.name).unwrap_or_else(|| {
-                    let service = goofi_transport::output_service(&base, out.name);
-                    let svc = goofi_transport::stream_service(iox, &service, goofi_transport::ServiceKind::Data)
-                        .expect("the skeleton's data service");
-                    goofi_transport::publisher(&svc, out.name, 64 * 1024)
-                        .expect("the skeleton's publisher")
-                });
+                let publisher = held
+                    .remove(out.name)
+                    .unwrap_or_else(|| hub.publisher(&goofi_transport::output_service(&base, out.name), false));
                 let rings = rings_for(view, *uid, out.name);
                 outs.push((out.name, publisher, rings));
             }
@@ -240,14 +234,17 @@ impl Engine for Skeleton {
                         &goofi_transport::service_base(view.instance, producer, p.generation),
                         slot,
                     );
-                    goofi_transport::open_output_subscriber(iox, &service).ok()
+                    Some(hub.subscribe(&service))
                 })
                 .collect();
             // The static block needs no tick to be current: publish on settle, so a consumer
             // wired later still sees data within one of ITS OWN wakes, and the tick re-publishes.
             for (slot, publisher, rings) in &feed.outs {
                 if *slot != "echo" {
-                    goofi_transport::publish(publisher, block, rings.iter().map(|(b, id)| (b, *id))).expect("published");
+                    publisher.publish(block.clone());
+                    for (bell, id) in rings {
+                        bell.ring(*id);
+                    }
                 }
             }
         }
@@ -286,10 +283,10 @@ impl Drop for Skeleton {
 /// Every doorbell one of this engine's output slots must ring, read off the view through the one
 /// derivation every engine uses: its consumers that wake on doorbells, and a reducer watching it.
 fn rings_for(view: &GraphView<'_>, producer: Uid, slot: &'static str) -> Rings {
-    let node_iox = goofi_tests::iox().node().expect("an iceoryx2 node for the rings");
+    let hub = goofi_tests::hub();
     goofi_transport::targets_of(view, producer, slot, view.ringers(producer, slot))
         .into_iter()
-        .filter_map(|(door, id)| Some((goofi_transport::Doorbell::open(&node_iox, &door).ok()?, id)))
+        .map(|(door, id)| (goofi_transport::Doorbell::on(hub.door(&door)), id))
         .collect()
 }
 

@@ -132,18 +132,16 @@ struct Slot {
 
 struct SlotReducer {
     slot: Arc<Slot>,
-    /// The bridge's bell on the slot's view door — the same door the producer rings once a frame
-    /// is out. A joiner, a spec, a tap, an ask, a settle and the stop all ring it; nothing polls.
-    bell: Option<goofi_transport::Doorbell>,
+    /// The slot's view door — the one the producer rings once a frame is out. A joiner, a spec,
+    /// a tap, an ask, a settle and the stop all ring it; nothing polls.
+    door: Arc<goofi_transport::Door>,
     /// The loop's thread, joined at shutdown.
     worker: Option<goofi_supervisor::worker::Worker>,
 }
 
 impl SlotReducer {
     fn poke(&self) {
-        if let Some(bell) = &self.bell {
-            let _ = bell.ring(goofi_transport::VIEW_POKE_ID);
-        }
+        self.door.ring(goofi_transport::VIEW_POKE_ID);
     }
 
     /// Owe the subscribers one more serve of the current frame.
@@ -168,20 +166,17 @@ pub struct SlotReducers {
     inner: Arc<Mutex<HashMap<SlotKey, SlotReducer>>>,
     graph: Arc<Mutex<Graph>>,
     next_conn: Arc<AtomicU64>,
-    /// One iceoryx2 node behind every feed: the reducers are ONE port owner, and a node per feed
-    /// made each viewer's attach mint a node directory — a create that can fail hard on Windows.
-    iox: SharedIox,
+    hub: Arc<goofi_transport::Hub>,
     /// Where every tap's pick goes: the follower, which writes the variable and broadcasts.
     follow: std::sync::mpsc::Sender<Followed>,
     /// The graph's instance, which every view door is named under.
     instance: Arc<str>,
-    /// The store, read for the viewer cap; and the producer, rung for the frame a fresh feed is owed.
+    /// The store, read for the viewer cap.
     store: Arc<Mutex<goofi_core::variables::VariableStore>>,
-    variables: Arc<crate::variables::Variables>,
 }
 
 impl SlotReducers {
-    pub fn new(iox: Arc<goofi_transport::Iox>, graph: Arc<Mutex<Graph>>, variables: Arc<crate::variables::Variables>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
+    pub fn new(hub: Arc<goofi_transport::Hub>, graph: Arc<Mutex<Graph>>, follow: std::sync::mpsc::Sender<Followed>) -> SlotReducers {
         let (instance, store) = {
             let g = graph.lock();
             (Arc::from(g.instance()), g.variable_store())
@@ -190,11 +185,10 @@ impl SlotReducers {
             inner: Arc::new(Mutex::new(HashMap::new())),
             graph,
             next_conn: Arc::new(AtomicU64::new(1)),
-            iox: Arc::new((iox, Mutex::new(None))),
+            hub,
             follow,
             instance,
             store,
-            variables,
         }
     }
 
@@ -264,24 +258,21 @@ impl SlotReducers {
             map.remove(key);
         }
         map.entry(key.clone()).or_insert_with(|| {
-            let door = goofi_transport::view_door_service(&self.instance, key.0, &key.1);
-            let bell = shared_iox(&self.iox).and_then(|n| goofi_transport::Doorbell::open(&n, &door).ok());
+            let name = goofi_transport::view_door_service(&self.instance, key.0, &key.1);
+            let door = self.hub.door(&name);
             let slot = Slot {
                 specs: Mutex::new(HashMap::new()),
                 taps: Mutex::new(Vec::new()),
                 retap: AtomicBool::new(false),
                 tx: broadcast::channel(16).0,
-                // No door is no wake: the stream is closed, and the next request tries again.
-                stop: AtomicBool::new(bell.is_none()),
+                stop: AtomicBool::new(false),
                 reductions: AtomicU64::new(0),
                 gen: AtomicU64::new(0),
                 latest: Mutex::new(None),
                 asked: AtomicBool::new(false),
             };
-            let mut reducer = SlotReducer { slot: Arc::new(slot), bell, worker: None };
-            if reducer.bell.is_some() {
-                reducer.worker = spawn_reducer(self, key.clone(), &reducer, door);
-            }
+            let mut reducer = SlotReducer { slot: Arc::new(slot), door, worker: None };
+            reducer.worker = spawn_reducer(self, key.clone(), &reducer, name);
             reducer
         })
     }
@@ -356,12 +347,6 @@ impl SlotReducers {
     pub fn reductions(&self, key: &SlotKey) -> u64 {
         self.inner.lock().get(key).map(|r| r.slot.reductions.load(Ordering::Relaxed)).unwrap_or(0)
     }
-
-    /// The iceoryx2 node every feed is built from, by id — `None` until the first feed mints it.
-    /// One port owner is one node, so this never changes again (test/diagnostic).
-    pub fn iox_node_id(&self) -> Option<u128> {
-        self.iox.1.lock().as_ref().map(|n| n.id().value())
-    }
 }
 
 /// How long a reducer nobody asks of keeps its subscription, and with it the producer's ring.
@@ -370,47 +355,28 @@ pub const IDLE: Duration = Duration::from_secs(1);
 /// published between the feed opening and that landing rang nobody, and is collected here.
 const WATCH_GRACE: Duration = Duration::from_millis(250);
 
-/// The reducers' ONE iceoryx2 node, minted on first feed and shared by every later one.
-type SharedIox = Arc<(Arc<goofi_transport::Iox>, Mutex<Option<Arc<goofi_transport::IoxNode>>>)>;
-
-/// The shared node, minting it if this is the first feed to ask; `None` is retried by the next.
-fn shared_iox(iox: &SharedIox) -> Option<Arc<goofi_transport::IoxNode>> {
-    let mut held = iox.1.lock();
-    if held.is_none() {
-        *held = iox.0.node().ok().map(Arc::new);
-    }
-    held.clone()
-}
-
-/// One end of a slot's data service: the subscriber and its iceoryx2 node.
+/// One end of a slot's wire: the subscriber on it.
 struct SlotFeed {
-    subscriber: goofi_transport::ByteSubscriber,
-    /// Declared LAST: fields drop in order, and a node dropped before its subscriber cannot remove
-    /// its own directory.
-    _node: Arc<goofi_transport::IoxNode>,
+    subscriber: goofi_transport::Subscriber,
 }
 
-/// Open a subscriber on `(uid, slot)`'s current output service, or `None` while the producer is
-/// not addressable; a miss is retried on the next re-home rather than being fatal. A variable's
-/// producer holds its last frame, and is poked for it once the feed is open.
-fn open_feed(graph: &Mutex<Graph>, iox: &SharedIox, variables: &crate::variables::Variables, uid: Uid, slot: &str) -> Option<SlotFeed> {
+/// Open a subscriber on `(uid, slot)`'s current output, or `None` while the producer is not
+/// addressable; a miss is retried on the next re-home rather than being fatal. A variable's slot
+/// holds its last frame, which the subscription is handed at its first receive.
+fn open_feed(graph: &Mutex<Graph>, hub: &goofi_transport::Hub, uid: Uid, slot: &str) -> Option<SlotFeed> {
     let service = {
         let g = graph.lock();
         crate::producer_alive(&g, uid, slot).then(|| crate::output_service_of(&g, uid, slot))?
     };
-    let node = shared_iox(iox)?;
-    let subscriber = goofi_transport::open_output_subscriber(&node, &service).ok()?;
-    if uid == Uid::VARIABLES {
-        variables.poke();
-    }
-    Some(SlotFeed { _node: node, subscriber })
+    Some(SlotFeed { subscriber: hub.subscribe(&service) })
 }
 
 /// Spawn the slot's loop on a plain thread, parked on the view door the producer and the bridge
 /// ring; a held serve, an idle expiry, a watch's grace and a snapshot's window are its deadlines.
 fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, door: String) -> Option<goofi_supervisor::worker::Worker> {
-    let (graph, iox, follow) = (reducers.graph.clone(), reducers.iox.clone(), reducers.follow.clone());
-    let (store, variables) = (reducers.store.clone(), reducers.variables.clone());
+    let (graph, hub, follow) = (reducers.graph.clone(), reducers.hub.clone(), reducers.follow.clone());
+    let store = reducers.store.clone();
+    let listener = reducer.door.clone();
     // Weak: the map owns this loop's entry, and the loop removes it; a strong one would be a cycle.
     let slots: Weak<Mutex<HashMap<SlotKey, SlotReducer>>> = Arc::downgrade(&reducers.inner);
     let (shared, failed) = (reducer.slot.clone(), reducer.slot.clone());
@@ -420,13 +386,6 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
         // Owed a serve: watched, holding a frame, and with a new frame or a bump not yet served.
         let owed = |made: &Option<Bytes>, served: Option<u64>, pending: bool| {
             !specs.lock().is_empty() && (made.is_some() || latest.lock().is_some()) && (pending || served != Some(gen.load(Ordering::Acquire)))
-        };
-        let listener = shared_iox(&iox)
-            .and_then(|n| goofi_transport::event_service(&n, &door).ok())
-            .and_then(|d| d.listener_builder().create().ok());
-        let Some(listener) = listener else {
-            stop.store(true, Ordering::Relaxed);
-            return;
         };
         let mut feed: Option<SlotFeed> = None;
         let time = graph.lock().time();
@@ -472,17 +431,13 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 grace.filter(|at| *at > now),
                 snapped.map(|at| at + IDLE).filter(|at| *at > now),
             ];
-            let mut poked = false;
-            let mut note = |id: goofi_transport::WakeId| poked |= id.as_value() == goofi_transport::VIEW_POKE_ID as usize;
             // A fresh loop reads its address before it parks: the poke its first subscriber sent
-            // may have rung before this listener existed.
-            match (homed.is_some(), duties.into_iter().flatten().min()) {
-                (false, _) => poked = true,
-                (true, Some(at)) => goofi_transport::wait_within(&listener, at.saturating_duration_since(now), &mut note),
-                (true, None) => {
-                    let _ = listener.blocking_wait_all(&mut note);
-                }
-            }
+            // may have rung before this loop existed.
+            let poked = match (homed.is_some(), duties.into_iter().flatten().min()) {
+                (false, _) => true,
+                (true, Some(at)) => listener.wait_until(at).has(goofi_transport::VIEW_POKE_ID),
+                (true, None) => listener.wait().has(goofi_transport::VIEW_POKE_ID),
+            };
             if stop.load(Ordering::Relaxed) {
                 return;
             }
@@ -537,7 +492,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             if asked_at.elapsed() > IDLE {
                 feed = None;
             } else if feed.is_none() {
-                feed = open_feed(&graph, &iox, &variables, uid, &slot);
+                feed = open_feed(&graph, &hub, uid, &slot);
             }
             // Watched exactly while the feed is open: the producer rings this door once each
             // frame is out, and stops when nobody reads them.
@@ -550,24 +505,33 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                 }
             }
             let mut fresh = false;
-            if let Some(f) = &feed {
-                while let Ok(Some(sample)) = f.subscriber.receive() {
-                    let Some(header) = Peek::of(sample.payload()) else { continue };
-                    // A frame already in the viewers' own width is FORWARDED: decoding it to f32 only
-                    // to quantize it back is the cost the demand exists to remove.
-                    if header.ready {
-                        peeked = Some(header);
-                        *latest.lock() = None;
-                        made = Some(Bytes::copy_from_slice(sample.payload()));
-                        fresh = true;
-                        continue;
+            if let Some(f) = &mut feed {
+                match f.subscriber.receive() {
+                    // A frame already in the viewers' own width is FORWARDED, the one buffer the
+                    // producer made: decoding it to f32 only to quantize it back is the cost the
+                    // demand exists to remove.
+                    Some(goofi_transport::Payload::Wire(bytes)) => {
+                        if let Some(header) = Peek::of(&bytes) {
+                            if header.ready {
+                                peeked = Some(header);
+                                *latest.lock() = None;
+                                made = Some(bytes);
+                                fresh = true;
+                            } else if let Ok(frame) = goofi_codec::decode(&bytes) {
+                                peeked = Some(header);
+                                made = None;
+                                *latest.lock() = Some(frame);
+                                fresh = true;
+                            }
+                        }
                     }
-                    if let Ok(frame) = goofi_codec::decode(sample.payload()) {
-                        peeked = Some(header);
+                    Some(goofi_transport::Payload::Data(frame)) => {
+                        peeked = Some(Peek::of_data(&frame));
                         made = None;
                         *latest.lock() = Some(frame);
                         fresh = true;
                     }
+                    None => {}
                 }
             }
             pending |= fresh;
@@ -718,6 +682,15 @@ impl goofi_view::Reducible for Peek {
 }
 
 impl Peek {
+    /// A frame the loop holds whole: its kind and shape, never already texels.
+    fn of_data(frame: &goofi_core::Data) -> Peek {
+        let shape = match frame.value() {
+            goofi_core::Value::Array(a) => a.shape().to_vec(),
+            _ => Vec::new(),
+        };
+        Peek { tag: frame.dtype_tag(), shape, ready: false }
+    }
+
     fn of(payload: &[u8]) -> Option<Peek> {
         let (tag, _, body) = goofi_codec::split_frame(payload).ok()?;
         let (dtype, shape) = match tag {

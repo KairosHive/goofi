@@ -10,10 +10,9 @@ differs; the mechanisms do not. What was not verified is listed at the end.
 
 This is the limiter on the signal plane, and it reaches audio, graphics and the viewers too.
 
-`goofi_transport::wait_within` is `Listener::timed_wait_all`, and iceoryx2's unix-datagram listener
-implements that with `SO_RCVTIMEO` on the socket (`iceoryx2-bb-posix/src/unix_datagram_socket.rs`,
-`set_timeout`). The kernel converts a receive timeout to jiffies, rounds up, and wakes at the next
-tick. `poll`, `ppoll` and `nanosleep` use high-resolution timers and do not. Measured on this kernel:
+Every timed wait went through iceoryx2's unix-datagram listener, which implemented it with
+`SO_RCVTIMEO` on the socket (`iceoryx2-bb-posix/src/unix_datagram_socket.rs`, `set_timeout`). The
+kernel converts a receive timeout to jiffies, rounds up, and wakes at the next tick. `poll`, `ppoll` and `nanosleep` use high-resolution timers and do not. Measured on this kernel:
 
 | asked | `SO_RCVTIMEO` recv | `poll` | `nanosleep` |
 | --- | --- | --- | --- |
@@ -40,13 +39,14 @@ shows. The same wait paces:
 - the audio control half's 10 ms tick (`Executor::next_wake` default `TICK`): 16 ms here, so taps,
   recording drains and breakpoints land every 16 ms;
 - the graphics half's 10 ms tap tick (`half.rs`): the readback a 60 Hz render made waits up to 16 ms;
-- the reducer's serve grid at the viewer cap (`reducer.rs`, `Pace` through `wait_within`): a 60 fps
+- the reducer's serve grid at the viewer cap (`reducer.rs`, its `Pace` paid through the same wait): a 60 fps
   cap delivered 42 to 46 frames/s, measured below;
 - the recording drain's 20 ms ceiling and a pulse's one-tick lowering.
 
-Fix: wait on the listener's file descriptor with `ppoll` (the listener is `FileDescriptorBased`)
-or iceoryx2's `WaitSet`, then `try_wait_all`. One change in `wait_within` corrects every path.
-Keep `blocking_wait_all` where no deadline exists; it is event-driven and costs nothing.
+Shipped (`data-layer.md`): iceoryx2 and its socket wait are gone. Every door is a
+`goofi_supervisor::timing::Event`, whose deadline is a condvar's high-resolution one, and the
+exchange parks on `poll`. The table above is the record of what was replaced; the cap, tick and
+viewer numbers are to be measured again on the new plane.
 
 ## 2. The producer cap itself
 
@@ -250,20 +250,21 @@ finding 1 but only bounds a park.
 
 ## 9. Stale measurement tooling
 
-`backend/goofi-tests/examples/latency.rs` adds a `Buffer` node on a bare graph, where no bundle is
-registered, and panics. `py_latency` and `backend_parity` set `signal.default_ufreq` to 1e6 on a
-bare graph, where the binding never acts, so their "uncapped" is accidental. The new probes boot
-the harness and set the variable through the op.
+`backend/goofi-tests/examples/latency.rs` added a `Buffer` node on a bare graph, where no bundle
+is registered, and panicked; it is removed. `py_latency` and `backend_parity` set
+`signal.default_ufreq` to 1e6 on a bare graph, where the binding never acts, so their "uncapped"
+is accidental. The new probes boot the harness and set the variable through the op.
 
 ## Remaining
 
-- Replace the `SO_RCVTIMEO` wait in `wait_within` with a high-resolution one, then measure the
-  cap table again; every pace in finding 1 follows.
+- Finding 1 is answered by `data-layer.md`: iceoryx2 and its wait are gone, every door parks on
+  `goofi_supervisor::timing::Event`. Measure the cap table, the audio tick and the viewer pace
+  again on the new plane.
 - `settle`: early return before `derive_bindings`; engines visit touched nodes only.
 - Audio: `remove` and `persist` off the runtime lock; measure `contended` on a device.
 - Graphics: event-driven tap, two `Tap` slots, serve on arrival under the cap.
 - Signal: encode into the loan; `Buffer` ring; Python params cache and one GIL check per tick.
-- Examples: `variables.system.default_ufreq` to `signal.default_ufreq`; delete or fix `latency.rs`.
+- Examples: `variables.system.default_ufreq` to `signal.default_ufreq`.
 
 ## Not verified here
 

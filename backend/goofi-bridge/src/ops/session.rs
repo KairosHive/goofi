@@ -156,7 +156,7 @@ fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
     let agents = goofi_supervisor::layout::agents();
     // Every source mounts FRESH and swaps in only once the manifest parsed, so a refused load
     // leaves the open patch untouched. Staged off the lock: its Rust nodes may take seconds.
-    let fresh = crate::Mount::new(state.iox.id())?;
+    let fresh = crate::Mount::new(state.hub.id())?;
     let staged = fresh.path();
     if let Source::File { path, .. } = source {
         goofi_supervisor::progress::report(format!("Opening {}", path.rsplit('/').next().unwrap_or(path)));

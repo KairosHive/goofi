@@ -522,15 +522,14 @@ impl Recorder {
     pub fn take_frame(
         &self,
         id: &StreamId,
-        bytes: &[u8],
+        frame: &goofi_core::Data,
         rate: Option<f64>,
         timeline: Timeline,
         at: f64,
         wait: bool,
     ) -> bool {
         if id.engine == "audio" {
-            let index = goofi_codec::frame_meta(bytes).ok().and_then(|m| m.index());
-            if let Some(index) = index {
+            if let Some(index) = frame.meta().index() {
                 let window = self.take.lock().as_ref().map(|s| s.lock().audio_window.clone());
                 if window.is_none_or(|window| !window.contains(index)) {
                     return true;
@@ -541,15 +540,15 @@ impl Recorder {
         // Idle armed feeds are still drained. They must not retain a frame from
         // the previous recording or discard a new one after a start boundary.
         let Some(writer) = guard.as_ref() else { return true };
-        writer.take(id, bytes, rate, timeline, at, wait)
+        writer.take(id, frame, rate, timeline, at, wait)
     }
 
     /// One queued frame, on the writer's thread: the file it belongs in, opened if the frame no
     /// longer fits the one that is open, and then the frame itself. An `Err` is the STREAM's
     /// death — a full disk, a frame the codec cannot read — and the lane is what says so.
     pub(crate) fn write_queued(&self, q: &writer::Queued) -> Result<(), String> {
-        let read = frame::read(&q.bytes, q.rate)?;
-        if !self.takes(&q.id, &read.kind, q.bytes.len()) {
+        let read = frame::read(&q.frame, q.rate)?;
+        if !self.takes(&q.id, &read.kind, frame::size(&q.frame)) {
             let meta = writer::meta_of(read.meta.as_ref(), q.timeline);
             self.open_now(&q.id, read.kind.clone(), q.at, meta)?;
         }

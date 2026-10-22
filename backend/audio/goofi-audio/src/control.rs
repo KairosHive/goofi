@@ -482,9 +482,8 @@ impl Executor for AudioHalf {
             }
             let t = planar.len() / c;
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let frame = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate)));
-            if let Some(bytes) = frame.ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-                publish(i, Out::Bytes(&bytes));
+            if let Ok(frame) = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate))) {
+                publish(i, Out::Wire(&frame));
             }
         }
         // After the drains, so what the old rings still held went out before they go.
@@ -714,8 +713,8 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
         meta.set_time(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
-        if let Some(bytes) = Data::array_f32(vec![c, BLOCK], bytes, meta).ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-            publish(out, Out::Record(&bytes));
+        if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
+            publish(out, Out::Record(&frame));
         }
     }
 }

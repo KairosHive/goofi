@@ -211,6 +211,9 @@ fn a_patch_sounds_under_the_external_clock() {
     let slew = g.add("Slew");
     g.set_param(slew, "slew", "rise", 1.0);
     g.set_param(slew, "slew", "fall", 1.0);
+    // The slopes land BEFORE the square reaches the node: at a second each way, a symmetric
+    // square cannot move the held value, so wherever the fast defaults left it, it would stay.
+    goofi_tests::applied(&g);
     g.link(square, "out", slew, "input");
     heard(&g, slew, "a full-scale square rate-limited to a hundredth", |x| peak(x) > 0.0 && peak(x) < 0.01);
     for uid in [square, filter, slew] {

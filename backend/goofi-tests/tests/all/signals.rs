@@ -682,10 +682,7 @@ fn a_stitching_node_answers_from_the_past_and_a_transform_round_trips() {
     g.link(repeated, "out", unchanged, "input");
     g.until("zero frequency shift preserves odd windows after history fills", |_| {
         pu.latest().filter(|d| {
-            let index = d.meta().get("index").and_then(|v| match v {
-                goofi_core::MetaValue::Int(i) => Some(*i),
-                _ => None,
-            }).unwrap_or(0);
+            let index = d.meta().index().unwrap_or(0);
             let v = f32s(d);
             index > 5 && v.len() == 3 && v.iter().enumerate()
                 .all(|(i, value)| (*value - i as f32 / 3.0).abs() < 1e-5)

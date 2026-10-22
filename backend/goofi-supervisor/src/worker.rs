@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use crate::scope::{self, Kind};
 
-/// The stack every goofi thread gets unless its builder says otherwise. Opening an iceoryx2
-/// service parses its config through serde and toml, whose debug-build frames overflow a platform
-/// default: 2 MiB for a spawned thread, and 1 MiB for the Windows main thread. Every goofi thread
-/// — a worker here, a tokio runtime's — is built with this, so the platform default never decides.
+/// The stack every goofi thread gets unless its builder says otherwise: a debug build's deep
+/// frames — serde through toml, a node's own recursion — overflow a platform default of 2 MiB
+/// for a spawned thread and 1 MiB for the Windows main thread. Every goofi thread — a worker
+/// here, a tokio runtime's — is built with this, so the platform default never decides.
 pub const STACK: usize = 8 * 1024 * 1024;
 
 /// A thread being described: its name, and the stack it gets.

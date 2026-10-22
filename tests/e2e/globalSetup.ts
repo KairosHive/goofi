@@ -16,10 +16,10 @@ type Backend = { child: ChildProcess; port: number; log: string };
  * contract intact rather than weakening it — a worker still owns its backend alone, so every
  * intra-worker ordering assumption survives; only a cross-worker one would not, and the suite has none.
  *
- * There is deliberately NO `/dev/shm/iox2*` sweep here. Unlinking a same-user tmpfs file never
- * fails, so a JS sweep cannot tell a corpse from a LIVE sibling's segment — it once severed a
- * running dev server's wires, silently, killing every wire made after it. The fleet's own boots
- * reclaim what the last run's SIGKILL left, through iceoryx2, which knows dead from alive.
+ * There is deliberately NO `/dev/shm` sweep here. Unlinking a same-user tmpfs file never fails,
+ * so a JS sweep cannot tell a corpse from a LIVE sibling's segment — it once severed a running
+ * dev server's wires, silently. The fleet's own boots reclaim what the last run's SIGKILL left,
+ * through the session sweep, which reads the lock that says a session is dead.
  *
  * Backend stdout also moves here: `webServer: { stdout: 'pipe' }` interleaved it into the report;
  * N of those would be unreadable even if Playwright offered it. Each backend gets its own log file

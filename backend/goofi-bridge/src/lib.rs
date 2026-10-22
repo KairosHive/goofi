@@ -101,8 +101,8 @@ pub struct Mode {
 
 #[derive(Clone)]
 pub struct AppState {
-    /// What every port of this manager and its engines is built against: the session's iceoryx2.
-    pub iox: Arc<goofi_transport::Iox>,
+    /// Where every slot, door and queue of this manager and its engines is found by name.
+    pub hub: Arc<goofi_transport::Hub>,
     pub plugins: Arc<plugins::Plugins>,
     pub(crate) graph: Arc<Mutex<Graph>>,
     /// What this instance serves, one owner: the op table, the routes and the engines read it.
@@ -210,7 +210,7 @@ impl DataLiveness {
 impl AppState {
     /// An instance named by `instance` — the binary's, which names it after the session it holds,
     /// so the id a shell sets `GOOFI_SESSION` to is the one `session status` answers.
-    pub fn with_instance(iox: Arc<goofi_transport::Iox>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
+    pub fn with_instance(hub: Arc<goofi_transport::Hub>, instance: String, mode: Mode, clock: Clock, render: Clock) -> Result<AppState, String> {
         // The runtime's caches are swept HERE, by the manager, before any engine
         // exists: a crash's part files, old versions.
         goofi_supervisor::session::sweep_runtime();
@@ -218,29 +218,29 @@ impl AppState {
         let events = Broadcaster::new(256);
         // Seeded BEFORE the baseline is taken, or the patch is dirty from boot, having written
         // the seed itself.
-        let mount = Mount::new(iox.id())?;
+        let mount = Mount::new(hub.id())?;
         let dir = mount.path();
         term::seed_orientation(&dir);
         seed_skills(&dir);
         let workspace_baseline = goofi_graph::archive::fingerprint(&dir);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
-        let (mut graph_val, recorder) = fresh_graph(iox.clone(), (!mode.demo).then_some(clock), render)?;
+        let (mut graph_val, recorder) = fresh_graph(hub.clone(), (!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
         doc.reconcile_root(graph_val.replica());
         // On the plane before anything reads: the seeded system values are its first frames. Every
         // wire is named under the GRAPH's instance, the one its nodes' services carry.
-        let variables = Arc::new(variables::Variables::new(&iox, graph_val.instance())?);
+        let variables = Arc::new(variables::Variables::new(hub.clone(), graph_val.instance()));
         graph_val.variables().set_plane(variables.clone());
         let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
         let graph = Arc::new(Mutex::new(graph_val));
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let (machines, machines_rx) = machines::Driver::new();
         graph.lock().variable_store().lock().set_watch(machines.watch());
-        let reducers = reducer::SlotReducers::new(iox.clone(), graph.clone(), variables.clone(), follow_tx);
+        let reducers = reducer::SlotReducers::new(hub.clone(), graph.clone(), follow_tx);
         let state = AppState {
-            iox: iox.clone(),
+            hub: hub.clone(),
             plugins: Arc::new(plugins::Plugins::default()),
             graph,
             events,
@@ -282,7 +282,7 @@ impl AppState {
         state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
         spawn_midi(state.clone());
-        *state.record_worker.lock() = record::spawn(iox, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
+        *state.record_worker.lock() = record::spawn(hub, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
     }
 
@@ -1012,15 +1012,15 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 
 /// A graph with every engine this machine has, and the one recorder its graphics engine encodes
 /// into. A `None` audio clock asks for no audio engine at all.
-pub fn fresh_graph(iox: Arc<goofi_transport::Iox>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
+pub fn fresh_graph(hub: Arc<goofi_transport::Hub>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
     let recorder = Arc::new(goofi_record::Recorder::new(g.time()));
-    let signal = goofi_signal::SignalEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker())?;
+    let signal = goofi_signal::SignalEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker())?;
     g.register_engine(Box::new(signal));
     if let Some(clock) = clock {
-        g.register_engine(Box::new(goofi_audio::AudioEngine::new(iox.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
+        g.register_engine(Box::new(goofi_audio::AudioEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
     }
-    match goofi_graphics::GraphicsEngine::open(iox, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.clone()) {
+    match goofi_graphics::GraphicsEngine::open(hub, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.clone()) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
@@ -1616,7 +1616,7 @@ fn sync_followers(state: &AppState, g: &Graph) {
                 // The reducer brings the frame; the follower subscribes to nothing itself.
                 goofi_node::BoundVar::Stream { var, producer, slot, .. } => {
                     taps.entry((*producer, slot.to_string())).or_default().push(reducer::Tap { variable: b.name.to_string(), var: var.clone() });
-                    (var, goofi_node::Var::Stream { service: String::new(), held: None })
+                    (var, goofi_node::Var::Stream { service: String::new() })
                 }
                 goofi_node::BoundVar::Value { var, value } => (var, goofi_node::Var::Value(value.clone())),
                 goofi_node::BoundVar::Missing { var, reason } => (var, goofi_node::Var::Missing(reason.clone())),

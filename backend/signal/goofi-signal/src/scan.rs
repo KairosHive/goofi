@@ -68,7 +68,7 @@ impl SignalEngine {
     /// and a re-authored node's newest build is what runs.
     fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<bool, String> {
         let (manifest, factory, tier) = goofi_runtime::hosted::load(
-            self.iox.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
+            self.hub.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
         )?;
         Ok(self.register_dyn_type(manifest, factory, tier))
     }
@@ -79,7 +79,7 @@ impl SignalEngine {
         let subproc = self.python.as_ref().map(|p| p.subproc.clone()).unwrap_or_default();
         match probed {
             Probed::InProcess(d) | Probed::Subprocess(d) => {
-                let (manifest, factory, tier) = routed(self.iox.clone(), d, &subproc);
+                let (manifest, factory, tier) = routed(self.hub.clone(), d, &subproc);
                 Scanned::Registered { isolation: tier.get(), replaced: self.register_dyn_type(manifest, factory, tier) }
             }
             // The latest scan is the answer: a stale runtime type is displaced first.
