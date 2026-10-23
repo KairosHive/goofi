@@ -5,8 +5,11 @@ inputs:
     description: >
       The one target selection every cargo command of the job uses. A second selection resolves
       features anew and rebuilds the crates whose features moved, so a job that builds `--bins`
-      must not run `cargo test` after.
-    default: --lib --bins --tests --example plugin_host
+      must not run `cargo test` after. The situations are named one by one: `--tests` would also
+      link a test harness per workspace crate, twenty-odd binaries nothing runs.
+    default: >-
+      --lib --bins --example plugin_host
+      --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire
 runs:
   using: composite
   steps:

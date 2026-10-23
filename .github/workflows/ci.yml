@@ -117,7 +117,7 @@ jobs:
       # so it builds the binaries alone. Drop both once a watched run passes.
       - uses: ./.github/actions/setup
         with:
-          targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --tests --example plugin_host' }}
+          targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --example plugin_host --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire' }}
       # The situations a platform can answer differently: processes and PTYs (children, agent),
       # paths (io, session), dynamic libraries (nodes, plugins, shipped), the Python child
       # (python), the exchange (transport) and the audio host (audio). A filter after `--`
