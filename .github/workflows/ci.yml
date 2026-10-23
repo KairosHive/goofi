@@ -108,14 +108,14 @@ jobs:
     timeout-minutes: 20
     env:
       # Windows only boots, so its build carries no debug info: the PDB is most of an MSVC link.
-      CARGO_PROFILE_DEV_DEBUG: ${{ runner.os == 'Windows' && '0' || 'line-tables-only' }}
+      CARGO_PROFILE_DEV_DEBUG: ${{ matrix.os == 'windows-latest' && '0' || 'line-tables-only' }}
     steps:
       - uses: actions/checkout@v7
       # Windows only boots: the situations are not yet proven there (roadmap/windows-cleanup.md),
       # so it builds the binaries alone. Drop both once a watched run passes.
       - uses: ./.github/actions/setup
         with:
-          targets: ${{ runner.os == 'Windows' && '--bins' || '--lib --bins --tests --example plugin_host' }}
+          targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --tests --example plugin_host' }}
       # The situations a platform can answer differently: processes and PTYs (children, agent),
       # paths (io, session), dynamic libraries (nodes, plugins, shipped), the Python child
       # (python), the exchange (transport) and the audio host (audio). A filter after `--`
