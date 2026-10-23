@@ -26,23 +26,17 @@ pub enum Target {
     /// `me.params.group.param` — this node's own param.
     MeParam { group: String, param: String },
     Variable { key: String },
-}
-
-/// What a machine's expression refers to: a variable, the playhead evaluating it, or a state.
-#[derive(Clone, Debug, PartialEq)]
-pub enum MachineRef {
-    Variable { key: String },
-    /// Bare `me`: the playhead, as a record of its name, state, arrival and attributes.
+    /// A machine's bare `me`: the playhead, a record of its name, state, arrival and attributes.
     Playhead,
-    /// `st('name')`: the state, as a record of who rests in it and who moved this instant.
+    /// A machine's `st('name')`: the state, a record of who rests in it and who moved this instant.
     State { name: String },
 }
 
 /// One span of the source to replace, and what it refers to.
-struct Term<T> {
+struct Term {
     start: usize,
     end: usize,
-    target: T,
+    target: Target,
 }
 
 /// The path a reference names: nothing (the single output), a slot, or a param.
@@ -81,7 +75,7 @@ fn path_after(source: &str, end: usize, head: &str) -> Result<Path, ExprError> {
 /// Rewrite every `nd(..)`, `me` and `variables.*` term into a generated variable, answering the
 /// rewritten source and the variables it names, in first-seen order.
 pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
-    let mut terms: Vec<Term<Target>> = Vec::new();
+    let mut terms: Vec<Term> = Vec::new();
     for call in goofi_node::expr::scan_calls(source, "nd") {
         // `nd('')` names nothing however it is spelled, so this precedes the unclosed-call check.
         if call.name.is_empty() {
@@ -117,47 +111,46 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
             target: Target::Variable { key: read.name.to_string() },
         });
     }
-    let (out, vars) = generate(source, terms);
-    Ok((out, vars.into_iter().map(|(var, target)| VarRef { var, target }).collect()))
+    Ok(generate(source, terms))
 }
 
 /// Rewrite a machine's expression: every `variables.*`, bare `me` and `st('name')` term into a
 /// generated variable, answering the rewritten source and what each names, in first-seen order.
 /// `nd()` is refused: a machine reads variables, its playheads and its states alone.
-pub fn rewrite_machine(source: &str) -> Result<(String, Vec<(String, MachineRef)>), ExprError> {
+pub fn rewrite_machine(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
     if !goofi_node::expr::scan_calls(source, "nd").is_empty() {
         return Err(ExprError(format!("`{source}` reads a node; a machine reads variables alone — follow the output in a variable")));
     }
-    let mut terms: Vec<Term<MachineRef>> = Vec::new();
+    let mut terms: Vec<Term> = Vec::new();
     for call in goofi_node::expr::scan_calls(source, "st") {
         if call.name.is_empty() {
             return Err(ExprError("st() needs a state name".to_string()));
         }
         let Some(end) = call.end else { continue };
-        terms.push(Term { start: call.start, end, target: MachineRef::State { name: call.name.to_string() } });
+        terms.push(Term { start: call.start, end, target: Target::State { name: call.name.to_string() } });
     }
     for (start, end) in goofi_node::expr::scan_me(source) {
-        terms.push(Term { start, end, target: MachineRef::Playhead });
+        terms.push(Term { start, end, target: Target::Playhead });
     }
     for read in goofi_node::expr::scan_variables(source) {
-        terms.push(Term { start: read.start, end: read.end, target: MachineRef::Variable { key: read.name.to_string() } });
+        terms.push(Term { start: read.start, end: read.end, target: Target::Variable { key: read.name.to_string() } });
     }
     Ok(generate(source, terms))
 }
 
 /// Splice `terms` out of `source`, each for a generated variable, in first-seen order.
-fn generate<T: PartialEq>(source: &str, terms: Vec<Term<T>>) -> (String, Vec<(String, T)>) {
-    let mut vars: Vec<(String, T)> = Vec::new();
+fn generate(source: &str, terms: Vec<Term>) -> (String, Vec<VarRef>) {
+    let mut vars: Vec<VarRef> = Vec::new();
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0;
     for term in merge(terms) {
         // Two spellings of one reference share ONE variable: `nd('a').out.x + nd('a').out.x`
         // subscribes once.
-        let var = match vars.iter().find(|(_, t)| *t == term.target) {
-            Some((var, _)) => var.clone(),
+        let var = match vars.iter().find(|v| v.target == term.target) {
+            Some(v) => v.var.clone(),
             None => {
                 let var = format!("__v{}", vars.len());
-                vars.push((var.clone(), term.target));
+                vars.push(VarRef { var: var.clone(), target: term.target });
                 var
             }
         };
@@ -171,9 +164,9 @@ fn generate<T: PartialEq>(source: &str, terms: Vec<Term<T>>) -> (String, Vec<(St
 
 /// The scans' terms as ONE ascending, non-overlapping list — the only shape the splice can
 /// consume. An unsorted or nested term slices backwards, which panics under the graph mutex.
-fn merge<T>(mut terms: Vec<Term<T>>) -> Vec<Term<T>> {
+fn merge(mut terms: Vec<Term>) -> Vec<Term> {
     terms.sort_by_key(|t| t.start);
-    let mut merged: Vec<Term<T>> = Vec::with_capacity(terms.len());
+    let mut merged: Vec<Term> = Vec::with_capacity(terms.len());
     for term in terms {
         if merged.last().is_none_or(|prev| prev.end <= term.start) {
             merged.push(term);

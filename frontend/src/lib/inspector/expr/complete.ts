@@ -227,12 +227,6 @@ function nodeEntry(node: CatalogueNode, ctx: NameContext): Completion {
 	};
 }
 
-/** One state-name entry: a state is read by field, so accepting lands past the dot. */
-function stateEntry(name: string, ctx: NameContext): Completion {
-	const tail = finish(ctx, '.');
-	return { label: name, detail: 'state', type: 'variable', apply: tail ? `${name}${tail}` : undefined };
-}
-
 /** The catalogue entry a reference target names — the editing node itself for `me`. */
 function nodeOf(cat: ExprCatalogue, target: RefTarget): CatalogueNode | undefined {
 	const name = 'self' in target ? cat.self : 'name' in target ? target.name : undefined;
@@ -244,8 +238,11 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 	switch (ctx.kind) {
 		case 'node':
 			return cat.machine ? [] : cat.nodes.map((n) => nodeEntry(n, ctx));
-		case 'state':
-			return (cat.machine?.states ?? []).map((n) => stateEntry(n, ctx));
+		// A state is read by field, so accepting lands past the dot.
+		case 'state': {
+			const tail = finish(ctx, '.');
+			return (cat.machine?.states ?? []).map((label) => ({ label, detail: 'state', type: 'variable', apply: tail ? `${label}${tail}` : undefined }));
+		}
 		case 'path':
 			if ('state' in ctx.target) {
 				return cat.machine ? STATE_FIELDS.map((label) => ({ label, detail: STATE_FIELD_DETAIL[label], type: 'property' })) : [];

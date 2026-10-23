@@ -43,4 +43,16 @@ impl Curve {
             Curve::Smooth => x * x * (3.0 - 2.0 * x),
         }
     }
+
+    /// [`Self::at`] as Python over `x`, for a functional a reader runs in the interpreter.
+    pub fn python(self) -> &'static str {
+        match self {
+            Curve::Step => "(1.0 if x >= 1.0 else 0.0)",
+            Curve::Linear => "x",
+            Curve::In => "x * x",
+            Curve::Out => "1.0 - (1.0 - x) * (1.0 - x)",
+            Curve::InOut => "(2.0 * x * x if x < 0.5 else 1.0 - 2.0 * (1.0 - x) * (1.0 - x))",
+            Curve::Smooth => "x * x * (3.0 - 2.0 * x)",
+        }
+    }
 }

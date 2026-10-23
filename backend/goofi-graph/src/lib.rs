@@ -2797,6 +2797,8 @@ impl Graph {
                 Target::MeParam { group, param } => {
                     value(var, self.param_value_of(consumer, "me", group, param))
                 }
+                // A node's rewrite never mints these; they are a machine's.
+                Target::Playhead | Target::State { .. } => BoundVar::Missing { var: var.to_string(), reason: "a machine's reference".to_string() },
             })
             .collect()
     }

@@ -14,15 +14,12 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { Badge, ColorPicker, Disclosure, ENVELOPE_BORN, Field, Icon, IconButton, ScrollArea, Segmented, Select, Slider, TextInput } from '$lib/ui';
 	import AttributeForm from './AttributeForm.svelte';
 	import { FACES, descriptorFor, envelopeDescriptor, literalOf, numberDescriptor } from './attributes';
-	import { editEach, held, mixed } from './batch';
-	import { DECISIONS, outgoing as outgoingOf, relink, shares, weightsOf } from './decision';
-	import ExprRow from './ExprRow.svelte';
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
-	import type { Subject } from './subject';
-	import { summary as transitionSummary } from './transition';
+	import { DECISIONS, editEach, held, mixed, outgoing as outgoingOf, relink, shares, summary as transitionSummary, weightsOf, type Subject } from './model';
 	import TransitionForm from './TransitionForm.svelte';
 
 	let { name, m, subject, onClose }: { name: string; m: Machine; subject: Subject; onClose: () => void } = $props();
@@ -122,12 +119,12 @@
 		<!-- A random state's draw: the wait leads the rows out, and each row out carries its share;
 		     a drag moves the others in their own ratio, so the shares always sum to one. -->
 		{#if addable && s?.mode === 'random' && list.length > 0}
-			<div class="wait" data-testid="state-share-wait">
-				<span class="wait-name">wait</span>
+			<div class="row" data-testid="state-share-wait">
+				<span class="hint mono">wait</span>
 				<span class="share">
 					<Slider value={shown[0]} min={0} max={1} step={0.01} bounds={false} aria-label="wait" onInput={(v) => drag(0, v)} onChange={(v) => land(0, v)} />
 				</span>
-				<span class="pct">{percent(shown[0])}</span>
+				<span class="hint mono">{percent(shown[0])}</span>
 			</div>
 		{/if}
 		{#each list as [id, t] (id)}
@@ -167,7 +164,7 @@
 				{/snippet}
 				{#snippet end()}
 					{#if one}
-						<Badge tone={resting.length > 0 ? 'accent' : 'neutral'} title={resting.length > 0 ? `Resting here now: ${resting.join(', ')}` : 'No playhead rests here now'} data-testid="state-residents">
+						<Badge tone={resting.length > 0 ? 'accent' : 'neutral'} title={resting.length > 0 ? `Resting here now: ${resting.join(', ')}` : 'No playhead rests here now'}>
 							{resting.length > 0 ? `${resting.length} here` : 'empty'}
 						</Badge>
 					{/if}
@@ -187,8 +184,10 @@
 					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1)} literal
 						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })} />
 					{#if s?.mode === 'expression'}
-						<ExprRow machine={name} label="index" hint={DECISION_HINT.expression} value={s.expression} testid="state-expression"
-							placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
+						<Field label="index" doc={DECISION_HINT.expression}>
+							<ExprEditor machine={name} label="index" value={s.expression} testid="state-expression"
+								placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
+						</Field>
 					{:else}
 						<div class="hint">{DECISION_HINT[states[0].mode]}</div>
 					{/if}
@@ -206,7 +205,7 @@
 					{#each Object.entries(m.attributes) as [attr, a] (attr)}
 						{@const h = held(m, ids, attr)}
 						{@const env = envelopeOf(attr)}
-						<div class="attr" class:unset={!h.set} class:defining={defining === attr} data-testid={`state-attribute-${attr}`} data-set={h.set} data-mixed={h.mixed} data-envelope={env !== null}>
+						<div class="attr" class:unset={!h.set} data-testid={`state-attribute-${attr}`} data-set={h.set} data-mixed={h.mixed} data-envelope={env !== null}>
 							<div class="attr-row">
 								<ParamField paramName={attr} label={h.mixed ? `${attr} (mixed)` : attr} descriptor={descriptorFor(a, h.value)} literal viewKey={`${name}/selection/${attr}`}
 									onCommit={(v) => editStates({ values: { [attr]: literalOf(v) } })}
@@ -250,11 +249,11 @@
 						</div>
 						{#each here as p (p)}
 							{@const ph = m.playheads[p]}
-							<div class="playhead" data-testid={`playhead-${p}`}>
+							<div class="row" data-testid={`playhead-${p}`}>
 								<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${p} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
-								<span class="label"><RenameField value={p} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
-								<span class="now" title="Where it is now">in <span class="mono" data-testid="playhead-state">{whereNow(p)}</span></span>
-								<span class="now" title="Where a reset and a load put it">starts</span>
+								<span class="mono"><RenameField value={p} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
+								<span class="hint" title="Where it is now">in <span class="mono" data-testid="playhead-state">{whereNow(p)}</span></span>
+								<span class="hint" title="Where a reset and a load put it">starts</span>
 								<Select data-testid="playhead-start" aria-label="start state" density="chrome" value={ph.start} options={Object.keys(m.states)} onChange={(v) => call('machine playhead edit', { name: p, start: v })} />
 								<span class="tools">
 									<IconButton variant="ghost" size="sm" label={`Remove ${p}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
@@ -322,9 +321,6 @@
 		color: var(--text-muted);
 		font-size: var(--fs-small);
 	}
-	.rows :global(.slack) {
-		flex: 1 1 auto;
-	}
 	.mono {
 		font-family: var(--font-mono);
 		font-size: var(--fs-small);
@@ -343,8 +339,8 @@
 	}
 	.attr-row:hover .tools,
 	.attr-row:focus-within .tools,
-	.playhead:hover .tools,
-	.playhead:focus-within .tools,
+	.row:hover .tools,
+	.row:focus-within .tools,
 	.tools.pinned {
 		opacity: 1;
 	}
@@ -365,8 +361,7 @@
 		gap: var(--space-2);
 		min-width: 0;
 	}
-	.attr-row > :global(.pf-param),
-	.nested > :global(.pf-param) {
+	.attr :global(.pf-param) {
 		flex: 1 1 auto;
 		min-width: 0;
 	}
@@ -388,74 +383,41 @@
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
 	}
-	/* A playhead's row: swatch, name, where it is, where it starts, and its removal. */
-	.playhead {
+	/* A flat row — a playhead's, or the wait that leads a random state's transitions out — lit
+	   under the pointer as a transition's is; the name after the swatch takes the slack. */
+	.row {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
+		gap: var(--space-3);
 		min-height: var(--hit);
 		padding: 0 var(--space-3);
 		margin-inline: calc(0px - var(--space-3));
 		border-radius: var(--radius-sm);
 		transition: background var(--dur-fast) var(--ease);
 	}
-	.playhead:hover,
-	.playhead:focus-within {
+	.row:hover,
+	.row:focus-within {
 		background: var(--surface-2);
 	}
-	.playhead .label {
+	.row > .mono:first-child,
+	.swatch + .mono {
 		flex: 1 1 auto;
-		min-width: 0;
-		font-family: var(--font-mono);
-		overflow: hidden;
-		text-overflow: ellipsis;
+	}
+	.hint .mono {
+		color: var(--text);
 	}
 	.swatch {
 		display: inline-flex;
-		flex: 0 0 auto;
 		width: var(--chrome-control-h);
 	}
-	.now {
-		display: inline-flex;
-		align-items: baseline;
-		gap: var(--space-1);
-		color: var(--text-muted);
-		font-size: var(--fs-small);
-		white-space: nowrap;
-	}
-	.now .mono {
-		color: var(--text);
-	}
-	/* The wait that leads a random state's transitions out: its name where a row's arrow sits, its
-	   share where the rows' shares sit, so the column of sliders reads as one. */
-	.wait {
-		display: flex;
-		align-items: center;
-		gap: var(--space-3);
-		min-height: var(--hit);
-		padding: 0 var(--space-3);
-		font-size: var(--fs-small);
-	}
-	.wait-name {
-		flex: 1 1 auto;
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-	}
+	/* The wait's share sits where the rows' shares sit, so the column of sliders reads as one. */
 	.share {
 		display: inline-flex;
 		flex: 1 1 auto;
 		min-width: 0;
 	}
-	.wait .share {
+	.row .share {
 		flex: 0 0 40%;
-	}
-	.pct {
-		flex: 0 0 auto;
-		width: 2.8em;
-		text-align: right;
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		color: var(--text-muted);
 	}
 	/* A transition's row is flat, and lights under the pointer as the rows around it do; the open
 	   one is a card on the step above, its settings inside. */

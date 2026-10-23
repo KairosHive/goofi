@@ -1,6 +1,6 @@
 <!-- One transition's settings, open inside its state's transition list: the buttons that fire it
      by hand and delete it, the condition that takes it on its own, and how the move goes. Dressed
-     by the inspector's own rules (`.fields`, `.slack`). -->
+     by the inspector's own rules (`.fields`). -->
 <script lang="ts">
 	import type { Machine } from '$lib/api/generated';
 	import { ContextMenu, type MenuItem } from 'panelty';
@@ -8,10 +8,10 @@
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { Button, Field, Icon, Select } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
-	import ExprRow from './ExprRow.svelte';
-	import { CURVES } from './transition';
+	import { CURVES } from './model';
 
 	let { name, m, id }: { name: string; m: Machine; id: string } = $props();
 
@@ -44,16 +44,16 @@
 	<div class="form" data-testid="machine-transition">
 		<div class="head">
 			<span class="id">{id}</span>
-			<span class="slack"></span>
 			<Button variant="ghost" size="sm" disabled={candidates.length === 0}
 				title={candidates.length === 0 ? 'No playhead is in its from state' : candidates.length === 1 ? `Fire it for ${candidates[0]}` : 'Fire it for one of the playheads there'}
 				data-testid="transition-fire" onclick={fire}><Icon name="play" />fire</Button>
 			<Button variant="danger" size="sm" title="Delete the transition" data-testid="transition-remove" onclick={() => call('machine transition remove', {})}>delete</Button>
 		</div>
-		<ExprRow machine={name} label="condition" value={t.condition ?? ''} testid="transition-condition"
-			hint="Taken the instant this turns true, for each playhead resting here; empty, the decision and the fire button alone take it"
-			placeholder="st('{example}').residents >= 2 and me.name == st('{example}').playheads[0]"
-			onCommit={(condition) => edit({ condition })} />
+		<Field label="condition" doc="Taken the instant this turns true, for each playhead resting here; empty, the decision and the fire button alone take it">
+			<ExprEditor machine={name} label="condition" value={t.condition ?? ''} testid="transition-condition"
+				placeholder="st('{example}').residents >= 2 and me.name == st('{example}').playheads[0]"
+				onCommit={(condition) => edit({ condition })} />
+		</Field>
 		<ParamField paramName="duration" descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}
 			data-testid="transition-duration" onCommit={(v) => edit({ duration: Math.max(0, Number(v)) })} />
 		<div class="fields">
@@ -77,6 +77,7 @@
 		gap: var(--space-2);
 	}
 	.id {
+		flex: 1 1 auto;
 		color: var(--text-muted);
 		font-family: var(--font-mono);
 		font-size: var(--fs-small);

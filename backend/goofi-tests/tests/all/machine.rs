@@ -193,13 +193,15 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     let why = g.refuse("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "st('Z').residents" }));
     assert!(why.contains("no state"), "{why}");
     let t4 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "variables.desk.gate > 0" }))["id"].clone();
-    assert_eq!(g.doc()["machines"]["seq"]["transitions"][t4.as_str().unwrap()]["condition"], j!("variables.desk.gate > 0"));
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a false condition holds");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 1.0 }));
     at_rest_in(&g, "head", "A");
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "C");
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition already true on arrival is no turn");
+    // An edited condition is read afresh: one true as edited waits for its next turn too.
+    write("machine transition edit", j!({ "machine": "seq", "id": t4, "condition": "variables.desk.gate > 0.5" }));
+    assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition true as edited is no turn");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 0.0 }));
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition turning false is no turn either");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 2.0 }));

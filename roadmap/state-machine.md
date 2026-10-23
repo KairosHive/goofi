@@ -20,6 +20,12 @@ Each as its own small change against the shipped model, in this order of value:
 
 ## Open
 
+- **A rename restarts the renamed thing's run.** The machine thread keys its runs by playhead
+  and state name, so `machine playhead rename` births the new name at its start and
+  `machine state rename` sends a playhead resting in the state back to its start. Forward the
+  rename to the thread (rekey the run, the head's state, its flight and its gates) before the
+  replaced model lands.
+
 - **Exact step onsets in audio.** A functional lands one wire hop after its event, so a `Step`
   curve sounds up to one block late and is ramped across that block. The branch's 10 ms
   presentation delay fixes the onset at the price of latency. Build it only if a patch asks.

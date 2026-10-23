@@ -30,11 +30,11 @@
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
 	import PlayheadDots from '$lib/machine/PlayheadDots.svelte';
 	import StateCard from '$lib/machine/StateCard.svelte';
-	import type { Subject } from '$lib/machine/subject';
+	import type { Subject } from '$lib/machine/model';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
 	import { GRID } from '$lib/editor/nodeMetrics';
 	import { CARD_W, TITLE_Y } from '$lib/machine/layout';
-	import { summary } from '$lib/machine/transition';
+	import { summary } from '$lib/machine/model';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';

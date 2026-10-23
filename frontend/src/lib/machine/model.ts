@@ -1,6 +1,16 @@
-/** A state's decision as the card draws it: the transitions out of it in the order the manager
- * picks among them, and the shares of a `random` draw, linked so they sum to one. */
-import type { Decision, Machine, State } from '$lib/api/generated';
+/** The machine as the panel and the inspector read it: a state's decision and the transitions out
+ * of it in the order the manager picks among them, the shares of a `random` draw linked so they
+ * sum to one, a transition's label, and an edit of several states as one step. */
+import type { Decision, Literal, Machine, State } from '$lib/api/generated';
+import { graph, type MachineOp } from '$lib/stores/graph.svelte';
+import { history } from '$lib/stores/history.svelte';
+import { notify } from '$lib/stores/notify.svelte';
+
+/** What the machine panel's inspector shows: the selected states, and the transitions among
+ * theirs whose rows start open — the selected ones. */
+export type Subject = { ids: string[]; open: string[] };
+
+export const CURVES = ['step', 'linear', 'in', 'out', 'in_out', 'smooth'] as const;
 
 export const DECISIONS: { id: Decision; label: string; title: string }[] = [
 	{ id: 'sequence', label: 'seq', title: 'Each interval, the next transition out, in order' },
@@ -53,4 +63,34 @@ export function decisionText(m: Machine, id: string): string {
 		default:
 			return `${Math.round(shares(s, out)[k + 1] * 100)}%`;
 	}
+}
+
+/** A transition's label: its part in its state's decision, then its duration. A condition shows
+ * in the inspector, where it is read whole. */
+export function summary(m: Machine, id: string): string {
+	const t = m.transitions[id];
+	return decisionText(m, id) + (t.duration > 0 ? ` ${t.duration}s` : '');
+}
+
+/** `patch` into each of `ids` through `op`, the id under `key`, as ONE undo step. */
+export async function editEach(machine: string, op: MachineOp, key: 'name' | 'id', ids: string[], patch: Record<string, unknown>): Promise<void> {
+	const g = graph();
+	try {
+		await history().transaction(op, async (step) => {
+			for (const id of ids) await g.machine(op, { machine, [key]: id, ...patch }, step);
+		});
+	} catch (e) {
+		notify().failure(op, e);
+	}
+}
+
+/** Whether `values` hold more than one value. */
+export const mixed = (values: unknown[]): boolean => new Set(values.map((v) => JSON.stringify(v))).size > 1;
+
+/** What the states hold for `attr`: the value shown (the first set, else the default), whether
+ * any sets it, and whether they differ, unset counting as a value of its own. */
+export function held(m: Machine, ids: string[], attr: string): { value: Literal; set: boolean; mixed: boolean } {
+	const values = ids.map((id) => m.states[id]?.values?.[attr]);
+	const first = values.find((v) => v !== undefined);
+	return { value: first ?? m.attributes[attr].default, set: first !== undefined, mixed: mixed(values) };
 }
