@@ -149,6 +149,11 @@ fn a_patch_sounds_under_the_external_clock() {
     let out = g.add("AudioOut");
     g.link(osc, "out", gain, "input");
     g.link(gain, "out", out, "input");
+    // A node is made on a thread of its own and lands at a settle: the chain sounds once each
+    // reports ready, and never a block before.
+    for node in [osc, gain, out] {
+        g.ready(node);
+    }
     let (a, channels) = drive(&g, TENTH);
     assert_eq!(channels, 1, "a mono chain is heard in mono");
     assert!((peak(&a) - 1.0).abs() < 0.01, "a full-scale sine: peak {}", peak(&a));
@@ -331,8 +336,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: the slab grows past its first 64 slots without losing an instance — the 65th node's
     // wire lands in the sum and every earlier one keeps running.
     let many: Vec<Uid> = (0..64).map(|_| held_one(&g)).collect();
-    let stillborn: Vec<String> = many.iter().filter_map(|u| g.error(*u)).collect();
-    assert!(stillborn.is_empty(), "every one of them starts: {stillborn:?}");
+    // Every one of them starts: a birth that failed instead fails here, wearing its error.
+    audio_ready(&g);
     g.link(*many.last().unwrap(), "out", gain, "input");
     goofi_tests::applied(&g);
     let (grown, _) = drive(&g, TENTH);
@@ -352,6 +357,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let (silent, _) = drive(&g, TENTH);
     assert_eq!(peak(&silent), 0.0, "nothing feeds the gain");
     assert_eq!(g.call("undo", j!({}))["changed"], true);
+    g.ready(osc);
     let (back, _) = drive(&g, TENTH);
     assert!((peak(&back) - 0.5).abs() < 0.01 && near(crossings(&back), 176), "undo restored the 880 Hz oscillator: peak {} crossings {}", peak(&back), crossings(&back));
 
@@ -369,6 +375,9 @@ fn a_patch_sounds_under_the_external_clock() {
     g.link(osc3, "out", gain3, "input");
     g.link(gain3, "out", out, "input");
     g.link(gain3, "out", out2, "input");
+    for node in [out2, osc3, gain3] {
+        g.ready(node);
+    }
     let (both, _) = drive(&g, TENTH);
     assert!((peak(&both) - 2.0).abs() < 0.02 && near(crossings(&both), 88), "two outputs sum: peak {} crossings {}", peak(&both), crossings(&both));
     g.set_param(out2, "audio", "gain", 0.5);
@@ -667,6 +676,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: a plan swap keeps every instance — the oscillator's phase runs on across it.
     let (a, _) = drive(&g, TENTH);
     let spare = g.add("Gain");
+    g.ready(spare);
     let (b, _) = drive(&g, TENTH);
     assert!((b[0] - a[a.len() - 1]).abs() < 0.1, "no jump at the swap: {} then {}", a[a.len() - 1], b[0]);
     g.call("node remove", j!({ "node": hex(spare) }));
@@ -921,6 +931,7 @@ fn a_patch_sounds_under_the_external_clock() {
         j!({ "node": hex(env), "param": "env/gate", "expression": format!("nd('{gate_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
+    audio_ready(&g);
     let (shut, _) = drive(&g, TENTH);
     assert_eq!(peak(&shut), 0.0, "a low gate is silence");
     g.set_param(gate, "constant", "value", 1.0);
@@ -1041,6 +1052,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let fb2 = g.add("audio:Feedback");
     g.link(fb2, "out", fb2, "input");
     g.link(fb2, "out", out, "input");
+    g.ready(fb2);
     let (still, _) = drive(&g, TENTH);
     assert!((mean(&still[still.len() - 480..]) - 1.0).abs() < 0.01, "it holds its zero: {}", mean(&still[still.len() - 480..]));
     g.call("node remove", j!({ "node": hex(fb2) }));
@@ -1182,9 +1194,12 @@ fn a_patch_sounds_under_the_external_clock() {
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Ticks"]));
     let ticks = g.add("Ticks");
+    g.ready(ticks);
     // Any frame after a tenth says it. NOT the first sample of a running count: a control tick
     // landing mid-drive splits the tenth into two frames, and the one-deep probe keeps the LAST.
+    // Driven once the node is on the audio thread again: a restart or a load births it anew.
     let born_at = |g: &Goofi, uid: Uid, what: &str| -> f32 {
+        g.ready(uid);
         let probe = g.probe(uid, "out");
         drive(g, TENTH);
         g.until(what, |_| probe.latest().and_then(|d| f32s(&d).first().copied()))
@@ -1433,6 +1448,22 @@ fn loudest(levels: &[f32]) -> usize {
     (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
 }
 
+/// Every audio node in the patch reported ready: each is made on a thread of its own and lands
+/// at a settle, so a block driven before that renders without it.
+fn audio_ready(g: &Goofi) {
+    let doc = g.doc();
+    let audio: Vec<Uid> = doc["nodes"]
+        .as_object()
+        .expect("the nodes")
+        .iter()
+        .filter(|(_, node)| node["type"].as_str().is_some_and(|t| t.starts_with("audio:")))
+        .filter_map(|(hex, _)| Uid::from_hex(hex))
+        .collect();
+    for uid in audio {
+        g.ready(uid);
+    }
+}
+
 /// A node's own output once the shape behind it has stopped moving, heard through an `AudioOut`
 /// of its own so the reading is the block `drive` renders rather than a tap's. The params last set
 /// reach the engine a control hop later, on wall time, so that hop is waited out first; a
@@ -1441,6 +1472,7 @@ fn loudest(levels: &[f32]) -> usize {
 fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
     let out = g.add("AudioOut");
     g.link(uid, "out", out, "input");
+    audio_ready(g);
     goofi_tests::applied(g);
     for _ in 0..5 {
         drive(g, TENTH);
@@ -1853,9 +1885,12 @@ fn nodes_that_do_not_feed_each_other_render_at_once() {
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Meet"]));
     let out = g.add("AudioOut");
+    // Both land before a block renders: one rendered alone waits out its bound every block, and
+    // eight such blocks are an overrun fault.
     for _ in 0..2 {
         let meet = g.add("Meet");
         g.link(meet, "out", out, "input");
+        g.ready(meet);
     }
     sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
     // The helpers sit on the performance cores where the machine has a slower kind too: the

@@ -34,7 +34,7 @@ pub struct Stats {
 pub struct Runtime {
     plan: Plan,
     states: HashMap<Uid, State>,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     stats: Arc<Stats>,
     /// The window thread, where a stage with a window on the machine's screen sends its frame.
     pub ui: Option<goofi_window::Ui>,
@@ -59,7 +59,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(
         gpu: Arc<Gpu>,
-        time: Arc<goofi_core::time::Time>,
+        time: Arc<goofi_supervisor::timing::Time>,
         stats: Arc<Stats>,
         troubles: Troubles,
         shared: Arc<goofi_runtime::Shared>,
@@ -86,7 +86,6 @@ impl Runtime {
     /// A birth's GPU state. `params` is the byte length of its uniform block, zero for a node
     /// that declares none.
     fn insert(&mut self, uid: Uid, params: usize) {
-        let _gate = crate::gpu::gate();
         let state = State::new(&self.gpu, params);
         self.states.insert(uid, state);
     }
@@ -94,14 +93,12 @@ impl Runtime {
     /// A node leaves, and the WHOLE plan goes with it: `Input::Stage` is an index into it. The
     /// settle that ends the batch builds the next one, and until it does this engine draws nothing.
     fn remove(&mut self, uid: Uid) {
-        let _gate = crate::gpu::gate();
         self.states.remove(&uid);
         self.plan = Plan::default();
     }
 
     /// Every GPU object this engine holds, given back at once.
     pub fn clear(&mut self) {
-        let _gate = crate::gpu::gate();
         self.plan = Plan::default();
         self.states.clear();
         self.presenting.clear();
@@ -109,7 +106,6 @@ impl Runtime {
     }
 
     fn set_plan(&mut self, plan: Plan) {
-        let _gate = crate::gpu::gate();
         self.plan = plan;
         // A closed window's entry would hold its waiting frame for the engine's life.
         let live: HashSet<_> = self.plan.stages.iter().filter_map(|s| s.window).collect();
@@ -164,7 +160,6 @@ impl Runtime {
     /// Wait for the device to draw what the ticks so far submitted: what makes a tick under the
     /// external clock mean one drawn frame, where the timer clock lets the device run behind.
     pub fn finish(&mut self) {
-        let _gate = crate::gpu::gate();
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
@@ -180,7 +175,6 @@ impl Runtime {
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let _gate = crate::gpu::gate();
         // BEFORE the take, because a map callback runs on a poll and nowhere else: polling only
         // after the submit below left every copy one whole tick older than it had to be.
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
@@ -212,7 +206,7 @@ impl Runtime {
                 _ => None,
             };
             let pipeline = match built {
-                Some(built) => match built.get() { Some(Ok(p)) => Some(p), _ => continue },
+                Some(built) => match built.peek() { Some(Ok(p)) => Some(p), _ => continue },
                 None => None,
             };
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
@@ -276,7 +270,7 @@ impl Runtime {
                 let targets: Vec<wgpu::TextureView> =
                     std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
                 let mut pass = crate::gpu::clear_pass(&mut encoder, &targets);
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &group0, &[]);
                 pass.set_bind_group(1, &group1, &[]);
                 pass.set_bind_group(2, &group2, &[]);

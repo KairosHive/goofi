@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use goofi_core::record::VideoQuality;
-use goofi_core::time::{stamp, stamp_nanos, Time};
+use goofi_supervisor::timing::{stamp, stamp_nanos, Time};
 use goofi_node::Uid;
 use goofi_supervisor::sync::{Condvar, Mutex};
 use goofi_supervisor::timing::Event;
@@ -380,9 +380,9 @@ impl Recorder {
             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("record"), goofi_supervisor::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
         self.arm(Vec::new());
-        let deadline = Instant::now() + LEAVE_WAIT;
+        let deadline = goofi_supervisor::timing::Deadline::within(LEAVE_WAIT);
         for handle in std::mem::take(&mut *self.departing.lock()) {
-            handle.join_within(deadline.saturating_duration_since(Instant::now()));
+            handle.join_within(deadline.left());
         }
     }
 

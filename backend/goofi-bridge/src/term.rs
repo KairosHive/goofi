@@ -221,16 +221,16 @@ impl Harnesses {
             let _ = signal(inst, goofi_supervisor::child::Tree::ask);
         }
         Some(move || {
-            let deadline = std::time::Instant::now() + GRACE;
+            let grace = goofi_supervisor::timing::Deadline::within(GRACE);
             for (_, inst) in &taken {
-                if !inst.reaped_within(deadline.saturating_duration_since(std::time::Instant::now())) {
+                if !inst.reaped_within(grace.left()) {
                     let _ = signal(inst, goofi_supervisor::child::Tree::kill);
                 }
             }
-            let deadline = std::time::Instant::now() + goofi_transport::SHUTDOWN_WAIT;
+            let deadline = goofi_supervisor::timing::Deadline::within(goofi_transport::SHUTDOWN_WAIT);
             for (_, inst) in &taken {
                 for worker in std::mem::take(&mut *inst.workers.lock()) {
-                    let _ = worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
+                    let _ = worker.join_within(deadline.left());
                 }
             }
         })

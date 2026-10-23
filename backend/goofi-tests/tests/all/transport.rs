@@ -122,7 +122,7 @@ impl Fleet {
             manifest: &MANIFEST,
             decls: MANIFEST.params.to_vec(),
             params: Arc::new([AtomicU64::new(0)]),
-            time: Arc::new(goofi_core::time::Time::new()),
+            time: Arc::new(goofi_supervisor::timing::Time::new()),
         };
         let (probe_log, probe_emit) = (log.clone(), emit.clone());
         let handle = goofi_runtime::spawn(&goofi_tests::hub(), spawn, self.shared.clone(), move || Probe {

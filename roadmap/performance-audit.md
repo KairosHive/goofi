@@ -47,6 +47,8 @@ rate or a latency.
 - Measure `contended`, `late` and the pool waits on a real device, with and without the
   real-time grant; only audio asks for one, so the equal-protection rule is not yet met for
   signal workers and the render clock.
+- The device open and a node's birth run through `ready::prepare` and land at a settle; verify
+  on a real device that the stream keeps playing through a device switch and a VST3 birth.
 
 ## Graphics
 
@@ -54,9 +56,9 @@ rate or a latency.
   between serves. The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it
   two. Let the half's wake be the readback's own (a bell from the render thread when a slot is
   ready), not a tick.
-- Shader compilation holds `gpu::gate()` through shader and pipeline creation while the render
-  tick needs the same gate: a refresh or a shader edit stalls the clock. Measure the gate wait
-  apart from GPU work, then take compilation off the gate.
+- `library refresh` validates every shader with naga on the op thread: 170 to 370 ms per refresh
+  with one 1 600-line shader (`compile_stall` probe). Validate through `ready::prepare` and
+  report the refusal at the settle after.
 - Submission is not completion: `tick_max_us` excludes `drain_inbox`, nothing budgets GPU
   completion, and `Chain::configure` can fall back to `Fifo` presentation. Verify the mode and
   adapter on the user's display; time completion apart from submission.

@@ -35,7 +35,9 @@ impl Line {
         }
     }
 
-    /// Every id that rang by `deadline`, in order; empty on the deadline. `Err` is the peer gone.
+    /// Every id that rang by `deadline`, in order; empty on the deadline. `Err` is the peer gone,
+    /// reported only once every ring before it has been answered: a peer that rang and left in
+    /// one breath is heard first and found gone on the wait after.
     pub(crate) fn wait_until(&mut self, deadline: Instant) -> std::io::Result<Vec<u8>> {
         let mut ids = self.drain()?;
         if ids.is_empty() && wait_readable(&self.stream, deadline)? {
@@ -49,7 +51,8 @@ impl Line {
         let mut buf = [0u8; 64];
         loop {
             match self.stream.read(&mut buf) {
-                Ok(0) => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the doorbell's peer closed")),
+                Ok(0) if ids.is_empty() => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "the doorbell's peer closed")),
+                Ok(0) => return Ok(ids),
                 Ok(n) => ids.extend_from_slice(&buf[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(ids),
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
@@ -121,4 +124,32 @@ pub(crate) fn connect(port: u16, token: &str) -> Result<Line, String> {
     let mut stream = TcpStream::connect(addr).map_err(|e| format!("the doorbell at {addr}: {e}"))?;
     stream.write_all(token.as_bytes()).map_err(|e| format!("the doorbell's token: {e}"))?;
     Line::new(stream).map_err(|e| format!("the doorbell: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A child answers its last request and exits: its ring and its close reach the parent in
+    /// one read. The ring is what the wait answers; the close is the wait after.
+    #[test]
+    fn a_ring_followed_by_the_peers_close_is_heard_before_the_close() {
+        let host = Host::open().expect("a port");
+        let (port, token) = (host.port(), host.token().to_string());
+        // Rung once the parent holds the line, as a child's answer is: the token is presented
+        // alone, and what follows it is a ring.
+        let (accepted, held) = std::sync::mpsc::channel();
+        let child = std::thread::spawn(move || {
+            let mut line = connect(port, &token).expect("the child's end");
+            held.recv().expect("the parent accepted");
+            line.ring(7).expect("the ring");
+            drop(line);
+        });
+        let mut line = host.accept_until(Instant::now() + std::time::Duration::from_secs(10)).expect("accept").expect("the child connected");
+        accepted.send(()).expect("the child waits");
+        child.join().expect("the child left");
+        assert_eq!(line.wait_until(Instant::now()).expect("the ring, not the close"), vec![7]);
+        let gone = line.wait_until(Instant::now() + std::time::Duration::from_secs(1));
+        assert!(gone.is_err(), "then the close: {gone:?}");
+    }
 }

@@ -143,19 +143,6 @@ pub fn shared() -> Result<Arc<Gpu>, String> {
     ONE.get_or_init(|| Gpu::open().map(Arc::new)).clone()
 }
 
-/// Held for EVERY operation on that device: a compile, a tick, a birth, a teardown. Lock order is
-/// the runtime mutex, then this.
-pub fn gate() -> std::sync::MutexGuard<'static, ()> {
-    static GATE: Mutex<()> = Mutex::new(());
-    GATE.lock()
-}
-
-/// Give a value that owns GPU objects back, behind the gate.
-pub fn give_back<T>(x: T) {
-    let _gate = gate();
-    drop(x);
-}
-
 impl Gpu {
     fn open() -> Result<Gpu, String> {
         // No display handle: this engine never opens a window, and asking for one would refuse

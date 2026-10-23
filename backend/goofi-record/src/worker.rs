@@ -158,7 +158,7 @@ fn handle(rec: &Recorder, armed: &Mutex<Armed>, shared: &Shared, open: &mut Opti
     }
     if open.is_none() {
         let t0_utc = rec.time().utc_at(at);
-        let base = format!("{}-{}__{}Z", a.id.node, a.id.slot, goofi_core::time::stamp_nanos(t0_utc));
+        let base = format!("{}-{}__{}Z", a.id.node, a.id.slot, goofi_supervisor::timing::stamp_nanos(t0_utc));
         let encoders = rec.encoders();
         let file = take.free_name(&base, kind.extension(&*encoders));
         let channels = meta.channels().dims().next().map(|(_, c)| c.len());

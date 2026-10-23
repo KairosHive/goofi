@@ -7,7 +7,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use goofi_core::Param;
@@ -48,22 +47,27 @@ impl BoundVar {
 /// Wakes the status drain the moment any engine has something to hand over — the alternative to a
 /// poll-to-discover. Every node report notifies; the worker parks on it between paced duties.
 #[derive(Default)]
-pub struct DrainWaker {
-    woke: Mutex<bool>,
-    cv: Condvar,
-}
+pub struct DrainWaker(goofi_supervisor::timing::Event);
 
 impl DrainWaker {
     pub fn notify(&self) {
-        *self.woke.lock() = true;
-        self.cv.notify_one();
+        self.0.ring(0);
     }
 
     /// Park until a notify or `timeout`, and consume the wake either way. Answers whether a
     /// notify came, so a caller can tell a quiet window from a wake.
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
-        let mut woke = self.cv.wait_timeout_while(self.woke.lock(), timeout, |w| !*w);
-        std::mem::replace(&mut *woke, false)
+        !self.0.wait_for(timeout).is_empty()
+    }
+
+    /// Park until a notify or `deadline`; whether a notify came.
+    pub fn wait_until(&self, deadline: std::time::Instant) -> bool {
+        !self.0.wait_until(deadline).is_empty()
+    }
+
+    /// Park until no notify has come for `quiet`, or `cap` passes; whether one came at all.
+    pub fn wait_quiet(&self, quiet: Duration, cap: goofi_supervisor::timing::Deadline) -> bool {
+        !self.0.wait_quiet(quiet, cap).is_empty()
     }
 }
 

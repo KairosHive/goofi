@@ -273,7 +273,7 @@ pub struct Cx<'a> {
     /// The patch's time at this run.
     pub now: f64,
     /// The patch's clock, read again as a frame leaves, for its `emit` stamp.
-    pub time: &'a goofi_core::time::Time,
+    pub time: &'a goofi_supervisor::timing::Time,
     /// The node this run is, as its frames' `source` names it.
     pub uid: Uid,
 }
@@ -461,7 +461,7 @@ pub struct Spawn {
     /// The params as the engine counts them: the consts, the atomics and every binding index.
     pub decls: Vec<ParamDecl>,
     pub params: Arc<[AtomicU64]>,
-    pub time: Arc<goofi_core::time::Time>,
+    pub time: Arc<goofi_supervisor::timing::Time>,
 }
 
 /// Open the node's slots and door on the caller's thread and park the runtime on them. `make`
@@ -587,7 +587,7 @@ struct Runtime<E: Executor> {
     base: String,
     manifest: &'static NodeManifest,
     decls: Vec<ParamDecl>,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     params: Arc<[AtomicU64]>,
     consts: Vec<Param>,
     /// The live value per param: the const, or what its binding last evaluated to.

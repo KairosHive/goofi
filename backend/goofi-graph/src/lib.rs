@@ -502,7 +502,7 @@ struct Runtime {
     /// the graph it resolved against is gone, without taking the lock to look.
     epoch: Arc<std::sync::atomic::AtomicU64>,
     /// The patch's time, shared with every engine — one object, never a copy of what it says.
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// Every variable with an expression, derived at settle as a param's source is.
@@ -596,7 +596,7 @@ impl Graph {
                 waker: Arc::new(DrainWaker::default()),
                 instance,
                 epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-                time: Arc::new(goofi_core::time::Time::new()),
+                time: Arc::new(goofi_supervisor::timing::Time::new()),
                 evaluator: None,
                 variable_binds: IndexMap::new(),
                 unavailable: std::collections::BTreeMap::new(),
@@ -3010,7 +3010,7 @@ impl Graph {
     }
 
     /// The patch's time. An engine holds this handle; there is no second origin anywhere.
-    pub fn time(&self) -> Arc<goofi_core::time::Time> {
+    pub fn time(&self) -> Arc<goofi_supervisor::timing::Time> {
         self.runtime.time.clone()
     }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than

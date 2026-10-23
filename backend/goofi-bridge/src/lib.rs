@@ -655,17 +655,15 @@ pub fn spawn_workers(state: &AppState) {
         // A node's stage changes on its own thread, with no RPC to ride on. It carries the error
         // too, because a facade HAS health and never reports one.
         let mut last: HashMap<String, NodeState> = HashMap::new();
-        let mut next_broadcast = Instant::now() + period;
-        let mut next_live = Instant::now() + LIVE_PERIOD;
+        let mut broadcast = goofi_supervisor::timing::Pace::new(period);
+        let mut live = goofi_supervisor::timing::Pace::new(LIVE_PERIOD);
         loop {
             // Parked until a report lands or a pace comes due — pacing, not polling.
-            let now = Instant::now();
-            let wait = next_broadcast.min(next_live).saturating_duration_since(now);
-            waker.wait_timeout(wait);
+            waker.wait_until(broadcast.next().min(live.next()));
             if state.stopping.stopped() {
                 return;
             }
-            let due = Instant::now() >= next_broadcast;
+            let due = broadcast.due();
             let (edits, collected) = {
                 let mut g = graph.lock();
                 // Readers derive from settled state: a drain that moved none owes them no wake.
@@ -675,9 +673,9 @@ pub fn spawn_workers(state: &AppState) {
                 if drained.staged || epoch.load(std::sync::atomic::Ordering::Acquire) != was {
                     state.settled_now();
                 }
-                if Instant::now() >= next_live {
+                if live.due() {
                     state.live.fill(&g);
-                    next_live = Instant::now() + LIVE_PERIOD;
+                    live.reset();
                 }
                 let edits = g.take_edits();
                 (edits, if !due {
@@ -736,7 +734,7 @@ pub fn spawn_workers(state: &AppState) {
             let Some((rates, stages, refreshed, live)) = collected else { continue };
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of
             // catch-up broadcasts.
-            next_broadcast = Instant::now() + period;
+            broadcast.reset();
             for ev in refreshed {
                 events.send(ev);
             }
@@ -1026,7 +1024,7 @@ pub fn try_graphics_engine(g: &mut Graph) -> Option<&mut goofi_graphics::Graphic
     g.engine_mut("graphics").and_then(|e| e.as_any_mut().downcast_mut())
 }
 
-pub use goofi_core::time::Clock;
+pub use goofi_supervisor::timing::Clock;
 
 /// The audio engine registered in `g` — its external clock is the concrete door a test drives.
 pub fn audio_engine(g: &mut Graph) -> &mut goofi_audio::AudioEngine {
@@ -1522,7 +1520,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             let g = state.graph.lock();
             (g.variable_store(), g.time())
         };
-        let mut pace = reducer::Pace::new();
+        let mut pace = goofi_supervisor::timing::Grid::new();
         let mut held: IndexMap<String, goofi_node::Expression> = IndexMap::new();
         let mut evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>> = None;
         loop {
@@ -1539,7 +1537,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             let due = pace.due(interval, Instant::now());
             let mut touched: Vec<String> = Vec::new();
             let mut batch: Vec<reducer::Followed> = first.into_iter().collect();
-            while let Ok(msg) = rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+            while let Ok(msg) = rx.recv_timeout(goofi_supervisor::timing::Deadline::at(due).left()) {
                 batch.push(msg);
             }
             pace.take(interval, Instant::now());
@@ -1644,9 +1642,8 @@ fn spawn_midi(state: AppState) {
             if changed {
                 resync_and_broadcast(&state);
             }
-            let until = Instant::now() + MIDI_POLL;
-            while Instant::now() < until && !state.stopping.stopped() {
-                std::thread::sleep(Duration::from_millis(100));
+            if state.stopping.wait_stopped_until(Instant::now() + MIDI_POLL) {
+                return;
             }
         }
     });

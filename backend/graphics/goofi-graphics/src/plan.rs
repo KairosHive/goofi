@@ -178,10 +178,10 @@ pub fn compile(
     for uid in &order {
         let inst = &live[uid];
         if let crate::scan::Kind::Shader(built) = &inst.class.kind {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("shader: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("shader: {why}"))); }
         }
         if let Some((_, built)) = &inst.program {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("texture program: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("texture program: {why}"))); }
         }
         let manifest = inst.class.manifest;
         let inputs = manifest

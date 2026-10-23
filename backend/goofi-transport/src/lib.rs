@@ -129,10 +129,10 @@ pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 /// Wait for every halt to release, up to [`SHUTDOWN_WAIT`]. Whether they all did.
 pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>) -> bool {
-    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    let deadline = goofi_supervisor::timing::Deadline::within(SHUTDOWN_WAIT);
     let mut all = true;
     for halt in halts {
-        all &= halt.wait_released_until(deadline);
+        all &= halt.wait_released_until(deadline.instant());
     }
     all
 }
@@ -146,15 +146,27 @@ thread_local! {
 #[derive(Default)]
 pub struct Halt {
     stop: AtomicBool,
+    /// Rung by the stop, for a thread parked on its own pace that must leave at once.
+    bell: goofi_supervisor::timing::Event,
     released: goofi_supervisor::sync::Latch,
 }
 
 impl Halt {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.bell.ring(0);
     }
     pub fn stopped(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
+    }
+    /// Park until the stop or `deadline`; whether it was the stop.
+    pub fn wait_stopped_until(&self, deadline: Instant) -> bool {
+        while !self.stopped() {
+            if self.bell.wait_until(deadline).is_empty() {
+                return self.stopped();
+            }
+        }
+        true
     }
     pub fn release(&self) {
         self.released.open();

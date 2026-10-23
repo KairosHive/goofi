@@ -137,9 +137,9 @@ impl Scope {
 
     /// Join every thread, within `within` for all of them together.
     pub fn close(&self, within: Duration) {
-        let deadline = Instant::now() + within;
+        let deadline = crate::timing::Deadline::within(within);
         for worker in std::mem::take(&mut *self.workers.lock()) {
-            let _ = worker.join_within(deadline.saturating_duration_since(Instant::now()));
+            let _ = worker.join_within(deadline.left());
         }
     }
 }

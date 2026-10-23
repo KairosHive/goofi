@@ -552,11 +552,11 @@ pub struct Anchor {
     /// What the audio thread stamps into every block; a new tie is a new epoch.
     epoch: AtomicU64,
     ties: Mutex<Vec<(u64, Tie)>>,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
 }
 
 impl Anchor {
-    pub fn new(time: Arc<goofi_core::time::Time>) -> Anchor {
+    pub fn new(time: Arc<goofi_supervisor::timing::Time>) -> Anchor {
         let tie = Tie { at: 0, time: time.now(), rate: crate::RATE };
         Anchor {
             blocks: AtomicU64::new(0),

@@ -69,7 +69,7 @@ impl goofi_record::video::Encoders for NoEncoder {
     }
 }
 
-use goofi_core::time::{stamp, Time};
+use goofi_supervisor::timing::{stamp, Time};
 use goofi_tests::j;
 
 #[test]

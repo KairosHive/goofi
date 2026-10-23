@@ -3,7 +3,7 @@
 
 use std::io::{self, PipeReader, PipeWriter, Read};
 use std::process::{Command, ExitStatus, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::log::Source;
 use crate::scope::{self, Kind, Lease};
@@ -151,19 +151,19 @@ fn drain(name: &str, from: impl Read + Send + 'static, source: Source, stream: &
 /// Run a one-shot tool as `name` to completion, its output captured on the same deadline.
 pub fn output(name: impl Into<String>, cmd: &mut Command, within: Duration) -> io::Result<Output> {
     let mut child = run(name, cmd).stdout(Out::Pipe).stderr(Out::Pipe).spawn()?;
-    let deadline = Instant::now() + within;
+    let deadline = crate::timing::Deadline::within(within);
     // Both pipes drained on threads of their own, so a tool that fills one while this waits on
     // the other cannot deadlock against its reader.
     let stdout = reader(child.inner.stdout.take().expect("piped stdout"))?;
     let stderr = reader(child.inner.stderr.take().expect("piped stderr"))?;
-    let status = child.wait_within(deadline.saturating_duration_since(Instant::now()));
+    let status = child.wait_within(deadline.left());
     let timeout = || {
         // A tool may have exited while its descendants still hold its output pipes.
         let _ = child.tree.kill();
         io::Error::new(io::ErrorKind::TimedOut, format!("{} did not finish in {within:?}", child.name))
     };
     let collect = |r: Worker<io::Result<Vec<u8>>>| {
-        r.join_within(deadline.saturating_duration_since(Instant::now()))
+        r.join_within(deadline.left())
             .ok_or_else(&timeout)?
             .map_err(|_| io::Error::other("the tool output reader panicked"))?
     };
@@ -212,7 +212,7 @@ impl Child {
         if self.reaped {
             return None;
         }
-        let ended = self.poll(Instant::now() + within);
+        let ended = self.poll(crate::timing::Deadline::within(within));
         self.reaped = true;
         if ended.is_none() {
             self.kill_and_reap();
@@ -231,12 +231,12 @@ impl Child {
 
     /// The child's end, or `None` at the deadline. A timed wait on the process where the OS has
     /// one; a 10 ms ask elsewhere.
-    fn poll(&mut self, deadline: Instant) -> Option<ExitStatus> {
+    fn poll(&mut self, deadline: crate::timing::Deadline) -> Option<ExitStatus> {
         loop {
             match self.inner.try_wait() {
                 Ok(Some(status)) => return Some(status),
                 Ok(None) => {
-                    let left = deadline.saturating_duration_since(Instant::now());
+                    let left = deadline.left();
                     if left.is_zero() {
                         return self.inner.try_wait().ok().flatten();
                     }

@@ -71,7 +71,7 @@ const OPEN_WAIT: Duration = Duration::from_secs(2);
 /// The same ceiling for an ASIO driver, which loads a vendor runtime before it answers.
 const ASIO_OPEN_WAIT: Duration = Duration::from_secs(10);
 
-pub use goofi_core::time::Clock;
+pub use goofi_supervisor::timing::Clock;
 
 /// Hardware belongs to the internal clock alone: `drive(frames)` renders at the caller's speed,
 /// and no live stream has a timeline that can meet it.
@@ -342,6 +342,62 @@ pub(crate) struct Instance {
     shown: Vec<f64>,
     /// The audio thread's tally of this occupant's `process` cost.
     spent: Arc<runtime::Spent>,
+    /// The node still being made, on a thread of its own; `None` once it is on the audio thread.
+    making: Option<Making>,
+}
+
+/// A node being made off this thread — a plugin's instantiation, its `prepare`, its saved state —
+/// and everything else its slot needs, held until the node lands and the slot goes whole.
+struct Making {
+    node: goofi_supervisor::ready::Ready<Box<dyn AudioNode>>,
+    /// The rate it is prepared at; one that moved by the landing is prepared again.
+    rate: f64,
+    unborn: Unborn,
+    born: Arc<AtomicBool>,
+}
+
+/// A slot but its node.
+struct Unborn {
+    idx: usize,
+    serial: u64,
+    type_name: &'static str,
+    params: Arc<[AtomicU64]>,
+    ramps: Arc<[runtime::Ramps]>,
+    inboxes: Vec<Frames>,
+    blocks: rtrb::Consumer<f32>,
+    taps: Vec<rtrb::Producer<f32>>,
+    recs: Vec<rtrb::Producer<f32>>,
+    spent: Arc<runtime::Spent>,
+}
+
+impl Unborn {
+    fn slot(self, uid: Uid, node: Box<dyn AudioNode>) -> Slot {
+        Slot {
+            uid,
+            type_name: self.type_name,
+            serial: self.serial,
+            node,
+            params: self.params,
+            ramps: self.ramps,
+            inboxes: self.inboxes,
+            blocks: self.blocks,
+            taps: self.taps,
+            recs: self.recs,
+            dead: false,
+            overruns: 0,
+            cost: None,
+            spent: self.spent,
+            fault: None,
+        }
+    }
+}
+
+/// A device being opened on a thread of its own, and the one to go back to if it refuses.
+struct Opening {
+    name: String,
+    buffer: u32,
+    clock: goofi_supervisor::ready::Ready<(DeviceClock, f64)>,
+    previous: Option<String>,
 }
 
 #[derive(Default)]
@@ -355,11 +411,13 @@ struct Minted {
 pub struct AudioEngine {
     hub: Arc<goofi_transport::Hub>,
     instance: String,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     clock: Clock,
     device: Option<DeviceClock>,
+    /// The open under way, on a thread of its own; the settle that finds it answered takes it.
+    opening: Option<Opening>,
     /// The name and buffer size last tried and what they answered: a pair that failed is not tried
-    /// again until one moves, because the open runs under the graph lock.
+    /// again until one moves.
     tried: Option<(String, u32, Option<String>)>,
     /// `audio.buffer_size` as the last settle read it: what the next open asks for.
     buffer: u32,
@@ -395,7 +453,7 @@ const SLAB: usize = 64;
 const QUEUE: usize = 4096;
 
 impl AudioEngine {
-    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>, clock: Clock) -> Result<AudioEngine, String> {
+    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_supervisor::timing::Time>, waker: Arc<DrainWaker>, clock: Clock) -> Result<AudioEngine, String> {
         host::warm();
         let classes: HashMap<&'static str, Class> = nodes::BUILT_IN
             .iter()
@@ -447,6 +505,7 @@ impl AudioEngine {
             workspace: None,
             sweep: false,
             disabled: HashMap::new(),
+            opening: None,
             faults: goofi_runtime::Faults::default(),
             pending: Vec::new(),
             dirty: false,
@@ -666,6 +725,7 @@ impl AudioEngine {
         let Some(name) = wanted else {
             self.close();
             self.tried = None;
+            self.opening = None;
             return None;
         };
         if let Some((tried, buffer, error)) = &self.tried {
@@ -673,30 +733,78 @@ impl AudioEngine {
                 return error.clone();
             }
         }
-        let previous = self.close();
-        let error = self.open(name).err();
-        if error.is_some() {
-            if let Some(previous) = previous {
-                let _ = self.open(&previous);
-            }
+        if self.opening.as_ref().is_some_and(|o| o.name == name && o.buffer == self.buffer) {
+            return None;
         }
-        self.tried = Some((name.to_string(), self.buffer, error.clone()));
-        error
+        // The open runs on a thread of its own and the settle goes on: a device takes seconds to
+        // answer, and the graph is not held for them. The clock lands at the settle after.
+        let previous = self.close();
+        let (runtime, stats, waker, buffer) = (self.runtime.clone(), self.stats.clone(), self.shared.waker.clone(), self.buffer);
+        let device = name.to_string();
+        let clock = goofi_supervisor::ready::prepare(format!("goofi-audio-open {name}"), move || DeviceClock::open(&device, buffer, runtime, stats, waker));
+        let drain = self.shared.waker.clone();
+        clock.on_ready(move || drain.notify());
+        self.opening = Some(Opening { name: name.to_string(), buffer: self.buffer, clock, previous });
+        None
     }
 
-    /// Stop the clock and wait for it; the name it had.
+    /// Every node whose making answered: its slot to the audio thread, whole, prepared again
+    /// where the rate moved meanwhile; one that refused is out of the plan with its reason.
+    fn land_births(&mut self) {
+        let rate = self.audio.rate();
+        let mut landed: Vec<(usize, Slot)> = Vec::new();
+        let mut refused: Vec<(Uid, String)> = Vec::new();
+        for (uid, inst) in self.live.iter_mut() {
+            let Some(outcome) = inst.making.as_ref().and_then(|m| m.node.take()) else { continue };
+            let Making { rate: made_at, mut unborn, born, .. } = inst.making.take().expect("read above");
+            match outcome {
+                Ok(mut node) => {
+                    if made_at != rate {
+                        node.prepare(rate);
+                        unborn.inboxes.iter_mut().for_each(|inbox| inbox.rate = rate);
+                    }
+                    landed.push((unborn.idx, unborn.slot(*uid, node)));
+                    born.store(true, Ordering::Release);
+                }
+                Err(why) => refused.push((*uid, why)),
+            }
+        }
+        for (idx, slot) in landed {
+            self.send(Msg::Insert { idx, slot });
+        }
+        for (uid, why) in refused {
+            self.disabled.insert(uid, why);
+        }
+    }
+
+    /// The device that answered its open, cut in and playing; one that refused is remembered as
+    /// tried, and the device before it is asked back.
+    fn land_device(&mut self) {
+        let Some(outcome) = self.opening.as_ref().and_then(|o| o.clock.take()) else { return };
+        let Opening { name, buffer, previous, .. } = self.opening.take().expect("read above");
+        match outcome {
+            Ok((clock, rate)) => {
+                self.retune(rate, clock.channels);
+                clock.play();
+                self.device = Some(clock);
+                self.tried = Some((name, buffer, None));
+            }
+            Err(error) => {
+                self.tried = Some((name, buffer, Some(error)));
+                if let Some(previous) = previous {
+                    self.follow(Some(&previous));
+                }
+            }
+        }
+    }
+
+    /// Stop the clock; the name it had. Its thread is waited for off this one.
     fn close(&mut self) -> Option<String> {
         let clock = self.device.take()?;
         self.runtime.lock().set_device(None);
-        Some(clock.name.clone())
-    }
-
-    fn open(&mut self, name: &str) -> Result<(), String> {
-        let (clock, rate) = DeviceClock::open(name, self.buffer, self.runtime.clone(), self.stats.clone(), self.shared.waker.clone())?;
-        self.retune(rate, clock.channels);
-        clock.play();
-        self.device = Some(clock);
-        Ok(())
+        let name = clock.name.clone();
+        let _ = goofi_supervisor::worker::spawn("goofi-audio-close", move || drop(clock));
+        Some(name)
     }
 
     /// The device's rate and width, under the runtime lock: every instance — the ones still on
@@ -812,22 +920,15 @@ impl Engine for AudioEngine {
         }
     }
 
+    /// A birth: the rings, the cells and the control half now, and the node itself — a plugin's
+    /// instantiation, its `prepare`, its saved state — on a thread of its own. The slot goes to
+    /// the audio thread whole once the node is there, and until then the plan leaves it out.
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
         let Some(Class { manifest, make, plugin }) = self.classes.get(type_name).cloned() else {
             return Some(format!("no audio node type `{type_name}`"));
         };
         let chans = Arc::new(AtomicU16::new(1));
         let (birth, ports) = rings_for(type_name, chans.clone(), uid, self.ui.clone(), self.audio.clone());
-        let mut node = make(birth);
-        // Only the audio-rate params are ports; a control-rate one is a float in the scalar strip.
-        let widest = node.audio_params(manifest.params.len()).max(manifest.inputs.len()).max(manifest.outputs.len());
-        if widest > MAX_PORTS {
-            return Some(format!("`{type_name}` declares more than {MAX_PORTS} ports"));
-        }
-        node.prepare(self.audio.rate());
-        if let Some(bytes) = self.state_path(uid, type_name).and_then(|p| std::fs::read(p).ok()) {
-            node.load(&bytes);
-        }
         let atomics: Arc<[AtomicU64]> = goofi_runtime::cells_of(params, manifest.params).into();
         let (inbox_in, inbox_out): (Vec<_>, Vec<_>) = manifest
             .inputs
@@ -853,7 +954,8 @@ impl Engine for AudioEngine {
         let ramps: Arc<[runtime::Ramps]> = manifest.params.iter().map(|_| runtime::Ramps::default()).collect();
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let spent = Arc::new(runtime::Spent::default());
-        let birth = control::Birth {
+        let born = Arc::new(AtomicBool::new(false));
+        let control_birth = control::Birth {
             uid,
             manifest,
             params: atomics.clone(),
@@ -866,6 +968,7 @@ impl Engine for AudioEngine {
             recs: rec_out,
             ports,
             audio: self.audio.clone(),
+            born: born.clone(),
         };
         let spawn = goofi_runtime::Spawn {
             engine: "audio",
@@ -877,34 +980,49 @@ impl Engine for AudioEngine {
             params: atomics.clone(),
             time: self.time.clone(),
         };
-        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), move || AudioHalf::new(birth)) {
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), move || AudioHalf::new(control_birth)) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         let idx = self.slot_index();
         let serial = self.next_serial;
         self.next_serial += 1;
-        let slot = Slot {
-            uid,
-            type_name: manifest.type_name,
+        let rate = self.audio.rate();
+        // Read here, at the settle that births it: a restart's state is what its last box left.
+        let state = self.state_path(uid, type_name).and_then(|p| std::fs::read(p).ok());
+        let (ty, widest_in, widest_out, nparams) = (manifest.type_name, manifest.inputs.len(), manifest.outputs.len(), manifest.params.len());
+        let making = make.clone();
+        let node = goofi_supervisor::ready::prepare(format!("goofi-audio-birth {ty}"), move || {
+            let mut node = making(birth);
+            // Only the audio-rate params are ports; a control-rate one is a float in the scalar strip.
+            let widest = node.audio_params(nparams).max(widest_in).max(widest_out);
+            if widest > MAX_PORTS {
+                return Err(format!("`{ty}` declares more than {MAX_PORTS} ports"));
+            }
+            node.prepare(rate);
+            if let Some(bytes) = state {
+                node.load(&bytes);
+            }
+            Ok(node)
+        });
+        let drain = self.shared.waker.clone();
+        node.on_ready(move || drain.notify());
+        let unborn = Unborn {
+            idx,
             serial,
-            node,
+            type_name: manifest.type_name,
             params: atomics,
             ramps,
-            inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), self.audio.rate())).collect(),
+            inboxes: inbox_out.into_iter().map(|ring| Frames::new(ring, Playback::of(manifest), rate)).collect(),
             blocks: blocks_out,
             taps: tap_in,
             recs: rec_in,
-            dead: false,
-            overruns: 0,
-            cost: None,
             spent: spent.clone(),
-            fault: None,
         };
-        self.send(Msg::Insert { idx, slot });
         let twin = make(nodes::Birth { chans, ..Default::default() });
         let shown = plugin.map(|d| d.params.iter().map(|k| k.default).collect()).unwrap_or_default();
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown, spent });
+        let making = Some(Making { node, rate, unborn, born });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown, spent, making });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -929,6 +1047,8 @@ impl Engine for AudioEngine {
     }
 
     fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+        self.land_births();
+        self.land_device();
         self.dirty = false;
         if std::mem::take(&mut self.sweep) {
             self.sweep_state();
@@ -981,7 +1101,10 @@ impl Engine for AudioEngine {
         }
         let silent: Vec<Uid> = faults.iter().map(|(u, _)| *u).collect();
         faults.extend(self.disabled.iter().map(|(u, m)| (*u, m.clone())));
-        let (plan, looped) = plan::compile(view, &self.live, &silent, &self.disabled);
+        // A node still being made is out of the plan, with no fault: it is in setup.
+        let mut out = self.disabled.clone();
+        out.extend(self.live.iter().filter(|(_, i)| i.making.is_some()).map(|(u, _)| (*u, String::new())));
+        let (plan, looped) = plan::compile(view, &self.live, &silent, &out);
         faults.extend(looped);
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
@@ -1013,6 +1136,13 @@ impl Engine for AudioEngine {
     }
 
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize {
+        // A node or a device whose making answered lands at the settle this asks for, never here:
+        // the slot and the plan that uses it go to the audio thread in one step.
+        if self.live.values().any(|i| i.making.as_ref().is_some_and(|m| m.node.is_ready()))
+            || self.opening.as_ref().is_some_and(|o| o.clock.is_ready())
+        {
+            self.dirty = true;
+        }
         self.discard_retired();
         // A stream that died is closed here, and its name tried once more at the settle this asks for.
         if self.stats.dead.swap(false, Ordering::Acquire) {
@@ -1080,7 +1210,12 @@ impl Engine for AudioEngine {
     /// Stop the clock and every control half, and WAIT for each to release its shared memory — a
     /// ceiling, because only a process about to EXIT has no "a moment later".
     fn shutdown(&mut self) {
-        self.close();
+        // Waited for here, not on a thread: nothing of the engine may outlive this.
+        self.opening = None;
+        if let Some(clock) = self.device.take() {
+            self.runtime.lock().set_device(None);
+            drop(clock);
+        }
         goofi_runtime::stop_all(self.live.values().map(|i| &i.control));
         for uid in self.live.keys().copied().collect::<Vec<_>>() {
             self.remove(uid);

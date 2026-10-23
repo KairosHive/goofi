@@ -99,7 +99,7 @@ impl Entry {
             slot: id.slot.clone(),
             uid: id.uid.to_hex(),
             engine: id.engine,
-            t0_utc: goofi_core::time::stamp_nanos(t0_utc),
+            t0_utc: goofi_supervisor::timing::stamp_nanos(t0_utc),
             t0_patch,
             sfreq,
             timeline: timeline.name(),

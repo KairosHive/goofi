@@ -23,7 +23,7 @@ pub struct SignalEngine {
     pub(crate) hub: Arc<goofi_transport::Hub>,
     /// What service names are scoped by — handed down from the graph, whose resolver inputs it is.
     instance: String,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     shared: Arc<Shared>,
     hosts: HashMap<Uid, Handle>,
     /// A node was born since the last settle, and owes its runtime a first desired state.
@@ -43,7 +43,7 @@ impl SignalEngine {
         self.host = Some(exe);
     }
 
-    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_core::time::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
+    pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_supervisor::timing::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
         Ok(SignalEngine {
             shared: Arc::new(Shared::new(waker)),
             hub,

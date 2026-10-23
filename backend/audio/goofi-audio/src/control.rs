@@ -144,6 +144,8 @@ pub struct AudioHalf {
     /// An `AudioPlayback`'s file; every other node has none.
     play: Option<Play>,
     audio: Arc<AudioShared>,
+    /// Raised once the node is on the audio thread: until then this half is a node in setup.
+    born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
@@ -161,6 +163,7 @@ pub struct Birth {
     pub recs: Vec<rtrb::Consumer<f32>>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
+    pub born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AudioHalf {
@@ -191,6 +194,7 @@ impl AudioHalf {
             ports,
             io: Io::default(),
             audio: birth.audio,
+            born: birth.born,
         }
     }
 
@@ -391,6 +395,11 @@ impl AudioHalf {
 }
 
 impl Executor for AudioHalf {
+    /// Setup while the node is still being made on its own thread; ready once it processes.
+    fn stage(&self) -> goofi_node::NodeStage {
+        if self.born.load(Ordering::Acquire) { goofi_node::NodeStage::Ready } else { goofi_node::NodeStage::Setup }
+    }
+
     /// One frame into the crossing that resamples it to the clock's rate, or that enters its
     /// values as they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {

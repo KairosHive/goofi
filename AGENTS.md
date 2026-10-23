@@ -109,8 +109,16 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   payloads, never a buffer; a queue is bounded, drops its oldest, never blocks its sender, and
   only the recorder reads one. A door is a `goofi_supervisor::timing::Event`. A child (a hosted
   Rust node, a Python subprocess) is called over an exchange: shared-memory mailboxes and a
-  loopback doorbell. `goofi_supervisor::timing` is the one place anything waits with a deadline
-  or on a grid.
+  loopback doorbell.
+- `goofi_supervisor::timing` is the one time module: the patch clock (`Time`) every stamp reads,
+  and every way anything waits, paces or measures (`Event`, `Deadline`, `Pace`, `Grid`,
+  `RateMeter`, `sleep_until`, `wait_readable`). Nothing else sleeps in a loop, sets a socket
+  timeout, rounds a deadline to a tick or keeps a clock of its own.
+- `goofi_supervisor::ready` is how a component is built: compilation and configuration (a node's
+  instantiation and `prepare`, a shader's pipeline, a device's open) run through `ready::prepare`
+  on a thread of their own, the system keeps running on what it has, and the owner takes the
+  `Ready` at its next settle or tick and swaps it in whole. A tick never waits on a build and never
+  sees a half-built component; a build that fails or panics is a refusal the owner reports.
 - `goofi_record` is the one recorder. An engine publishes an armed output's frames (`Out::Record`,
   a `Data` or a texture's texels) and never touches a file; the manager tells the recorder the
   settled armed set after every settle; a worker per armed stream takes frames off its queue and

@@ -68,45 +68,6 @@ fn serve_interval(by_conn: &HashMap<ConnId, Declared>, cap: f64) -> Duration {
     Duration::from_secs_f64(1.0 / fps.min(cap))
 }
 
-/// A rate on ONE grid for the whole process: every serve lands on a tick of its interval, so
-/// streams at one rate arrive together, a page paints them once, and work never stretches it.
-pub(crate) struct Pace {
-    tick: std::time::Instant,
-    /// The grid `tick` is on; a tick armed on another grid is nobody's.
-    interval: Duration,
-    /// Whether something waits for `tick`: only then is a wake after it that tick's, late.
-    armed: bool,
-}
-
-/// The first tick of `interval`'s grid at or after `at`.
-fn tick(interval: Duration, at: std::time::Instant) -> std::time::Instant {
-    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let origin = *ORIGIN.get_or_init(std::time::Instant::now);
-    let step = interval.as_nanos().max(1);
-    let n = at.saturating_duration_since(origin).as_nanos().div_ceil(step);
-    origin + Duration::from_nanos((n * step) as u64)
-}
-
-impl Pace {
-    pub(crate) fn new() -> Pace {
-        Pace { tick: std::time::Instant::now(), interval: Duration::ZERO, armed: false }
-    }
-    /// The tick to serve on, armed by this ask. An armed one passed by more than half an interval
-    /// is not a wake's lateness but an idle stretch, and the next tick takes its place.
-    pub(crate) fn due(&mut self, interval: Duration, now: std::time::Instant) -> std::time::Instant {
-        if !self.armed || self.interval != interval || self.tick + interval / 2 <= now {
-            self.tick = tick(interval, now);
-            self.interval = interval;
-            self.armed = true;
-        }
-        self.tick
-    }
-    /// A serve took this tick: the next one is nobody's until a wait arms it.
-    pub(crate) fn take(&mut self, interval: Duration, now: std::time::Instant) {
-        self.tick = tick(interval, now + Duration::from_nanos(1));
-        self.armed = false;
-    }
-}
 
 /// What a slot's loop shares with its map entry, which the loop knows its own entry by.
 struct Slot {
@@ -235,10 +196,10 @@ impl SlotReducers {
             reducer.slot.stop.store(true, Ordering::Relaxed);
             reducer.poke();
         }
-        let deadline = std::time::Instant::now() + within;
+        let deadline = goofi_supervisor::timing::Deadline::within(within);
         for mut reducer in reducers {
             if let Some(worker) = reducer.worker.take() {
-                worker.join_within(deadline.saturating_duration_since(std::time::Instant::now()));
+                worker.join_within(deadline.left());
             }
         }
     }
@@ -406,7 +367,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
         // `served: None` means "never broadcast", which is what sends the first frame without a bump.
         let mut served: Option<u64> = None;
         let mut pending = false;
-        let mut pace = Pace::new();
+        let mut pace = goofi_supervisor::timing::Grid::new();
         // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
         // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
         let mut demanded: Option<Option<goofi_view::ViewWant>> = None;

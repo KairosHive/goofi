@@ -4,8 +4,9 @@
 
 use std::ffi::c_void;
 use std::sync::Arc;
-use goofi_supervisor::sync::{Condvar, Mutex};
 use std::time::Instant;
+
+use goofi_supervisor::timing::Event;
 
 use super::{Id, Pumped, Screen, Wake};
 
@@ -15,16 +16,13 @@ pub struct Platform {
     next: Id,
 }
 
+/// The pump's door: a wake rings it, and the pump parks on it until its deadline.
 #[derive(Default)]
-struct Signal {
-    woke: Mutex<bool>,
-    cv: Condvar,
-}
+struct Signal(Event);
 
 impl Wake for Signal {
     fn wake(&self) {
-        *self.woke.lock() = true;
-        self.cv.notify_one();
+        self.0.ring(0);
     }
 }
 
@@ -43,19 +41,10 @@ impl Screen for Platform {
     fn destroy(&mut self, _id: Id) {}
 
     fn pump(&mut self, until: Option<Instant>, _fds: &[i32]) -> Pumped {
-        let mut woke = self.wake.woke.lock();
-        while !*woke {
-            let Some(until) = until else {
-                woke = self.wake.cv.wait(woke);
-                continue;
-            };
-            let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            woke = self.wake.cv.wait_timeout(woke, left);
-        }
-        *woke = false;
+        match until {
+            Some(until) => self.wake.0.wait_until(until),
+            None => self.wake.0.wait(),
+        };
         Pumped { closed: Vec::new(), ready: Vec::new(), dead: false }
     }
 }

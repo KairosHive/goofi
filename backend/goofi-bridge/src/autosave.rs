@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use goofi_graph::archive;
 use notify::Watcher;
@@ -43,13 +43,7 @@ pub(crate) fn spawn(state: AppState) {
         loop {
             state.changed.wait_timeout(if watch.at.is_some() { PARK } else { CAP });
             // Debounce: wait for a quiet window, but no longer than the cap since the first pulse.
-            let first = Instant::now();
-            loop {
-                let left = (first + CAP).saturating_duration_since(Instant::now());
-                if left.is_zero() || !state.changed.wait_timeout(QUIET.min(left)) {
-                    break;
-                }
-            }
+            state.changed.wait_quiet(QUIET, goofi_supervisor::timing::Deadline::within(CAP));
             if state.stopping.stopped() {
                 return;
             }

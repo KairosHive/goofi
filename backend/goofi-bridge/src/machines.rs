@@ -69,7 +69,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
         loop {
             // Sleep toward the next instant owed; a message is the other reason to wake.
             let wait = match machines.next_deadline() {
-                Some(at) => Duration::from_secs_f64((at - time.now()).max(0.0)).min(IDLE),
+                Some(at) => goofi_supervisor::timing::Deadline::at(time.instant_at(at)).left().min(IDLE),
                 None => IDLE,
             };
             let mut woken = false;
