@@ -5,7 +5,11 @@ use std::process::Command;
 use std::time::SystemTime;
 
 fn main() {
-    prebuild_nodes();
+    // A moment before this run, for what it builds: cargo's reference for a watched path is the
+    // run's start, so a product dated later would call this script stale on every build after,
+    // and one dated at the start would tie, which is read as newer.
+    let started = SystemTime::now() - std::time::Duration::from_secs(2);
+    prebuild_nodes(started);
     embed_skills();
     // Outside every early return below, or the headless verdict outlives the change that revoked it.
     println!("cargo:rerun-if-env-changed=GOOFI_HEADLESS");
@@ -14,8 +18,18 @@ fn main() {
         println!("cargo:warning=GOOFI_HEADLESS: built without the frontend — this binary serves the API alone");
         return embed_spa(&frontend.join("build"), true);
     }
-    sync_frontend(&frontend);
+    sync_frontend(&frontend, started);
     embed_spa(&frontend.join("build"), false);
+}
+
+/// Date `path` and everything under it at `at`: what this run built is this run's product.
+fn date_tree(path: &Path, at: SystemTime) {
+    let _ = std::fs::File::options().write(true).open(path).or_else(|_| std::fs::File::open(path)).and_then(|f| f.set_modified(at));
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+            date_tree(&entry.path(), at);
+        }
+    }
 }
 
 /// Build every `node-bundles/<bundle>/*.rs` through the one pipeline a scan runs,
@@ -23,10 +37,7 @@ fn main() {
 /// bundle, every artifact under the cache key a scan will look it up by, and a key over the
 /// files themselves. A shipped node that does not compile fails THIS build, so a binary never
 /// ships a node it cannot load.
-fn prebuild_nodes() {
-    // A moment before this run, for what it builds; a product dated at the run's start would tie
-    // with cargo's reference, and a tie is read as newer.
-    let started = SystemTime::now() - std::time::Duration::from_secs(2);
+fn prebuild_nodes(started: SystemTime) {
     let bundles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     // The runtime a goofi from this build loads from, so a boot finds what this step built.
@@ -48,12 +59,10 @@ fn prebuild_nodes() {
             let held = goofi_build::built(sdk, &path, &base).is_ok();
             let artifact = goofi_build::ensure(sdk, &path, &base)
                 .unwrap_or_else(|why| panic!("the shipped node {} does not build:\n{why}", path.display()));
-            // Watched, so an artifact removed or replaced by hand re-runs this script. Cargo's
-            // reference for a watched path is this run's START, so one built here is newer than
-            // it and would call the script stale on every build after; it is dated as what it is,
-            // this run's product, and a build after reads it as current.
+            // Watched, so an artifact removed or replaced by hand re-runs this script; one built
+            // here is dated as this run's product, so a build after reads it as current.
             if !held {
-                let _ = std::fs::File::options().write(true).open(&artifact).and_then(|f| f.set_modified(started));
+                date_tree(&artifact, started);
             }
             println!("cargo:rerun-if-changed={}", artifact.display());
             let key = artifact.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
@@ -157,7 +166,7 @@ const INPUTS: &[&str] = &[
 
 /// Rebuild the served SPA when its sources are newer than the last build; a build that cannot be
 /// made current panics, because by here the caller has asked for an app.
-fn sync_frontend(frontend: &Path) {
+fn sync_frontend(frontend: &Path, started: SystemTime) {
     if !frontend.join("src").is_dir() {
         return;
     }
@@ -191,7 +200,9 @@ fn sync_frontend(frontend: &Path) {
 
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     match Command::new(npm).args(["run", "build"]).current_dir(frontend).status() {
-        Ok(s) if s.success() => {}
+        // Built here, so dated as this run's product (see `main`), or every build after would
+        // find the app newer than this run and run this script again.
+        Ok(s) if s.success() => date_tree(&frontend.join("build"), started),
         Ok(s) => panic!("`npm run build` failed in frontend/ ({s})"),
         Err(e) => panic!(
             "could not run `{npm}` ({e}) — it builds the SPA compiled into this binary. Install \
