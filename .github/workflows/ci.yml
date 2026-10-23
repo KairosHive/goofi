@@ -71,7 +71,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      - run: npx playwright install --with-deps chromium
+      # Without `--with-deps`: the runner holds Chromium's libraries already, and that flag's own
+      # apt transaction added nine font packages the suite asserts nothing on, at the mirror's pace.
+      - run: npx playwright install chromium
         working-directory: tests/e2e
       # The suite against the binary and the frontend built above: one worker per core, each with
       # a backend of its own.
