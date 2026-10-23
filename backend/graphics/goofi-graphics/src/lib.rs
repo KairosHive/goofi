@@ -60,13 +60,18 @@ pub(crate) struct Instance {
     control: Handle,
     pub(crate) source: Option<producer::Source>,
     program: Option<(Arc<str>, scan::Built)>,
+    /// The width and height the settled document holds as constants, per axis; `None` where an
+    /// expression drives the axis and the half's evaluation is the one value.
+    settled_size: (Option<u32>, Option<u32>),
 }
 
 impl Instance {
-    /// The size this node asks for, from the one writer of its param atomics — a constant and an
-    /// evaluated binding alike. 0 on an axis means follow what is wired behind it.
+    /// The size this node asks for: a constant as the last settle read it, so the plan decides
+    /// from settled state; an evaluated binding from the half's param atomics, its one writer.
+    /// 0 on an axis means follow what is wired behind it.
     pub(crate) fn asked(&self) -> (u32, u32) {
-        plan::asked(&self.cells.params, self.class.manifest.params.len())
+        let (w, h) = plan::asked(&self.cells.params, self.class.manifest.params.len());
+        (self.settled_size.0.unwrap_or(w), self.settled_size.1.unwrap_or(h))
     }
 }
 
@@ -421,7 +426,7 @@ impl Engine for GraphicsEngine {
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, program: None });
+        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, program: None, settled_size: (None, None) });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -446,7 +451,16 @@ impl Engine for GraphicsEngine {
         for uid in self.live.keys().copied().collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
-            self.live[&uid].control.send_if_changed(desired);
+            // The universal group ends the decls: width, then height. A constant is read here,
+            // settled; a bound axis is left to the half, which writes what it evaluates.
+            let n = desired.consts.len();
+            let settled = |i: usize| {
+                let bound = desired.subs.iter().any(|s| matches!(s, goofi_runtime::Sub::Bind { param, .. } if *param == i));
+                (!bound).then(|| goofi_runtime::scalar(&desired.consts[i]).clamp(0.0, plan::MAX_SIZE as f64) as u32)
+            };
+            let inst = self.live.get_mut(&uid).expect("listed above");
+            inst.settled_size = (settled(n - 2), settled(n - 1));
+            inst.control.send_if_changed(desired);
         }
         // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
         for inst in self.live.values_mut() {

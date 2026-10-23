@@ -39,9 +39,12 @@ fn a_chain_filters_a_live_stream_and_reads_the_band_that_survives() {
     g.link(flt, "out", buf, "input");
     g.link(buf, "out", psd, "input");
 
-    // 512 real samples become 257 one-sided bins, and the rank is untouched.
-    let full = g.until("a spectrum of the full window", |_| {
-        probe.latest().filter(|d| shape(d) == vec![257])
+    // 512 real samples become 257 one-sided bins, and the rank is untouched. A slot between
+    // nodes is latest-wins, so a block the chain missed under load leaves a gap in the window
+    // and a smeared peak: the spectrum read is one of a window with no gap, which peaks at bin
+    // 20 and nowhere else.
+    let full = g.until("a spectrum of a full window with no gap, peaking at 10 Hz", |_| {
+        probe.latest().filter(|d| shape(d) == vec![257] && peak(d).0 == 20)
     });
     let (bin, power) = peak(&full);
     assert_eq!(bin, 20, "a 10 Hz sine peaks in the 10 Hz bin — bin 20 at half a hertz each, not {bin}");

@@ -621,7 +621,10 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             .expect("ffmpeg reads back what it wrote");
         assert_eq!(read.stdout.len() as u64, held * texels, "every frame in the file is one frame: {entry}");
         assert!(read.status.success(), "{}", String::from_utf8_lossy(&read.stderr));
-        let red = u16::from_le_bytes(read.stdout[..2].try_into().unwrap()) as f32 / 65535.0;
+        // The LAST frame: a readback is a tick or two behind the render, and the first frame a
+        // take holds may predate the half's write of the colour it was sent.
+        let last = read.stdout.len() - texels as usize;
+        let red = u16::from_le_bytes(read.stdout[last..last + 2].try_into().unwrap()) as f32 / 65535.0;
         assert!((red - 0.5).abs() < 0.04, "the GPU readback keeps the red channel: {red}");
         // …and what a PLAYER finds in it: three components at the rate the manifest states. A
         // 16-bit alpha plane is one VLC cannot allocate, and it plays such a file as nothing.
