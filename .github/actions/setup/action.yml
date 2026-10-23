@@ -90,9 +90,12 @@ runs:
       env:
         GOOFI_BOOT_ONLY: "1"
 
-    # Nothing the boot wrote may dirty the build: a crate rebuilt here names what it watched.
+    # Nothing the build script wrote, and nothing the boot wrote, may dirty the build: the gates
+    # after this would each pay the rebuild. A crate rebuilt here names what it watched.
     - name: Still fresh after the boot
       shell: bash
-      run: cargo build --workspace ${{ inputs.targets }} 2>&1 | grep -iE 'dirty|stale|Compiling' | head -40 || true
+      run: |
+        cargo build --workspace ${{ inputs.targets }} 2>&1 | tee fresh.log | grep -iE 'stale: changed|Compiling' || true
+        ! grep -q 'Compiling' fresh.log
       env:
         CARGO_LOG: cargo::core::compiler::fingerprint=info
