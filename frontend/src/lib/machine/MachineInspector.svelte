@@ -113,8 +113,8 @@
 					data-testid="transition-add-to" onChange={addTransition} />
 			{/if}
 		</div>
-		{#if list.length === 0}
-			<div class="empty">{addable ? 'None yet: drag from the box’s edge to another box, or pick a state above.' : 'None.'}</div>
+		{#if list.length === 0 && !addable}
+			<div class="empty">None.</div>
 		{/if}
 		<!-- A random state's draw: the wait leads the rows out, and each row out carries its share;
 		     a drag moves the others in their own ratio, so the shares always sum to one. -->
@@ -188,8 +188,6 @@
 							<ExprEditor machine={name} label="index" value={s.expression} testid="state-expression"
 								placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
 						</Field>
-					{:else}
-						<div class="hint">{DECISION_HINT[states[0].mode]}</div>
 					{/if}
 				</section>
 				<section class="section" data-testid="state-attributes">
@@ -236,8 +234,6 @@
 								<div class="definition"><AttributeForm {name} {attr} {a} /></div>
 							{/if}
 						</div>
-					{:else}
-						<div class="empty">No attributes yet: name one above. A state sets attributes, and a playhead carries them as variables.</div>
 					{/each}
 				</section>
 				{#if one}
@@ -259,8 +255,6 @@
 									<IconButton variant="ghost" size="sm" label={`Remove ${p}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
 								</span>
 							</div>
-						{:else}
-							<div class="empty">A playhead travels the states; its values are the variables a param reads.</div>
 						{/each}
 					</section>
 					{@render transitionList('transitions out', outgoing, 'transitions-out', true)}
