@@ -61,9 +61,13 @@ runs:
       run: |
         if [ ! -f target/asio_sdk/common/asio.h ]; then
           mkdir -p target/asio_sdk_dl && cd target/asio_sdk_dl
-          curl -sSL -o asio_sdk.zip https://www.steinberg.net/asiosdk
+          curl -sSL -A 'Mozilla/5.0' -o asio_sdk.zip https://www.steinberg.net/asiosdk
           7z x -y asio_sdk.zip > /dev/null
-          mv asio*/ ../asio_sdk
+          header=$(find . -type f -name asio.h -path '*common*' | head -1)
+          if [ -z "$header" ]; then
+            echo "the download holds no common/asio.h:"; ls -la; head -c 400 asio_sdk.zip; exit 1
+          fi
+          mv "$(dirname "$(dirname "$header")")" ../asio_sdk
           cd .. && rm -rf asio_sdk_dl
         fi
         echo "CPAL_ASIO_DIR=$GITHUB_WORKSPACE/target/asio_sdk" >> "$GITHUB_ENV"
