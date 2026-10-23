@@ -14,9 +14,10 @@ Related: `windows-agent-quoting.md`.
 
 ## Tests and CI
 
-- The `platform` job still runs no situation on Windows (`if: runner.os != 'Windows'` in
-  `ci.yml`). On a Windows 11 machine (2026-10-11) with `--test-threads=1`, children, engines,
-  headless, inspect, io, logging, plugins, python and transport passed and the run died at the
-  session situation above; in parallel the situations hit the handle table. Enable them serially
-  once that situation passes and a runner run is watched.
+- The `platform` job builds the binaries and boots on Windows, and runs no situation there
+  (`if: runner.os != 'Windows'` in `ci.yml`). On a Windows 11 machine (2026-10-11) with
+  `--test-threads=1`, children, engines, headless, inspect, io, logging, plugins, python and
+  transport passed and the run died at the session situation above; the handle table that broke
+  a parallel run was iceoryx2's and is gone. Enable them, at four threads, once that situation
+  passes and a runner run is watched.
 - The e2e agent specs need a POSIX shell (`tests/e2e/globalSetup.ts` pins `sh`).

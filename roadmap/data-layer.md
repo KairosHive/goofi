@@ -5,9 +5,9 @@ module (`goofi_supervisor::timing`) shipped on 2026-10-22; AGENTS.md describes t
 
 ## Remaining
 
-- Windows and macOS: the exchange's sections (`CreateFileMappingW`, `shm_open` under the
-  31-character name limit) and the `select` wait compile against the bindings but have not run.
-  Run the children, python, nodes and recording situations there.
+- Windows: the exchange's section (`CreateFileMappingW`) and the `select` wait compile against
+  the bindings but have not run; macOS ran the children, python, nodes and transport situations
+  green on CI (2026-10-23). Run the children, python, nodes and recording situations on Windows.
 - The measurements `performance-audit.md` lists under "Measure again".
 
 ## Not to be done
