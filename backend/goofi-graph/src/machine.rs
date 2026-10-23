@@ -8,15 +8,23 @@ use goofi_core::control;
 use goofi_core::ease::Curve;
 use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
 use goofi_core::{Data, Face, Meta, Param, Value};
-use goofi_node::{EvalCtx, ExprEvaluator, Local};
+use goofi_node::{EvalCtx, ExprEvaluator, Field, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::expr_rewrite::{self, Target};
+use crate::expr_rewrite::{self, MachineRef};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name.
 pub const OWN: [&str; 4] = ["state", "prev", "progress", "arrived"];
+
+/// What `st('name')` answers an expression: how many playheads rest in the state, their names
+/// from the longest resident to the newest, and how many arrived in it and left it at this instant.
+pub const STATE_FIELDS: [&str; 4] = ["residents", "playheads", "arrivals", "departures"];
+
+/// What `me` answers an expression before the attributes: the playhead's name, the state it rests
+/// in, and when it arrived there.
+pub const ME_FIELDS: [&str; 3] = ["name", "state", "arrived"];
 
 /// How many instant transitions the playheads take at one instant before the chain is an error.
 const HOPS: usize = 64;
@@ -180,7 +188,8 @@ pub struct State {
     /// draws evenly.
     #[serde(default)]
     pub weights: IndexMap<String, f64>,
-    /// In `expression`: the index of the transition out to take; a negative one waits.
+    /// In `expression`: Python over `variables.*`, `me`, `st()` and `t` to the index of the
+    /// transition out to take; a negative one waits.
     #[serde(default)]
     pub expression: String,
 }
@@ -206,40 +215,17 @@ pub struct Transition {
     /// A state name, or `*` for any state.
     pub from: String,
     pub to: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<Trigger>,
+    /// Python over `variables.*`, `me`, `st()` and `t`, read for each playhead resting in `from`
+    /// as it arrives and at every instant the machine settles after: the playhead takes the
+    /// transition the instant the condition turns true. Empty, the state's decision and a fire
+    /// alone take it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub condition: String,
     /// Seconds; 0 is instant.
     #[serde(default)]
     pub duration: f64,
     #[serde(default)]
     pub curve: Curve,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Trigger {
-    Manual,
-    /// `weight` is its share of the draw among the triggers that fire in one tick; 0 is never drawn.
-    When {
-        expression: String,
-        #[serde(default = "one")]
-        weight: f64,
-    },
-    Meet {
-        #[serde(default)]
-        policy: Policy,
-    },
-    Alone,
-}
-
-/// Who takes a `meet` transition: the longest resident, the newest arrival, or every resident.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "lowercase")]
-pub enum Policy {
-    #[default]
-    Fifo,
-    Lifo,
-    All,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -249,23 +235,38 @@ pub struct Playhead {
     pub start: String,
 }
 
-/// Why an expression cannot drive a machine: it names what is not a variable.
-pub fn check_expression(expression: &str) -> Result<(), String> {
-    let (_, refs) = expr_rewrite::rewrite(expression).map_err(|e| e.0)?;
-    match refs.iter().find(|r| !matches!(r.target, Target::Variable { .. })) {
-        Some(_) => Err(format!("`{expression}` reads a node; a machine reads variables alone — follow the output in a variable")),
-        None => Ok(()),
-    }
-}
-
 impl Machine {
-    /// Every expression the machine evaluates.
-    pub fn expressions(&self) -> impl Iterator<Item = &str> {
-        let whens = self.transitions.values().flat_map(|t| &t.triggers).filter_map(|tr| match tr {
-            Trigger::When { expression, .. } => Some(expression.as_str()),
+    /// Why an expression cannot drive this machine: it reads a node, or a state it does not have.
+    pub fn check_expression(&self, expression: &str) -> Result<(), String> {
+        let (_, refs) = expr_rewrite::rewrite_machine(expression).map_err(|e| e.0)?;
+        let missing = refs.iter().find_map(|(_, r)| match r {
+            MachineRef::State { name } if !self.states.contains_key(name) => Some(name),
             _ => None,
         });
-        whens.chain(self.states.values().filter(|s| s.mode == Decision::Expression && !s.expression.is_empty()).map(|s| s.expression.as_str()))
+        match missing {
+            Some(name) => Err(format!("`{expression}` reads `st('{name}')`, which is no state of the machine")),
+            None => Ok(()),
+        }
+    }
+
+    /// Every expression the machine evaluates.
+    pub fn expressions(&self) -> impl Iterator<Item = &str> {
+        let conditions = self.transitions.values().filter(|t| !t.condition.is_empty()).map(|t| t.condition.as_str());
+        conditions.chain(self.states.values().filter(|s| s.mode == Decision::Expression && !s.expression.is_empty()).map(|s| s.expression.as_str()))
+    }
+
+    /// Follow a rename into every expression the machine holds: `edit` answers the rewritten text.
+    pub fn rewrite_expressions(&mut self, edit: impl Fn(&str) -> Option<String>) {
+        for t in self.transitions.values_mut() {
+            if let Some(next) = edit(&t.condition) {
+                t.condition = next;
+            }
+        }
+        for s in self.states.values_mut() {
+            if let Some(next) = edit(&s.expression) {
+                s.expression = next;
+            }
+        }
     }
 
     /// The transitions out of `state`, in authored order: what a decision picks among.
@@ -319,7 +320,7 @@ impl Machine {
                 return Err(format!("state `{name}` weighs `{id}`, which is no transition out of it"));
             }
             if !state.expression.is_empty() {
-                check_expression(&state.expression).map_err(|why| format!("state `{name}`: {why}"))?;
+                self.check_expression(&state.expression).map_err(|why| format!("state `{name}`: {why}"))?;
             }
         }
         for (id, t) in &self.transitions {
@@ -332,13 +333,8 @@ impl Machine {
             if t.duration.is_nan() || t.duration < 0.0 {
                 return Err(format!("transition `{id}`: duration is at least 0"));
             }
-            for trigger in &t.triggers {
-                if let Trigger::When { expression, weight } = trigger {
-                    if weight.is_nan() || *weight < 0.0 {
-                        return Err(format!("transition `{id}`: a trigger's weight is at least 0"));
-                    }
-                    check_expression(expression).map_err(|why| format!("transition `{id}`: {why}"))?;
-                }
+            if !t.condition.is_empty() {
+                self.check_expression(&t.condition).map_err(|why| format!("transition `{id}`: {why}"))?;
             }
         }
         for (name, p) in &self.playheads {
@@ -367,10 +363,10 @@ impl Machine {
     }
 }
 
-/// One expression as the machines run it: compiled once per text, its variables by name.
+/// One expression as the machines run it: compiled once per text, what it reads by variable name.
 struct Expr {
     rewritten: String,
-    refs: Vec<(String, String)>,
+    refs: Vec<(String, MachineRef)>,
     id: Option<goofi_node::BindingId>,
     error: Option<String>,
 }
@@ -440,6 +436,7 @@ struct Due {
 /// One playhead's run: at rest in `state` since `arrived`, or in flight toward it; what it holds,
 /// and the attributes still on their way.
 struct Head {
+    name: String,
     state: String,
     prev: String,
     arrived: f64,
@@ -451,7 +448,7 @@ struct Head {
     due: Option<Due>,
     /// Per state, where `sequence` takes up again: the index of the next transition out.
     cursor: HashMap<String, usize>,
-    /// Per `when` transition out of the state, the gate as last read.
+    /// Per transition out of the state with a condition, its truth as last read.
     gates: HashMap<String, bool>,
     fire: Option<String>,
 }
@@ -467,6 +464,15 @@ struct Run {
 struct Events {
     arrived: Vec<String>,
     left: Vec<String>,
+}
+
+/// A state as `st()` reads it at one instant: who rests in it, longest resident first, and how
+/// many arrived in it and left it since the last look.
+#[derive(Clone, Default)]
+struct Occupancy {
+    playheads: Vec<String>,
+    arrivals: usize,
+    departures: usize,
 }
 
 enum Request {
@@ -531,17 +537,10 @@ impl Machines {
 
     fn compile(&self, text: &str) -> Expr {
         let none = |error: String| Expr { rewritten: String::new(), refs: Vec::new(), id: None, error: Some(error) };
-        let (rewritten, refs) = match expr_rewrite::rewrite(text) {
+        let (rewritten, refs) = match expr_rewrite::rewrite_machine(text) {
             Ok(r) => r,
             Err(e) => return none(e.0),
         };
-        let refs = refs
-            .into_iter()
-            .map(|r| match r.target {
-                Target::Variable { key } => (r.var, key),
-                _ => (r.var, String::new()),
-            })
-            .collect();
         if expr_rewrite::is_bare(&rewritten) {
             return Expr { rewritten, refs, id: None, error: None };
         }
@@ -571,7 +570,11 @@ impl Machines {
 
     /// Every variable the machines' expressions read — what an advance wants handed to it.
     pub fn keys(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self.compiled.values().flat_map(|e| e.refs.iter().map(|(_, k)| k.clone())).collect();
+        let variables = self.compiled.values().flat_map(|e| e.refs.iter()).filter_map(|(_, r)| match r {
+            MachineRef::Variable { key } => Some(key.clone()),
+            _ => None,
+        });
+        let mut keys: Vec<String> = variables.collect();
         keys.sort();
         keys.dedup();
         keys
@@ -662,6 +665,7 @@ impl Machines {
         for (name, machine) in &self.config {
             let Some(run) = self.runs.get_mut(name) else { continue };
             let mut events = Events::default();
+            ctx.census(machine, run, &events);
             for r in &requests {
                 match r {
                     Request::Fire { machine: m, playhead, transition } if m == name => {
@@ -797,34 +801,73 @@ fn fold(head: &mut Head, now: f64) {
     });
 }
 
-/// What a step reads and evaluates against.
+/// What a step reads and evaluates against: the compiled expressions, the frames, the instant,
+/// and the census the machine's own records are read from.
 struct Ctx<'a> {
     compiled: &'a HashMap<String, Expr>,
     evaluator: &'a Option<Arc<dyn ExprEvaluator>>,
     read: &'a dyn Fn(&str) -> Option<Data>,
     now: f64,
     errors: std::cell::RefCell<Vec<String>>,
+    census: std::cell::RefCell<HashMap<String, Occupancy>>,
 }
 
 impl<'a> Ctx<'a> {
     fn new(compiled: &'a HashMap<String, Expr>, evaluator: &'a Option<Arc<dyn ExprEvaluator>>, read: &'a dyn Fn(&str) -> Option<Data>, now: f64) -> Ctx<'a> {
-        Ctx { compiled, evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()) }
+        Ctx { compiled, evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()), census: std::cell::RefCell::new(HashMap::new()) }
     }
 
-    fn eval(&self, text: &str) -> Result<Data, String> {
+    /// Take the census `st()` answers from: every state of `machine`, who rests in it by arrival,
+    /// and the moves `events` holds. A playhead's conditions are first read against the census
+    /// taken before its own arrival, so the arrival itself can be what turns one true.
+    fn census(&self, machine: &Machine, run: &Run, events: &Events) {
+        let mut census: HashMap<String, Occupancy> = machine.states.keys().map(|s| (s.clone(), Occupancy::default())).collect();
+        let mut resting: Vec<(&String, &Head)> = run.heads.iter().filter(|(_, h)| h.flight.is_none()).collect();
+        resting.sort_by(|a, b| a.1.arrived.total_cmp(&b.1.arrived));
+        for (ph, h) in resting {
+            if let Some(o) = census.get_mut(&h.state) {
+                o.playheads.push(ph.clone());
+            }
+        }
+        for s in &events.arrived {
+            if let Some(o) = census.get_mut(s) {
+                o.arrivals += 1;
+            }
+        }
+        for s in &events.left {
+            if let Some(o) = census.get_mut(s) {
+                o.departures += 1;
+            }
+        }
+        *self.census.borrow_mut() = census;
+    }
+
+    /// Evaluate `text` for `me`, the playhead it is read for.
+    fn eval(&self, text: &str, me: &Head) -> Result<Data, String> {
         let Some(e) = self.compiled.get(text) else { return Err(format!("`{text}` is not compiled")) };
         if let Some(error) = &e.error {
             return Err(error.clone());
         }
         let mut locals: Vec<(String, Local)> = Vec::with_capacity(e.refs.len());
-        for (var, key) in &e.refs {
-            let frame = (self.read)(key).ok_or_else(|| format!("variable `{key}` is not defined"))?;
-            // A variable holding a functional is read at this instant, as any reader reads it.
-            let frame = match (frame.as_functional().is_some(), self.evaluator) {
-                (true, Some(ev)) => goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?,
-                _ => frame,
+        for (var, r) in &e.refs {
+            let local = match r {
+                MachineRef::Variable { key } => {
+                    let frame = (self.read)(key).ok_or_else(|| format!("variable `{key}` is not defined"))?;
+                    // A variable holding a functional is read at this instant, as any reader reads it.
+                    let frame = match (frame.as_functional().is_some(), self.evaluator) {
+                        (true, Some(ev)) => goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?,
+                        _ => frame,
+                    };
+                    Local::Frame(frame)
+                }
+                MachineRef::Playhead => Local::Record(playhead_record(me, self.now)),
+                MachineRef::State { name } => {
+                    let census = self.census.borrow();
+                    let o = census.get(name).ok_or_else(|| format!("`st('{name}')` is no state of the machine"))?;
+                    Local::Record(state_record(o))
+                }
             };
-            locals.push((var.clone(), Local::Frame(frame)));
+            locals.push((var.clone(), local));
         }
         if expr_rewrite::is_bare(&e.rewritten) {
             let (var, index) = goofi_node::mailbox::split_index(e.rewritten.trim())?;
@@ -837,9 +880,9 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// The gate an expression holds now; an expression that cannot be read is a closed gate.
-    fn gate(&self, text: &str) -> bool {
-        match self.eval(text) {
+    /// The truth a condition holds now, for `me`; one that cannot be read is false.
+    fn gate(&self, text: &str, me: &Head) -> bool {
+        match self.eval(text, me) {
             Ok(frame) => control::truth(&frame),
             Err(why) => {
                 self.errors.borrow_mut().push(format!("`{text}`: {why}"));
@@ -847,6 +890,29 @@ impl<'a> Ctx<'a> {
             }
         }
     }
+}
+
+/// `me` as an expression reads it: the playhead's name, state and arrival, then each attribute as
+/// it stands at `now`, mid-motion or at rest.
+fn playhead_record(head: &Head, now: f64) -> Vec<(String, Field)> {
+    let own = [Data::text(head.name.as_str()), Data::text(head.state.as_str()), Data::number(head.arrived)];
+    let mut fields: Vec<(String, Field)> = ME_FIELDS.iter().zip(own).map(|(f, v)| (f.to_string(), Field::Frame(v))).collect();
+    for (a, held) in &head.held {
+        let value = head.motions.get(a).map_or_else(|| held.clone(), |m| m.at(now));
+        fields.push((a.clone(), Field::Frame(value)));
+    }
+    fields
+}
+
+/// `st('name')` as an expression reads it: [`STATE_FIELDS`] over the census.
+fn state_record(o: &Occupancy) -> Vec<(String, Field)> {
+    let values = [
+        Field::Frame(Data::number(o.playheads.len() as f64)),
+        Field::Names(o.playheads.clone()),
+        Field::Frame(Data::number(o.arrivals as f64)),
+        Field::Frame(Data::number(o.departures as f64)),
+    ];
+    STATE_FIELDS.iter().zip(values).map(|(f, v)| (f.to_string(), v)).collect()
 }
 
 fn seed_state(seed: u64) -> u64 {
@@ -869,8 +935,9 @@ fn leaves(t: &Transition, state: &str) -> bool {
 }
 
 /// A head born at the attribute defaults, placed in `state`.
-fn born(machine: &Machine, state: &str, ctx: &Ctx, events: &mut Events) -> Head {
+fn born(machine: &Machine, name: &str, state: &str, ctx: &Ctx, events: &mut Events) -> Head {
     let mut head = Head {
+        name: name.to_string(),
         state: String::new(),
         prev: String::new(),
         arrived: ctx.now,
@@ -930,9 +997,10 @@ fn relocate(head: &mut Head, machine: &Machine, state: &str, ctx: &Ctx, events: 
     arrive(head, machine, state, ctx.now, ctx, events);
 }
 
-/// Arm what fires out of the head's state: its decisions from its arrival, a gate's baseline.
-/// With `fresh`, everything is re-armed; without, a model edit keeps the decision's beat, moved to
-/// a changed interval from the last one.
+/// Arm what fires out of the head's state: its decisions from its arrival, and each condition's
+/// truth as it stands, so the next instant it turns true is the one that fires it. With `fresh`,
+/// everything is re-armed; without, a model edit keeps the decision's beat, moved to a changed
+/// interval from the last one.
 fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
     if fresh {
         head.due = None;
@@ -950,15 +1018,15 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
         (true, Some(d)) if d.at.is_infinite() => Some(Due { at: ctx.now + interval, interval }),
         (true, Some(d)) => Some(Due { at: (d.at - d.interval + interval).max(ctx.now), interval }),
     };
-    for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &state)) {
-        for trigger in &t.triggers {
-            if let Trigger::When { expression, .. } = trigger {
-                if !head.gates.contains_key(id) {
-                    let gate = ctx.gate(expression);
-                    head.gates.insert(id.clone(), gate);
-                }
-            }
-        }
+    let unread: Vec<(String, String)> = machine
+        .transitions
+        .iter()
+        .filter(|(id, t)| leaves(t, &state) && !t.condition.is_empty() && !head.gates.contains_key(*id))
+        .map(|(id, t)| (id.clone(), t.condition.clone()))
+        .collect();
+    for (id, condition) in unread {
+        let gate = ctx.gate(&condition, head);
+        head.gates.insert(id, gate);
     }
 }
 
@@ -966,10 +1034,11 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
 fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
     let mut events = Events::default();
     run.heads.retain(|ph, _| machine.playheads.contains_key(ph));
+    ctx.census(machine, run, &events);
     for (ph, p) in &machine.playheads {
         match run.heads.get_mut(ph) {
             None => {
-                let head = born(machine, &p.start, ctx, &mut events);
+                let head = born(machine, ph, &p.start, ctx, &mut events);
                 run.heads.insert(ph.clone(), head);
             }
             Some(head) => {
@@ -1034,7 +1103,10 @@ fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx, events: &mut 
 
 /// Land the flights that are done by this instant, then let what fires out of each rest state
 /// take its playhead, a bounded number of hops; a chain still going past the bound is an error.
+/// Each hop reads the conditions against the census the last hop's moves left, so a playhead's
+/// arrival and departure are what the others' conditions see.
 fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Events) {
+    ctx.census(machine, run, &Events::default());
     for head in run.heads.values_mut() {
         fold(head, ctx.now);
         let Some(f) = &head.flight else { continue };
@@ -1046,6 +1118,8 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
         }
     }
     for hop in 0..=HOPS {
+        let moved = std::mem::take(&mut events);
+        ctx.census(machine, run, &moved);
         let mut takes: Vec<(String, String)> = Vec::new();
         for (ph, head) in run.heads.iter_mut() {
             // A manual fire redirects a flight; nothing else reaches a playhead in the air.
@@ -1058,8 +1132,9 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
             if head.flight.is_some() {
                 continue;
             }
-            // A beat due now decides, and re-arms from its due; a `when` rising at this instant
-            // goes first, the draw among them by weight. With no way out, the beat plays the state again.
+            // A beat due now decides, and re-arms from its due; a condition turning true at this
+            // instant goes first, the first in authored order among several. With no way out, the
+            // beat plays the state again.
             let decided = match head.due.filter(|d| d.at <= ctx.now) {
                 Some(d) => {
                     let at = if d.interval > 0.0 { d.at + d.interval } else { f64::INFINITY };
@@ -1075,45 +1150,16 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, mut events: Eve
                 }
                 None => None,
             };
-            let mut fired: Vec<(String, f64)> = Vec::new();
-            for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &head.state)) {
-                for trigger in &t.triggers {
-                    if let Trigger::When { expression, weight } = trigger {
-                        let gate = ctx.gate(expression);
-                        if gate && !head.gates.get(id).copied().unwrap_or(false) {
-                            fired.push((id.clone(), *weight));
-                        }
-                        head.gates.insert(id.clone(), gate);
-                    }
+            let mut rising: Option<String> = None;
+            for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, &head.state) && !t.condition.is_empty()) {
+                let gate = ctx.gate(&t.condition, head);
+                if gate && !head.gates.get(id).copied().unwrap_or(false) {
+                    rising.get_or_insert_with(|| id.clone());
                 }
+                head.gates.insert(id.clone(), gate);
             }
-            if let Some(id) = pick(&fired, &mut run.rng).or(decided) {
+            if let Some(id) = rising.or(decided) {
                 takes.push((ph.clone(), id));
-            }
-        }
-        // A meeting or a lone stay, from what this hop's arrivals and departures left behind.
-        let arrivals = std::mem::take(&mut events.arrived);
-        let departures = std::mem::take(&mut events.left);
-        for state in arrivals.iter().chain(&departures) {
-            let residents: Vec<(String, f64)> =
-                run.heads.iter().filter(|(_, h)| h.flight.is_none() && h.state == *state).map(|(ph, h)| (ph.clone(), h.arrived)).collect();
-            for (id, t) in machine.transitions.iter().filter(|(_, t)| leaves(t, state)) {
-                for trigger in &t.triggers {
-                    let chosen: Vec<String> = match trigger {
-                        Trigger::Meet { policy } if arrivals.contains(state) && residents.len() >= 2 => match policy {
-                            Policy::All => residents.iter().map(|(ph, _)| ph.clone()).collect(),
-                            Policy::Fifo => residents.iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(ph, _)| ph.clone()).into_iter().collect(),
-                            Policy::Lifo => residents.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(ph, _)| ph.clone()).into_iter().collect(),
-                        },
-                        Trigger::Alone if departures.contains(state) && residents.len() == 1 => vec![residents[0].0.clone()],
-                        _ => Vec::new(),
-                    };
-                    for ph in chosen {
-                        if !takes.iter().any(|(p, _)| *p == ph) {
-                            takes.push((ph, id.clone()));
-                        }
-                    }
-                }
             }
         }
         if takes.is_empty() {
@@ -1152,7 +1198,7 @@ fn decide(machine: &Machine, head: &mut Head, ctx: &Ctx, rng: &mut u64) -> Optio
         }
         Decision::Expression if s.expression.is_empty() => None,
         Decision::Expression => {
-            let index = match ctx.eval(&s.expression) {
+            let index = match ctx.eval(&s.expression, head) {
                 Ok(frame) => control::number_of(&frame),
                 Err(why) => {
                     ctx.errors.borrow_mut().push(format!("`{}`: {why}", s.expression));
@@ -1171,18 +1217,18 @@ fn decide(machine: &Machine, head: &mut Head, ctx: &Ctx, rng: &mut u64) -> Optio
     }
 }
 
-/// One of the triggers that fired, drawn by weight; the transition it is on.
-fn pick(fired: &[(String, f64)], rng: &mut u64) -> Option<String> {
-    let total: f64 = fired.iter().map(|(_, w)| w).sum();
+/// One of `options`, drawn by weight.
+fn pick(options: &[(String, f64)], rng: &mut u64) -> Option<String> {
+    let total: f64 = options.iter().map(|(_, w)| w).sum();
     if total <= 0.0 {
         return None;
     }
     let mut r = draw(rng) * total;
-    for (id, w) in fired {
+    for (id, w) in options {
         if r < *w {
             return Some(id.clone());
         }
         r -= w;
     }
-    fired.last().map(|(id, _)| id.clone())
+    options.last().map(|(id, _)| id.clone())
 }

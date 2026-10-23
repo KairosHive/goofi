@@ -880,6 +880,7 @@ impl Graph {
             rekey(&mut s.values, from, to);
             rekey(&mut s.envelopes, from, to);
         }
+        next.rewrite_expressions(|e| expr_rewrite::rename_me_fields(e, |f| (f == from).then(|| to.to_string())));
         let moved: Vec<(String, String)> = m.playheads.keys().map(|ph| (format!("{ph}.{from}"), format!("{ph}.{to}"))).collect();
         self.set_machine(machine, Some(next), None)?;
         Ok(self.rewrite_variable_reads(&moved))
@@ -906,11 +907,14 @@ impl Graph {
         }
     }
 
-    /// Follow a set of variable renames into every expression that spells one, answering the nodes
-    /// whose source text changed.
+    /// Follow a set of variable renames into every expression that spells one — a variable's, a
+    /// source's, a machine's — answering the nodes whose source text changed.
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
+        for m in self.patch.machines.values_mut() {
+            m.rewrite_expressions(|e| expr_rewrite::rename_variables(e, rename));
+        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })

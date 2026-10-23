@@ -235,6 +235,47 @@ describe('variables. and np.', () => {
 	});
 });
 
+/* A machine's expression is read against its own scope: `st('…')` names a state and answers the
+ * manager's four fields, `me` is the playhead with its own fields and one per attribute, and no
+ * node is readable — the shared functions stay. */
+describe('the machine scope', () => {
+	const MACHINE: ExprCatalogue = { ...CAT, machine: { states: ['A', 'B'], fields: ['name', 'state', 'arrived', 'gain'] } };
+	const machine = (doc: string, pos = doc.length): string[] => {
+		const c = at(doc, pos);
+		return c ? entriesFor(c, MACHINE).map((o) => o.label) : [];
+	};
+
+	it('offers the states inside st(…), and lands past the dot', () => {
+		expect(machine("st('")).toEqual(['A', 'B']);
+		const c = at("st('")!;
+		expect(entriesFor(c, MACHINE)[0].apply).toBe("A').");
+	});
+
+	it('offers a state’s fields after st(…)., and nothing deeper', () => {
+		expect(machine("st('A').")).toEqual(['residents', 'playheads', 'arrivals', 'departures']);
+		expect(machine("st('A').playheads.")).toEqual([]);
+	});
+
+	it('reads me as the playhead', () => {
+		expect(machine('me.')).toEqual(['name', 'state', 'arrived', 'gain']);
+		expect(machine('me.gain.')).toEqual([]);
+	});
+
+	it('offers st and me but no nd at a name, and keeps the shared functions', () => {
+		const got = machine('s');
+		expect(got).toContain('st');
+		expect(got).toContain('me');
+		expect(got).not.toContain('nd');
+		for (const name of ['t', 'np', 'variables', 'lfo', 'noi', 'qtz', 'sin']) expect(got).toContain(name);
+		expect(machine("nd('")).toEqual([]);
+	});
+
+	it('is absent from a node’s expression', () => {
+		expect(labels("st('")).toEqual([]);
+		expect(labels("st('A').")).toEqual([]);
+	});
+});
+
 /* The names the evaluator injects (`backend/signal/goofi-python/src/inproc/expr.rs`) are the scope, and
  * nothing else in the app tells the user they exist. Offering them at a variable position is both
  * the most useful completion here AND the observable proof of the "trick": our entries and Python's

@@ -295,6 +295,15 @@ pub struct Compiled {
 pub enum Local {
     Frame(Data),
     Value(Param),
+    /// A record read by attribute, as a machine's `me` and `st()` answer: `me.gain`, `st('A').residents`.
+    Record(Vec<(String, Field)>),
+}
+
+/// One field of a [`Local::Record`]: a frame, or a list of names.
+#[derive(Clone, Debug)]
+pub enum Field {
+    Frame(Data),
+    Names(Vec<String>),
 }
 
 /// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.

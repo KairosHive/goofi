@@ -34,7 +34,7 @@
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
 	import { GRID } from '$lib/editor/nodeMetrics';
 	import { CARD_W, TITLE_Y } from '$lib/machine/layout';
-	import { summary } from '$lib/machine/triggers';
+	import { summary } from '$lib/machine/transition';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -227,8 +227,9 @@
 		if (touching && onBarePane(e.target)) panePress.start(e);
 	}
 
-	// ---- a connection drawn from one box's band onto any part of another is a transition, fired by
-	// a tap until it is edited. The radius reaches a box's corners, since Flow measures from its centre.
+	// ---- a connection drawn from one box's band onto any part of another is a transition, taken by
+	// its state's decision until it is edited. The radius reaches a box's corners, since Flow
+	// measures from its centre.
 	// The document is the one owner of edges: `false` keeps Flow from drawing a provisional one.
 	function onConnect(c: Connection): false {
 		if (c.source && c.target) void addTransition(c.source, c.target);
@@ -236,9 +237,7 @@
 	}
 	async function addTransition(from: string, to: string): Promise<void> {
 		try {
-			const r = await g.machine<{ id: string }>('machine transition add', {
-				machine: name, from, to, triggers: [{ kind: 'manual' }]
-			});
+			const r = await g.machine<{ id: string }>('machine transition add', { machine: name, from, to });
 			sel.setSelection(panelId, [], [r.id]);
 		} catch (e) {
 			notify().failure('Add transition', e);

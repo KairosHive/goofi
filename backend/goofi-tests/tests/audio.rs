@@ -592,7 +592,7 @@ fn a_patch_sounds_under_the_external_clock() {
         ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
         ("machine state add", j!({ "machine": "amp", "name": "low", "values": { "level": 0.25 } })),
         ("machine state add", j!({ "machine": "amp", "name": "high", "values": { "level": 1.0 } })),
-        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "triggers": [{ "kind": "manual" }], "duration": 0.5, "curve": "linear" })),
+        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "duration": 0.5, "curve": "linear" })),
         ("machine state edit", j!({ "machine": "amp", "name": "low", "noop": 1.0, "weights": { "t1": 0.0 } })),
         ("machine playhead add", j!({ "machine": "amp", "name": "h", "start": "low" })),
     ] {

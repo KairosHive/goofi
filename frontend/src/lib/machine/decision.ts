@@ -37,7 +37,8 @@ export function weightsOf(p: number[], out: string[]): { noop: number; weights: 
 	return { noop: p[0], weights: Object.fromEntries(out.map((id, k) => [id, p[k + 1]])) };
 }
 
-/** A transition's part in its state's decision, in a few words for its label; '' for none. */
+/** A transition's part in its state's decision, in a few words for its label: its share of the
+ * draw, its turn in the sequence, or its index; '' for a `*` transition, which has no one state. */
 export function decisionText(m: Machine, id: string): string {
 	const t = m.transitions[id];
 	const s = m.states[t.from];
@@ -49,9 +50,7 @@ export function decisionText(m: Machine, id: string): string {
 			return `#${k + 1}`;
 		case 'expression':
 			return `[${k}]`;
-		default: {
-			const share = shares(s, out)[k + 1];
-			return share > 0 ? `${Math.round(share * 100)}%` : '';
-		}
+		default:
+			return `${Math.round(shares(s, out)[k + 1] * 100)}%`;
 	}
 }
