@@ -250,10 +250,13 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const x = box.x + box.width / 2;
 			// The sine crosses every row at some column, so a column scan meets it; the readout
 			// gives the value over the sample index, and marks the point on the line.
+			// The drawing answers a hover from its worker, a frame or two later on a loaded machine:
+			// each column position is given that long before the scan moves on.
 			await expect
 				.poll(async () => {
 					for (let y = box.y + 6; y < box.y + box.height - 6; y += 4) {
 						await page.mouse.move(x, y);
+						await readout.first().waitFor({ state: 'attached', timeout: 1000 }).catch(() => {});
 						if ((await readout.count()) > 0) return readout.innerText();
 					}
 					return '';
