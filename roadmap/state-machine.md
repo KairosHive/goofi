@@ -20,6 +20,13 @@ Each as its own small change against the shipped model, in this order of value:
 
 ## Open
 
+- **A test evaluator meets a flight.** The audio situation `a_patch_sounds_under_the_external_clock`
+  reads a playhead's attribute through the test evaluator (`goofi_tests::FirstVar`), which runs
+  no functional; after a `session load` the newborn playhead's attribute is a functional while it
+  is in flight (an arrival or a transition), and the step asserting that the corpse's answer never
+  lands on the newborn read that functional instead (CI 2026-10-23, run 277, once; five local runs
+  passed). Decide whether the fixture waits the flight out before it asserts, or reads through an
+  evaluator that runs motions; the assertion itself must not widen.
 - **A rename restarts the renamed thing's run.** The machine thread keys its runs by playhead
   and state name, so `machine playhead rename` births the new name at its start and
   `machine state rename` sends a playhead resting in the state back to its start. Forward the
