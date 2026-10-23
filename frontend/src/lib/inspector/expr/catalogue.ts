@@ -1,4 +1,5 @@
 /** What the expression completion source knows about the patch: node names, output slots, variables. */
+import { ME_FIELDS } from '$lib/api/vocab';
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
 import type { VariableView } from '$lib/crdt/graphDoc';
 import { engineOf } from '$lib/editor/typeId';
@@ -28,11 +29,26 @@ export interface CatalogueNode {
 /** A variable, with the form its live value holds when a watcher has it; the document says nothing. */
 export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element'> & { form?: Form };
 
+/** A machine's own scope: what `st('…')` may name, and what `me`, the playhead, answers. */
+export interface CatalogueMachine {
+	states: string[];
+	/** `me`'s fields: the playhead's own, then one per attribute. */
+	fields: string[];
+}
+
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];
 	variables: CatalogueVariable[];
 	/** The editing node's own display name — what `me` reads. */
 	self?: string;
+	/** Set for a machine's expression, where `me` is the playhead, `st()` a state, and no node is readable. */
+	machine?: CatalogueMachine;
+}
+
+/** The scope of `machine`'s expressions, read at the moment a completion is asked for. */
+export function machineCatalogue(machine: string, g: GraphStore = graph()): CatalogueMachine {
+	const m = g.machines[machine];
+	return { states: Object.keys(m?.states ?? {}), fields: [...ME_FIELDS, ...Object.keys(m?.attributes ?? {})] };
 }
 
 /** The live patch, read at the moment a completion is asked for. `g` is the store to read, so a

@@ -5,20 +5,25 @@ import { pythonLanguage } from '@codemirror/lang-python';
 import type { Completion, CompletionContext } from '@codemirror/autocomplete';
 import type { EditorState, Extension } from '@codemirror/state';
 import type { SyntaxNode } from '@lezer/common';
+import { STATE_FIELDS } from '$lib/api/vocab';
 import type { CatalogueNode, ExprCatalogue } from './catalogue';
 
-export type RefTarget = { self: true } | { name: string };
+/** What a member chain hangs off: `me`, `nd('name')` or `st('name')`. */
+export type RefTarget = { self: true } | { name: string } | { state: string };
+
+/** Inside the first argument of `nd(` or `st(`: a node's name, or a state's. */
+export interface NameContext {
+	kind: 'node' | 'state';
+	from: number;
+	to: number;
+	/** The quote the literal opened with — reused to close it on accept. */
+	quote: string;
+	terminated: boolean;
+	callClosed: boolean;
+}
 
 export type ExprContext =
-	| {
-			kind: 'node';
-			from: number;
-			to: number;
-			/** The quote the literal opened with — reused to close it on accept. */
-			quote: string;
-			terminated: boolean;
-			callClosed: boolean;
-	  }
+	| NameContext
 	| { kind: 'path'; target: RefTarget; from: number; to: number }
 	| { kind: 'slot'; target: RefTarget; from: number; to: number }
 	| { kind: 'group'; target: RefTarget; from: number; to: number }
@@ -31,10 +36,13 @@ export type ExprContext =
 const text = (state: EditorState, node: SyntaxNode): string =>
 	state.doc.sliceString(node.from, node.to);
 
-function isNdCall(state: EditorState, call: SyntaxNode | null): boolean {
-	if (!call || call.name !== 'CallExpression') return false;
+/** The reference call `call` is — `nd` or `st` — or null for any other node. */
+function refCall(state: EditorState, call: SyntaxNode | null): 'nd' | 'st' | null {
+	if (!call || call.name !== 'CallExpression') return null;
 	const callee = call.firstChild;
-	return !!callee && callee.name === 'VariableName' && text(state, callee) === 'nd';
+	if (!callee || callee.name !== 'VariableName') return null;
+	const name = text(state, callee);
+	return name === 'nd' || name === 'st' ? name : null;
 }
 
 /** An `ArgList`'s first ACTUAL argument, past the parens/commas and the parser's error markers. */
@@ -53,17 +61,18 @@ function literal(state: EditorState, str: SyntaxNode): { quote: string; body: st
 	return quote === "'" || quote === '"' ? { quote, terminated, body: raw.slice(1, terminated ? -1 : undefined) } : null;
 }
 
-/** The string a `nd('…')` call names its node with, or null when it is not a plain literal. */
-function ndArgName(state: EditorState, call: SyntaxNode): string | null {
+/** The string a `nd('…')` or `st('…')` call names with, or null when it is not a plain literal. */
+function argName(state: EditorState, call: SyntaxNode): string | null {
 	const arg = firstArg(call.getChild('ArgList'));
 	return arg?.name === 'String' ? (literal(state, arg)?.body ?? null) : null;
 }
 
-/** The cursor is inside a string: a node name iff that string is `nd`'s FIRST argument. */
+/** The cursor is inside a string: a name iff that string is `nd`'s or `st`'s FIRST argument. */
 function stringContext(state: EditorState, str: SyntaxNode, pos: number): ExprContext | null {
 	const argList = str.parent;
 	if (!argList || argList.name !== 'ArgList') return null;
-	if (!isNdCall(state, argList.parent)) return null;
+	const call = refCall(state, argList.parent);
+	if (!call) return null;
 	if (firstArg(argList)?.from !== str.from) return null;
 	const lit = literal(state, str);
 	if (!lit) return null;
@@ -71,10 +80,10 @@ function stringContext(state: EditorState, str: SyntaxNode, pos: number): ExprCo
 	const from = str.from + 1;
 	const to = lit.terminated ? str.to - 1 : str.to;
 	if (pos < from || pos > to) return null;
-	return { kind: 'node', from, to, quote: lit.quote, terminated: lit.terminated, callClosed: !!argList.getChild(')') };
+	return { kind: call === 'nd' ? 'node' : 'state', from, to, quote: lit.quote, terminated: lit.terminated, callClosed: !!argList.getChild(')') };
 }
 
-/** The reference a member chain hangs off — `nd('x')` or `me` — and the attributes between. */
+/** The reference a member chain hangs off — `nd('x')`, `st('x')` or `me` — and the attributes between. */
 function refHead(state: EditorState, obj: SyntaxNode): { target: RefTarget; path: string[] } | null {
 	const path: string[] = [];
 	let cur: SyntaxNode | null = obj;
@@ -86,9 +95,10 @@ function refHead(state: EditorState, obj: SyntaxNode): { target: RefTarget; path
 	}
 	if (!cur) return null;
 	if (cur.name === 'VariableName' && text(state, cur) === 'me') return { target: { self: true }, path };
-	if (isNdCall(state, cur)) {
-		const name = ndArgName(state, cur);
-		return name === null ? null : { target: { name }, path };
+	const call = refCall(state, cur);
+	if (call) {
+		const name = argName(state, cur);
+		return name === null ? null : { target: call === 'nd' ? { name } : { state: name }, path };
 	}
 	return null;
 }
@@ -122,6 +132,8 @@ function memberContext(state: EditorState, node: SyntaxNode, pos: number): ExprC
 	if (!head) return null;
 	const { target, path } = head;
 	if (path.length === 0) return { kind: 'path', target, from, to };
+	// A state's record and a playhead's are one level deep: past that is Python's own.
+	if ('state' in target) return null;
 	if (path[0] === 'out' && path.length === 1) return { kind: 'slot', target, from, to };
 	if (path[0] === 'params' && path.length === 1) return { kind: 'group', target, from, to };
 	if (path[0] === 'params' && path.length === 2)
@@ -143,11 +155,10 @@ export function exprContext(state: EditorState, pos: number): ExprContext | null
 	return null;
 }
 
-/** The evaluator's injected scope (`expr.rs`'s `eval` variables): goofi's own names, `time()`, and
- *  the common slice of `from math import *`, since only eval is authoritative. */
-const SCOPE: Completion[] = [
-	{ label: 'nd', type: 'function', detail: "node reference — nd('name')", boost: 1 },
-	{ label: 'me', type: 'variable', detail: 'this node — me.out / me.params', boost: 1 },
+/** The evaluator's injected scope (`expr.rs`'s `eval` variables) that every expression shares:
+ *  goofi's own functions, `time()`, and the common slice of `from math import *`, since only eval
+ *  is authoritative. */
+const SHARED_SCOPE: Completion[] = [
 	{ label: 'lfo', type: 'function', detail: 'sine wave — lfo(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
 	{ label: 'noi', type: 'function', detail: 'smooth noise — noi(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
 	{ label: 'qtz', type: 'function', detail: "volts per octave onto a scale — qtz(v, scale='major', root='C')", boost: 1 },
@@ -161,6 +172,26 @@ const SCOPE: Completion[] = [
 	...'pi e tau inf nan'.split(' ').map((label) => ({ label, type: 'constant', detail: 'math' }))
 ];
 
+/** What a node's expression reads besides: the nodes, and itself. */
+const NODE_SCOPE: Completion[] = [
+	{ label: 'nd', type: 'function', detail: "node reference — nd('name')", boost: 1 },
+	{ label: 'me', type: 'variable', detail: 'this node — me.out / me.params', boost: 1 }
+];
+
+/** What a machine's expression reads besides: its states, and the playhead it is read for. */
+const MACHINE_SCOPE: Completion[] = [
+	{ label: 'st', type: 'function', detail: "a state — st('name').residents / .playheads", boost: 1 },
+	{ label: 'me', type: 'variable', detail: 'this playhead — me.name / me.state / me.<attribute>', boost: 1 }
+];
+
+/** What `st('…')` answers, in the order the manager declares the fields. */
+const STATE_FIELD_DETAIL: Record<(typeof STATE_FIELDS)[number], string> = {
+	residents: 'how many playheads rest in it',
+	playheads: 'their names, longest resident first',
+	arrivals: 'how many arrived at this instant',
+	departures: 'how many left at this instant'
+};
+
 /** The numpy names offered after `np.`: hand-picked, never the real namespace. */
 const NUMPY: Completion[] = [
 	...('abs angle arange arccos arcsin arctan arctan2 argmax argmin argsort array asarray blackman ceil clip ' +
@@ -172,8 +203,14 @@ const NUMPY: Completion[] = [
 	...'fft linalg random'.split(' ').map((label) => ({ label, type: 'namespace' }))
 ];
 
+/** What finishes a name typed inside `nd('` or `st('`: only what is not written yet — an
+ *  already-closed call's paren sits past the caret, so a dot inserted here would land inside it. */
+function finish(ctx: NameContext, steer: string): string {
+	return `${ctx.terminated ? '' : ctx.quote}${ctx.callClosed ? '' : `)${steer}`}`;
+}
+
 /** One node-name entry; a multi-output node steers to a `.slot`, since bare use of one raises. */
-function nodeEntry(node: CatalogueNode, ctx: Extract<ExprContext, { kind: 'node' }>): Completion {
+function nodeEntry(node: CatalogueNode, ctx: NameContext): Completion {
 	const n = node.slots.length;
 	const multi = n > 1;
 	const detail = multi
@@ -181,9 +218,7 @@ function nodeEntry(node: CatalogueNode, ctx: Extract<ExprContext, { kind: 'node'
 		: n === 1
 			? '1 output — usable bare'
 			: 'no outputs';
-	// Finish only what is not written yet: an already-closed call's paren sits past the caret, so a
-	// dot inserted here would land inside it.
-	const tail = `${ctx.terminated ? '' : ctx.quote}${ctx.callClosed ? '' : `)${multi ? '.out.' : ''}`}`;
+	const tail = finish(ctx, multi ? '.out.' : '');
 	return {
 		label: node.name,
 		detail,
@@ -194,7 +229,7 @@ function nodeEntry(node: CatalogueNode, ctx: Extract<ExprContext, { kind: 'node'
 
 /** The catalogue entry a reference target names — the editing node itself for `me`. */
 function nodeOf(cat: ExprCatalogue, target: RefTarget): CatalogueNode | undefined {
-	const name = 'self' in target ? cat.self : target.name;
+	const name = 'self' in target ? cat.self : 'name' in target ? target.name : undefined;
 	return name == null ? undefined : cat.nodes.find((n) => n.name === name);
 }
 
@@ -202,8 +237,19 @@ function nodeOf(cat: ExprCatalogue, target: RefTarget): CatalogueNode | undefine
 export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 	switch (ctx.kind) {
 		case 'node':
-			return cat.nodes.map((n) => nodeEntry(n, ctx));
+			return cat.machine ? [] : cat.nodes.map((n) => nodeEntry(n, ctx));
+		// A state is read by field, so accepting lands past the dot.
+		case 'state': {
+			const tail = finish(ctx, '.');
+			return (cat.machine?.states ?? []).map((label) => ({ label, detail: 'state', type: 'variable', apply: tail ? `${label}${tail}` : undefined }));
+		}
 		case 'path':
+			if ('state' in ctx.target) {
+				return cat.machine ? STATE_FIELDS.map((label) => ({ label, detail: STATE_FIELD_DETAIL[label], type: 'property' })) : [];
+			}
+			if (cat.machine) {
+				return 'self' in ctx.target ? cat.machine.fields.map((label) => ({ label, type: 'property' })) : [];
+			}
 			return [
 				{ label: 'out', type: 'namespace', detail: 'output slots — .out.<slot>' },
 				{ label: 'params', type: 'namespace', detail: 'params — .params.<group>.<param>' }
@@ -236,7 +282,7 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 		case 'numpy':
 			return NUMPY;
 		case 'scope':
-			return SCOPE;
+			return [...(cat.machine ? MACHINE_SCOPE : NODE_SCOPE), ...SHARED_SCOPE];
 	}
 }
 

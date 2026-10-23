@@ -129,7 +129,7 @@ pub struct AppState {
     pub variables: Arc<variables::Variables>,
     /// The MIDI devices open on the bus, each writing its group through the store.
     pub midi: Arc<midi::Midi>,
-    /// The state machines' thread, handed the settled model and every fire.
+    /// The state machines' thread, handed the settled model and every request.
     pub machines: Arc<machines::Driver>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
     /// socket re-asks which physical slot stands behind its port on the pulse, not on a clock.

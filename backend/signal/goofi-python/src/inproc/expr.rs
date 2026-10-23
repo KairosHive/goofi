@@ -8,10 +8,10 @@ use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 
 use goofi_core::{Data, Meta, Value};
-use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Local};
+use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Field, Local};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyModule, PyString};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
 /// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
 /// generated variable, so an expression compiles ONCE into a function of `t` and those variables,
@@ -178,6 +178,20 @@ fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
     }
 }
 
+/// A record as the expression reads it: a namespace with one attribute per field, a frame as
+/// [`data_to_py`] hands it and a list of names as a list of strings.
+fn record_to_py(py: Python<'_>, fields: &[(String, Field)]) -> PyResult<Py<PyAny>> {
+    let kwargs = PyDict::new(py);
+    for (name, field) in fields {
+        let value: Py<PyAny> = match field {
+            Field::Frame(d) => data_to_py(py, d)?,
+            Field::Names(names) => PyList::new(py, names)?.into_any().unbind(),
+        };
+        kwargs.set_item(name.as_str(), value)?;
+    }
+    Ok(py.import("types")?.getattr("SimpleNamespace")?.call((), Some(&kwargs))?.unbind())
+}
+
 /// The names an expression's variables wear, in the order the rewrite minted them: `__v0`, `__v1`
 /// and so on, which is the order the harness declares them in.
 fn names_of(source: &str) -> Vec<String> {
@@ -215,6 +229,7 @@ impl PyExprEvaluator {
                     (_, Some(now)) => data_to_py(py, now).map_err(|e| ExprError(e.to_string()))?,
                     (Local::Frame(d), None) => data_to_py(py, d).map_err(|e| ExprError(e.to_string()))?,
                     (Local::Value(p), None) => goofi_pymod::exec::param_to_py(py, p).map(Bound::unbind).map_err(|e| ExprError(e.to_string()))?,
+                    (Local::Record(fields), None) => record_to_py(py, fields).map_err(|e| ExprError(e.to_string()))?,
                 };
                 locals.set_item(name.as_str(), val).map_err(|e| ExprError(e.to_string()))?;
             }

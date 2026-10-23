@@ -387,7 +387,7 @@ pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
     use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi};
     use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
-    use goofi_graph::machine::{Attribute, AttributeKind, Decision, Machine, Playhead, Policy, State, Transition, Trigger};
+    use goofi_graph::machine::{Attribute, AttributeKind, Decision, Machine, Playhead, State, Transition};
     use goofi_core::ease::Curve;
     let cfg = ts_rs::Config::new().with_large_int("number");
     let decls = [
@@ -412,8 +412,6 @@ pub fn typescript() -> String {
         Decision::decl(&cfg),
         State::decl(&cfg),
         Curve::decl(&cfg),
-        Policy::decl(&cfg),
-        Trigger::decl(&cfg),
         Transition::decl(&cfg),
         Playhead::decl(&cfg),
         Machine::decl(&cfg),

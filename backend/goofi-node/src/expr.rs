@@ -92,9 +92,9 @@ fn string_end(b: &[u8], at: usize) -> usize {
     b.len()
 }
 
-/// One `nd(..)` call, with both spans its consumers need: the name literal a rename replaces, and
-/// the whole term a rewrite replaces.
-pub struct NdCall<'a> {
+/// One `nd(..)` or `st(..)` call, with both spans its consumers need: the name literal a rename
+/// replaces, and the whole term a rewrite replaces.
+pub struct Call<'a> {
     pub start: usize,
     pub name_start: usize,
     pub name_end: usize,
@@ -104,12 +104,12 @@ pub struct NdCall<'a> {
     pub name: &'a str,
 }
 
-/// Every `nd('name')` call in `source`, in source order.
-pub fn scan_nd_calls(source: &str) -> Vec<NdCall<'_>> {
+/// Every `callee('name')` call in `source`, in source order: `nd` names a node, `st` a state.
+pub fn scan_calls<'a>(source: &'a str, callee: &str) -> Vec<Call<'a>> {
     let toks = tokens(source);
     let mut out = Vec::new();
     for (i, t) in toks.iter().enumerate() {
-        if t.kind != Kind::Ident || &source[t.start..t.end] != "nd" {
+        if t.kind != Kind::Ident || &source[t.start..t.end] != callee {
             continue;
         }
         if toks.get(i + 1).is_none_or(|o| o.kind != Kind::Punct(b'(')) {
@@ -118,7 +118,7 @@ pub fn scan_nd_calls(source: &str) -> Vec<NdCall<'_>> {
         let Some(lit) = toks.get(i + 2).filter(|l| l.kind == Kind::Str) else { continue };
         let Some((name_start, name_end)) = plain_string_body(source, lit) else { continue };
         let end = toks.get(i + 3).filter(|c| c.kind == Kind::Punct(b')')).map(|c| c.end);
-        out.push(NdCall { start: t.start, name_start, name_end, end, name: &source[name_start..name_end] });
+        out.push(Call { start: t.start, name_start, name_end, end, name: &source[name_start..name_end] });
     }
     out
 }

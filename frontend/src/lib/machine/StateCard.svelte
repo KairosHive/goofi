@@ -6,7 +6,7 @@
 	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { DECISIONS, outgoing } from './decision';
+	import { DECISIONS, outgoing } from './model';
 	import { CARD_H, CARD_W } from './layout';
 
 	let { id, data }: NodeProps = $props();

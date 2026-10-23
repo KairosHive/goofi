@@ -94,7 +94,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             // The frames the expressions read, taken in one look; the step runs off every lock.
             let frames: IndexMap<String, goofi_core::Data> = {
                 let store = store.lock();
-                machines.keys().into_iter().filter_map(|k| Some((k.clone(), store.get(&k)?.clone()))).collect()
+                machines.keys().iter().filter_map(|k| Some((k.clone(), store.get(k)?.clone()))).collect()
             };
             let writes = machines.advance(now, &|key| frames.get(key).cloned());
             {

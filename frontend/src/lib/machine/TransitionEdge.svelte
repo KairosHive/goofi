@@ -1,7 +1,7 @@
 <!-- A transition on the machine canvas: a line from box to box, or a loop off the side when it
      re-enters its own state, with chevrons along it for the way it goes — one stroke, so hover and
      selection reach the whole of it. Two between one pair of boxes run side by side. A click on the
-     line or on its label selects it; the label, the trigger summary, shows only while the transition
+     line or on its label selects it; the label, its share or turn, shows only while the transition
      or one of its boxes is selected. -->
 <script lang="ts">
 	import { BaseEdge, EdgeLabel, useStore, type EdgeProps, type InternalNode } from '@xyflow/svelte';

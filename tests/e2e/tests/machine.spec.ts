@@ -1,10 +1,11 @@
 // One state machine, built with the pointer the project gives: two boxes from a double-click or a
 // held finger, a transition dragged from one box's edge to the other, and everything else in the
 // inspector of the selected state — its playheads, its attributes and their envelopes, its
-// decision and its transitions, each out carrying its share — and the dot that crosses when a
-// transition is fired. Runs on the desktop and the phone, and sweeps the scene. A second test,
-// desktop only, drops a box on a node's param row to map it, completes an expression with Tab,
-// and sends the Delete key to the active panel alone.
+// decision and its transitions, each out carrying its share and a condition of its own — and the
+// dot that crosses when a transition is fired. Runs on the desktop and the phone, and sweeps the
+// scene. A second test, desktop only, drops a box on a node's param row to map it, completes an
+// expression with Tab in a param's editor and in a condition's, and sends the Delete key to the
+// active panel alone.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -102,9 +103,9 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await drag(page, hasTouch, card0, card1);
 		const label = page.getByTestId('transition-t1');
 		// A new box draws evenly among its transitions out; this one holds, so only a fire moves it.
-		await expect(label).toHaveText('100% | manual');
+		await expect(label).toHaveText('100%');
 		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'state0', noop: 1, weights: { t1: 0 } });
-		await expect(label).toHaveText('manual');
+		await expect(label).toHaveText('0%');
 		const inspector = page.getByTestId('machine-inspector');
 		await expect(inspector).toHaveAttribute('data-count', '1');
 		await expect(inspector.getByTestId('state-name')).toHaveText('state0');
@@ -214,12 +215,12 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(kind).toHaveAttribute('data-face', 'text');
 		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBe('0.7');
 		await expect(kind.locator('[aria-label="integer"], [aria-label="min"]')).toHaveCount(0);
-		await expect(both.locator('.slot-head').getByTestId('param-text')).toBeVisible();
+		await expect(both.locator('.attr-row').getByTestId('param-text')).toBeVisible();
 		await press(both.getByTestId('state-clear'));
 		await expect(both).toHaveAttribute('data-set', 'false');
 		await kind.getByTestId('attribute-kind').locator('select').selectOption('toggle');
 		await expect(kind).toHaveAttribute('data-face', 'toggle');
-		await expect(both.locator('.slot-head').getByTestId('param-toggle')).toBeVisible();
+		await expect(both.locator('.attr-row').getByTestId('param-toggle')).toBeVisible();
 		await multi();
 		await tapCorner();
 
@@ -236,7 +237,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => (await decision()).weights.t1).toBeCloseTo(0.6);
 		expect((await decision()).noop).toBeCloseTo(0.4);
 		await expect(inspector.getByTestId('state-share-wait')).toContainText('40%');
-		await expect(label).toHaveText('60% | manual');
+		await expect(label).toHaveText('60%');
 		const interval = inspector.getByTestId('state-interval').getByTestId('param-number');
 		await interval.fill('1.05');
 		await interval.press('Enter');
@@ -245,13 +246,27 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(card0).toHaveAttribute('data-mode', 'sequence');
 		await expect(card0.getByTestId('state-card-summary')).toContainText('seq · 1.05s');
 		await expect(inspector.getByTestId('state-share-t1')).toHaveCount(0);
-		await expect(inspector.getByTestId('transition-row-t1')).toContainText('#1 | manual');
-		await expect(label).toHaveText('#1 | manual');
+		await expect(inspector.getByTestId('transition-row-t1')).toContainText('#1');
+		await expect(label).toHaveText('#1');
+		// A condition typed into the open row rides the row's summary, and the canvas label stays the
+		// decision's; the condition's own editor completes `st(` with the machine's states.
+		await press(inspector.getByTestId('transition-row-t1').locator('.ui-disclosure-summary'));
+		const condition = inspector.getByTestId('transition-condition');
+		await expect(condition).toBeVisible();
+		await press(condition);
+		await page.keyboard.type("st('");
+		await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('state1');
+		await page.keyboard.press('Escape');
+		await page.keyboard.type("state1').residents > 0");
+		await page.keyboard.press('Enter');
+		await expect.poll(async () => (await machineState()).transitions.t1.condition).toBe("st('state1').residents > 0");
+		await expect(inspector.getByTestId('transition-row-t1')).toContainText("if st('state1').residents > 0");
+		await expect(label).toHaveText('#1');
 		await tapCorner();
 
 		// A transition back the other way runs beside the first, its label apart from the first's, and
 		// either label selects its own. The labels show once a box of theirs is selected.
-		await rawCall(page, 'machine transition add', { machine: 'machine0', from: 'state1', to: 'state0', triggers: [{ kind: 'manual' }] });
+		await rawCall(page, 'machine transition add', { machine: 'machine0', from: 'state1', to: 'state0' });
 		const back = page.getByTestId('transition-t2');
 		await expect(back).toHaveCount(0);
 		await press(name0);

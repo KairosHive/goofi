@@ -20,7 +20,7 @@
 			const prev = String(variableValue(`${p}.prev`) ?? '');
 			const progress = Number(variableValue(`${p}.progress`) ?? 1);
 			const arrived = Number(variableValue(`${p}.arrived`) ?? 0);
-			return { p, color: dotColor(m.playheads[p].color, i), state, prev, progress, arrived, flying: prev !== '' && prev !== state && progress < 1 };
+			return { p, color: dotColor(m.playheads[p].color, i), state, prev, progress, arrived, flying: prev !== '' && progress < 1 };
 		})
 	);
 

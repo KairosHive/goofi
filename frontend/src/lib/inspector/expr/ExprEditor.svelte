@@ -1,7 +1,8 @@
-<!-- A param's Python expression with goofi's completions; it reads the graph store, so it is not in $lib/ui. -->
+<!-- A Python expression with goofi's completions — a param's, or a machine's; it reads the graph
+     store, so it is not in $lib/ui. -->
 <script lang="ts">
 	import type { ExprEditorHandle } from './editor';
-	import { liveCatalogue } from './catalogue';
+	import { liveCatalogue, machineCatalogue } from './catalogue';
 
 	let {
 		value,
@@ -10,7 +11,8 @@
 		label,
 		placeholder = '',
 		testid,
-		selfName
+		selfName,
+		machine
 	}: {
 		value: string;
 		error?: string | null;
@@ -22,6 +24,8 @@
 		testid: string;
 		/** The edited node's display name — what `me` completes against. */
 		selfName?: string;
+		/** The machine whose expression this is: `me` is then the playhead, `st()` its states. */
+		machine?: string;
 	} = $props();
 
 	let host = $state<HTMLDivElement | null>(null);
@@ -39,7 +43,7 @@
 			const attributes = { 'data-testid': testid, 'aria-label': label };
 			mounted = mod.createExprEditor(el, {
 				doc: value,
-				catalogue: () => ({ ...liveCatalogue(), self: selfName }),
+				catalogue: () => ({ ...liveCatalogue(), self: selfName, ...(machine ? { machine: machineCatalogue(machine) } : {}) }),
 				onCommit: (v) => onCommit(v),
 				error,
 				placeholder,

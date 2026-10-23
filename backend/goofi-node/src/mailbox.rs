@@ -67,6 +67,7 @@ pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
     let frame = match local {
         Local::Value(value) => goofi_core::control::data_of(value).ok_or_else(|| format!("`{value:?}` holds nothing"))?,
         Local::Frame(frame) => frame.clone(),
+        Local::Record(_) => return Err("a record is read by attribute, not bare".into()),
     };
     match (frame.value(), index) {
         (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),

@@ -7,7 +7,8 @@ use crate::machines::Msg;
 use crate::{AppState, Caller, Txn};
 use goofi_core::ease::Curve;
 use goofi_core::Data;
-use goofi_graph::machine::{Attribute, AttributeKind, Machine, Decision, Playhead, State, Transition, Trigger, OWN};
+use goofi_graph::expr_rewrite;
+use goofi_graph::machine::{Attribute, AttributeKind, Machine, Decision, Playhead, State, Transition, OWN};
 use goofi_graph::{Command, Graph};
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
@@ -15,7 +16,7 @@ const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, re
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, mode, noop, weights, expression}}, transitions: {id: {from, to, triggers, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -40,7 +41,7 @@ op!(Edit, "machine edit", 1, EditArgs {
     pub machine: String,
     pub seed: Option<u64>,
 },
-    "Change a machine's own settings: `seed` starts its random draws — a `random` state's decisions and the draw among the triggers that fire together — so a run repeats.",
+    "Change a machine's own settings: `seed` starts its random draws — a `random` state's decisions — so a run repeats.",
     "{seed}");
 
 op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
@@ -101,7 +102,7 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub weights: Option<std::collections::BTreeMap<String, f64>>,
     pub expression: Option<String>,
 },
-    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` over `variables.*` and `t` to the index of the transition out to take, a negative index waiting. A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
+    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` to the index of the transition out to take, a negative index waiting (see `machine transition add` for what an expression reads). A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
 
 op!(Arrange, "machine arrange", 1, ArrangeArgs {
@@ -129,11 +130,11 @@ op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub machine: String,
     pub from: String,
     pub to: String,
-    pub triggers: Option<Value>,
+    pub condition: Option<String>,
     pub duration: Option<f64>,
     pub curve: Option<String>,
 },
-    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), or when any of its `triggers` fires: `{kind: manual}` — `machine fire`, or the inspector's fire button; `{kind: when, expression, weight?}` — the one expression language a param uses, over `variables.*` and `t` alone, firing on the rising edge of its truth; `{kind: meet, policy?}` — when a second playhead arrives in `from`, `fifo` (the longest resident goes, the default), `lifo` (the newest) or `all` (every resident); `{kind: alone}` — for the playhead left behind when the second-to-last leaves `from`. When several `when` triggers out of one state fire in one tick, one is drawn by `weight` (default 1; 0 is never drawn); a firing trigger goes before a decision due at the same instant. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival; an attribute the entering state shapes with an envelope, or one the leaving state's envelope has at rest, moves by that envelope instead (see `machine state add`).",
+    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), when `machine fire` or the inspector's fire button fires it, or the instant its `condition` turns true: the condition is read for each playhead resting in `from` as it arrives and at every instant the machine settles after — a write to a variable it reads, a playhead's landing, a decision's due — and fires on the turn from false to true, so one already true on arrival waits for the next turn. Several conditions turning true at one instant take the first in authored order; a condition goes before a decision due at the same instant. `st('A').residents >= 2` fires every resident as a second playhead arrives, `… and me.name == st('A').playheads[0]` the longest resident alone, `… [-1]` the newest; `st('A').residents == 1 and st('A').departures > 0` fires the one left behind as the other leaves. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival; an attribute the entering state shapes with an envelope, or one the leaving state's envelope has at rest, moves by that envelope instead (see `machine state add`). An expression is the one Python a param's expression is, over `variables.<group>.<element>`, `t` (patch seconds), `time()`, `np`, `math` and `lfo()`, `noi()` and `qtz()`; a machine's also reads `me` — the playhead it is read for: `me.name`, `me.state`, `me.arrived` and `me.<attribute>` — and `st('<state>')`: `.residents` (how many playheads rest there), `.playheads` (their names, longest resident first), `.arrivals` and `.departures` (how many arrived there and left it at this instant). A node's output is not readable; follow it in a variable",
     "{id} — the transition's id, `t1`, `t2`, …, which every later op addresses it by");
 
 op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
@@ -141,11 +142,11 @@ op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
     pub id: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    pub triggers: Option<Value>,
+    pub condition: Option<String>,
     pub duration: Option<f64>,
     pub curve: Option<String>,
 },
-    "Change a transition: any of the fields `machine transition add` takes, the rest kept. `triggers` replaces the whole list.",
+    "Change a transition: any of the fields `machine transition add` takes, the rest kept; an empty `condition` leaves it to its state's decision and the fire button.",
     "{id}");
 
 op!(TransitionRemove, "machine transition remove", 2, TransitionRemoveArgs {
@@ -277,10 +278,6 @@ fn parse_curve(v: &str) -> Result<Curve, String> {
         let curves = Curve::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
         format!("`curve` is one of {curves}, not `{v}`")
     })
-}
-
-fn parse_triggers(v: Value) -> Result<Vec<Trigger>, String> {
-    serde_json::from_value(v).map_err(|e| format!("`triggers` is a list of {{kind: manual|when|meet|alone, …}}: {e}"))
 }
 
 impl WriteOp for Add {
@@ -557,6 +554,7 @@ impl WriteOp for StateRename {
         for p in m.playheads.values_mut().filter(|p| p.start == a.name) {
             p.start = a.to.clone();
         }
+        m.rewrite_expressions(|e| expr_rewrite::rename_states(e, |s| (s == a.name).then(|| a.to.clone())));
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.to }))
     }
@@ -573,7 +571,7 @@ impl WriteOp for TransitionAdd {
         let t = Transition {
             from: a.from,
             to: a.to,
-            triggers: a.triggers.map(parse_triggers).transpose()?.unwrap_or_default(),
+            condition: a.condition.unwrap_or_default(),
             duration: a.duration.unwrap_or(0.0),
             curve: a.curve.as_deref().map(parse_curve).transpose()?.unwrap_or_default(),
         };
@@ -597,8 +595,8 @@ impl WriteOp for TransitionEdit {
         if let Some(to) = a.to {
             t.to = to;
         }
-        if let Some(triggers) = a.triggers {
-            t.triggers = parse_triggers(triggers)?;
+        if let Some(condition) = a.condition {
+            t.condition = condition;
         }
         if let Some(duration) = a.duration {
             t.duration = duration;
