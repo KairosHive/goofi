@@ -68,10 +68,6 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		await browser.getByRole('button', { name: 'Cancel' }).click();
 		await page.getByTestId('topbar-load').click();
 		await expect(browser.getByTestId('fs-sort-size')).toHaveAttribute('aria-pressed', 'true');
-		// The recent folders are the runtime's, shared by every backend of this run: a patch another
-		// worker saved meanwhile heads the list, so the folder is entered again before it is read.
-		await pathInput.fill(dir);
-		await pathInput.press('Enter');
 		await expect(rows.first()).toContainText('big.txt');
 		// A dismissed upload picker returns to the dialog rather than closing it.
 		await expect(browser.getByTestId('fs-upload')).toHaveText('Upload…');

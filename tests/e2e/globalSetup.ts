@@ -10,7 +10,7 @@ type Backend = { child: ChildProcess; port: number; log: string };
  * One PREBUILT backend per worker slot, on `BASE_PORT + slot`.
  *
  * This replaces `webServer`, which can only ever spawn one — and one backend is why the suite ran
- * `workers: 1`. A single backend is shared variable state (`expectPristineWorkspace` and the save-path
+ * `workers: 1`. A single backend is shared variable state (`waitForApp`, which hands back the patch, and the save-path
  * guard in `lib/app.ts` are written against exactly that), so a second worker against it trips them:
  * measured, `--workers=4` on the shared backend failed 132 of 343. A backend per SLOT keeps the
  * contract intact rather than weakening it — a worker still owns its backend alone, so every

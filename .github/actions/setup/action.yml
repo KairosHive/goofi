@@ -1,5 +1,12 @@
 name: Set up a goofi build
-description: The toolchains, the caches and `goofi-init`, the same on every runner.
+description: The toolchains, the caches, `goofi-init`, ONE cargo build and the boot, the same on every runner.
+inputs:
+  targets:
+    description: >
+      The one target selection every cargo command of the job uses. A second selection resolves
+      features anew and rebuilds the crates whose features moved, so a job that builds `--bins`
+      must not run `cargo test` after.
+    default: --all-targets
 runs:
   using: composite
   steps:
@@ -13,6 +20,12 @@ runs:
     - uses: actions/setup-node@v7
       with:
         node-version: '24'
+
+    # The frontend's packages, which `goofi-init` installs: a hit makes its `npm install` a check.
+    - uses: actions/cache@v4
+      with:
+        path: frontend/node_modules
+        key: frontend-npm-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
 
     # The bundles' packages, keyed on the requirement files goofi-init installs from.
     - uses: astral-sh/setup-uv@v7
@@ -32,47 +45,38 @@ runs:
       shell: bash
       run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
 
-    # The shipped nodes and the Python probes, built into the binary and read back at boot.
-    # Restored here, saved by the job's last step under this run's id, so each run's is the newest.
-    - uses: actions/cache/restore@v4
+    # The shipped nodes' artifacts and the Python probes' answers, both keyed by content inside,
+    # so the cache is keyed on what can change them: the SDKs, the bundles, the build pipeline
+    # and the lock. An exact hit saves nothing; a changed key starts from the last cache and
+    # saves once. The nodes' own cargo target dir stays out: it is most of the bytes, and only a
+    # run whose key moved builds a node.
+    - uses: actions/cache@v4
       with:
         path: |
           target/goofi-runtime/*/build
+          !target/goofi-runtime/*/build/target
           target/goofi-runtime/cache/cargo
-        key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+        key: goofi-runtime-${{ runner.os }}-${{ hashFiles('backend/**/*-sdk/**', 'backend/goofi-build/**', 'node-bundles/**', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
         restore-keys: |
-          goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
           goofi-runtime-${{ runner.os }}-
 
+    # goofi-init's own build is the one package-scoped cargo command: the Python it provisions is
+    # what goofi-python links, so nothing of the workspace builds before it.
     - name: Provision (cargo run -p goofi-init)
       shell: bash
       run: cargo run -p goofi-init
+
+    # THE build of the job. Cargo's own warnings are not clippy's: both gates read this log.
+    - name: Build (cargo build --workspace ${{ inputs.targets }})
+      shell: bash
+      run: |
+        cargo build --workspace ${{ inputs.targets }} 2>&1 | tee build.log
+        ! grep -n '^warning' build.log
 
     # One boot fills the node build dir with the Python probes every test binary would otherwise
     # take, so the tests that follow start warm, however many run at once.
     - name: Boot the node library
       shell: bash
-      run: cargo run -p goofi-cli -- --headless
+      run: target/debug/goofi --headless
       env:
         GOOFI_BOOT_ONLY: "1"
-
-    # The browser suite's own prerequisites, where the browser suite runs. Chromium is keyed on
-    # the Playwright that installed, which the unpinned package.json does not name.
-    - if: runner.os == 'Linux'
-      shell: bash
-      run: npm install
-      working-directory: tests/e2e
-    - if: runner.os == 'Linux'
-      id: playwright
-      shell: bash
-      run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
-      working-directory: tests/e2e
-    - if: runner.os == 'Linux'
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-    - if: runner.os == 'Linux'
-      shell: bash
-      run: npx playwright install --with-deps chromium
-      working-directory: tests/e2e

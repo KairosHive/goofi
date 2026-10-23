@@ -1625,13 +1625,17 @@ fn sync_followers(state: &AppState, g: &Graph) {
 /// How often the host is asked which MIDI ports it lists: a plug or a pull shows within it.
 const MIDI_POLL: Duration = Duration::from_secs(2);
 
+/// How often a host with no MIDI at all is asked again: a sequencer is a driver, not a plug, and
+/// a host without one logs every ask.
+const MIDI_POLL_ABSENT: Duration = Duration::from_secs(60);
+
 /// The MIDI watch: the host's ports asked for on a clock, the devices the patch reads opened and
 /// the ones it stopped reading — or a learn ran out on — closed, each move broadcast.
 fn spawn_midi(state: AppState) {
     let owner = state.clone();
     owner.scope.spawn("goofi-midi", move || {
         while !state.stopping.stopped() {
-            state.midi.probe();
+            let absent = state.midi.probe().is_some();
             let changed = {
                 let g = state.graph.lock();
                 let (closed, changed) = state.midi.resync(&g);
@@ -1642,7 +1646,8 @@ fn spawn_midi(state: AppState) {
             if changed {
                 resync_and_broadcast(&state);
             }
-            if state.stopping.wait_stopped_until(Instant::now() + MIDI_POLL) {
+            let poll = if absent { MIDI_POLL_ABSENT } else { MIDI_POLL };
+            if state.stopping.wait_stopped_until(Instant::now() + poll) {
                 return;
             }
         }

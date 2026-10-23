@@ -144,6 +144,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   failure. Use Playwright for socket integration, layout and gestures, and typecheck for Svelte.
 - A test asserts the state reached, never how fast: no rate floors, latency ceilings or sleeps.
   Poll against the harness `WAIT`. No test simulates load, opens audio hardware or native windows.
+- CI is a quick validation, not a second development loop: one job per gate on a runner of its
+  own (the situations, the browser suite, each platform that can answer differently), one cargo
+  build per job under one target selection, and every job under ten minutes. A test that only
+  fails beside another suite's load, or that proves a node or a library detail, is cut.
 
 ```sh
 cargo run -p goofi-init          # provision, then: cargo run

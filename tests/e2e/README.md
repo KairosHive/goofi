@@ -14,7 +14,7 @@ npm run e2e                      # typechecks, builds the frontend + backend, th
 npm test                         # just `playwright test`, against whatever is already built
 ```
 
-`npm run e2e` = `tsc --noEmit`, the frontend build plus `cargo build -p goofi-cli`, then `playwright test`.
+`npm run e2e` = `tsc --noEmit`, the frontend build plus `cargo build --workspace --all-targets` (one target selection, so the suite's host and `BIN` come from one resolve), then `playwright test`.
 
 **One backend per worker.** `globalSetup.ts` spawns a fleet of `goofi`s on
 `8500 + <worker slot>` (override the base with `GOOFI_E2E_PORT`, the width with
