@@ -76,6 +76,8 @@ pub(crate) struct State {
     /// How many times this node has rendered since those buffers were made — zero is a fresh
     /// state, which is how a body knows to seed itself.
     pub(crate) count: u32,
+    /// Readbacks taken for the recording, numbered from one.
+    pub(crate) recorded: u64,
     pub(crate) uploads: Vec<Option<Target>>,
     /// The range each upload spanned, in the uniform's own order.
     pub(crate) ranges: Vec<[f32; 3]>,
@@ -101,6 +103,7 @@ impl State {
             reads: [None, None, None, None],
             buffers: Vec::new(),
             count: 0,
+            recorded: 0,
             uploads: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),

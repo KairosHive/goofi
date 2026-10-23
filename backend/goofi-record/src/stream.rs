@@ -1,13 +1,20 @@
-//! One open stream file, and what a reader must be told about it.
+//! One open stream file, the sidecar beside it, and what a reader must be told about it. Every
+//! kind of file is behind one [`Format`]: a frame goes in, the file says what it added, and the
+//! sidecar and the counts are kept here for all of them alike.
 
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
+use goofi_core::record::{Frame, VideoQuality};
+use goofi_core::Value;
+
 use crate::beside::{Beside, Extent};
 use crate::csv::Csv;
+use crate::manifest::Entry;
 use crate::npy::Npy;
 use crate::video::{Encoders, Video};
 use crate::wav::Wav;
+use crate::StreamId;
 
 /// What a stream's file IS, which is the shape of the thing being recorded rather than a choice:
 /// an array is a `.npy`, a table is a `.csv`, text is its own lines, audio is a `.wav`, a texture
@@ -20,10 +27,27 @@ pub enum Kind {
     Table { columns: Vec<String> },
     Text,
     Audio { rate: f64, channels: usize },
-    Video { size: (u32, u32), fps: f64, quality: goofi_core::record::VideoQuality },
+    Video { size: (u32, u32), fps: f64, quality: VideoQuality },
 }
 
 impl Kind {
+    /// The kind a frame belongs in. `rate` is the audio engine's word that this stream is audio
+    /// and how fast it runs — a signal node's array is an array however many samples a second it
+    /// carries. `quality` is what a video of it is encoded at.
+    pub fn of(frame: &Frame, rate: Option<f64>, quality: VideoQuality) -> Result<Kind, String> {
+        match frame {
+            Frame::Texels(t) => Ok(Kind::Video { size: (t.width, t.height), fps: t.meta.sfreq().unwrap_or_default(), quality }),
+            Frame::Data(d) => match (d.value(), rate) {
+                (Value::Array(a), Some(rate)) => Ok(Kind::Audio { rate, channels: *a.shape().first().unwrap_or(&1) }),
+                (Value::Array(_), None) => Ok(Kind::Array),
+                (Value::Str(_), _) => Ok(Kind::Text),
+                (Value::Table(map), _) => Ok(Kind::Table { columns: map.keys().cloned().collect() }),
+                (Value::Texture(_), _) => Err("a texture submission is not recorded".into()),
+                (Value::Functional(_), _) => Err("a functional is not recorded".into()),
+            },
+        }
+    }
+
     pub fn extension(&self, encoders: &dyn Encoders) -> &'static str {
         match self {
             Kind::Array => "npy",
@@ -32,6 +56,17 @@ impl Kind {
             Kind::Audio { .. } => "wav",
             Kind::Video { .. } => encoders.extension(),
         }
+    }
+}
+
+/// How many bytes a frame's samples take: what a wav's room is measured against.
+pub fn size(frame: &Frame) -> usize {
+    match frame {
+        Frame::Data(d) => match d.value() {
+            Value::Array(a) => a.as_bytes().len(),
+            _ => 0,
+        },
+        Frame::Texels(t) => t.rgba.len(),
     }
 }
 
@@ -51,45 +86,37 @@ impl Timeline {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct StreamMeta {
-    pub sfreq: Option<f64>,
-    pub timeline: Timeline,
-    pub channels: Option<usize>,
+/// What a file says one frame added to it: the shape it came in, which the sidecar writes where
+/// it MOVED, or how many of the file's own units it took, where no shape can say it.
+pub enum Added {
+    Shape(Vec<usize>),
+    Rows(u64),
 }
 
-impl StreamMeta {
-    pub fn measured(sfreq: Option<f64>) -> StreamMeta {
-        StreamMeta { sfreq, timeline: Timeline::Measured, channels: None }
+/// One kind of file: a frame goes in and the file says what it added. Opened for one kind, and
+/// never asked to take another.
+pub trait Format {
+    fn write(&mut self, frame: &Frame, at: f64) -> Result<Added, String>;
+    /// Frames the file holds, in the file's own units.
+    fn frames(&self) -> u64;
+    /// Whether a frame of `bytes` still fits: a file with a ceiling says no, and opens the next.
+    fn room_for(&self, _bytes: usize) -> bool {
+        true
     }
-    pub fn derived(sfreq: Option<f64>) -> StreamMeta {
-        StreamMeta { sfreq, timeline: Timeline::Derived, channels: None }
-    }
-    pub fn with_channels(mut self, channels: usize) -> StreamMeta {
-        self.channels = Some(channels);
-        self
-    }
+    /// Reach the disk, on the cadence.
+    fn sync(&mut self) -> Result<(), String>;
+    /// Close the file, which for a video is what completes the container.
+    fn finish(&mut self) -> Result<(), String>;
 }
 
 const SYNC_EVERY: Duration = Duration::from_secs(1);
 
-/// What one frame carries into a stream: the instant it was made, its `Meta` for the sidecar, and
-/// the payload in the shape its own kind takes.
-pub enum Written<'a> {
-    /// One array frame, appended as it stands, and the shape it came in — which the flat file
-    /// cannot hold, so the sidecar carries it.
-    Rows { samples: &'a [u8], shape: Vec<usize> },
-    /// One audio block, PLANAR as the engine renders it — the wav interleaves it on the way in,
-    /// into a buffer of its own, so a block costs no allocation.
-    Blocks { planar: &'a [u8], channels: usize },
-    Cells(Vec<(String, String)>),
-    Text(&'a str),
-}
-
 pub struct Stream {
     pub file: String,
     pub kind: Kind,
-    pub meta: StreamMeta,
+    sfreq: Option<f64>,
+    timeline: Timeline,
+    channels: Option<usize>,
     pub t0_patch: f64,
     pub t0_utc: SystemTime,
     pub dropped: u64,
@@ -101,12 +128,8 @@ pub struct Stream {
     shapes: Shapes,
     /// What a derived timeline last measured itself against patch time.
     pub drift: Option<f64>,
-    fill: f32,
-    lines: u64,
-    sink: Sink,
-    /// Absent for a video, whose encoder thread owns its own — a frame the encoder dropped must
-    /// not get a line.
-    beside: Option<Beside>,
+    sink: Box<dyn Format + Send>,
+    beside: Beside,
     synced: Instant,
 }
 
@@ -137,45 +160,34 @@ impl Shapes {
     }
 }
 
-/// Where a stream's frames land.
-enum Sink {
-    Array(Npy),
-    Table(Csv),
-    Text(std::io::BufWriter<std::fs::File>),
-    Audio(Wav),
-    Video(Video),
-}
-
 impl Stream {
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         encoders: &dyn Encoders,
         folder: &Path,
         file: String,
         kind: Kind,
-        meta: StreamMeta,
+        sfreq: Option<f64>,
+        timeline: Timeline,
+        channels: Option<usize>,
         t0_patch: f64,
         t0_utc: SystemTime,
     ) -> Result<Stream, String> {
         let path = folder.join(&file);
-        let sink = match &kind {
-            Kind::Array => Sink::Array(Npy::create(&path)?),
-            Kind::Table { columns } => Sink::Table(Csv::create(&path, columns)?),
-            Kind::Text => Sink::Text(std::io::BufWriter::new(
-                std::fs::File::create_new(&path).map_err(|e| e.to_string())?,
-            )),
-            Kind::Audio { rate, channels } => Sink::Audio(Wav::create(&path, *rate, *channels)?),
-            Kind::Video { size, fps, quality } => {
-                Sink::Video(Video::spawn(encoders, folder, &file, *size, *fps, *quality)?)
-            }
+        let sink: Box<dyn Format + Send> = match &kind {
+            Kind::Array => Box::new(Npy::create(&path)?),
+            Kind::Table { columns } => Box::new(Csv::create(&path, columns)?),
+            Kind::Text => Box::new(Text(std::io::BufWriter::new(std::fs::File::create_new(&path).map_err(|e| e.to_string())?), 0)),
+            Kind::Audio { rate, channels } => Box::new(Wav::create(&path, *rate, *channels)?),
+            Kind::Video { size, fps, quality } => Box::new(Video::open(encoders, &path, *size, *fps, *quality)?),
         };
-        let beside = match kind {
-            Kind::Video { .. } => None,
-            _ => Some(Beside::create(&path)?),
-        };
+        let beside = Beside::create(&path)?;
         Ok(Stream {
             file,
             kind,
-            meta,
+            sfreq,
+            timeline,
+            channels,
             t0_patch,
             t0_utc,
             dropped: 0,
@@ -183,24 +195,15 @@ impl Stream {
             numbered: None,
             shapes: Shapes::None,
             drift: None,
-            fill: 0.0,
-            lines: 0,
             sink,
             beside,
             synced: Instant::now(),
         })
     }
 
-    /// How many frames this stream holds. A video's own encoder is the one that knows, because a
-    /// frame handed to it is not yet a frame in the file.
+    /// How many frames this stream holds, in its file's own units.
     pub fn frames(&self) -> u64 {
-        match &self.sink {
-            Sink::Array(n) => n.frames(),
-            Sink::Table(c) => c.rows(),
-            Sink::Text(_) => self.lines,
-            Sink::Audio(w) => w.frames(),
-            Sink::Video(v) => v.encoded(),
-        }
+        self.sink.frames()
     }
 
     /// The one shape every frame of this file had, which is what lets a reader fold the flat
@@ -212,111 +215,115 @@ impl Stream {
         }
     }
 
-    /// How full this stream's feeding buffer is. A video's queue into the encoder knows its own.
-    pub fn fill(&self) -> f32 {
-        match &self.sink {
-            Sink::Video(v) => v.fill(),
-            _ => self.fill,
-        }
-    }
-
-    /// What a drain last saw of the buffer feeding it. A video answers from its own queue.
-    pub fn set_fill(&mut self, fill: f32) {
-        if !matches!(self.sink, Sink::Video(_)) {
-            self.fill = fill;
-        }
-    }
-
-    /// Frames this stream lost. A video adds the one an encoder that died mid-write took with it,
-    /// which no caller can see from the outside.
-    pub fn lost(&self) -> u64 {
-        match &self.sink {
-            Sink::Video(v) => self.dropped + v.lost(),
-            _ => self.dropped,
-        }
-    }
-
     /// Whether this stream can still take what the frame brings. A `false` is a NEW file, never a
-    /// refused frame: a table with other columns, a full wav. An array always takes one — its
-    /// file is flat, so a reshape is not a reason to open another.
+    /// refused frame: a table with other columns, a full wav, a video of another size.
     pub fn takes(&self, kind: &Kind, bytes: usize) -> bool {
-        match (&self.sink, kind) {
-            (Sink::Audio(w), Kind::Audio { .. }) => &self.kind == kind && w.room_for(bytes),
-            _ => &self.kind == kind,
-        }
+        self.kind == *kind && self.sink.room_for(bytes)
     }
 
-    /// Hand one readback to the encoder, with the instant it was rendered at. `false` is a drop
-    /// the caller counts; a video stream never stalls the engine that feeds it.
-    pub fn write_video(&mut self, texels: &[u8], at: f64) -> bool {
-        match &self.sink {
-            Sink::Video(v) => v.push(texels, at),
-            _ => false,
+    /// Why a frame of `kind` opens a new file after this one.
+    pub fn reopened_because(&self, kind: &Kind) -> &'static str {
+        match (&self.kind, kind) {
+            (Kind::Video { size, .. }, Kind::Video { size: next, .. }) if size != next => "resized",
+            (Kind::Video { quality, .. }, Kind::Video { quality: next, .. }) if quality != next => "quality changed",
+            _ => "reopened",
         }
     }
 
     /// Append one frame, and reach the disk on a one-second cadence so a crash costs a second. The
     /// frame's own NUMBER is what says whether any went missing before it, so `dropped` is the gap
     /// in this file's numbering and can never be a loss the file itself cannot show.
-    pub fn write(
-        &mut self,
-        at: f64,
-        written: Written<'_>,
-        meta: Option<&goofi_core::Meta>,
-    ) -> Result<(), String> {
-        let extent = match (&mut self.sink, written) {
-            (Sink::Array(n), Written::Rows { samples, shape }) => {
-                n.write(samples)?;
-                Extent::Shape(self.shapes.took(shape))
-            }
-            (Sink::Audio(w), Written::Blocks { planar, channels }) => {
-                let was = w.frames();
-                w.write_planar(planar, channels)?;
-                Extent::Rows(w.frames() - was)
-            }
-            (Sink::Table(c), Written::Cells(cells)) => {
-                c.write(at, &cells)?;
-                Extent::Rows(1)
-            }
-            (Sink::Text(f), Written::Text(t)) => {
-                use std::io::Write;
-                writeln!(f, "{}", t.replace('\n', "\\n")).map_err(|e| e.to_string())?;
-                self.lines += 1;
-                Extent::Rows(1)
-            }
-            _ => return Err("the frame is not the shape this stream holds".into()),
+    pub fn write(&mut self, at: f64, frame: &Frame) -> Result<(), String> {
+        let meta = frame.meta();
+        let extent = match self.sink.write(frame, at)? {
+            Added::Shape(shape) => Extent::Shape(self.shapes.took(shape)),
+            Added::Rows(n) => Extent::Rows(n),
         };
-        if let Some(n) = meta.and_then(|m| m.index()) {
+        if let Some(n) = meta.index() {
             let missed = self.numbered.replace(n).map_or(0, |l| n.saturating_sub(l).saturating_sub(1));
             if missed > 0 {
                 self.dropped += missed;
                 self.dropped_at = Some(at);
             }
         }
-        if let Some(beside) = &mut self.beside {
-            beside.line(at, extent, meta)?;
+        if let Some(goofi_core::MetaValue::Float(d)) = meta.get(goofi_core::META_DRIFT) {
+            self.drift = Some(*d);
         }
+        self.beside.line(at, extent, Some(meta))?;
         if self.synced.elapsed() >= SYNC_EVERY {
-            self.sync()?;
+            self.sink.sync()?;
+            self.beside.sync()?;
+            self.synced = Instant::now();
         }
         Ok(())
     }
 
-    /// Reach the disk. For a video that is the encoder finishing, which is what closes the
-    /// container — so nothing after it may write.
-    pub fn sync(&mut self) -> Result<(), String> {
-        match &mut self.sink {
-            Sink::Array(n) => n.sync()?,
-            Sink::Table(c) => c.sync()?,
-            Sink::Audio(w) => w.sync()?,
-            Sink::Text(f) => sync_file(f)?,
-            Sink::Video(v) => v.finish()?,
+    /// Close the file and the sidecar. For a video that is the encoder finishing, which is what
+    /// closes the container — so nothing after it may write.
+    pub fn finish(&mut self) -> Result<(), String> {
+        let closed = self.sink.finish();
+        self.beside.sync()?;
+        closed
+    }
+
+    /// This stream's manifest entry, with its counts so far.
+    pub fn entry(&self, id: &StreamId, because: Option<String>, error: Option<String>) -> Entry {
+        Entry {
+            drift: self.drift,
+            frame: self.frame(),
+            frames: self.frames(),
+            dropped: self.dropped,
+            dropped_at: self.dropped_at,
+            closed_because: because,
+            error,
+            ..Entry::base(id, &self.file, &self.kind, self.sfreq, self.timeline, self.channels, self.t0_patch, self.t0_utc)
         }
-        if let Some(beside) = &mut self.beside {
-            beside.sync()?;
-        }
-        self.synced = Instant::now();
-        Ok(())
+    }
+
+    /// Refresh the counts an open entry carries.
+    pub fn count_into(&self, entry: &mut Entry) {
+        entry.frames = self.frames();
+        entry.dropped = self.dropped;
+        entry.dropped_at = self.dropped_at;
+        entry.frame = self.frame();
+        entry.drift = self.drift;
+    }
+}
+
+/// A text stream: one line per frame.
+struct Text(std::io::BufWriter<std::fs::File>, u64);
+
+impl Format for Text {
+    fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
+        use std::io::Write;
+        let Frame::Data(d) = frame else { return Err("the frame is not the shape this stream holds".into()) };
+        let Value::Str(text) = d.value() else { return Err("the frame is not the shape this stream holds".into()) };
+        writeln!(self.0, "{}", text.replace('\n', "\\n")).map_err(|e| e.to_string())?;
+        self.1 += 1;
+        Ok(Added::Rows(1))
+    }
+
+    fn frames(&self) -> u64 {
+        self.1
+    }
+
+    fn sync(&mut self) -> Result<(), String> {
+        sync_file(&mut self.0)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        self.sync()
+    }
+}
+
+/// The frame as an array, or the error every format answers a frame of another shape with.
+pub(crate) fn array(frame: &Frame) -> Result<&goofi_core::ArrayStore, String> {
+    match frame {
+        Frame::Data(d) => match d.value() {
+            Value::Array(a) => Ok(a),
+            _ => Err("the frame is not the shape this stream holds".into()),
+        },
+        Frame::Texels(_) => Err("the frame is not the shape this stream holds".into()),
     }
 }
 

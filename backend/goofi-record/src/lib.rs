@@ -1,39 +1,49 @@
-//! The recorder: a folder, one manifest, and one writer per stream. It owns no engine and no
-//! engine owns it.
+//! The recorder: every armed output's frames, through the transport's queues, into one folder of
+//! files under one manifest. It owns no engine and no engine owns it: an engine publishes frames,
+//! and a worker here, one per armed stream, takes them off the queue and writes them on its own
+//! time. Nothing a worker does reaches an engine's thread.
 
 pub mod beside;
 pub mod csv;
-pub mod frame;
 pub mod manifest;
 pub mod npy;
 pub mod stream;
 pub mod video;
 pub mod wav;
-pub mod writer;
+mod worker;
 
-use goofi_core::time::{stamp, stamp_nanos, Time};
-use goofi_node::Uid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, MutexGuard};
-use goofi_supervisor::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-pub use manifest::Manifest;
-pub use stream::{Kind, Stream, StreamMeta, Timeline, Written};
+use goofi_core::record::VideoQuality;
+use goofi_core::time::{stamp, stamp_nanos, Time};
+use goofi_node::Uid;
+use goofi_supervisor::sync::{Condvar, Mutex};
+use goofi_supervisor::timing::Event;
+use goofi_transport::Hub;
 
-/// The composition root joins engine queues to the recorder's transport drain.
-/// None of these waits may run on a device callback or with the graph locked.
-pub trait Capture: Send + Sync {
-    fn prepare(&self) -> Result<(), String>;
-    fn boundary(&self, window: Arc<goofi_core::record::FrameWindow>, begin: bool) -> Result<(), String>;
+pub use manifest::Manifest;
+pub use stream::{Kind, Stream, Timeline};
+pub use worker::Live;
+
+/// What a start and a stop ask of the engines: every control half delivers what it holds, so a
+/// frame rendered before the boundary is on its queue before the file closes; and the audio
+/// clock's block count, which bounds the derived timeline where no instant can.
+pub trait Engines: Send + Sync {
+    fn flush(&self) -> Result<(), String>;
+    fn audio_blocks(&self) -> Option<u64>;
 }
 
-/// How often a sweep's counts reach the manifest. The manifest is a PROJECTION and every stream
-/// reaches the disk on this same cadence, so nothing is fresher for being written more often —
-/// and a rewrite is a create, an fsync and a rename ON THE DRAIN THREAD, which a sweep rate of
-/// fifty a second turns into the thing that makes a drain fall behind its transport.
+/// How often a worker's counts reach the manifest. The manifest is a PROJECTION, and a rewrite is
+/// a create, an fsync and a rename: once a second is news; once a frame would be the cost.
 const NOTE_EVERY: Duration = Duration::from_secs(1);
+
+/// A ceiling on the wait for departed workers at shutdown, never on a stop: a stop waits for its
+/// files, however long an encoder takes to finish one.
+const LEAVE_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamId {
@@ -41,6 +51,17 @@ pub struct StreamId {
     pub node: String,
     pub slot: String,
     pub engine: &'static str,
+}
+
+/// One armed output, as the settled graph names it: the queue its frames ride, how deep, how its
+/// frames are dated, and the quality a video of it is encoded at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Armed {
+    pub id: StreamId,
+    pub service: String,
+    pub depth: usize,
+    pub timeline: Timeline,
+    pub quality: VideoQuality,
 }
 
 pub struct Status {
@@ -59,154 +80,103 @@ pub struct StreamStatus {
     pub frames: u64,
     pub dropped: u64,
     pub fill: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
-/// Finalize a detached stream — the wait for its encoder — and the entry it leaves behind.
-fn finished(id: &StreamId, stream: &Arc<Mutex<Stream>>, why: &str) -> manifest::Entry {
-    let mut s = stream.lock();
-    let error = s.sync().err();
-    Take::entry(id, &s, Some(why.to_string()), error)
+/// Where a take begins or ends: the instant, for a stream that reads the clock, and the audio
+/// clock's block, for one that counts samples.
+#[derive(Clone, Copy, Debug)]
+pub struct Boundary {
+    pub time: f64,
+    pub block: u64,
 }
 
-struct Take {
-    audio_window: Arc<goofi_core::record::FrameWindow>,
-    folder: PathBuf,
+/// One recording: its folder, its boundaries, and the entries of the streams that closed in it.
+pub struct Take {
+    /// Which take this is, so a worker tells the one it opened a file in from the next.
+    pub id: u64,
+    pub folder: PathBuf,
     name: String,
     patch: Option<PathBuf>,
-    started: f64,
-    stopped_utc: Option<SystemTime>,
-    open: BTreeMap<StreamId, Arc<Mutex<Stream>>>,
-    closed: Vec<manifest::Entry>,
-    version: u64,
-    landed: Arc<Mutex<u64>>,
+    pub started: f64,
+    pub begin: Boundary,
+    /// Set by the stop, before the engines are flushed: a frame past it is the next take's.
+    pub end: Mutex<Option<Boundary>>,
+    /// Raised once the engines have delivered what they held past the end: every frame of this
+    /// take is on its queue, and a worker whose queue is empty is done.
+    flushed: AtomicBool,
+    stopped_utc: Mutex<Option<SystemTime>>,
+    pub closed: Mutex<Vec<manifest::Entry>>,
+    /// The manifest versions minted and landed, so a slower writer never lands an older one.
+    version: AtomicU64,
+    landed: Mutex<u64>,
 }
 
 impl Take {
-    /// A stream's entry with no counts: what it is, and the shape a reader needs to fold the file
-    /// back — for a video, also what its encoding costs.
-    fn base(id: &StreamId, file: &str, kind: &Kind, meta: &StreamMeta, t0_patch: f64, t0_utc: SystemTime) -> manifest::Entry {
-        let (columns, video) = match kind {
-            Kind::Table { columns } => (Some(columns.clone()), None),
-            Kind::Video { size, fps, quality } => (None, Some((*size, *fps, *quality))),
-            Kind::Array | Kind::Text | Kind::Audio { .. } => (None, None),
-        };
-        manifest::Entry {
-            file: file.to_string(),
-            node: id.node.clone(),
-            slot: id.slot.clone(),
-            uid: id.uid.to_hex(),
-            engine: id.engine,
-            t0_utc: stamp_nanos(t0_utc),
-            t0_patch,
-            sfreq: meta.sfreq,
-            timeline: meta.timeline.name(),
-            drift: None,
-            channels: meta.channels,
-            frame: None,
-            columns,
-            size: video.map(|v| v.0),
-            fps: video.map(|v| v.1),
-            encoding: video.map(|_| video::CLIP),
-            quality: video.map(|v| v.2),
-            frames: 0,
-            dropped: 0,
-            dropped_at: None,
-            closed_because: None,
-            error: None,
-        }
+    /// Whether the stop has delivered every frame of this take to the queues.
+    pub fn stopping(&self) -> bool {
+        self.flushed.load(Ordering::Acquire)
     }
 
-    fn entry(id: &StreamId, s: &Stream, because: Option<String>, error: Option<String>) -> manifest::Entry {
-        manifest::Entry {
-            drift: s.drift,
-            frame: s.frame(),
-            frames: s.frames(),
-            dropped: s.lost(),
-            dropped_at: s.dropped_at,
-            closed_because: because,
-            error,
-            ..Take::base(id, &s.file, &s.kind, &s.meta, s.t0_patch, s.t0_utc)
-        }
-    }
-
-    fn manifest(&self, time: &Time) -> Manifest {
-        let mut streams = self.closed.clone();
-        streams.extend(self.open.iter().map(|(id, s)| Take::entry(id, &s.lock(), None, None)));
-        Manifest {
-            goofi: env!("CARGO_PKG_VERSION"),
-            name: self.name.clone(),
-            patch: self.patch.as_ref().map(|p| p.display().to_string()),
-            origin_utc: stamp_nanos(time.wall()),
-            started_utc: stamp(time.utc_at(self.started)),
-            stopped_utc: self.stopped_utc.map(stamp),
-            streams,
+    /// Whether a frame dated `at`, numbered `index`, falls inside this take.
+    pub fn holds(&self, timeline: Timeline, at: f64, index: Option<u64>) -> bool {
+        let end = *self.end.lock();
+        match timeline {
+            Timeline::Measured => at >= self.begin.time && end.is_none_or(|e| at < e.time),
+            Timeline::Derived => index.is_some_and(|i| i >= self.begin.block && end.is_none_or(|e| i < e.block)),
         }
     }
 
     /// The name nothing else in the folder holds, so a file is never opened over a written one.
-    fn free_name(&self, base: &str, ext: &str) -> String {
+    pub fn free_name(&self, base: &str, ext: &str) -> String {
         (1u32..)
             .map(|n| if n == 1 { format!("{base}.{ext}") } else { format!("{base}-{n}.{ext}") })
             .find(|file| !self.folder.join(file).exists())
             .expect("a free name, of endlessly many")
     }
-
-    /// Close a stream this take OWNS outright — the caller holds no lock anyone else needs.
-    fn close(&mut self, id: &StreamId, why: &str) {
-        if let Some(s) = self.open.remove(id) {
-            self.closed.push(finished(id, &s, why));
-        }
-    }
-}
-
-#[derive(Default)]
-struct Sweeps {
-    asked: u64,
-    swept: u64,
-    drains: usize,
-}
-
-/// A drain's registration; dropping it lets every stop that waits on the drain go.
-pub struct Draining(Arc<Recorder>);
-
-impl Drop for Draining {
-    fn drop(&mut self) {
-        self.0.sweeps.lock().drains -= 1;
-        self.0.swept.notify_all();
-    }
 }
 
 pub struct Recorder {
     time: Arc<Time>,
-    take: Mutex<Option<Arc<Mutex<Take>>>>,
-    /// The thread that turns frames into files. A drain hands frames over and never formats one
-    /// itself: at a producer's rate, formatting is what makes a drain fall behind its transport.
-    writer: Mutex<Option<writer::Writer>>,
+    hub: Arc<Hub>,
+    take: Mutex<Option<Arc<Take>>>,
+    takes: AtomicU64,
+    /// One worker per armed stream, by its id.
+    workers: Mutex<BTreeMap<StreamId, worker::Handle>>,
+    /// Workers told to leave, each writing what its queue held and finishing its file on its own
+    /// time: listed, woken and projected like the armed ones until they are gone.
+    departing: Mutex<Vec<worker::Handle>>,
+    /// A stop parks here until every worker has closed its file in the take.
+    done: Mutex<()>,
+    finished: Condvar,
+    /// Held: every worker parks instead of reading, so a test can fill a queue to overflow.
+    held: AtomicBool,
+    /// Whether a take runs, readable from any thread: what puts an armed stage in demand.
+    running: Arc<AtomicBool>,
     encoders: Mutex<Arc<dyn video::Encoders>>,
-    /// When a sweep's counts last reached the manifest. Every other writer publishes at once —
-    /// an open, a close, a drop — because each is rare and each is news.
+    engines: Mutex<Option<Arc<dyn Engines>>>,
     noted: Mutex<Instant>,
-    /// The sweeps a stop has asked its drains for, the ones they have finished, and the drains
-    /// there are. A stop waits for the second to reach the first, so no file is closed over a
-    /// frame already delivered; it stops waiting when no drain is left to answer.
-    sweeps: Mutex<Sweeps>,
-    swept: Condvar,
     transition: Mutex<()>,
-    capture: Mutex<Option<Arc<dyn Capture>>>,
 }
 
 impl Recorder {
-    pub fn new(time: Arc<Time>) -> Recorder {
+    pub fn new(time: Arc<Time>, hub: Arc<Hub>) -> Recorder {
         Recorder {
             time,
+            hub,
             take: Mutex::new(None),
-            writer: Mutex::new(None),
+            takes: AtomicU64::new(0),
+            workers: Mutex::new(BTreeMap::new()),
+            departing: Mutex::new(Vec::new()),
+            done: Mutex::new(()),
+            finished: Condvar::new(),
+            held: AtomicBool::new(false),
+            running: Arc::new(AtomicBool::new(false)),
             encoders: Mutex::new(Arc::new(video::FfmpegEncoders)),
+            engines: Mutex::new(None),
             noted: Mutex::new(Instant::now()),
-            sweeps: Mutex::new(Sweeps::default()),
-            swept: Condvar::new(),
             transition: Mutex::new(()),
-            capture: Mutex::new(None),
         }
     }
 
@@ -216,8 +186,8 @@ impl Recorder {
         *self.encoders.lock() = encoders;
     }
 
-    pub fn set_capture(&self, capture: Arc<dyn Capture>) {
-        *self.capture.lock() = Some(capture);
+    pub fn set_engines(&self, engines: Arc<dyn Engines>) {
+        *self.engines.lock() = Some(engines);
     }
 
     /// Whether a video stream could be opened at all. `record start` asks it, and refuses only a
@@ -227,79 +197,95 @@ impl Recorder {
         encoders.probe()
     }
 
-    /// Publish this take after releasing the current-take lock.
-    fn publish(&self, guard: MutexGuard<'_, Option<Arc<Mutex<Take>>>>) -> Result<(), String> {
-        let take = guard.as_ref().cloned();
-        drop(guard);
-        match take {
-            Some(take) => self.publish_take(&take),
-            None => Ok(()),
+    /// Whether a take runs, as a flag an engine's clock reads without a lock.
+    pub fn running_flag(&self) -> Arc<AtomicBool> {
+        self.running.clone()
+    }
+
+    pub fn running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    /// The take that runs, if one does.
+    pub(crate) fn current(&self) -> Option<Arc<Take>> {
+        self.take.lock().clone()
+    }
+
+    pub(crate) fn encoders(&self) -> Arc<dyn video::Encoders> {
+        self.encoders.lock().clone()
+    }
+
+    pub(crate) fn time(&self) -> &Time {
+        &self.time
+    }
+
+    /// Park every worker, or let them go. A held recorder's queues fill and overflow at their
+    /// depth, which is how a test witnesses the count of what overflowed.
+    pub fn hold(&self, held: bool) {
+        self.held.store(held, Ordering::Release);
+        if !held {
+            self.poke();
         }
     }
 
-    fn publish_take(&self, take: &Mutex<Take>) -> Result<(), String> {
-        let mut take = take.lock();
-        let manifest = take.manifest(&self.time);
-        let folder = take.folder.clone();
-        take.version += 1;
-        let version = take.version;
-        let landed = take.landed.clone();
-        drop(take);
-        let mut landed = landed.lock();
-        if *landed > version {
-            return Ok(());
+    pub(crate) fn held(&self) -> bool {
+        self.held.load(Ordering::Acquire)
+    }
+
+    /// Wake every worker, so one that parks on an empty queue reads what moved.
+    fn poke(&self) {
+        for shared in self.handles() {
+            shared.event.ring(goofi_transport::POKED);
         }
-        manifest.write_atomic(&folder)?;
-        *landed = version;
-        Ok(())
     }
 
-    /// A sweep a stop is waiting for. The drain reads this before it sweeps and reports it after,
-    /// so a sweep that began before the ask never counts as the answer to it.
-    pub fn sweeping(&self) -> u64 {
-        self.sweeps.lock().asked
+    /// Every worker there is: the armed ones and the ones on their way out that are not yet gone.
+    fn handles(&self) -> Vec<Arc<worker::Shared>> {
+        let mut all: Vec<Arc<worker::Shared>> = self.workers.lock().values().map(|h| h.shared.clone()).collect();
+        all.extend(self.departing.lock().iter().filter(|h| !h.gone()).map(|h| h.shared.clone()));
+        all
     }
 
-    /// One sweep of every feed, to exhaustion, has finished.
-    pub fn swept(&self, mark: u64) {
-        let mut sweeps = self.sweeps.lock();
-        sweeps.swept = sweeps.swept.max(mark);
-        self.swept.notify_all();
+    /// A worker is done with take `id`, or gone for good.
+    pub(crate) fn finished(&self, shared: &worker::Shared, id: u64) {
+        shared.finished.store(id, Ordering::Release);
+        let _done = self.done.lock();
+        self.finished.notify_all();
     }
 
-    /// A drain is running, for as long as the guard lives. Taken BEFORE its thread starts, so a
-    /// stop that races the boot waits for it.
-    pub fn draining(self: &Arc<Self>) -> Draining {
-        self.sweeps.lock().drains += 1;
-        Draining(self.clone())
-    }
-
-    /// Ask every drain for one more sweep and wait for it: the tail, the frames the last sweep
-    /// did not reach. The wait ends when the sweep did, or when no drain is left to make it.
-    fn settle(&self) -> Result<(), String> {
-        let mut sweeps = self.sweeps.lock();
-        sweeps.asked += 1;
-        let want = sweeps.asked;
-        sweeps = self.swept.wait_while(sweeps, |s| s.swept < want && s.drains > 0);
-        if sweeps.swept < want {
-            return Err("no recording drain runs".into());
+    /// The streams to record, whole: the settled graph's armed outputs. A stream named here and
+    /// not before gets a worker on its queue; one no longer named has its worker close its file and
+    /// leave, after what the queue already holds; one named under a new queue is reborn.
+    pub fn arm(self: &Arc<Self>, armed: Vec<Armed>) {
+        let mut workers = self.workers.lock();
+        let mut departing = self.departing.lock();
+        departing.retain(|h| !h.gone());
+        for (id, handle) in std::mem::take(&mut *workers) {
+            let wanted = armed.iter().find(|a| a.id == id);
+            match wanted {
+                Some(a) if a.service == handle.armed.lock().service => {
+                    handle.armed.lock().quality = a.quality;
+                    workers.insert(id, handle);
+                }
+                Some(_) => departing.push(handle.leave("reborn")),
+                None => departing.push(handle.leave("disarmed")),
+            }
         }
-        Ok(())
+        for a in armed {
+            if let std::collections::btree_map::Entry::Vacant(slot) = workers.entry(a.id.clone()) {
+                if let Some(handle) = worker::spawn(self, a) {
+                    slot.insert(handle);
+                }
+            }
+        }
     }
 
-    /// Mint the folder. Refused when a recording already runs — the take lock is the ONE
-    /// authority on that, so no caller can check and then act past it.
+    /// Mint the folder and begin the take. Refused when one already runs — the take lock is the
+    /// ONE authority on that, so no caller can check and then act past it.
     pub fn start(self: &Arc<Self>, root: &Path, name: &str, patch: Option<&Path>, annotations: Option<&serde_json::Value>) -> Result<PathBuf, String> {
         let _transition = self.transition.lock();
         if self.running() {
             return Err("a recording already runs".into());
-        }
-        let capture = self.capture.lock().clone();
-        let window = Arc::new(goofi_core::record::FrameWindow::default());
-        if let Some(capture) = &capture {
-            window.prepare();
-            capture.prepare()?;
-            self.settle()?;
         }
         if name.chars().any(|c| c.is_control() || "/\\:<>\"|?*".contains(c)) {
             return Err("recording name contains a path separator or unsupported filename character".into());
@@ -336,247 +322,104 @@ impl Recorder {
                 }
             }
         }
-        let take = Take {
+        let engines = self.engines.lock().clone();
+        let block = engines.as_ref().and_then(|e| e.audio_blocks()).unwrap_or(0);
+        let take = Arc::new(Take {
+            id: self.takes.fetch_add(1, Ordering::Relaxed) + 1,
             folder: folder.clone(),
             name: name.to_string(),
             patch: patch.map(Path::to_path_buf),
             started,
-            stopped_utc: None,
-            open: BTreeMap::new(),
-            closed: Vec::new(),
-            version: 0,
-            landed: Arc::new(Mutex::new(0)),
-            audio_window: window.clone(),
-        };
-        if let Err(error) = take.manifest(&self.time).write_atomic(&folder) {
+            begin: Boundary { time: started, block },
+            end: Mutex::new(None),
+            flushed: AtomicBool::new(false),
+            stopped_utc: Mutex::new(None),
+            closed: Mutex::new(Vec::new()),
+            version: AtomicU64::new(0),
+            landed: Mutex::new(0),
+        });
+        if let Err(error) = self.manifest(&take).write_atomic(&folder) {
             let _ = std::fs::remove_dir_all(&folder);
             return Err(error);
         }
-        *self.take.lock() = Some(Arc::new(Mutex::new(take)));
-        *self.writer.lock() =
-            Some(writer::Writer::new(Arc::downgrade(self)));
-        if let Some(capture) = capture {
-            if let Err(error) = capture.boundary(window.clone(), true) {
-                window.finish(0);
-                self.finish()?;
-                return Err(error);
-            }
-        }
+        *self.take.lock() = Some(take);
+        self.running.store(true, Ordering::Release);
+        self.poke();
         Ok(folder)
     }
 
-    /// Close every stream and finalize the manifest. `Ok(None)` is a recorder that was not
-    /// running; a manifest that could not be written is the error, never a silent `None`.
+    /// End the take: the boundary is set, the engines deliver what they hold, every worker writes
+    /// what falls inside and closes its file, and the manifest is finalized. `Ok(None)` is a
+    /// recorder that was not running; a manifest that could not be written is the error.
     pub fn stop(&self) -> Result<Option<PathBuf>, String> {
         let _transition = self.transition.lock();
-        if !self.running() {
-            return Ok(None);
+        let Some(take) = self.current() else { return Ok(None) };
+        let engines = self.engines.lock().clone();
+        let block = engines.as_ref().and_then(|e| e.audio_blocks()).unwrap_or(u64::MAX);
+        *take.end.lock() = Some(Boundary { time: self.time.now(), block });
+        *take.stopped_utc.lock() = Some(self.time.utc());
+        if let Some(engines) = engines {
+            engines.flush()?;
         }
-        if let Some(capture) = self.capture.lock().clone() {
-            let window = self.take.lock().as_ref().map(|s| s.lock().audio_window.clone());
-            if let Some(window) = window {
-                capture.boundary(window, false)?;
-            }
-            self.settle()?;
-        }
-        self.finish()
+        take.flushed.store(true, Ordering::Release);
+        // Every worker armed NOW is owed a wait; one that leaves meanwhile reports itself gone.
+        let waited: Vec<Arc<worker::Shared>> = self.workers.lock().values().map(|h| h.shared.clone()).collect();
+        self.poke();
+        let mut done = self.done.lock();
+        done = self.finished.wait_while(done, |_| waited.iter().any(|w| w.finished.load(Ordering::Acquire) < take.id));
+        drop(done);
+        *self.take.lock() = None;
+        self.running.store(false, Ordering::Release);
+        self.publish(&take)?;
+        Ok(Some(take.folder.clone()))
     }
 
-    fn finish(&self) -> Result<Option<PathBuf>, String> {
-        // The writer goes FIRST: a file closed over a frame still queued is a frame the manifest
-        // counted and the disk never got.
-        drop(self.writer.lock().take());
-        let Some(take) = self.take.lock().take() else { return Ok(None) };
-        let streams = {
-            let mut take = take.lock();
-            take.stopped_utc = Some(self.time.utc());
-            std::mem::take(&mut take.open)
-        };
-        for (id, stream) in streams {
-            let entry = finished(&id, &stream, "stopped");
-            take.lock().closed.push(entry);
+    /// Stop, send every worker away and wait for them: the manager's last word to the recorder.
+    pub fn shutdown(self: &Arc<Self>) {
+        if let Err(error) = self.stop() {
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("record"), goofi_supervisor::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
         }
-        let folder = take.lock().folder.clone();
-        self.publish_take(&take)?;
-        Ok(Some(folder))
-    }
-
-    pub fn running(&self) -> bool {
-        self.take.lock().is_some()
-    }
-
-    /// Open a file for a stream, closing whatever that stream held. Everything queued for it
-    /// reaches the old file first, so a reopen never moves a frame into the file after it.
-    pub fn open(
-        &self,
-        id: &StreamId,
-        kind: Kind,
-        t0_patch: f64,
-        meta: StreamMeta,
-    ) -> Result<(), String> {
-        // A video's frames never ride the queue — they go to its own encoder — and this is called
-        // from the thread that RENDERS, which must not wait on another stream's disk.
-        if !matches!(kind, Kind::Video { .. }) {
-            if let Some(writer) = self.writer.lock().as_ref() {
-                writer.flush();
-            }
-        }
-        self.open_now(id, kind, t0_patch, meta)
-    }
-
-    /// The open itself, with no flush: the WRITER's own door, because a writer that waited on its
-    /// own queue would wait for ever.
-    fn open_now(
-        &self,
-        id: &StreamId,
-        kind: Kind,
-        t0_patch: f64,
-        meta: StreamMeta,
-    ) -> Result<(), String> {
-        let guard = self.take.lock();
-        let mut take = guard.as_ref().ok_or("no recording is running")?.lock();
-        take.close(id, "reopened");
-        let t0_utc = self.time.utc_at(t0_patch);
-        let base = format!("{}-{}__{}Z", id.node, id.slot, stamp_nanos(t0_utc));
-        let encoders = self.encoders.lock().clone();
-        let file = take.free_name(&base, kind.extension(&*encoders));
-        let made =
-            Stream::create(&*encoders, &take.folder, file.clone(), kind.clone(), meta.clone(), t0_patch, t0_utc);
-        // A stream that could not open is an ENTRY, not an absence: a recording says what it was
-        // asked for and did not get, or nobody reading it later can tell.
-        let opened = match made {
-            Ok(stream) => {
-                take.open.insert(id.clone(), Arc::new(Mutex::new(stream)));
-                Ok(())
-            }
-            Err(why) => {
-                let base = Take::base(id, &file, &kind, &meta, t0_patch, t0_utc);
-                take.closed.push(manifest::Entry { closed_because: Some("never opened".into()), error: Some(why.clone()), ..base });
-                Err(why)
-            }
-        };
-        // The manifest is a projection and is rewritten at every later publish, so a stream that
-        // opened is OPEN even where the disk refused this snapshot.
-        drop(take);
-        let _ = self.publish(guard);
-        opened
-    }
-
-    /// Count what a stream lost and close it, on a thread of its own. Finalizing a video waits
-    /// for its encoder, and a thread that renders must never wait for one.
-    pub fn close_later(self: &Arc<Self>, id: &StreamId, why: &str, missed: u64, at: f64) {
-        let Some(take) = self.take.lock().as_ref().cloned() else { return };
-        let Some(stream) = take.lock().open.remove(id) else { return };
-        if missed > 0 {
-            let mut stream = stream.lock();
-            stream.dropped += missed;
-            stream.dropped_at = Some(at);
-        }
-        let (rec, mine, said) = (self.clone(), id.clone(), why.to_string());
-        let (owner, closing) = (take.clone(), stream.clone());
-        let spawned = goofi_supervisor::worker::thread("goofi-record-close").spawn(move || {
-            rec.finish_close(&owner, &mine, &closing, &said);
-        });
-        if spawned.is_err() {
-            self.finish_close(&take, id, &stream, why);
+        self.arm(Vec::new());
+        let deadline = Instant::now() + LEAVE_WAIT;
+        for handle in std::mem::take(&mut *self.departing.lock()) {
+            handle.join_within(deadline.saturating_duration_since(Instant::now()));
         }
     }
 
-    /// Close a stream and finalize its file. A VIDEO's encoder is waited for here, so this is
-    /// never called from a thread that renders — [`Recorder::close_later`] is that door.
-    pub fn close(&self, id: &StreamId, why: &str) {
-        if let Some(writer) = self.writer.lock().as_ref() {
-            writer.flush();
-            writer.forget(id);
+    fn manifest(&self, take: &Take) -> Manifest {
+        let mut streams = take.closed.lock().clone();
+        streams.extend(self.handles().iter().filter_map(|shared| {
+            let live = shared.live.lock();
+            live.entry.clone().filter(|_| live.take == take.id)
+        }));
+        Manifest {
+            goofi: env!("CARGO_PKG_VERSION"),
+            name: take.name.clone(),
+            patch: take.patch.as_ref().map(|p| p.display().to_string()),
+            origin_utc: stamp_nanos(self.time.wall()),
+            started_utc: stamp(self.time.utc_at(take.started)),
+            stopped_utc: take.stopped_utc.lock().map(stamp),
+            streams,
         }
-        self.close_now(id, why);
     }
 
-    /// The close itself, with no flush: the WRITER's own door, as [`Recorder::open_now`] is. A
-    /// writer that waited on its own queue would wait for ever, and nothing of this stream can
-    /// still be queued when the thread that would write it is the caller.
-    pub(crate) fn close_now(&self, id: &StreamId, why: &str) {
-        let Some(take) = self.take.lock().as_ref().cloned() else { return };
-        let stream = take.lock().open.remove(id);
-        let Some(stream) = stream else { return };
-        self.finish_close(&take, id, &stream, why);
-    }
-
-    fn finish_close(
-        &self,
-        take: &Mutex<Take>,
-        id: &StreamId,
-        stream: &Arc<Mutex<Stream>>,
-        why: &str,
-    ) {
-        let entry = finished(id, stream, why);
-        take.lock().closed.push(entry);
-        let _ = self.publish_take(take);
-    }
-
-    /// Hand one frame over to be written. `false` is a queue that is full, or no recording at all —
-    /// either way the frame is not written, and the next one's own number says so.
-    ///
-    /// `wait` is the LAST hand-over of a stream, where a full queue is waited on rather than
-    /// dropped: a drain that must not stall is one with more frames coming, and this one has none.
-    pub fn take_frame(
-        &self,
-        id: &StreamId,
-        frame: &goofi_core::Data,
-        rate: Option<f64>,
-        timeline: Timeline,
-        at: f64,
-        wait: bool,
-    ) -> bool {
-        if id.engine == "audio" {
-            if let Some(index) = frame.meta().index() {
-                let window = self.take.lock().as_ref().map(|s| s.lock().audio_window.clone());
-                if window.is_none_or(|window| !window.contains(index)) {
-                    return true;
-                }
-            }
+    /// Rewrite the take's manifest: a projection of every entry closed and every file open, minted
+    /// now and landed only if nothing newer landed first.
+    pub(crate) fn publish(&self, take: &Take) -> Result<(), String> {
+        let manifest = self.manifest(take);
+        let version = take.version.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut landed = take.landed.lock();
+        if *landed > version {
+            return Ok(());
         }
-        let guard = self.writer.lock();
-        // Idle armed feeds are still drained. They must not retain a frame from
-        // the previous recording or discard a new one after a start boundary.
-        let Some(writer) = guard.as_ref() else { return true };
-        writer.take(id, frame, rate, timeline, at, wait)
+        manifest.write_atomic(&take.folder)?;
+        *landed = version;
+        Ok(())
     }
 
-    /// One queued frame, on the writer's thread: the file it belongs in, opened if the frame no
-    /// longer fits the one that is open, and then the frame itself. An `Err` is the STREAM's
-    /// death — a full disk, a frame the codec cannot read — and the lane is what says so.
-    pub(crate) fn write_queued(&self, q: &writer::Queued) -> Result<(), String> {
-        let read = frame::read(&q.frame, q.rate)?;
-        if !self.takes(&q.id, &read.kind, frame::size(&q.frame)) {
-            let meta = writer::meta_of(read.meta.as_ref(), q.timeline);
-            self.open_now(&q.id, read.kind.clone(), q.at, meta)?;
-        }
-        self.write(&q.id, read, q.at)
-    }
-
-    /// The stream `id` has open, if a recording runs.
-    fn stream(&self, id: &StreamId) -> Option<Arc<Mutex<Stream>>> {
-        let stream = self.take.lock().as_ref()?.lock().open.get(id).cloned();
-        stream
-    }
-
-    fn write(&self, id: &StreamId, read: frame::Incoming<'_>, at: f64) -> Result<(), String> {
-        let stream = self.stream(id).ok_or("no such open stream")?;
-        let done = stream.lock().write(at, read.written, read.meta.as_ref());
-        done
-    }
-
-    /// Whether the stream's open file still takes what a frame brings — a `false` is the caller's
-    /// cue to open the next one, never to drop the frame. An unopened stream takes nothing.
-    pub fn takes(&self, id: &StreamId, kind: &Kind, bytes: usize) -> bool {
-        self.stream(id).is_some_and(|s| s.lock().takes(kind, bytes))
-    }
-
-    /// Rewrite the manifest for what the sweeps since the last one changed, on [`NOTE_EVERY`].
-    /// Every count is already on its stream, so a skipped note loses nothing: the next one, and
-    /// the stop, both mint the projection whole.
-    pub fn note(&self) {
+    /// Publish for what the writes since the last note changed, on [`NOTE_EVERY`]. Every count is
+    /// on its worker already, so a skipped note loses nothing: the next, and the stop, mint whole.
+    pub(crate) fn note(&self, take: &Take) {
         {
             let mut noted = self.noted.lock();
             if noted.elapsed() < NOTE_EVERY {
@@ -584,76 +427,43 @@ impl Recorder {
             }
             *noted = Instant::now();
         }
-        let _ = self.publish(self.take.lock());
-    }
-
-    /// Hand one video readback to its encoder, dated by the tick that DREW it rather than the one
-    /// that took it. `false` is a drop the caller counts: a real-time engine is never stalled.
-    pub fn write_video(&self, id: &StreamId, texels: &[u8], at: f64) -> bool {
-        self.stream(id).is_some_and(|s| s.lock().write_video(texels, at))
-    }
-
-    pub fn dropped(&self, id: &StreamId, count: u64, at: f64) {
-        let guard = self.take.lock();
-        let Some(take) = guard.as_ref() else { return };
-        let take = take.lock();
-        let Some(stream) = take.open.get(id) else { return };
-        {
-            let mut stream = stream.lock();
-            stream.dropped += count;
-            stream.dropped_at = Some(at);
-        }
-        drop(take);
-        let _ = self.publish(guard);
-    }
-
-    /// What a derived timeline last measured itself against patch time. The manifest carries it so
-    /// an analyst can correct the stream against the ones that read the clock.
-    pub fn drift(&self, id: &StreamId, seconds: f64) {
-        if let Some(stream) = self.stream(id) {
-            stream.lock().drift = Some(seconds);
-        }
-    }
-
-    /// Whether this stream has a file open right now — what a drain asks so it opens one exactly
-    /// where the recorder holds none, rather than keeping a second belief about it.
-    pub fn is_open(&self, id: &StreamId) -> bool {
-        self.stream(id).is_some()
-    }
-
-    /// How full the stream's feeding buffer is, as its drain last saw it.
-    pub fn fill(&self, id: &StreamId, fill: f32) {
-        if let Some(stream) = self.stream(id) {
-            stream.lock().set_fill(fill);
-        }
+        let _ = self.publish(take);
     }
 
     pub fn status(&self) -> Status {
-        let guard = self.take.lock();
-        let Some(take) = guard.as_ref() else {
-            return Status { running: false, folder: None, started: None, streams: Vec::new() };
-        };
-        let take = take.lock();
-        Status {
-            running: true,
-            folder: Some(take.folder.clone()),
-            started: Some(take.started),
-            streams: take
-                .open
-                .iter()
-                .map(|(id, s)| {
-                    let s = s.lock();
-                    StreamStatus {
-                        node: id.node.clone(),
-                        slot: id.slot.clone(),
-                        engine: id.engine,
-                        file: s.file.clone(),
-                        frames: s.frames(),
-                        dropped: s.lost(),
-                        fill: s.fill(),
-                    }
+        let take = self.current();
+        let workers = self.workers.lock();
+        let departing = self.departing.lock();
+        let streams = workers
+            .values()
+            .chain(departing.iter().filter(|h| !h.gone()))
+            .filter_map(|handle| {
+                let id = &handle.armed.lock().id;
+                let live = handle.shared.live.lock();
+                let entry = live.entry.as_ref();
+                if entry.is_none() && live.error.is_none() {
+                    return None;
+                }
+                Some(StreamStatus {
+                    node: id.node.clone(),
+                    slot: id.slot.clone(),
+                    engine: id.engine,
+                    file: entry.map(|e| e.file.clone()).unwrap_or_default(),
+                    frames: entry.map_or(0, |e| e.frames),
+                    dropped: entry.map_or(0, |e| e.dropped),
+                    fill: live.fill,
+                    error: live.error.clone(),
                 })
-                .collect(),
+            })
+            .collect();
+        Status {
+            running: take.is_some(),
+            folder: take.as_ref().map(|t| t.folder.clone()),
+            started: take.as_ref().map(|t| t.started),
+            streams,
         }
     }
 }
+
+/// The event a worker parks on, held by the recorder to wake it: the queue's own.
+pub(crate) type Wake = Arc<Event>;

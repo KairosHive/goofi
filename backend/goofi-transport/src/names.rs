@@ -5,8 +5,6 @@ use goofi_node::{BoundVar, EventId, GraphView, Uid, Var};
 
 use crate::ServiceName;
 
-/// The id every armed slot rings the recorder's door with; the drain ignores it, so one is enough.
-pub const RECORD_EVENT_ID: EventId = 0;
 /// The id a producer rings a slot's view door with: a frame is out.
 pub const VIEW_EVENT_ID: EventId = 0;
 /// The id the bridge rings a view door with: what the reducer should do may have moved — a
@@ -45,12 +43,6 @@ pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
 /// of the old one is never read as the new one's.
 pub fn record_service(base: &str, slot: &str, serial: u64) -> ServiceName {
     format!("goofi_{base}_rec_{slot}_{serial}")
-}
-
-/// The ONE door every armed slot rings once its frame is out. It is the recorder's, not a node's,
-/// so a burst across every armed slot coalesces into one sweep of every armed buffer.
-pub fn record_door_service(instance: &str) -> ServiceName {
-    format!("goofi_{instance}_recdoor")
 }
 
 /// One node's door, from the view's birth facts.

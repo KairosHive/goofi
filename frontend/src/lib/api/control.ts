@@ -198,6 +198,8 @@ export interface RecordStreamStatus {
 	frames: number;
 	dropped: number;
 	fill: number;
+	/** Why the stream has no file: an encoder this machine lacks, a frame the disk refused. */
+	error?: string;
 }
 
 /** The recording SESSION — runtime, so it rides `record status` and `record_changed`, never the

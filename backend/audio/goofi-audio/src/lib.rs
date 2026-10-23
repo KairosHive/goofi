@@ -138,8 +138,6 @@ struct DeviceClock {
     period: Option<u32>,
     go: Option<mpsc::Sender<()>>,
     done: mpsc::Receiver<()>,
-    /// Whether the stream still runs: lowered when it is dropped or its device went away.
-    playing: Arc<AtomicBool>,
     /// The output stream's entry in the resource index, for as long as the clock holds it.
     _lease: goofi_supervisor::scope::Lease,
 }
@@ -150,11 +148,8 @@ impl DeviceClock {
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
-        let playing = Arc::new(AtomicBool::new(true));
-        let lowered = playing.clone();
         goofi_supervisor::worker::thread("goofi-audio-clock")
             .spawn(move || {
-                let _lowered = Lowered(lowered);
                 let stream = match open_output(&device, buffer, runtime, stats.clone(), waker.clone()) {
                     Ok((stream, rate, channels)) => {
                         let _ = opened.send(Ok((rate, channels, stream.buffer_size().ok())));
@@ -182,7 +177,7 @@ impl DeviceClock {
             .recv_timeout(wait)
             .map_err(|_| format!("`{name}` did not open within {} s", wait.as_secs()))??;
         let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {name}"));
-        Ok((DeviceClock { name: name.to_string(), channels, buffer, period, go: Some(go), done: on_done, playing, _lease: lease }, rate))
+        Ok((DeviceClock { name: name.to_string(), channels, buffer, period, go: Some(go), done: on_done, _lease: lease }, rate))
     }
 
     /// Start the callbacks — only once the runtime is cut to this stream's rate and width.
@@ -194,14 +189,6 @@ impl DeviceClock {
 }
 
 /// Lowers the flag when the clock thread ends, however it ends.
-struct Lowered(Arc<AtomicBool>);
-
-impl Drop for Lowered {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 impl Drop for DeviceClock {
     fn drop(&mut self) {
         self.go = None;
@@ -513,29 +500,10 @@ impl AudioEngine {
         self.live.values().map(|node| node.control.flush()).collect()
     }
 
-    /// Change the recording interval between whole blocks, with no wait, allocation or lock on the
-    /// audio thread. Wait on the returned action only after releasing the graph lock.
-    pub fn recording_boundary(
-        &mut self,
-        window: Arc<goofi_core::record::FrameWindow>,
-        begin: bool,
-    ) -> impl FnOnce() -> Result<(), String> + Send + 'static {
-        let done = Arc::new(AtomicBool::new(false));
-        self.send(Msg::RecordBoundary { window, begin, done: done.clone() });
-        if self.device.is_none() {
-            self.runtime.lock().apply_pending();
-        }
-        // The callback is the only reader, so the wait ends when it answered or its stream is gone.
-        let playing = self.device.as_ref().map(|d| d.playing.clone());
-        move || {
-            while !done.load(Ordering::Acquire) {
-                if !playing.as_ref().is_some_and(|p| p.load(Ordering::Acquire)) {
-                    return Err("the audio clock is gone".into());
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            Ok(())
-        }
+    /// Blocks the clock has rendered so far: the recorder's boundary on the derived timeline,
+    /// since every block carries its number and no block is rendered between two reads of this.
+    pub fn blocks(&self) -> u64 {
+        self.audio.anchor.blocks.load(Ordering::Relaxed)
     }
 
     /// Read without the runtime lock: taking it under the graph lock would cost a callback its block.
@@ -617,7 +585,6 @@ impl AudioEngine {
                 Retired::Plan(plan, arena) => drop((plan, arena)),
                 Retired::Rings(rings) => drop(rings),
                 Retired::Slab(slab) => drop(slab),
-                Retired::RecordBoundary(window, done) => drop((window, done)),
                 Retired::Faulted { uid, serial, fault } => {
                     if self.live.get(&uid).is_some_and(|i| i.serial == serial) {
                         let msg = match fault {

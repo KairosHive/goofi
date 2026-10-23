@@ -72,3 +72,50 @@ impl Manifest {
         std::fs::rename(&beside, folder.join("manifest.json")).map_err(|e| e.to_string())
     }
 }
+
+impl Entry {
+    /// A stream's entry with no counts: what it is, and the shape a reader needs to fold the file
+    /// back — for a video, also what its encoding costs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn base(
+        id: &crate::StreamId,
+        file: &str,
+        kind: &crate::Kind,
+        sfreq: Option<f64>,
+        timeline: crate::Timeline,
+        channels: Option<usize>,
+        t0_patch: f64,
+        t0_utc: std::time::SystemTime,
+    ) -> Entry {
+        use crate::Kind;
+        let (columns, video) = match kind {
+            Kind::Table { columns } => (Some(columns.clone()), None),
+            Kind::Video { size, fps, quality } => (None, Some((*size, *fps, *quality))),
+            Kind::Array | Kind::Text | Kind::Audio { .. } => (None, None),
+        };
+        Entry {
+            file: file.to_string(),
+            node: id.node.clone(),
+            slot: id.slot.clone(),
+            uid: id.uid.to_hex(),
+            engine: id.engine,
+            t0_utc: goofi_core::time::stamp_nanos(t0_utc),
+            t0_patch,
+            sfreq,
+            timeline: timeline.name(),
+            drift: None,
+            channels,
+            frame: None,
+            columns,
+            size: video.map(|v| v.0),
+            fps: video.map(|v| v.1),
+            encoding: video.map(|_| crate::video::CLIP),
+            quality: video.map(|v| v.2),
+            frames: 0,
+            dropped: 0,
+            dropped_at: None,
+            closed_because: None,
+            error: None,
+        }
+    }
+}

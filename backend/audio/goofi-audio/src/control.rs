@@ -32,7 +32,7 @@ pub fn tap_ring(width: u16) -> usize {
     (1 + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK / 4)
 }
 /// A recording ring holds one second of blocks at `width`: the control half drains it every tick,
-/// and a second is what a parked drain thread may cost before the recorder counts a gap.
+/// and a second is what a parked recorder may cost before it counts a gap.
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
@@ -714,7 +714,7 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         meta.set_time(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
         if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
-            publish(out, Out::Record(&frame));
+            publish(out, Out::Record(goofi_core::record::Frame::Data(frame)));
         }
     }
 }

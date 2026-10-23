@@ -105,8 +105,7 @@ pub struct GraphicsEngine {
     windows: HashMap<Uid, Opened>,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
-    /// What the render thread found an armed stage could not record; settled as a fault like any
-    /// other, so a missing encoder reaches the panel the way every node failure does.
+    /// What the render thread found a stage could not do; settled as a fault like any other.
     troubles: runtime::Troubles,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
@@ -152,7 +151,7 @@ impl GraphicsEngine {
         time: Arc<goofi_core::time::Time>,
         waker: Arc<DrainWaker>,
         clock: Clock,
-        recorder: Arc<goofi_record::Recorder>,
+        recording: Arc<AtomicBool>,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
@@ -165,7 +164,7 @@ impl GraphicsEngine {
             stats.clone(),
             troubles.clone(),
             shared.clone(),
-            recorder,
+            recording,
             fps.clone(),
         )));
         let inbox = runtime.lock().inbox.clone();
@@ -220,6 +219,12 @@ impl GraphicsEngine {
         })
     }
 
+    /// Ask every node's half for one tick, acknowledged: what a recording's stop waits for, so a
+    /// readback the half still holds reaches the queue before the file closes.
+    pub fn flush_recording(&self) -> Vec<std::sync::mpsc::Receiver<Result<(), String>>> {
+        self.live.values().map(|inst| inst.control.flush()).collect()
+    }
+
     /// The window thread, where a `Window` node's frames go. Without one there are no windows,
     /// and a `Window` node is a pass-through with a viewer like any other node.
     pub fn set_ui(&mut self, ui: Option<goofi_window::Ui>) {
@@ -262,9 +267,10 @@ impl GraphicsEngine {
     }
 
     /// Everything one node's runtime holds, read off the settled view: a texture wire is a plan
-    /// edge, carried by the stage rather than subscribed, and a recording is the render thread's.
+    /// edge, carried by the stage rather than subscribed; an armed output's queue is the half's,
+    /// fed with what the render thread read back.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: false };
+        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
         goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
     }
 
@@ -387,6 +393,7 @@ impl Engine for GraphicsEngine {
             readers: AtomicBool::new(false),
             tap: Mutex::new(None),
             tap_box: AtomicU64::new(0),
+            record: Mutex::new(std::collections::VecDeque::new()),
         });
         let spawn = goofi_runtime::Spawn {
             engine: "graphics",

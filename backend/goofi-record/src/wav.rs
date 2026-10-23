@@ -9,6 +9,10 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use goofi_core::record::Frame;
+
+use crate::stream::{Added, Format};
+
 /// The most sample bytes one file takes, leaving the headers inside the 32-bit count.
 pub const CEILING: u64 = u32::MAX as u64 - 1024;
 
@@ -36,40 +40,6 @@ impl Wav {
         Ok(wav)
     }
 
-    /// Whether this file can still take a block of `bytes`. A full file is a new file, never a
-    /// truncated count.
-    pub fn room_for(&self, bytes: usize) -> bool {
-        self.bytes + bytes as u64 <= CEILING
-    }
-
-    /// One PLANAR block, interleaved into the only order a wav has.
-    pub fn write_planar(&mut self, planar: &[u8], channels: usize) -> Result<(), String> {
-        let samples = planar.len() / (4 * channels.max(1));
-        self.scratch.clear();
-        self.scratch.reserve(planar.len());
-        for i in 0..samples {
-            for c in 0..channels {
-                let at = (c * samples + i) * 4;
-                self.scratch.extend_from_slice(&planar[at..at + 4]);
-            }
-        }
-        self.file.write_all(&self.scratch).map_err(|e| e.to_string())?;
-        self.bytes += self.scratch.len() as u64;
-        Ok(())
-    }
-
-    /// Frames, in WAV's sense: one sample per channel.
-    pub fn frames(&self) -> u64 {
-        self.bytes / (4 * self.channels as u64)
-    }
-
-    pub fn sync(&mut self) -> Result<(), String> {
-        let end = self.file.stream_position().map_err(|e| e.to_string())?;
-        self.sizes()?;
-        self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
-        crate::stream::sync_file(&mut self.file)
-    }
-
     fn head(&mut self, rate: f64) -> Result<(), String> {
         let block = 4 * self.channels as u32;
         let mut h = Vec::with_capacity(HEADER as usize);
@@ -91,5 +61,48 @@ impl Wav {
         self.file.write_all(&(HEADER as u32 - 8 + data).to_le_bytes()).map_err(|e| e.to_string())?;
         self.file.seek(SeekFrom::Start(HEADER - 4)).map_err(|e| e.to_string())?;
         self.file.write_all(&data.to_le_bytes()).map_err(|e| e.to_string())
+    }
+}
+
+impl Format for Wav {
+    /// One PLANAR block, as the engine renders it, interleaved into the only order a wav has —
+    /// into a buffer of its own, so a block costs no allocation.
+    fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
+        let a = crate::stream::array(frame)?;
+        let (planar, channels) = (a.as_bytes(), *a.shape().first().unwrap_or(&1));
+        let samples = planar.len() / (4 * channels.max(1));
+        self.scratch.clear();
+        self.scratch.reserve(planar.len());
+        for i in 0..samples {
+            for c in 0..channels {
+                let at = (c * samples + i) * 4;
+                self.scratch.extend_from_slice(&planar[at..at + 4]);
+            }
+        }
+        self.file.write_all(&self.scratch).map_err(|e| e.to_string())?;
+        self.bytes += self.scratch.len() as u64;
+        Ok(Added::Rows(samples as u64))
+    }
+
+    /// Frames, in WAV's sense: one sample per channel.
+    fn frames(&self) -> u64 {
+        self.bytes / (4 * self.channels as u64)
+    }
+
+    /// Whether this file can still take a block of `bytes`. A full file is a new file, never a
+    /// truncated count.
+    fn room_for(&self, bytes: usize) -> bool {
+        self.bytes + bytes as u64 <= CEILING
+    }
+
+    fn sync(&mut self) -> Result<(), String> {
+        let end = self.file.stream_position().map_err(|e| e.to_string())?;
+        self.sizes()?;
+        self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
+        crate::stream::sync_file(&mut self.file)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        self.sync()
     }
 }

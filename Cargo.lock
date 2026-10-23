@@ -1080,7 +1080,6 @@ dependencies = [
  "goofi-host-sdk",
  "goofi-node",
  "goofi-python",
- "goofi-record",
  "goofi-runtime",
  "goofi-supervisor",
  "goofi-transport",
@@ -1184,10 +1183,10 @@ dependencies = [
 name = "goofi-record"
 version = "3.0.0"
 dependencies = [
- "goofi-codec",
  "goofi-core",
  "goofi-node",
  "goofi-supervisor",
+ "goofi-transport",
  "serde",
  "serde_json",
 ]

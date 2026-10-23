@@ -13,14 +13,14 @@ pub mod door;
 pub mod exchange;
 mod link;
 pub mod names;
-pub mod record;
+pub mod queue;
 mod shm;
 pub mod slot;
 
 pub use door::*;
 pub use exchange::*;
 pub use names::*;
-pub use record::*;
+pub use queue::*;
 pub use slot::*;
 
 /// A service name: a wire's identity, which is why a payload carries no source uid.
@@ -30,13 +30,13 @@ pub type ServiceName = String;
 /// 63 sharing 64; `65..=128` an `nd()` channel; the rest a door's own.
 pub use goofi_node::EventId;
 
-/// The per-session registry: every slot, door and recording queue by name, made by whichever
-/// end asks first and gone when the last end lets go.
+/// The per-session registry: every slot, door and queue by name, made by whichever end asks
+/// first and gone when the last end lets go.
 pub struct Hub {
     session: String,
     slots: Mutex<HashMap<String, Weak<slot::Cell>>>,
     doors: Mutex<HashMap<String, Weak<Door>>>,
-    records: Mutex<HashMap<String, Weak<record::Queue>>>,
+    queues: Mutex<HashMap<String, Weak<queue::Queue>>>,
     /// Exchanges opened so far: each names its own mailboxes.
     exchanges: AtomicU64,
 }
@@ -47,7 +47,7 @@ impl Hub {
             session: session.to_string(),
             slots: Mutex::new(HashMap::new()),
             doors: Mutex::new(HashMap::new()),
-            records: Mutex::new(HashMap::new()),
+            queues: Mutex::new(HashMap::new()),
             exchanges: AtomicU64::new(0),
         }
     }
@@ -93,15 +93,15 @@ impl Hub {
         Self::entry(&self.doors, name, || Door::new(name))
     }
 
-    /// A producer's end of one armed slot's recording queue, `depth` frames deep.
-    pub fn record_port(&self, name: &str, depth: usize, bell: Arc<Door>) -> RecordPort {
-        RecordPort::new(Self::entry(&self.records, name, || record::Queue::new(depth)), bell)
+    /// A producer's end of a queue `depth` frames deep: an armed slot's, feeding the recorder.
+    pub fn sender(&self, name: &str, depth: usize) -> Sender {
+        Sender::new(Self::entry(&self.queues, name, || queue::Queue::new(depth)))
     }
 
-    /// The recorder's end of one armed slot's recording queue, `depth` frames deep: both ends
-    /// name the depth, from the engine, so whichever comes first makes the same queue.
-    pub fn record_subscriber(&self, name: &str, depth: usize) -> RecordSubscriber {
-        RecordSubscriber::new(Self::entry(&self.records, name, || record::Queue::new(depth)))
+    /// The reader's end of a queue `depth` frames deep: both ends name the depth, from the
+    /// engine, so whichever comes first makes the same queue.
+    pub fn receiver(&self, name: &str, depth: usize) -> Receiver {
+        Receiver::new(Self::entry(&self.queues, name, || queue::Queue::new(depth)))
     }
 
     /// A fresh exchange number: what names its mailboxes, unique for the session.

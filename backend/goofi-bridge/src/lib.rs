@@ -173,12 +173,9 @@ pub struct AppState {
     pub harnesses: Arc<term::Harnesses>,
     /// The browsers in the patch right now, and where their pointers are.
     pub presence: Arc<Mutex<presence::Presence>>,
-    /// The one recorder every engine writes its armed streams to. Whether it runs is RUNTIME —
+    /// The one recorder every engine's armed streams queue to. Whether it runs is RUNTIME —
     /// `record status` and the `record_changed` event carry it, never the document.
     pub recorder: Arc<goofi_record::Recorder>,
-    /// The drain thread's stop flag, and the thread [`AppState::stop_recording`] joins.
-    record_drain: Arc<goofi_transport::Halt>,
-    record_worker: Arc<Mutex<Option<goofi_supervisor::worker::Worker>>>,
     /// Raised once, at shutdown: every worker of the manager's own reads it and leaves.
     stopping: Arc<goofi_transport::Halt>,
     /// The manager's own threads — the status drain, the tap follower, the autosave — closed at
@@ -235,6 +232,7 @@ impl AppState {
         graph_val.variables().set_plane(variables.clone());
         let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
         let graph = Arc::new(Mutex::new(graph_val));
+        record::attach(&recorder, &graph);
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
         let (machines, machines_rx) = machines::Driver::new();
         graph.lock().variable_store().lock().set_watch(machines.watch());
@@ -271,8 +269,6 @@ impl AppState {
             harnesses: Arc::new(term::Harnesses::default()),
             presence: Arc::new(Mutex::new(presence::Presence::default())),
             recorder,
-            record_drain: Arc::new(goofi_transport::Halt::default()),
-            record_worker: Arc::new(Mutex::new(None)),
             stopping: Arc::new(goofi_transport::Halt::default()),
             scope: Arc::new(goofi_supervisor::scope::Scope::default()),
         };
@@ -282,7 +278,6 @@ impl AppState {
         state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
         spawn_midi(state.clone());
-        *state.record_worker.lock() = record::spawn(hub, state.graph.clone(), state.recorder.clone(), state.record_drain.clone());
         Ok(state)
     }
 
@@ -303,16 +298,10 @@ impl AppState {
         self.release_mount();
     }
 
-    /// Close the capture interval and drain its queues before the engines stop.
+    /// End the take, every file closed, and send the recorder's workers away.
     pub fn stop_recording(&self) {
-        if let Err(error) = self.recorder.stop() {
-            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("Recording could not be finalized: {error}"));
-        }
+        self.recorder.shutdown();
         self.plugins.stop();
-        self.record_drain.stop();
-        if let Some(worker) = self.record_worker.lock().take() {
-            let _ = worker.join_within(goofi_transport::SHUTDOWN_WAIT);
-        }
     }
 
     /// Record the address this server actually bound — what `local_url` derives from.
@@ -1010,17 +999,17 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
     }
 }
 
-/// A graph with every engine this machine has, and the one recorder its graphics engine encodes
-/// into. A `None` audio clock asks for no audio engine at all.
+/// A graph with every engine this machine has, and the one recorder its armed outputs queue to.
+/// A `None` audio clock asks for no audio engine at all.
 pub fn fresh_graph(hub: Arc<goofi_transport::Hub>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
-    let recorder = Arc::new(goofi_record::Recorder::new(g.time()));
+    let recorder = Arc::new(goofi_record::Recorder::new(g.time(), hub.clone()));
     let signal = goofi_signal::SignalEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker())?;
     g.register_engine(Box::new(signal));
     if let Some(clock) = clock {
         g.register_engine(Box::new(goofi_audio::AudioEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
     }
-    match goofi_graphics::GraphicsEngine::open(hub, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.clone()) {
+    match goofi_graphics::GraphicsEngine::open(hub, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.running_flag()) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
     }
@@ -1503,6 +1492,7 @@ fn dispatch(state: &AppState, req: Request) -> Option<String> {
 /// graph: apply→re-project is atomic, and the diff runs off the graph lock.
 pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (MutexGuard<'a, crate::doc::GraphDoc>, Value) {
     g.settle();
+    record::follow(state, g);
     state.changed.notify();
     sync_followers(state, g);
     state.live.fill(g);

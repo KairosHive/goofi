@@ -15,8 +15,8 @@ use goofi_node::{
 };
 use goofi_supervisor::sync::Mutex;
 use goofi_transport::{
-    door_service, output_service, record_door_service, record_service, record_shape, take_where, Door, Doorbell, Halt,
-    Hub, Listener, Payload, Publisher, RecordPort, ServiceName, Subscriber,
+    door_service, output_service, record_depth, record_service, take_where, Doorbell, Halt, Hub, Listener, Payload,
+    Publisher, Sender, ServiceName, Subscriber,
 };
 use indexmap::IndexMap;
 
@@ -289,7 +289,7 @@ pub enum Out<'a> {
     Frame(&'a Data),
     /// A frame for the recording alone. The queue drops its oldest when the recorder falls
     /// behind, a gap in `Meta::index`, which is what the recorder counts drops by.
-    Record(&'a Data),
+    Record(goofi_core::record::Frame),
 }
 
 /// What is wrong with the executor's node: its `setup` failed and nothing runs until a retry
@@ -503,8 +503,6 @@ pub fn spawn<E: Executor + 'static>(
                     born,
                     engine: spawn.engine,
                     base: spawn.base,
-                    record_door: record_door_service(&spawn.instance),
-                    record_bell: None,
                     manifest: spawn.manifest,
                     decls: spawn.decls,
                     time: spawn.time.clone(),
@@ -544,8 +542,8 @@ pub fn spawn<E: Executor + 'static>(
 struct Out_ {
     publisher: Publisher,
     bells: Vec<(String, Doorbell, EventId)>,
-    /// The armed port and the arming it serves; a new arming replaces it under a new name.
-    record: Option<(u64, RecordPort)>,
+    /// The armed queue and the arming it serves; a new arming replaces it under a new name.
+    record: Option<(u64, Sender)>,
 }
 
 struct SlotSub {
@@ -587,9 +585,6 @@ struct Runtime<E: Executor> {
     born: u64,
     engine: &'static str,
     base: String,
-    record_door: ServiceName,
-    /// The recorder's door, taken by the first arming and kept for the node's life.
-    record_bell: Option<Arc<Door>>,
     manifest: &'static NodeManifest,
     decls: Vec<ParamDecl>,
     time: Arc<goofi_core::time::Time>,
@@ -616,8 +611,8 @@ struct Runtime<E: Executor> {
     last_ufreq: Option<Instant>,
     listener: Listener,
     exec: E,
-    /// Ports a newer arming replaced, each kept until the recorder has let go of it.
-    retired: Vec<RecordPort>,
+    /// Queues a newer arming replaced, each kept until the recorder has let go of it.
+    retired: Vec<Sender>,
     /// Where every slot, door and queue this runtime reaches is found by name.
     hub: Arc<Hub>,
 }
@@ -823,10 +818,7 @@ impl<E: Executor> Runtime<E> {
     /// The recorder's queue on every armed output: opened by the arming, released by the
     /// recorder's read, so delivered frames stay.
     fn apply_records(&mut self, armed: &[(String, u64)]) {
-        let shape = record_shape(self.engine);
-        if !armed.is_empty() && self.record_bell.is_none() {
-            self.record_bell = Some(self.hub.door(&self.record_door));
-        }
+        let depth = record_depth(self.engine);
         for (out, decl) in self.outs.iter_mut().zip(self.manifest.outputs) {
             let wanted = armed.iter().find(|(slot, _)| slot == decl.name).map(|(_, serial)| *serial);
             match (out.record.as_mut(), wanted) {
@@ -852,9 +844,7 @@ impl<E: Executor> Runtime<E> {
                 (None, Some(_)) => {}
             }
             let serial = wanted.expect("armed above");
-            let Some(bell) = &self.record_bell else { continue };
-            let port = self.hub.record_port(&record_service(&self.base, decl.name, serial), shape.buffer, bell.clone());
-            out.record = Some((serial, port));
+            out.record = Some((serial, self.hub.sender(&record_service(&self.base, decl.name, serial), depth)));
         }
     }
 
@@ -1030,7 +1020,7 @@ impl<E: Executor> Runtime<E> {
             let (wire, record) = match out {
                 Out::Wire(frame) => (Some(Payload::Data(frame.clone())), None),
                 Out::Bytes(bytes) => (Some(Payload::Wire(bytes)), None),
-                Out::Frame(frame) => (Some(Payload::Data(frame.clone())), Some(frame)),
+                Out::Frame(frame) => (Some(Payload::Data(frame.clone())), Some(goofi_core::record::Frame::Data(frame.clone()))),
                 Out::Record(frame) => (None, Some(frame)),
             };
             // The frame first, then every bell: a consumer woken first finds nothing and parks.
@@ -1041,7 +1031,7 @@ impl<E: Executor> Runtime<E> {
                 }
             }
             if let (Some(frame), Some((_, rec))) = (record, port.record.as_ref()) {
-                rec.send(frame.clone());
+                rec.send(frame);
             }
         });
         self.absorb(ticked);

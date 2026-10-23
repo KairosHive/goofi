@@ -1,5 +1,5 @@
-//! A door: the one event a node's thread, a reducer or the recorder parks on, rung with an id
-//! by every producer feeding it and by the engine that owns it.
+//! A door: the one event a node's thread or a reducer parks on, rung with an id by every
+//! producer feeding it and by the engine that owns it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

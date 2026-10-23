@@ -105,10 +105,18 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   goes to the process log unless its owner wires a pipe or a file. `AppState::shutdown` is the one
   release order.
 - `goofi_transport` is the data layer: a `Hub` per session hands every end its slot, door or
-  recording queue by a name derived from the graph. A slot is one latest-wins cell of `Arc`
-  payloads; a door is a `goofi_supervisor::timing::Event`. A child (a hosted Rust node, a Python
-  subprocess) is called over an exchange: shared-memory mailboxes and a loopback doorbell.
-  `goofi_supervisor::timing` is the one place anything waits with a deadline or on a grid.
+  queue by a name derived from the graph. Between nodes a slot is one latest-wins cell of `Arc`
+  payloads, never a buffer; a queue is bounded, drops its oldest, never blocks its sender, and
+  only the recorder reads one. A door is a `goofi_supervisor::timing::Event`. A child (a hosted
+  Rust node, a Python subprocess) is called over an exchange: shared-memory mailboxes and a
+  loopback doorbell. `goofi_supervisor::timing` is the one place anything waits with a deadline
+  or on a grid.
+- `goofi_record` is the one recorder. An engine publishes an armed output's frames (`Out::Record`,
+  a `Data` or a texture's texels) and never touches a file; the manager tells the recorder the
+  settled armed set after every settle; a worker per armed stream takes frames off its queue and
+  writes the file its kind takes (`.npy`, `.csv`, `.txt`, `.wav`, video) with one sidecar and one
+  manifest for all. A take's boundary is an instant for a measured timeline and the audio
+  clock's block for the derived one.
 - `plugins/` ships plugins as source, loaded from `~/.goofi/plugins/<id>`; `sdk/README.md` is the
   plugin interface. `skills/` holds agent guides, embedded at build and seeded into a patch's
   workspace when it has none.
