@@ -83,20 +83,10 @@ export function course(from: Box, to: Box, offset = 0): Course {
 export const LANE_GAP = 44;
 
 /** A transition's lane among the `n` between its pair of boxes: how far off the centre line it
- * runs, in the pair's one frame so the two directions take opposite sides, and where between the
- * two CENTRES its label sits — the pair's frame again, so the labels of a pair never meet however
- * each course is cut by its box. */
-export function lane(k: number, n: number, source: string, target: string): { offset: number; at: number } {
+ * runs, in the pair's one frame so the two directions take opposite sides. */
+export function lane(k: number, n: number, source: string, target: string): number {
 	const side = source <= target ? 1 : -1;
-	const along = n === 1 ? 0.5 : 0.3 + (0.4 * k) / (n - 1);
-	return { offset: side * (k - (n - 1) / 2) * LANE_GAP, at: side === 1 ? along : 1 - along };
-}
-
-/** Where a course's label sits: the course's point nearest to `at` of the way from `from`'s
- * centre to `to`'s, kept off both ends. */
-export function labelAt(c: Course, from: Box, to: Box, at: number): { x: number; y: number } {
-	const ref = { x: from.x + from.w / 2 + (to.x + to.w / 2 - from.x - from.w / 2) * at, y: from.y + from.h / 2 + (to.y + to.h / 2 - from.y - from.h / 2) * at };
-	return c.at(Math.min(0.85, Math.max(0.15, c.near(ref))));
+	return side * (k - (n - 1) / 2) * LANE_GAP;
 }
 
 /** A loop out of the right side and back in, bulging past the box by LOOP_R. */

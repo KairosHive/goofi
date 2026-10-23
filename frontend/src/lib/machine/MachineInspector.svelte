@@ -6,6 +6,7 @@
      then sections of flat rows on the pane's own ground, a row's tools showing under the pointer. -->
 <script lang="ts">
 	import type { Attribute, Decision, Machine } from '$lib/api/generated';
+	import { ContextMenu, type MenuItem } from 'panelty';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import IdentityBar from '$lib/inspector/IdentityBar.svelte';
 	import ParamField from '$lib/inspector/ParamField.svelte';
@@ -98,9 +99,12 @@
 	const whereNow = (p: string): string => String(variableValue(`${p}.state`) ?? m.playheads[p].start);
 	const resting = $derived(one ? playheads.filter((p) => whereNow(p) === one) : []);
 
-	// ---- a transition out, added here rather than dragged: to a state picked from the list.
-	function addTransition(to: string): void {
-		if (one && to) void g.machine('machine transition add', { machine: name, from: one, to }).catch((e) => notify().failure('Add transition', e));
+	// ---- a transition out, added here rather than dragged: to a state picked from a menu under the +.
+	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function pickTransition(e: MouseEvent): void {
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const add = (to: string): void => void g.machine('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
+		picker = { x: r.left, y: r.bottom, items: Object.keys(m.states).map((to) => ({ label: to, action: () => add(to) })) };
 	}
 </script>
 
@@ -109,8 +113,8 @@
 		<header>
 			<span>{title}</span>
 			{#if addable}
-				<Select aria-label="Add a transition to" density="chrome" value="" options={['', ...Object.keys(m.states)]} labels={{ '': '+ to…' }}
-					data-testid="transition-add-to" onChange={addTransition} />
+				<IconButton variant="ghost" size="sm" label="Add a transition" title="Add a transition out, to a state picked from the menu" data-testid="transition-add"
+					onclick={pickTransition}><Icon name="plus" /></IconButton>
 			{/if}
 		</header>
 		{#if list.length === 0 && !addable}
@@ -151,6 +155,10 @@
 	</section>
 {/snippet}
 
+{#if picker}
+	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => (picker = null)} />
+{/if}
+
 <div class="inspector" data-testid="machine-inspector" data-subject="state" data-count={ids.length} data-open={subject.open.join(' ')}>
 	{#if ids.length > 0}
 		{#key one}
@@ -179,15 +187,17 @@
 							<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
 						</Field>
 					</div>
-					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. -->
-					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1)} literal
-						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })} />
 					{#if s?.mode === 'expression'}
 						<Field label="index" doc={DECISION_HINT.expression}>
 							<ExprEditor machine={name} label="index" value={s.expression} testid="state-expression"
 								placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
 						</Field>
 					{/if}
+					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. An
+					     expression drives it as one drives a param, read as each beat is armed. -->
+					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1, states[0].interval_expression ?? '')}
+						machine={name} viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })}
+						onSetSource={(src) => editStates({ interval_expression: src.expression ?? (src.mode === 'constant' ? '' : states[0].interval_expression ?? '') })} />
 				</section>
 				<section class="section" data-testid="state-attributes">
 					<header>

@@ -16,7 +16,7 @@ const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, re
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -96,13 +96,14 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub values: Option<Value>,
     pub envelopes: Option<Value>,
     pub interval: Option<f64>,
+    pub interval_expression: Option<String>,
     #[schemars(with = "Option<String>")]
     pub mode: Option<Decision>,
     pub noop: Option<f64>,
     pub weights: Option<std::collections::BTreeMap<String, f64>>,
     pub expression: Option<String>,
 },
-    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` to the index of the transition out to take, a negative index waiting (see `machine transition add` for what an expression reads). A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
+    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds; an attribute no state sets any more leaves the machine. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) — or every `interval_expression` seconds, an expression read for the playhead as each beat is armed, a negative value being never; empty, `interval` holds — which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` to the index of the transition out to take, a negative index waiting (see `machine transition add` for what an expression reads). A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
 
 op!(Arrange, "machine arrange", 1, ArrangeArgs {
@@ -115,7 +116,7 @@ op!(StateRemove, "machine state remove", 2, StateRemoveArgs {
     pub machine: String,
     pub name: String,
 },
-    "Delete a state and every transition into or out of it. A state a playhead starts in refuses: move the playhead first.",
+    "Delete a state and every transition into or out of it, and every attribute no other state sets. A state a playhead starts in refuses: move the playhead first.",
     "{removed: true}");
 
 op!(StateRename, "machine state rename", 2, StateRenameArgs {
@@ -244,6 +245,15 @@ fn envelopes_of(values: Option<Value>) -> Result<Edits<[f64; 4]>, String> {
             v => serde_json::from_value::<[f64; 4]>(v.clone()).map(|e| (attr.clone(), Some(e))).map_err(|_| format!("attribute `{attr}`: {ENVELOPES}")),
         })
         .collect()
+}
+
+/// An attribute no state sets any more leaves the machine, and every playhead with it.
+fn drop_unset(m: &mut Machine, attrs: impl IntoIterator<Item = String>) {
+    for attr in attrs {
+        if !m.states.values().any(|s| s.values.contains_key(&attr)) {
+            m.attributes.shift_remove(&attr);
+        }
+    }
 }
 
 /// A kind must hold every value it will be handed.
@@ -450,8 +460,8 @@ impl WriteOp for StateAdd {
 impl WriteOp for StateEdit {
     fn run(tx: &mut Txn, a: StateEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
-        if a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
-            return Err("nothing to change — give a pos, values, envelopes, interval, mode, noop, weights or expression".into());
+        if a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
+            return Err("nothing to change — give a pos, values, envelopes, interval, interval_expression, mode, noop, weights or expression".into());
         }
         let values = values_of(&m, a.values)?;
         let envelopes = envelopes_of(a.envelopes)?;
@@ -463,12 +473,14 @@ impl WriteOp for StateEdit {
             s.pos = pos;
         }
         s.interval = a.interval.unwrap_or(s.interval);
+        s.interval_expression = a.interval_expression.unwrap_or(std::mem::take(&mut s.interval_expression));
         s.mode = a.mode.unwrap_or(s.mode);
         s.noop = a.noop.unwrap_or(s.noop);
         if let Some(w) = a.weights {
             s.weights = w.into_iter().collect();
         }
         s.expression = a.expression.unwrap_or(std::mem::take(&mut s.expression));
+        let mut cleared = Vec::new();
         for (attr, v) in values {
             match v {
                 Some(v) => {
@@ -477,6 +489,7 @@ impl WriteOp for StateEdit {
                 None => {
                     s.values.shift_remove(&attr);
                     s.envelopes.shift_remove(&attr);
+                    cleared.push(attr);
                 }
             }
         }
@@ -490,13 +503,14 @@ impl WriteOp for StateEdit {
                 }
             }
         }
+        drop_unset(&mut m, cleared);
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.name }))
     }
 
     fn label(a: &StateEditArgs, _: &Value) -> String {
         match (&a.pos, &a.values) {
-            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", a.name),
+            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", a.name),
             _ => format!("Edit state {}", a.name),
         }
     }
@@ -524,8 +538,9 @@ impl WriteOp for StateRemove {
         if let Some((ph, _)) = m.playheads.iter().find(|(_, p)| p.start == a.name) {
             return Err(format!("playhead `{ph}` starts in `{}` — move it first", a.name));
         }
-        m.states.shift_remove(&a.name);
+        let set_here: Vec<String> = m.states.shift_remove(&a.name).map(|s| s.values.into_keys().collect()).unwrap_or_default();
         m.transitions.retain(|_, t| t.from != a.name && t.to != a.name);
+        drop_unset(&mut m, set_here);
         set(tx, &a.machine, m)?;
         Ok(json!({ "removed": true }))
     }

@@ -43,9 +43,11 @@ const constant = (fallback: Literal | null) => ({
 	error: null
 });
 
-/** A bare number as a constant param with a slider over `vmin..vmax`: a transition's setting. */
-export function numberDescriptor(value: number, vmin: number, vmax: number, fallback = value): ParamDescriptor {
-	return { ...constant(fallback), type: 'num', value, vmin, vmax, int: false, options: [], face: 'plain' };
+/** A bare number as a param with a slider over `vmin..vmax`: a transition's or a state's setting,
+ * driven by `expression` where one is given. */
+export function numberDescriptor(value: number, vmin: number, vmax: number, fallback = value, expression = ''): ParamDescriptor {
+	const source = expression ? { mode: 'expression' as const, expression } : {};
+	return { ...constant(fallback), ...source, type: 'num', value, vmin, vmax, int: false, options: [], face: 'plain' };
 }
 
 /** Four ADSR numbers as a constant envelope param, its times up to `vmax` seconds and its

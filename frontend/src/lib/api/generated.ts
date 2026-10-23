@@ -43,7 +43,12 @@ envelopes?: Record<string, [number, number, number, number]>,
  * Seconds between decisions, from arrival; 0 decides once, on arrival; -1 never. With no
  * transition out, each interval lands the values again and plays the envelopes.
  */
-interval: number, mode: Decision, 
+interval: number, 
+/**
+ * Python over the machine's scope to the seconds instead, read for the playhead each time a
+ * beat is armed: on arrival and at each beat; a negative value is none. Empty, `interval` holds.
+ */
+interval_expression?: string, mode: Decision, 
 /**
  * The weight of a decision that waits one more interval, in `random`.
  */

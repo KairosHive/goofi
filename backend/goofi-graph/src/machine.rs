@@ -179,6 +179,10 @@ pub struct State {
     /// transition out, each interval lands the values again and plays the envelopes.
     #[serde(default = "one")]
     pub interval: f64,
+    /// Python over the machine's scope to the seconds instead, read for the playhead each time a
+    /// beat is armed: on arrival and at each beat; a negative value is none. Empty, `interval` holds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub interval_expression: String,
     #[serde(default)]
     pub mode: Decision,
     /// The weight of a decision that waits one more interval, in `random`.
@@ -196,7 +200,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        State { pos: [0.0; 2], values: IndexMap::new(), envelopes: IndexMap::new(), interval: 1.0, mode: Decision::default(), noop: 0.0, weights: IndexMap::new(), expression: String::new() }
+        State { pos: [0.0; 2], values: IndexMap::new(), envelopes: IndexMap::new(), interval: 1.0, interval_expression: String::new(), mode: Decision::default(), noop: 0.0, weights: IndexMap::new(), expression: String::new() }
     }
 }
 
@@ -251,20 +255,18 @@ impl Machine {
 
     /// Every expression the machine evaluates.
     pub fn expressions(&self) -> impl Iterator<Item = &str> {
-        let conditions = self.transitions.values().filter(|t| !t.condition.is_empty()).map(|t| t.condition.as_str());
-        conditions.chain(self.states.values().filter(|s| s.mode == Decision::Expression && !s.expression.is_empty()).map(|s| s.expression.as_str()))
+        let conditions = self.transitions.values().map(|t| t.condition.as_str());
+        let decisions = self.states.values().filter(|s| s.mode == Decision::Expression).map(|s| s.expression.as_str());
+        let intervals = self.states.values().map(|s| s.interval_expression.as_str());
+        conditions.chain(decisions).chain(intervals).filter(|e| !e.is_empty())
     }
 
     /// Follow a rename into every expression the machine holds: `edit` answers the rewritten text.
     pub fn rewrite_expressions(&mut self, edit: impl Fn(&str) -> Option<String>) {
-        for t in self.transitions.values_mut() {
-            if let Some(next) = edit(&t.condition) {
-                t.condition = next;
-            }
-        }
-        for s in self.states.values_mut() {
-            if let Some(next) = edit(&s.expression) {
-                s.expression = next;
+        let texts = self.transitions.values_mut().map(|t| &mut t.condition).chain(self.states.values_mut().flat_map(|s| [&mut s.expression, &mut s.interval_expression]));
+        for text in texts {
+            if let Some(next) = edit(text) {
+                *text = next;
             }
         }
     }
@@ -319,8 +321,8 @@ impl Machine {
             if let Some(id) = state.weights.keys().find(|id| !self.transitions.get(*id).is_some_and(|t| leaves(t, name))) {
                 return Err(format!("state `{name}` weighs `{id}`, which is no transition out of it"));
             }
-            if !state.expression.is_empty() {
-                self.check_expression(&state.expression).map_err(|why| format!("state `{name}`: {why}"))?;
+            for expression in [&state.expression, &state.interval_expression].into_iter().filter(|e| !e.is_empty()) {
+                self.check_expression(expression).map_err(|why| format!("state `{name}`: {why}"))?;
             }
         }
         for (id, t) in &self.transitions {
@@ -940,7 +942,7 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
         head.gates.clear();
     }
     let state = head.state.clone();
-    let interval = machine.states.get(&state).map_or(0.0, |s| s.interval);
+    let interval = interval_of(head, machine, ctx);
     let from = if fresh { head.arrived } else { ctx.now };
     let beats = interval >= 0.0 && (interval > 0.0 || machine.outgoing(&state).next().is_some());
     head.due = match (beats, head.due) {
@@ -960,6 +962,26 @@ fn arm(head: &mut Head, machine: &Machine, ctx: &Ctx, fresh: bool) {
     for (id, condition) in unread {
         let gate = ctx.gate(&condition, head);
         head.gates.insert(id, (condition, gate));
+    }
+}
+
+/// The seconds between the beats of the head's state: its interval expression read for the head
+/// now — a negative value is none, one that cannot be read is the constant — else the constant.
+fn interval_of(head: &Head, machine: &Machine, ctx: &Ctx) -> f64 {
+    let Some(s) = machine.states.get(&head.state) else { return 0.0 };
+    if s.interval_expression.is_empty() {
+        return s.interval;
+    }
+    match ctx.eval(&s.interval_expression, head) {
+        Ok(frame) => match control::number_of(&frame) {
+            v if v.is_nan() => s.interval,
+            v if v < 0.0 => -1.0,
+            v => v,
+        },
+        Err(why) => {
+            ctx.errors.borrow_mut().push(format!("`{}`: {why}", s.interval_expression));
+            s.interval
+        }
     }
 }
 
@@ -1068,8 +1090,12 @@ fn step(name: &str, machine: &Machine, run: &mut Run, ctx: &Ctx, requests: &[Req
             // beat plays the state again.
             let decided = match head.due.filter(|d| d.at <= ctx.now) {
                 Some(d) => {
-                    let at = if d.interval > 0.0 { d.at + d.interval } else { f64::INFINITY };
-                    head.due = Some(Due { at, interval: d.interval });
+                    let interval = interval_of(head, machine, ctx);
+                    head.due = match interval {
+                        i if i > 0.0 => Some(Due { at: d.at + i, interval: i }),
+                        i if i == 0.0 => Some(Due { at: f64::INFINITY, interval: i }),
+                        _ => None,
+                    };
                     if machine.outgoing(&head.state).next().is_none() {
                         let state = head.state.clone();
                         place(head, machine, &state);
