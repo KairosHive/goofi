@@ -48,6 +48,26 @@ runs:
       shell: bash
       run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
 
+    # The ASIO SDK, which asio-sys would otherwise download into TEMP at its first build and
+    # watch there, newer than that build and so a rebuild of the tree at the next cargo command.
+    # Fetched before any build, into a dir of its own that the cache keeps.
+    - if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: target/asio_sdk
+        key: asio-sdk-${{ runner.os }}-1
+    - if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if [ ! -f target/asio_sdk/common/asio.h ]; then
+          mkdir -p target/asio_sdk_dl && cd target/asio_sdk_dl
+          curl -sSL -o asio_sdk.zip https://www.steinberg.net/asiosdk
+          7z x -y asio_sdk.zip > /dev/null
+          mv asio*/ ../asio_sdk
+          cd .. && rm -rf asio_sdk_dl
+        fi
+        echo "CPAL_ASIO_DIR=$GITHUB_WORKSPACE/target/asio_sdk" >> "$GITHUB_ENV"
+
     # The shipped nodes' artifacts and the Python probes' answers, both keyed by content inside,
     # so the cache is keyed on what can change them: the SDKs, the bundles, the build pipeline
     # and the lock. An exact hit saves nothing; a changed key starts from the last cache and

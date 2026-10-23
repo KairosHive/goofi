@@ -24,7 +24,12 @@ fn main() {
 
 /// Date `path` and everything under it at `at`: what this run built is this run's product.
 fn date_tree(path: &Path, at: SystemTime) {
-    let _ = std::fs::File::options().write(true).open(path).or_else(|_| std::fs::File::open(path)).and_then(|f| f.set_modified(at));
+    let mut options = std::fs::File::options();
+    options.write(true);
+    // A directory opens for writing only with backup semantics on Windows.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut options, 0x0200_0000);
+    let _ = options.open(path).or_else(|_| std::fs::File::open(path)).and_then(|f| f.set_modified(at));
     if path.is_dir() {
         for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
             date_tree(&entry.path(), at);
