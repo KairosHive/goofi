@@ -41,6 +41,9 @@ fn fixture() -> (Goofi, String) {
     g.call("link add", j!({ "from": ep(hex(osc), "out"), "to": ep(&scope, &bnd) }));
     // The fault is a REPORT — the graph does not hold it until the node has run and said so.
     g.until("the failing node's first fault", |g| g.error(boom));
+    // The buffer ran on a hole before its wire landed and reported that; the report clears on
+    // its next run, and the scope wears a fault until it has. Read the state reached.
+    g.until("the buffer's fault clears", |g| g.error(buf).is_none().then_some(()));
     (g, scope)
 }
 

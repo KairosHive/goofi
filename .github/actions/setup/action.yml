@@ -6,7 +6,7 @@ inputs:
       The one target selection every cargo command of the job uses. A second selection resolves
       features anew and rebuilds the crates whose features moved, so a job that builds `--bins`
       must not run `cargo test` after.
-    default: --all-targets
+    default: --lib --bins --tests --example plugin_host
 runs:
   using: composite
   steps:
@@ -60,6 +60,12 @@ runs:
         restore-keys: |
           goofi-runtime-${{ runner.os }}-
 
+    # The goofi wheels, which goofi-init builds in release with LTO and reuses by content key.
+    - uses: actions/cache@v4
+      with:
+        path: target/wheels
+        key: goofi-wheels-${{ runner.os }}-${{ hashFiles('backend/signal/goofi-pymod/**', 'backend/goofi-supervisor/**', 'backend/goofi-core/**', 'backend/goofi-codec/**', 'backend/goofi-transport/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
     # goofi-init's own build is the one package-scoped cargo command: the Python it provisions is
     # what goofi-python links, so nothing of the workspace builds before it.
     - name: Provision (cargo run -p goofi-init)
@@ -80,3 +86,10 @@ runs:
       run: target/debug/goofi --headless
       env:
         GOOFI_BOOT_ONLY: "1"
+
+    # Nothing the boot wrote may dirty the build: a crate rebuilt here names what it watched.
+    - name: Still fresh after the boot
+      shell: bash
+      run: cargo build --workspace ${{ inputs.targets }} 2>&1 | grep -iE 'dirty|stale|Compiling' | head -40 || true
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
