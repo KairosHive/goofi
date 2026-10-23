@@ -100,7 +100,10 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
             g.call("midi learn", j!({ "on": true }))["groups"].as_array().unwrap().iter()
                 .find(|p| p["port"].as_str().unwrap().contains("goofi-test-keys")).map(|p| p["group"].as_str().unwrap().to_string())
         });
-        assert_eq!(live, "goofi_test_goofi_test_keys", "named after the port, the host's own numbers left off");
+        // Named after the port as the host lists it: ALSA puts the client's name and its own
+        // numbers around it, CoreMIDI lists the port alone. The numbers never reach the name.
+        assert!(live.ends_with("goofi_test_keys") && !live.chars().any(|c| c.is_ascii_digit()),
+                "named after the port, the host's own numbers left off: {live}");
         let held = |g: &Goofi| g.call("session status", j!({}))["resources"].as_array().unwrap().iter()
             .any(|r| r["kind"] == "device" && r["name"].as_str().unwrap().contains("goofi-test-keys"));
         assert!(held(&g), "the port is a device the session holds");

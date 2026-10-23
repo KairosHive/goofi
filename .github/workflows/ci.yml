@@ -62,6 +62,13 @@ jobs:
           echo "::group::Browser suite"
           cat e2e.log
           echo "::endgroup::"
+          # Where a browser test stopped: Playwright's error context for each failed test.
+          for context in tests/e2e/test-results/*/error-context.md; do
+            [ -f "$context" ] || continue
+            echo "::group::$context"
+            cat "$context"
+            echo "::endgroup::"
+          done
           exit $status
       - uses: actions/upload-artifact@v7
         if: failure()

@@ -220,7 +220,14 @@ impl Exchange {
             // Checked AFTER reading, so a child that answered and then exited still gets its answer through.
             check(child, by)?;
             let line = self.line.as_mut().ok_or("the child's doorbell is not connected")?;
-            let _ = line.wait_until(Instant::now() + SLICE).map_err(|e| format!("the doorbell: {e}"))?;
+            if let Err(e) = line.wait_until(Instant::now() + SLICE) {
+                // A peer that closed its doorbell is a child that died or is dying: its exit is
+                // the cause to report, the closed socket only how it was noticed.
+                if let Some(status) = child.ended_within(SLICE) {
+                    return Err(format!("the child exited: {status}"));
+                }
+                return Err(format!("the doorbell: {e}"));
+            }
         }
     }
 

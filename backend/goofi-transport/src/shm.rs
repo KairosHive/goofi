@@ -8,8 +8,11 @@ use std::ptr::NonNull;
 pub(crate) struct Segment {
     ptr: NonNull<u8>,
     len: usize,
+    /// The name an owner unlinks; a Windows section goes with its last handle, unnamed.
+    #[cfg(unix)]
     name: String,
     /// Whether this process made it, and so unlinks it.
+    #[cfg(unix)]
     owner: bool,
     #[cfg(windows)]
     handle: windows_sys::Win32::Foundation::HANDLE,
@@ -140,7 +143,7 @@ mod imp {
                 return Err(format!("CreateFileMapping {name}: {}", std::io::Error::last_os_error()));
             }
             match view(handle, len) {
-                Ok(ptr) => Ok(Segment { ptr, len, name: name.to_string(), owner: true, handle }),
+                Ok(ptr) => Ok(Segment { ptr, len, handle }),
                 Err(e) => {
                     // SAFETY: the handle just made.
                     unsafe { CloseHandle(handle) };
@@ -169,7 +172,7 @@ mod imp {
             // The first word of every mailbox segment is its capacity, written by the maker.
             // SAFETY: the maker zeroed the section and wrote its header before naming it.
             let capacity = unsafe { std::ptr::read_volatile(ptr.as_ptr() as *const u64) } as usize;
-            Ok(Segment { ptr, len: super::super::exchange::mailbox_len(capacity), name: name.to_string(), owner: false, handle })
+            Ok(Segment { ptr, len: super::super::exchange::mailbox_len(capacity), handle })
         }
     }
 

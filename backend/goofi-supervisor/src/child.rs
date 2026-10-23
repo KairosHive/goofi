@@ -221,6 +221,18 @@ impl Child {
         ended
     }
 
+    /// The child's end, if it comes within `within`; one still running at the deadline is left
+    /// running. What a peer that closed its doorbell is asked: gone, with its status, or going.
+    pub fn ended_within(&mut self, within: Duration) -> Option<ExitStatus> {
+        if self.reaped {
+            return None;
+        }
+        let ended = self.poll(crate::timing::Deadline::within(within))?;
+        self.reaped = true;
+        self.settle_log();
+        Some(ended)
+    }
+
     /// Wait for the child to end on its own, however long that takes.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.inner.wait()?;

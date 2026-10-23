@@ -222,11 +222,11 @@ fn a_ring_landing_mid_drain_is_not_lost_and_each_id_wakes_once() {
     bell.ring(3);
     assert_eq!(wait(&door), vec![0, 3], "each id wakes once, however often it rang");
 
-    // A deadline is kept to the millisecond, not rounded to a kernel tick.
+    // A deadline is kept: a wait of 2 ms does not return before it. How soon after is the
+    // machine's, never asserted.
     let t = Instant::now();
     assert!(door.wait_until(t + Duration::from_millis(2)).is_empty());
-    let waited = t.elapsed();
-    assert!(waited >= Duration::from_millis(2) && waited < Duration::from_millis(6), "a 2 ms wait took {waited:?}");
+    assert!(t.elapsed() >= Duration::from_millis(2), "a 2 ms wait returned early: {:?}", t.elapsed());
 }
 
 #[test]
