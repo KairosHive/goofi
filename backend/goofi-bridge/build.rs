@@ -24,6 +24,9 @@ fn main() {
 /// files themselves. A shipped node that does not compile fails THIS build, so a binary never
 /// ships a node it cannot load.
 fn prebuild_nodes() {
+    // A moment before this run, for what it builds; a product dated at the run's start would tie
+    // with cargo's reference, and a tie is read as newer.
+    let started = SystemTime::now() - std::time::Duration::from_secs(2);
     let bundles = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../node-bundles");
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     // The runtime a goofi from this build loads from, so a boot finds what this step built.
@@ -42,8 +45,16 @@ fn prebuild_nodes() {
             key.push(format!("{name}/{within}").into_bytes());
             key.push(std::fs::read(&path).expect("a bundle file reads"));
             let Some(sdk) = sdk_of(&path) else { continue };
+            let held = goofi_build::built(sdk, &path, &base).is_ok();
             let artifact = goofi_build::ensure(sdk, &path, &base)
                 .unwrap_or_else(|why| panic!("the shipped node {} does not build:\n{why}", path.display()));
+            // Watched, so an artifact removed or replaced by hand re-runs this script. Cargo's
+            // reference for a watched path is this run's START, so one built here is newer than
+            // it and would call the script stale on every build after; it is dated as what it is,
+            // this run's product, and a build after reads it as current.
+            if !held {
+                let _ = std::fs::File::options().write(true).open(&artifact).and_then(|f| f.set_modified(started));
+            }
             println!("cargo:rerun-if-changed={}", artifact.display());
             let key = artifact.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
             let file = artifact.file_name().unwrap().to_string_lossy().into_owned();
