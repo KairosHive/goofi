@@ -106,13 +106,13 @@
 
 {#snippet transitionList(title: string, list: [string, Machine['transitions'][string]][], testid: string, addable: boolean)}
 	<section class="section" data-testid={testid}>
-		<div class="section-head">
-			<span class="section-name">{title}</span>
+		<header>
+			<span>{title}</span>
 			{#if addable}
 				<Select aria-label="Add a transition to" density="chrome" value="" options={['', ...Object.keys(m.states)]} labels={{ '': '+ to…' }}
 					data-testid="transition-add-to" onChange={addTransition} />
 			{/if}
-		</div>
+		</header>
 		{#if list.length === 0 && !addable}
 			<div class="empty">None.</div>
 		{/if}
@@ -174,7 +174,6 @@
 		<ScrollArea>
 			<div class="rows">
 				<section class="section" data-testid="state-decision">
-					<div class="section-head"><span class="section-name">decision</span></div>
 					<div class="fields">
 						<Field label={tag('mode', states.map((s) => s.mode))} doc={DECISION_HINT[states[0].mode]} row>
 							<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
@@ -191,15 +190,15 @@
 					{/if}
 				</section>
 				<section class="section" data-testid="state-attributes">
-					<div class="section-head">
-						<span class="section-name">attributes</span>
+					<header>
+						<span>Attributes</span>
 						<span class="add-attr">
 							<TextInput class="add-attr-name" inputmode="search" placeholder="name a new attribute…" aria-label="New attribute" data-testid="attribute-name-new"
 								value={fresh} onInput={(v) => (fresh = v)} onChange={(v) => { fresh = v; void create(); }} />
 							<IconButton variant="ghost" size="sm" label="Add the attribute" title="Add an attribute of that name, set in the selected states" disabled={!creatable}
 								data-testid="attribute-create" onclick={() => void create()}><Icon name="plus" /></IconButton>
 						</span>
-					</div>
+					</header>
 					{#each Object.entries(m.attributes) as [attr, a] (attr)}
 						{@const h = held(m, ids, attr)}
 						{@const env = envelopeOf(attr)}
@@ -238,11 +237,11 @@
 				</section>
 				{#if one}
 					<section class="section" data-testid="state-playheads">
-						<div class="section-head">
-							<span class="section-name">playheads starting here</span>
+						<header>
+							<span>Playheads</span>
 							<IconButton variant="ghost" size="sm" label="Add a playhead here" title="Add a playhead that starts in this state" data-testid="machine-add-playhead"
 								onclick={() => call('machine playhead add', { start: one, color: dotColor('', playheads.length) })}><Icon name="plus" /></IconButton>
-						</div>
+						</header>
 						{#each here as p (p)}
 							{@const ph = m.playheads[p]}
 							<div class="row" data-testid={`playhead-${p}`}>
@@ -257,8 +256,8 @@
 							</div>
 						{/each}
 					</section>
-					{@render transitionList('transitions out', outgoing, 'transitions-out', true)}
-					{@render transitionList('transitions in', incoming, 'transitions-in', false)}
+					{@render transitionList('Transitions Out', outgoing, 'transitions-out', true)}
+					{@render transitionList('Transitions In', incoming, 'transitions-in', false)}
 				{/if}
 			</div>
 		</ScrollArea>
@@ -298,16 +297,14 @@
 		row-gap: var(--space-3);
 		--number-width: 100%;
 	}
-	.section-head {
+	/* A section's heading, as the node inspector's metadata wears one: its name, and its action at the end. */
+	header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
 		min-height: var(--chrome-control-h);
-	}
-	.section-name {
-		color: var(--text-muted);
-		font-size: var(--fs-small);
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.empty,
