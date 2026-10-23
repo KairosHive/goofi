@@ -953,10 +953,16 @@ test.describe('the control socket', () => {
 			const read = () => frameSummary(page, osc);
 			// The producer's emit counter on the newest frame the tab holds; -1 before any.
 			const index = async (): Promise<number> => (await read())?.index ?? -1;
+			// A block holds the samples elapsed since the last, so the first blocks are a sample
+			// long and span nothing: the frame read below is the first with a span.
+			const spanning = async () => {
+				const s = await read();
+				return s?.numeric && s.numeric.max - s.numeric.min > 0 ? s : null;
+			};
 			await test.step('frames arrive on the slot the viewer subscribed', async () => {
-				await expect.poll(read, { message: 'a decoded frame reached the tab' }).not.toBeNull();
+				await expect.poll(spanning, { message: 'a decoded frame with a span reached the tab' }).not.toBeNull();
 			});
-			const summary = await read();
+			const summary = await spanning();
 
 			await test.step('a SECOND viewer on the same slot is served, and closing it leaves the first', async () => {
 				// "One data stream per (node, slot), whatever the viewer count" is the architecture's

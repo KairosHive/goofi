@@ -12,15 +12,20 @@ const KEYS = path.join(REPO_ROOT, 'target', 'debug', `midikeys${process.platform
  * The port leaves with the process, which is how a device is pulled. */
 class Keys {
 	private child: ChildProcess;
+	private readiness: Promise<boolean>;
 	constructor(name: string) {
 		this.child = spawn(KEYS, [name], { stdio: ['pipe', 'pipe', 'inherit'] });
+		// Watched from the spawn: a helper with no sequencer exits within milliseconds, long
+		// before the page is up, and an exit nobody was listening for is a wait with no end.
+		this.readiness = new Promise((resolve) => {
+			this.child.stdout!.once('data', () => resolve(true));
+			this.child.once('exit', () => resolve(false));
+			this.child.once('error', () => resolve(false));
+		});
 	}
 	/** Whether the host listed the port; a machine with no sequencer has none to make. */
 	ready(): Promise<boolean> {
-		return new Promise((resolve) => {
-			this.child.stdout!.once('data', () => resolve(true));
-			this.child.once('exit', () => resolve(false));
-		});
+		return this.readiness;
 	}
 	play(bytes: number[]): void {
 		this.child.stdin!.write(bytes.map((b) => b.toString(16)).join(' ') + '\n');
