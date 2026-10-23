@@ -106,11 +106,13 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    env:
-      # Windows only boots, so its build carries no debug info: the PDB is most of an MSVC link.
-      CARGO_PROFILE_DEV_DEBUG: ${{ matrix.os == 'windows-latest' && '0' || 'line-tables-only' }}
     steps:
       - uses: actions/checkout@v7
+      # Windows only boots, so its build carries no debug info: the PDB is most of an MSVC link.
+      # Set here and nowhere else: a profile value set in the environment, even to what Cargo.toml
+      # says, is a profile of its own to sccache, and every crate misses.
+      - if: runner.os == 'Windows'
+        run: echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
       # Windows only boots: the situations are not yet proven there (roadmap/windows-cleanup.md),
       # so it builds the binaries alone. Drop both once a watched run passes.
       - uses: ./.github/actions/setup
