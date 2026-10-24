@@ -33,7 +33,7 @@
 	import type { Subject } from '$lib/machine/model';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
 	import { GRID } from '$lib/editor/nodeMetrics';
-	import { CARD_W, TITLE_Y } from '$lib/machine/layout';
+	import { CARD_W, TITLE_Y, cardBox } from '$lib/machine/layout';
 	import { summary } from '$lib/machine/model';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
@@ -228,9 +228,15 @@
 	}
 
 	// ---- a connection drawn from one box's band onto any part of another is a transition, taken by
-	// its state's decision until it is edited. The radius reaches a box's corners, since Flow
-	// measures from its centre.
+	// its state's decision until it is edited. Flow measures its radius from a box's centre, so the
+	// radius reaches the corners and the line snaps only while the pointer is over the box itself.
 	// The document is the one owner of edges: `false` keeps Flow from drawing a provisional one.
+	let pointer = { x: 0, y: 0 };
+	function overTarget(c: Connection | Edge): boolean {
+		const box = cardBox(flowNodes, c.target ?? '');
+		const p = screenToFlow?.(pointer);
+		return !!box && !!p && p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h;
+	}
 	function onConnect(c: Connection): false {
 		if (c.source && c.target) void addTransition(c.source, c.target);
 		return false;
@@ -375,7 +381,10 @@
 				max: MAX_ZOOM
 			}),
 			on(root, 'pointerdown', onPanePointerDown),
-			on(root, 'pointermove', panePress.move),
+			on(root, 'pointermove', (e: PointerEvent) => {
+				pointer = { x: e.clientX, y: e.clientY };
+				panePress.move(e);
+			}),
 			on(root, 'pointerup', panePress.cancel),
 			on(root, 'pointercancel', panePress.cancel),
 			on(document, 'keydown', onKeydown)
@@ -419,6 +428,7 @@
 					connectionMode={ConnectionMode.Loose}
 					connectionLineType={ConnectionLineType.Straight}
 					connectionRadius={CARD_W / 2 + 20}
+					isValidConnection={overTarget}
 					onbeforeconnect={onConnect}
 					onnodedragstart={onNodeDragStart}
 					onnodedrag={onNodeDrag}

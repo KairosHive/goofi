@@ -37,6 +37,7 @@
 		onPulse,
 		refreshing = false,
 		selfName,
+		machine,
 		dropZone = null,
 		viewKey = '',
 		literal = false,
@@ -59,6 +60,8 @@
 		refreshing?: boolean;
 		/** The node's display name, handed to the expression editor as `me`. */
 		selfName?: string;
+		/** The machine whose setting this row is: its expression reads the machine's own scope. */
+		machine?: string;
 		/** This row's key as a node-drop target; null while it is not one. */
 		dropZone?: string | null;
 		/** `uid/group/name`, under which a colour's view (picker or vector) is remembered. */
@@ -321,6 +324,7 @@
 							{#if el?.mode === 'expression'}
 								<ExprEditor
 									{selfName}
+									{machine}
 									value={el.expression ?? ''}
 									error={el.error}
 									onCommit={(expression) => onSetElementSource?.(i, { expression })}
@@ -358,6 +362,7 @@
 				<div class="src-region">
 					<ExprEditor
 						{selfName}
+						{machine}
 						value={descriptor.expression ?? ''}
 						error={descriptor.error}
 						onCommit={(expression) => onSetSource?.({ expression })}

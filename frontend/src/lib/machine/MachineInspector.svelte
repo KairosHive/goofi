@@ -6,6 +6,7 @@
      then sections of flat rows on the pane's own ground, a row's tools showing under the pointer. -->
 <script lang="ts">
 	import type { Attribute, Decision, Machine } from '$lib/api/generated';
+	import { ContextMenu, type MenuItem } from 'panelty';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import IdentityBar from '$lib/inspector/IdentityBar.svelte';
 	import ParamField from '$lib/inspector/ParamField.svelte';
@@ -98,23 +99,26 @@
 	const whereNow = (p: string): string => String(variableValue(`${p}.state`) ?? m.playheads[p].start);
 	const resting = $derived(one ? playheads.filter((p) => whereNow(p) === one) : []);
 
-	// ---- a transition out, added here rather than dragged: to a state picked from the list.
-	function addTransition(to: string): void {
-		if (one && to) void g.machine('machine transition add', { machine: name, from: one, to }).catch((e) => notify().failure('Add transition', e));
+	// ---- a transition out, added here rather than dragged: to a state picked from a menu under the +.
+	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function pickTransition(e: MouseEvent): void {
+		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const add = (to: string): void => void g.machine('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
+		picker = { x: r.left, y: r.bottom, items: Object.keys(m.states).map((to) => ({ label: to, action: () => add(to) })) };
 	}
 </script>
 
 {#snippet transitionList(title: string, list: [string, Machine['transitions'][string]][], testid: string, addable: boolean)}
 	<section class="section" data-testid={testid}>
-		<div class="section-head">
-			<span class="section-name">{title}</span>
+		<header>
+			<span>{title}</span>
 			{#if addable}
-				<Select aria-label="Add a transition to" density="chrome" value="" options={['', ...Object.keys(m.states)]} labels={{ '': '+ to…' }}
-					data-testid="transition-add-to" onChange={addTransition} />
+				<IconButton variant="ghost" size="sm" label="Add a transition" title="Add a transition out, to a state picked from the menu" data-testid="transition-add"
+					onclick={pickTransition}><Icon name="plus" /></IconButton>
 			{/if}
-		</div>
-		{#if list.length === 0}
-			<div class="empty">{addable ? 'None yet: drag from the box’s edge to another box, or pick a state above.' : 'None.'}</div>
+		</header>
+		{#if list.length === 0 && !addable}
+			<div class="empty">None.</div>
 		{/if}
 		<!-- A random state's draw: the wait leads the rows out, and each row out carries its share;
 		     a drag moves the others in their own ratio, so the shares always sum to one. -->
@@ -151,6 +155,10 @@
 	</section>
 {/snippet}
 
+{#if picker}
+	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => (picker = null)} />
+{/if}
+
 <div class="inspector" data-testid="machine-inspector" data-subject="state" data-count={ids.length} data-open={subject.open.join(' ')}>
 	{#if ids.length > 0}
 		{#key one}
@@ -174,34 +182,33 @@
 		<ScrollArea>
 			<div class="rows">
 				<section class="section" data-testid="state-decision">
-					<div class="section-head"><span class="section-name">decision</span></div>
 					<div class="fields">
 						<Field label={tag('mode', states.map((s) => s.mode))} doc={DECISION_HINT[states[0].mode]} row>
 							<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
 						</Field>
 					</div>
-					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. -->
-					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1)} literal
-						viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })} />
 					{#if s?.mode === 'expression'}
 						<Field label="index" doc={DECISION_HINT.expression}>
 							<ExprEditor machine={name} label="index" value={s.expression} testid="state-expression"
 								placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
 						</Field>
-					{:else}
-						<div class="hint">{DECISION_HINT[states[0].mode]}</div>
 					{/if}
+					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. An
+					     expression drives it as one drives a param, read as each beat is armed. -->
+					<ParamField paramName="interval" label={tag('interval', states.map((s) => s.interval))} descriptor={numberDescriptor(states[0].interval, -1, 10, 1, states[0].interval_expression ?? '')}
+						machine={name} viewKey={`${name}/states/interval`} data-testid="state-interval" onPreview={(v) => preview({ interval: Number(v) })} onCommit={(v) => editStates({ interval: Number(v) < 0 ? -1 : Number(v) })}
+						onSetSource={(src) => editStates({ interval_expression: src.expression ?? (src.mode === 'constant' ? '' : states[0].interval_expression ?? '') })} />
 				</section>
 				<section class="section" data-testid="state-attributes">
-					<div class="section-head">
-						<span class="section-name">attributes</span>
+					<header>
+						<span>Attributes</span>
 						<span class="add-attr">
 							<TextInput class="add-attr-name" inputmode="search" placeholder="name a new attribute…" aria-label="New attribute" data-testid="attribute-name-new"
 								value={fresh} onInput={(v) => (fresh = v)} onChange={(v) => { fresh = v; void create(); }} />
 							<IconButton variant="ghost" size="sm" label="Add the attribute" title="Add an attribute of that name, set in the selected states" disabled={!creatable}
 								data-testid="attribute-create" onclick={() => void create()}><Icon name="plus" /></IconButton>
 						</span>
-					</div>
+					</header>
 					{#each Object.entries(m.attributes) as [attr, a] (attr)}
 						{@const h = held(m, ids, attr)}
 						{@const env = envelopeOf(attr)}
@@ -236,17 +243,15 @@
 								<div class="definition"><AttributeForm {name} {attr} {a} /></div>
 							{/if}
 						</div>
-					{:else}
-						<div class="empty">No attributes yet: name one above. A state sets attributes, and a playhead carries them as variables.</div>
 					{/each}
 				</section>
 				{#if one}
 					<section class="section" data-testid="state-playheads">
-						<div class="section-head">
-							<span class="section-name">playheads starting here</span>
+						<header>
+							<span>Playheads</span>
 							<IconButton variant="ghost" size="sm" label="Add a playhead here" title="Add a playhead that starts in this state" data-testid="machine-add-playhead"
 								onclick={() => call('machine playhead add', { start: one, color: dotColor('', playheads.length) })}><Icon name="plus" /></IconButton>
-						</div>
+						</header>
 						{#each here as p (p)}
 							{@const ph = m.playheads[p]}
 							<div class="row" data-testid={`playhead-${p}`}>
@@ -259,12 +264,10 @@
 									<IconButton variant="ghost" size="sm" label={`Remove ${p}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
 								</span>
 							</div>
-						{:else}
-							<div class="empty">A playhead travels the states; its values are the variables a param reads.</div>
 						{/each}
 					</section>
-					{@render transitionList('transitions out', outgoing, 'transitions-out', true)}
-					{@render transitionList('transitions in', incoming, 'transitions-in', false)}
+					{@render transitionList('Transitions Out', outgoing, 'transitions-out', true)}
+					{@render transitionList('Transitions In', incoming, 'transitions-in', false)}
 				{/if}
 			</div>
 		</ScrollArea>
@@ -304,16 +307,14 @@
 		row-gap: var(--space-3);
 		--number-width: 100%;
 	}
-	.section-head {
+	/* A section's heading, as the node inspector's metadata wears one: its name, and its action at the end. */
+	header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
 		min-height: var(--chrome-control-h);
-	}
-	.section-name {
-		color: var(--text-muted);
-		font-size: var(--fs-small);
+		font-weight: 600;
 		white-space: nowrap;
 	}
 	.empty,

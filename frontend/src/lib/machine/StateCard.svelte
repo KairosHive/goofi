@@ -57,7 +57,7 @@
 		</div>
 		{#if s}
 			<div class="summary" data-testid="state-card-summary" title="How it decides, every interval; what it sets; the transitions out">
-				<span>{mode} · {s.interval < 0 ? 'no beat' : `${s.interval.toFixed(2)}s`}</span>
+				<span>{mode} · {s.interval_expression ? 'ƒ' : s.interval < 0 ? 'no beat' : `${s.interval.toFixed(2)}s`}</span>
 				<span class="muted">{set} set · {out} out</span>
 			</div>
 		{/if}

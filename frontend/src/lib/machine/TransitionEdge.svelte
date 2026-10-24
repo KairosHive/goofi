@@ -1,11 +1,11 @@
 <!-- A transition on the machine canvas: a line from box to box, or a loop off the side when it
      re-enters its own state, with chevrons along it for the way it goes — one stroke, so hover and
      selection reach the whole of it. Two between one pair of boxes run side by side. A click on the
-     line or on its label selects it; the label, its share or turn, shows only while the transition
-     or one of its boxes is selected. -->
+     line or on its label selects it; the label, its share or turn, sits halfway along and shows
+     only while the transition or one of its boxes is selected. -->
 <script lang="ts">
 	import { BaseEdge, EdgeLabel, useStore, type EdgeProps, type InternalNode } from '@xyflow/svelte';
-	import { course, labelAt, lane, marked, type Box } from './geometry';
+	import { course, lane, marked, type Box } from './geometry';
 	import { CARD_W, FALLBACK_H } from './layout';
 
 	let { id, source, target, selected, data }: EdgeProps = $props();
@@ -20,9 +20,8 @@
 		const a = boxOf(store.nodeLookup.get(source));
 		const b = boxOf(store.nodeLookup.get(target));
 		if (!a || !b) return null;
-		const l = lane(d.k, d.n, source, target);
-		const c = course(a, source === target ? a : b, l.offset);
-		return { d: marked(c), label: source === target ? c.at(0.5) : labelAt(c, a, b, l.at) };
+		const c = course(a, source === target ? a : b, lane(d.k, d.n, source, target));
+		return { d: marked(c), label: c.at(0.5) };
 	});
 </script>
 

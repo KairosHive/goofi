@@ -156,7 +156,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(tabs.locator('[role=tab][aria-selected="true"]')).toHaveText('machine0');
 
 		// A name typed into the selected box's inspector is a new attribute, set there and drawn as a
-		// param: a number's slider. A cleared value keeps its slider, and a turn sets it again.
+		// param: a number's slider. Unset in the last state that set it, the attribute leaves the machine.
 		const machineState = async (): Promise<any> => (await rawCall(page, 'session state')).result.machines.machine0;
 		await press(name1);
 		const newName = inspector.getByTestId('attribute-name-new');
@@ -166,7 +166,10 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(gain).toHaveAttribute('data-set', 'true');
 		await expect(newName).toHaveValue('');
 		await press(gain.getByTestId('state-clear'));
-		await expect(gain).toHaveAttribute('data-set', 'false');
+		await expect(gain).toHaveCount(0);
+		await expect.poll(async () => (await machineState()).attributes?.gain).toBeUndefined();
+		await newName.fill('gain');
+		await newName.press('Enter');
 		await gain.getByTestId('param-slider').locator('input').fill('0.7');
 		await expect(gain).toHaveAttribute('data-set', 'true');
 		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBeCloseTo(0.7);
@@ -216,11 +219,13 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBe('0.7');
 		await expect(kind.locator('[aria-label="integer"], [aria-label="min"]')).toHaveCount(0);
 		await expect(both.locator('.attr-row').getByTestId('param-text')).toBeVisible();
-		await press(both.getByTestId('state-clear'));
-		await expect(both).toHaveAttribute('data-set', 'false');
 		await kind.getByTestId('attribute-kind').locator('select').selectOption('toggle');
 		await expect(kind).toHaveAttribute('data-face', 'toggle');
 		await expect(both.locator('.attr-row').getByTestId('param-toggle')).toBeVisible();
+		// Unset in both, the attribute is gone from the machine.
+		await press(both.getByTestId('state-clear'));
+		await expect(both).toHaveCount(0);
+		await expect.poll(async () => (await machineState()).attributes?.gain).toBeUndefined();
 		await multi();
 		await tapCorner();
 
@@ -242,6 +247,12 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await interval.fill('1.05');
 		await interval.press('Enter');
 		await expect.poll(async () => (await decision()).interval).toBeCloseTo(1.05);
+		// The interval is a param: its source switch seeds an expression from the value, and back.
+		await press(inspector.getByTestId('state-interval').getByRole('button', { name: 'interval', exact: true }));
+		await press(inspector.getByTestId('state-interval').getByTestId('param-mode-expression'));
+		await expect.poll(async () => (await rawCall(page, 'session state')).result.machines.machine0.states.state0.interval_expression).toBe('1.05');
+		await press(inspector.getByTestId('state-interval').getByTestId('param-mode-constant'));
+		await expect.poll(async () => (await rawCall(page, 'session state')).result.machines.machine0.states.state0.interval_expression).toBeUndefined();
 		await press(inspector.getByTestId('state-mode-sequence'));
 		await expect(card0).toHaveAttribute('data-mode', 'sequence');
 		await expect(card0.getByTestId('state-card-summary')).toContainText('seq · 1.05s');
@@ -295,7 +306,8 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		// A transition is added from the inspector too, to a state picked from the list, and its
 		// open row's delete button takes it away. The manager mints the first free id again.
 		await press(name0);
-		await inspector.getByTestId('transition-add-to').locator('select').selectOption('state1');
+		await press(inspector.getByTestId('transition-add'));
+		await press(page.locator('.context-menu .item', { hasText: 'state1' }));
 		await expect.poll(async () => Object.keys((await machineState()).transitions)).toEqual(['t1']);
 		const row = inspector.getByTestId('transition-row-t1');
 		await expect(row).toBeVisible();

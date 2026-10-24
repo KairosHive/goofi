@@ -69,7 +69,9 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
         write("machine attribute edit", j!({ "machine": "seq", "name": "mood", "kind": kind, "value": default }));
         assert_eq!(mood(&g), want, "a state's value follows the kind {kind}");
     }
-    write("machine attribute remove", j!({ "machine": "seq", "name": "mood" }));
+    // Unset in the last state that set it, an attribute leaves the machine.
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "values": { "mood": null } }));
+    assert!(g.doc()["machines"]["seq"]["attributes"].get("mood").is_none(), "{}", g.doc()["machines"]["seq"]["attributes"]);
     // An envelope shapes a number the state sets: a text takes none, a sustain is in 0..1, and a
     // value cleared takes its envelope with it.
     write("machine state edit", j!({ "machine": "seq", "name": "A", "envelopes": { "gain": [0.1, 0.2, 0.5, 0.3] } }));
@@ -273,8 +275,12 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // A state a playhead starts in refuses to go; another takes its transitions with it.
     let why = g.refuse("machine state remove", j!({ "machine": "seq", "name": "Start" }));
     assert!(why.contains("starts in"), "{why}");
+    write("machine attribute add", j!({ "machine": "seq", "name": "only", "value": 1.0 }));
+    write("machine state edit", j!({ "machine": "seq", "name": "B", "values": { "only": 2.0 } }));
     write("machine state remove", j!({ "machine": "seq", "name": "B" }));
     assert!(g.doc()["machines"]["seq"]["transitions"].get("t1").is_none(), "t1 left B with it");
+    assert!(g.doc()["machines"]["seq"]["attributes"].get("only").is_none(), "an attribute B alone set left with it");
+    assert!(g.doc()["variables"]["lead.only"].is_null());
 
     // Saved and opened elsewhere: the model comes back whole, every playhead in its start state.
     g.call("machine jump", j!({ "machine": "seq", "playhead": "second", "state": "Start" }));
@@ -551,6 +557,7 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
     let none = |_: &str| None;
     assert_eq!(walk(j!({ "mode": "sequence" }), &none).0, "XYZXYZ", "the next spoke in authored order, round the ring");
     assert_eq!(walk(j!({ "mode": "sequence", "interval": -1.0 }), &none).0, "------", "an interval of -1 never decides by time");
+    assert_eq!(walk(j!({ "mode": "sequence", "interval_expression": "len(me.name) + 1" }), &none), ("-X-Y-Z".to_string(), Vec::new()), "an interval expression is read as each beat is armed");
     let (path, _) = walk(j!({}), &none);
     assert!(path.len() == 6 && !path.contains('-'), "a new state draws evenly and never waits: {path}");
     let (path, _) = walk(j!({ "noop": 0.0, "weights": { "hx": 1.0, "hy": 2.0 } }), &none);
