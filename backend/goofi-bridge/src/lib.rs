@@ -292,6 +292,7 @@ impl AppState {
         self.stopping.stop();
         // Parked workers read the stop when they wake.
         self.changed.notify();
+        self.variables.poke();
         self.midi.release_all();
         self.scope.close(goofi_transport::SHUTDOWN_WAIT);
         self.reducers.stop_all(goofi_transport::SHUTDOWN_WAIT);
@@ -1500,9 +1501,12 @@ pub(crate) fn history_event(history: &goofi_graph::History) -> Event {
 /// the graph: apply→re-project is atomic, and the diff against the document runs off the graph lock.
 pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (MutexGuard<'a, crate::doc::GraphDoc>, goofi_graph::Projection) {
     g.settle();
-    record::follow(state, g);
+    let marks = g.take_marks();
+    if marks.armed {
+        record::follow(state, g);
+    }
     state.changed.notify();
-    sync_followers(state, g);
+    sync_followers(state, g, marks);
     state.live.fill(g);
     (state.doc.lock(), g.projection())
 }
@@ -1604,8 +1608,18 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
 }
 
 /// Hand the follower every variable expression, the reducers every slot one reads and the
-/// machines their model, from settled state, after each mutation.
-fn sync_followers(state: &AppState, g: &Graph) {
+/// machines their model, from settled state — each on the mark that says its input moved.
+fn sync_followers(state: &AppState, g: &Graph, marks: goofi_graph::Marks) {
+    if marks.machines {
+        state.machines.configure(g);
+    }
+    if marks.groups {
+        let (closed, _) = state.midi.resync(g);
+        drop(closed);
+    }
+    if !marks.ringers {
+        return;
+    }
     let mut taps: HashMap<reducer::SlotKey, Vec<reducer::Tap>> = HashMap::new();
     let mut wanted = Vec::new();
     for b in g.variable_bindings() {
@@ -1625,11 +1639,8 @@ fn sync_followers(state: &AppState, g: &Graph) {
     }
     state.reducers.follow(reducer::Followed::Desired(wanted, g.evaluator()));
     state.reducers.set_taps(taps);
-    state.machines.configure(g);
-    // The bindings may have moved: the producer re-reads who it rings.
+    // The bindings moved: the producer re-reads who it rings.
     state.variables.poke();
-    let (closed, _) = state.midi.resync(g);
-    drop(closed);
 }
 
 /// How often the host is asked which MIDI ports it lists: a plug or a pull shows within it.

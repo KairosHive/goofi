@@ -117,12 +117,35 @@ struct Diff {
     rewired: Vec<Edge>,
     /// Whether the links root moved at all: what a stream read through a port follows.
     relinked: bool,
+    /// Whether the machines root, or the arrangement, moved: what their followers read.
+    machines: bool,
+    arrangement: bool,
 }
 
 impl Diff {
     fn is_empty(&self) -> bool {
-        self.changed.is_empty() && self.removed.is_empty() && self.rewired.is_empty() && !self.relinked
+        self.changed.is_empty()
+            && self.removed.is_empty()
+            && self.rewired.is_empty()
+            && !self.relinked
+            && !self.machines
+            && !self.arrangement
     }
+}
+
+/// What the settles since the last take moved that a follower of the graph reads: each follower
+/// runs on its mark alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    /// A binding was derived anew, or a node was born, reborn or removed: the variable
+    /// producer's ringers, the reducers' taps and the follower's expressions may have moved.
+    pub ringers: bool,
+    /// The machines root moved.
+    pub machines: bool,
+    /// An armed output moved, or a node whose arming names a generation was born or removed.
+    pub armed: bool,
+    /// A source, a feed or a variable moved: what the MIDI watch reads for the groups it opens.
+    pub groups: bool,
 }
 
 /// What one drain of the engines' reports landed.
@@ -572,6 +595,11 @@ struct Runtime {
     /// A variable's binding error moved since the last projection: the one runtime fact the
     /// document carries beside a variable.
     binds_moved: bool,
+    /// What the settles since the last take moved, for the followers.
+    marks: Marks,
+    /// Bumped by every settle that delivered and every viewpoint write: what autosave compares to
+    /// know the patch moved since it last wrote.
+    revision: u64,
     /// The variable store's configuration version at the last settle: a variable added, removed,
     /// renamed or re-sourced re-derives every binding and re-sends every node.
     settled_vars: u64,
@@ -684,6 +712,8 @@ impl Graph {
                 },
                 projected_vars: 0,
                 binds_moved: false,
+                marks: Marks::default(),
+                revision: 0,
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
@@ -1226,6 +1256,8 @@ impl Graph {
         for e in self.engines_mut() {
             e.set_evaluator(evaluator.clone());
         }
+        // Every binding reads through the new evaluator: the next settle re-derives and re-sends.
+        self.runtime.redeliver = true;
     }
 
     /// Register an engine, signal first by convention. Its library joins the merged view, and its
@@ -1612,6 +1644,7 @@ impl Graph {
 
     pub fn set_viewpoint(&mut self, viewpoint: serde_json::Value) {
         self.viewpoint = viewpoint;
+        self.runtime.revision += 1;
     }
 
     /// Record a type that could not be loaded, and why. Refused while any engine's library still
@@ -3166,6 +3199,8 @@ impl Graph {
         }
         self.runtime.settled_vars = vars_version;
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.runtime.revision += 1;
+        self.runtime.marks.machines |= diff.machines;
         // Every arming the batch left unnumbered gets its serial, before the snapshot is kept.
         for uid in &diff.rearmed {
             self.mint_serials(*uid);
@@ -3223,6 +3258,10 @@ impl Graph {
         };
         let derive: Vec<Uid> = derive.into_iter().collect::<HashSet<_>>().into_iter().collect();
         let rebound = self.derive_nodes(&derive, &diff.edited);
+        let lives_moved = !born.is_empty() || !reborn.is_empty() || !gone.is_empty();
+        self.runtime.marks.ringers |= !rebound.is_empty() || lives_moved || self.runtime.binds_moved || redeliver;
+        self.runtime.marks.groups |= !derive.is_empty() || redeliver;
+        self.runtime.marks.armed |= !diff.rearmed.is_empty() || lives_moved;
 
         // What each engine is re-sent: the changed leaves, both ends of every wire that moved,
         // the neighbours of a node born or reborn (its service names moved), a consumer whose
@@ -3323,6 +3362,8 @@ impl Graph {
             }
         }
         d.relinked = !Arc::ptr_eq(&prev.links, &next.links);
+        d.machines = !Arc::ptr_eq(&prev.machines, &next.machines);
+        d.arrangement = !Arc::ptr_eq(&prev.arrangement, &next.arrangement);
         if d.relinked || !d.changed.is_empty() || !d.removed.is_empty() {
             // A port's wires resolve to leaves, so a wire that moved shows as a resolved edge
             // that one settle's walk found and the other's did not.
@@ -3570,6 +3611,16 @@ impl Graph {
             }
         }
         root
+    }
+
+    /// What the settles since the last take moved, for the followers; taken once.
+    pub fn take_marks(&mut self) -> Marks {
+        std::mem::take(&mut self.runtime.marks)
+    }
+
+    /// Moved by every settle that delivered and every viewpoint write.
+    pub fn revision(&self) -> u64 {
+        self.runtime.revision
     }
 
     /// The patch and the variable store as they stand: what a history entry keeps.

@@ -476,12 +476,15 @@ pub struct VariableStore {
     entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Group>,
     plane: Option<std::sync::Arc<dyn Plane>>,
-    /// Told the name of every value that moved: the machines' reason to look again.
+    /// Told the name of every value that moved, whoever wrote it: the machines' reason to look again.
     watch: Option<Watch>,
     /// Bumped by every change to what the store HOLDS — a variable or a group added, removed,
     /// renamed, re-sourced, re-controlled or re-locked, and a value an op set — never by a value
     /// the plane drives. What a settle compares to know the bindings that read the store moved.
     version: u64,
+    /// Bumped by every value that moved, the plane's included: what autosave compares to know the
+    /// values it would write moved.
+    moves: u64,
 }
 
 impl Default for VariableStore {
@@ -492,7 +495,7 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None, version: 0 };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None, version: 0, moves: 0 };
         s.reassert_system();
         s
     }
@@ -500,6 +503,11 @@ impl VariableStore {
     /// The configuration version: moved by every change to what the store holds.
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// The value version: moved by every value that moved, whoever wrote it.
+    pub fn moves(&self) -> u64 {
+        self.moves
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -526,6 +534,7 @@ impl VariableStore {
             .collect();
         self.entries = entries;
         self.groups = s.groups.clone();
+        self.moves += moved.len() as u64;
         for name in moved {
             self.emit(&name, &self.entries[&name].value);
             if let Some(watch) = &self.watch {
@@ -648,6 +657,7 @@ impl VariableStore {
             return false;
         }
         existing.value = value;
+        self.moves += 1;
         self.emit(name, &self.entries[name].value);
         if let Some(watch) = &self.watch {
             watch(name);
@@ -858,8 +868,12 @@ impl VariableStore {
                 format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
             })?;
         }
+        self.moves += 1;
         self.emit(name, &value);
         self.entries[name].value = value;
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         Ok(())
     }
 
@@ -877,8 +891,12 @@ impl VariableStore {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
         let at = at.unwrap_or(usize::MAX).min(self.entries.len());
+        self.moves += 1;
         self.emit(name, &value);
         self.entries.shift_insert(at, name.to_string(), Variable::of(value));
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         Ok(())
     }
 

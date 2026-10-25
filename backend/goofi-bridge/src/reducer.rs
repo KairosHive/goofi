@@ -183,7 +183,12 @@ impl SlotReducers {
         }
         for (key, list) in taps {
             let reducer = self.ensure(&mut map, &key);
-            *reducer.slot.taps.lock() = list;
+            let mut held = reducer.slot.taps.lock();
+            if *held == list {
+                continue;
+            }
+            *held = list;
+            drop(held);
             reducer.slot.retap.store(true, Ordering::Release);
             reducer.poke();
         }

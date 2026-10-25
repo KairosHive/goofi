@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use goofi_graph::{Graph, Uid};
 use goofi_node::EventId;
@@ -49,12 +48,12 @@ impl Variables {
         self.door.ring(0);
     }
 
-    /// Park on the door until `stopping`: each wake re-reads the ringers from the graph and rings
-    /// every consumer's door, so one that subscribed since takes the held frame. A spurious ring
-    /// costs a wake.
+    /// Park on the door until `stopping`: a settle that moved the bindings rings it, and each wake
+    /// re-reads the ringers from the graph and rings every consumer's door, so one that subscribed
+    /// since takes the held frame.
     pub fn serve(&self, graph: &Mutex<Graph>, stopping: &goofi_transport::Halt) {
         while !stopping.stopped() {
-            goofi_transport::wait_within(&self.door, Duration::from_millis(500), |_| {});
+            self.door.wait();
             if stopping.stopped() {
                 return;
             }
