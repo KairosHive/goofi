@@ -16,9 +16,9 @@ rate or a latency.
 
 ## Signal
 
-- The op tail walks the whole graph on every write, and the manager's clocks re-derive what
-  moves only on an event: `roadmap/reactivity.md` holds the audit, the measurements, the shared
-  primitive and its phases.
+- The settle still walks every node for its view, every link for its edges and compiles both
+  plans whole; the status beat, the live fill and the halves recompute on their clocks:
+  `roadmap/reactivity.md` holds the measurements and the remaining work.
 - `Buffer` memmoves its whole window on every frame: a ring, so a frame costs one copy.
 - A Python node copies an array three times out and once in, rebuilds its `params` namespaces
   every call and reads `_is_gil_enabled` twice a call: cache the namespaces, rebuild on
