@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use goofi_node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Touched, Uid};
+use goofi_node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Uid};
 use goofi_runtime::{Handle, HostExecutor, Plane, Shared};
 
 /// A [`goofi_signal_sdk::NodeFactory`] shared with the node's own thread, which is where the build happens.
@@ -150,12 +150,12 @@ impl Engine for SignalEngine {
         self.hosts.remove(&uid);
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, changed: &[Uid]) {
         self.dirty = false;
         self.shared.replan.store(false, Ordering::Release);
         let plane = Plane { kind: None, planned: &|_| false, records: true };
-        for (uid, handle) in &self.hosts {
-            let Some(nv) = view.nodes.get(uid) else { continue };
+        for uid in changed {
+            let (Some(handle), Some(nv)) = (self.hosts.get(uid), view.nodes.get(uid)) else { continue };
             let decls = Self::decls_of(nv.manifest);
             handle.send_if_changed(goofi_runtime::desired_of(view, *uid, nv, &decls, &plane));
         }

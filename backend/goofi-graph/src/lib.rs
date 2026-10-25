@@ -10,7 +10,7 @@ use goofi_node::{
     Edit, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, ExprMode, GraphView, Isolation,
     IsolationCell, LibraryEntry, NodeManifest, NodeView, ParamDecl, ParamGroups, ParamKey,
-    Status, Touched,
+    Status,
 };
 use indexmap::IndexMap;
 
@@ -36,6 +36,7 @@ use subpatch::Dir;
 
 /// What a node IS. The thin distinction the backend keeps and the frontend never sees: a leaf runs,
 /// so it carries a thread and params; a facade and a port do not, so they carry neither.
+#[derive(Clone)]
 enum Kind {
     /// Boxed: a leaf's runtime state dwarfs the other two, and one map holds all three.
     Leaf(Box<Leaf>),
@@ -47,6 +48,7 @@ enum Kind {
 
 /// The state only a RUNNING node has: the RECORD the ops write, and the health its instance
 /// reports.
+#[derive(Clone)]
 struct Leaf {
     manifest: &'static NodeManifest,
     /// The type's cell, captured at birth — shared per type, so a runtime demotion of a Python
@@ -57,12 +59,14 @@ struct Leaf {
     /// The param RECORD — the literals `serialize` writes, every param of the class. An evaluated
     /// value must never reach it; the typed params with bounds derive from the class on read.
     values: Record,
-    /// The graph resolves each source's references and ships it; the NODE evaluates it.
-    sources: HashMap<ParamKey, ParamSource>,
+    /// The AUTHORED source per param: the mode and the text the document holds. What it derives
+    /// to against the graph is the runtime's ([`Runtime::bindings`]), never the record's.
+    sources: HashMap<ParamKey, SourceState>,
 }
 
 /// A leaf's literals, with the typed params derived from them memoized until the next write:
 /// the record's one reader derives through [`Graph::typed`], and a write clears the memo.
+#[derive(Clone)]
 struct Record {
     values: doc::Values,
     typed: std::sync::OnceLock<Arc<ParamGroups>>,
@@ -91,20 +95,42 @@ struct Instance {
     health: Health,
 }
 
+/// What a batch changed between two snapshots, as [`Graph::settle`] reads it.
+#[derive(Default)]
+struct Diff {
+    /// Nodes whose record is not the one the last settle saw, born ones included.
+    changed: Vec<Uid>,
+    removed: Vec<Uid>,
+    /// Leaves whose class or engine changed under them: a rebirth.
+    reclassed: Vec<Uid>,
+    /// Display names that moved, old and new, and the nodes wearing them.
+    renamed: Vec<(String, String)>,
+    renamed_uids: Vec<Uid>,
+    /// Display names that came with a node born, or went with one removed: what a binding
+    /// spelling one re-derives on.
+    named: Vec<String>,
+    /// Nodes whose armed outputs moved.
+    rearmed: Vec<Uid>,
+    /// Params whose literal or authored source moved.
+    edited: Vec<(Uid, ParamKey)>,
+    /// Resolved edges one snapshot has and the other has not.
+    rewired: Vec<Edge>,
+    /// Whether the links root moved at all: what a stream read through a port follows.
+    relinked: bool,
+}
+
+impl Diff {
+    fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.removed.is_empty() && self.rewired.is_empty() && !self.relinked
+    }
+}
+
 /// What one drain of the engines' reports landed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Drained {
     pub reports: usize,
     /// Whether a node's stage moved: what a reader waiting on a node's start re-reads for.
     pub staged: bool,
-}
-
-/// What a batch did to a node's instance and `settle` has not yet delivered to its engine.
-#[derive(Clone, Copy, PartialEq)]
-enum Change {
-    Added(Uid),
-    Removed(Uid),
-    Restart(Uid),
 }
 
 /// What the running instance reports about itself — a one-way projection with two writers by
@@ -126,7 +152,7 @@ struct Health {
     /// broken binding still has the authored literal to fall back to.
     evaluated: IndexMap<ParamKey, Param>,
     /// Every error THIS INSTANCE reported, by param. It dies with the instance, where
-    /// `ParamSource::bind_error` survives because the source does.
+    /// `Binding::bind_error` survives because the source does.
     param_errors: IndexMap<ParamKey, String>,
     /// A refreshable `Str` param's re-enumerated options — the overlay a projection reads over
     /// the record's declared options. The answer to a ⟳ lands here, never in the record.
@@ -152,6 +178,7 @@ impl Health {
 
 /// One entry in the ONE node map: a leaf, a sub-patch facade or a boundary port. Everything an op
 /// can address about a node — its name, where it sits, what it shows — is here for all three.
+#[derive(Clone)]
 struct NodeEntry {
     kind: Kind,
     name: String,
@@ -382,9 +409,9 @@ pub enum Mode {
     Expression,
 }
 
-/// A param's source record: the AUTHORED state, the text retained whatever the mode, and
-/// everything below it DERIVED from the active one at settle.
-struct ParamSource {
+/// What a param's authored source derives to against the graph, at settle: the state it was
+/// derived from, and everything below it. The runtime's, keyed by node and param.
+struct Binding {
     state: SourceState,
     /// Compiled from [`Self::rewritten`], never from the authored text: the evaluator is handed
     /// variables, not names. `None` when the compile failed, or there is no evaluator.
@@ -408,9 +435,9 @@ struct Derived {
     error: Option<String>,
 }
 
-impl ParamSource {
-    fn fresh(state: SourceState) -> ParamSource {
-        ParamSource { state, id: None, rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), bind_error: None }
+impl Binding {
+    fn fresh(state: SourceState) -> Binding {
+        Binding { state, id: None, rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), bind_error: None }
     }
 
     /// Whether the graph SHIPS this source. A constant mode and a source the graph could not bind
@@ -429,8 +456,8 @@ pub struct VariableBinding<'a> {
     pub vars: &'a [BoundVar],
 }
 
-/// [`ParamSource`] projected for the bridge and the `.gfi`: the authored state, and why it does
-/// not hold — the graph could not bind it, or the node could not evaluate it.
+/// A source projected for the bridge and the `.gfi`: the authored state, and why it does not
+/// hold — the graph could not bind it, or the node could not evaluate it.
 pub struct SourceInfo {
     pub state: SourceState,
     pub error: Option<String>,
@@ -472,20 +499,24 @@ pub enum Origin {
     Plugin,
 }
 
-/// The document: what the archive, the replica and a paste fragment project.
+/// The document: what the archive, the replica and a paste fragment project. A VALUE: every root
+/// a write can touch sits behind an `Arc`, a write copies the one node or root it touches, and a
+/// clone is pointers — so the settle reads what a batch changed off two snapshots, pointer by
+/// pointer, and a history entry is a snapshot.
+#[derive(Clone)]
 struct Patch {
-    nodes: IndexMap<Uid, NodeEntry>,
+    nodes: IndexMap<Uid, Arc<NodeEntry>>,
     /// Keyed by [`Link::key`], in connection order — which IS a multi input's wire order.
-    links: IndexMap<String, Link>,
+    links: Arc<IndexMap<String, Link>>,
     /// The panel arrangement, held FLAT — the fifth doc root. Every mutation is an ordinary
     /// command, so the layout has exactly one projection, as nodes and links do.
-    arrangement: layout::Layout,
+    arrangement: Arc<layout::Layout>,
     /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load. Under a
     /// lock of its own: a value write is the store's and the plane's, never the graph's.
     variables: Arc<goofi_supervisor::sync::Mutex<goofi_core::variables::VariableStore>>,
     /// The state machines, the sixth doc root. Each playhead is a group of variables the machine
     /// owns, held in step with this model by [`Graph::sync_playheads`].
-    machines: IndexMap<String, machine::Machine>,
+    machines: Arc<IndexMap<String, machine::Machine>>,
 }
 
 /// What runs the patch: the engines, the catalog, the mint and the live instances.
@@ -506,7 +537,18 @@ struct Runtime {
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
     evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
     /// Every variable with an expression, derived at settle as a param's source is.
-    variable_binds: IndexMap<String, ParamSource>,
+    variable_binds: IndexMap<String, Binding>,
+    /// Every leaf's authored sources derived against the graph, at the last settle and at the
+    /// write that set them: the one place a compiled handle lives.
+    bindings: HashMap<Uid, HashMap<ParamKey, Binding>>,
+    /// The snapshot the last settle delivered. The next settle reads what changed off this and
+    /// the patch, pointer by pointer, and then holds the patch here.
+    settled: Patch,
+    /// The resolved edges of that snapshot: what a wire that moved is told apart against.
+    settled_edges: Vec<Edge>,
+    /// The variable store's configuration version at the last settle: a variable added, removed,
+    /// renamed or re-sourced re-derives every binding and re-sends every node.
+    settled_vars: u64,
     /// Types that exist on disk but cannot load here → why. Greyed in the palette, so a node
     /// needing an uninstalled dependency explains itself instead of silently not existing.
     unavailable: std::collections::BTreeMap<String, Greyed>,
@@ -515,8 +557,14 @@ struct Runtime {
     origins: std::collections::HashMap<String, Origin>,
     /// A process-lifetime counter: undo restores deleted uids, so none is ever handed out twice.
     next_uid: u64,
-    /// A `system.*` value moved: the next settle runs whatever else moved, so engines re-read it.
-    resettle: bool,
+    /// Every node is re-sent at the next settle, whatever else moved: a `system.*` value an
+    /// engine reads off the view moved, or the library rescanned.
+    redeliver: bool,
+    /// Nodes whose instance is respawned at the next settle, in place, by request.
+    restarts: Vec<Uid>,
+    /// Nodes a reducer started or stopped watching since the last settle: an input of a settle no
+    /// snapshot holds.
+    rewatched: Vec<Uid>,
     /// Every uid's birth generation, bumped on EVERY birth and never reset, so a reborn node's
     /// service names stay clear of its predecessor's. Never enters the archive.
     generations: HashMap<Uid, u64>,
@@ -533,8 +581,6 @@ struct Runtime {
     view_wants: HashMap<(Uid, String), Option<goofi_view::ViewWant>>,
     /// Every leaf an engine runs, by uid. A leaf absent here is born at the next settle.
     instances: HashMap<Uid, Instance>,
-    /// The births, removals and restarts the batch asked for, in order, netted by `settle`.
-    changed: Vec<Change>,
 }
 
 pub struct Graph {
@@ -543,8 +589,6 @@ pub struct Graph {
     /// patch on mere navigation — but persistence is the other axis, so it rides the `.gfi`.
     viewpoint: serde_json::Value,
     runtime: Runtime,
-    /// What the current batch changed and [`Self::settle`] has not yet delivered.
-    touched: Vec<Touched>,
 }
 
 impl Drop for Graph {
@@ -582,14 +626,15 @@ impl Graph {
     /// `instance` is the service-name scope this graph mints under: fresh per graph and never a
     /// pid, which is reused, since a recycled scope would JOIN stale services.
     pub fn new(instance: String) -> Graph {
+        let patch = Patch {
+            nodes: IndexMap::new(),
+            links: Arc::new(IndexMap::new()),
+            arrangement: Arc::new(layout::Layout::default()),
+            variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
+            machines: Arc::new(IndexMap::new()),
+        };
         Graph {
-            patch: Patch {
-                nodes: IndexMap::new(),
-                links: IndexMap::new(),
-                arrangement: layout::Layout::default(),
-                variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
-                machines: IndexMap::new(),
-            },
+            patch: patch.clone(),
             viewpoint: serde_json::Value::Null,
             runtime: Runtime {
                 engines: Vec::new(),
@@ -599,20 +644,38 @@ impl Graph {
                 time: Arc::new(goofi_supervisor::timing::Time::new()),
                 evaluator: None,
                 variable_binds: IndexMap::new(),
+                bindings: HashMap::new(),
+                settled: patch,
+                settled_edges: Vec::new(),
+                settled_vars: 0,
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
-                resettle: false,
+                redeliver: false,
+                restarts: Vec::new(),
+                rewatched: Vec::new(),
                 generations: HashMap::new(),
                 arm_serial: 0,
                 refreshed: Vec::new(),
                 watched: HashSet::new(),
                 view_wants: HashMap::new(),
                 instances: HashMap::new(),
-                changed: Vec::new(),
             },
-            touched: Vec::new(),
         }
+    }
+
+    /// A node's record to write. The one door every write to a node goes through: the snapshot
+    /// keeps the record as it was, and the write copies it once.
+    fn entry_mut(&mut self, uid: Uid) -> Option<&mut NodeEntry> {
+        self.patch.nodes.get_mut(&uid).map(Arc::make_mut)
+    }
+
+    fn links_mut(&mut self) -> &mut IndexMap<String, Link> {
+        Arc::make_mut(&mut self.patch.links)
+    }
+
+    fn machines_mut(&mut self) -> &mut IndexMap<String, machine::Machine> {
+        Arc::make_mut(&mut self.patch.machines)
     }
 
     /// Stop every node and WAIT for each to release its shared memory. The waiting is why this is
@@ -623,8 +686,9 @@ impl Graph {
         }
         self.patch.nodes.clear();
         self.runtime.instances.clear();
-        self.runtime.changed.clear();
-        self.touched.clear();
+        self.runtime.bindings.clear();
+        self.runtime.restarts.clear();
+        self.runtime.rewatched.clear();
     }
 
     /// The authoritative variables store, taken for one statement: a guard held across a call
@@ -644,7 +708,7 @@ impl Graph {
         let mut out = Vec::new();
         for (uid, e) in &self.patch.nodes {
             let Some(leaf) = e.leaf() else { continue };
-            for b in leaf.sources.values().filter(|b| b.live()) {
+            for (_, b) in self.bindings_of(*uid).filter(|(_, b)| b.live()) {
                 for v in &b.vars {
                     if let BoundVar::Stream { producer: Uid::VARIABLES, slot, event_id, .. } = v {
                         out.push((slot.to_string(), *uid, self.node_generation(*uid), *event_id));
@@ -668,7 +732,7 @@ impl Graph {
     pub fn referenced_groups(&self) -> HashSet<String> {
         let group_of = |name: &str| goofi_core::variables::split_variable(name).map(|(g, _)| g.to_string());
         let mut out = HashSet::new();
-        let node_refs = self.leaves().flat_map(|(_, leaf)| leaf.sources.values()).flat_map(|b| &b.refs);
+        let node_refs = self.runtime.bindings.values().flat_map(|m| m.values()).flat_map(|b| &b.refs);
         for r in node_refs.chain(self.runtime.variable_binds.values().flat_map(|b| &b.refs)) {
             if let expr_rewrite::Target::Variable { key } = &r.target {
                 out.extend(group_of(key));
@@ -700,7 +764,7 @@ impl Graph {
         // An engine reads goofi's own groups off the settled view, so a value there is delivered by
         // a settle.
         if goofi_core::variables::split_variable(name).is_some_and(|(g, _)| goofi_core::variables::is_own_group(g)) {
-            self.runtime.resettle = true;
+            self.runtime.redeliver = true;
         }
         Ok(())
     }
@@ -744,10 +808,10 @@ impl Graph {
         }
         for (name, expression) in wanted {
             let state = SourceState { mode: Mode::Expression, expression };
-            let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| ParamSource::fresh(state.clone()));
+            let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| Binding::fresh(state.clone()));
             let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
             let (id, error) = self.compiled(&prior, &derived);
-            let record = ParamSource { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
+            let record = Binding { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
             self.runtime.variable_binds.insert(name, record);
         }
     }
@@ -788,7 +852,7 @@ impl Graph {
         }
         let moved = self.variables().rename_group(from, to)?;
         let touched = self.rewrite_variable_reads(&moved);
-        self.patch.arrangement.set_contents(&writes);
+        self.arrangement_mut().set_contents(&writes);
         Ok(touched)
     }
 
@@ -803,7 +867,7 @@ impl Graph {
             return Err(format!("invalid machine name `{name}`: {}", machine::NAME_RULE));
         }
         let old = match record {
-            None => self.patch.machines.shift_remove(name),
+            None => self.machines_mut().shift_remove(name),
             Some(record) => {
                 record.check()?;
                 for ph in record.playheads.keys() {
@@ -813,10 +877,10 @@ impl Graph {
                     }
                 }
                 match self.patch.machines.get_index_of(name) {
-                    Some(_) => self.patch.machines.insert(name.to_string(), record),
+                    Some(_) => self.machines_mut().insert(name.to_string(), record),
                     None => {
                         let at = at.unwrap_or(usize::MAX).min(self.patch.machines.len());
-                        self.patch.machines.shift_insert(at, name.to_string(), record);
+                        self.machines_mut().shift_insert(at, name.to_string(), record);
                         None
                     }
                 }
@@ -835,10 +899,10 @@ impl Graph {
             return Err(format!("machine `{to}` already exists"));
         }
         let at = self.patch.machines.get_index_of(from).ok_or_else(|| format!("no machine `{from}`"))?;
-        let record = self.patch.machines.shift_remove(from).expect("the index answered");
-        self.patch.machines.shift_insert(at, to.to_string(), record);
+        let record = self.machines_mut().shift_remove(from).expect("the index answered");
+        self.machines_mut().shift_insert(at, to.to_string(), record);
         let writes = self.patch.arrangement.retarget("machine", "machine", from, to);
-        self.patch.arrangement.set_contents(&writes);
+        self.arrangement_mut().set_contents(&writes);
         self.sync_playheads();
         Ok(())
     }
@@ -912,7 +976,7 @@ impl Graph {
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
-        for m in self.patch.machines.values_mut() {
+        for m in self.machines_mut().values_mut() {
             m.rewrite_expressions(|e| expr_rewrite::rename_variables(e, rename));
         }
         self.rewrite_sources(|s| {
@@ -934,7 +998,7 @@ impl Graph {
         let edit = &edit;
         let edits: Vec<(Uid, ParamKey, SourceState)> = self
             .leaves()
-            .flat_map(|(uid, l)| l.sources.iter().filter_map(move |(k, b)| Some((uid, k.clone(), edit(&b.state)?))))
+            .flat_map(|(uid, l)| l.sources.iter().filter_map(move |(k, state)| Some((uid, k.clone(), edit(state)?))))
             .collect();
         let mut referrers: Vec<Uid> = Vec::new();
         for (uid, key, state) in edits {
@@ -945,36 +1009,115 @@ impl Graph {
         referrers
     }
 
-    /// Derive every binding from its authored texts against the graph as it stands, and touch the
-    /// ones that moved, so their nodes are re-sent. Runs at settle.
-    fn derive_bindings(&mut self) {
-        self.derive_variables();
-        let mut keys: Vec<(Uid, ParamKey)> =
-            self.leaves().flat_map(|(uid, e)| e.sources.keys().map(move |k| (uid, k.clone()))).collect();
-        keys.sort();
-        for (uid, key) in keys {
-            self.derive_one(uid, &key);
-        }
+    /// A leaf's derived bindings, as the last derivation left them.
+    fn bindings_of(&self, uid: Uid) -> impl Iterator<Item = (&ParamKey, &Binding)> {
+        self.runtime.bindings.get(&uid).into_iter().flat_map(|m| m.iter())
     }
 
-    /// Derive one record from its authored texts, and touch it when the derivation moved.
-    fn derive_one(&mut self, uid: Uid, key: &ParamKey) {
-        let Some(prior) = self.leaf(uid).and_then(|e| e.sources.get(key)) else { return };
-        let state = prior.state.clone();
-        let derived = self.derive(uid, key, &state);
-        let edited: Vec<(Uid, ParamKey)> = self
-            .touched
+    fn binding(&self, uid: Uid, key: &ParamKey) -> Option<&Binding> {
+        self.runtime.bindings.get(&uid)?.get(key)
+    }
+
+    /// Derive the sources of the leaves `uids` names against the graph as it stands — at settle,
+    /// for the nodes the batch changed and the referrers of what it moved, and for every node
+    /// when a variable or the library moved. A node gone releases what it held. Answers the nodes
+    /// whose binding moved, which their engine is re-sent.
+    fn derive_nodes(&mut self, uids: &[Uid], edited: &[(Uid, ParamKey)]) -> Vec<Uid> {
+        let mut moved = Vec::new();
+        for &uid in uids {
+            let Some(leaf) = self.leaf(uid) else {
+                self.release_bindings(uid);
+                continue;
+            };
+            let mut keys: Vec<ParamKey> = leaf.sources.keys().cloned().collect();
+            keys.sort();
+            let stale: Vec<ParamKey> =
+                self.bindings_of(uid).map(|(k, _)| k).filter(|k| !leaf.sources.contains_key(k)).cloned().collect();
+            let mut node_moved = !stale.is_empty();
+            for key in stale {
+                self.release_binding(uid, &key);
+            }
+            for key in keys {
+                node_moved |= self.derive_one(uid, &key, edited);
+            }
+            if node_moved {
+                moved.push(uid);
+            }
+        }
+        moved
+    }
+
+    /// The leaves whose bindings spell one of `names` as a node, or as a slot — a port's name is
+    /// a slot label on its facade — resolved or not: a node born, gone or renamed re-derives each.
+    fn referrers(&self, names: &[&str]) -> Vec<Uid> {
+        let spells = |t: &Target| match t {
+            Target::Node { name, slot } => {
+                names.contains(&name.as_str()) || slot.as_deref().is_some_and(|s| names.contains(&s))
+            }
+            Target::NodeParam { name, .. } => names.contains(&name.as_str()),
+            _ => false,
+        };
+        self.runtime
+            .bindings
             .iter()
-            .filter_map(|t| match t {
-                Touched::Param(uid, key) => Some((*uid, key.clone())),
-                _ => None,
-            })
-            .collect();
-        if !self.moved(uid, prior, &derived, &edited) {
-            return;
+            .filter(|(_, m)| m.values().any(|b| b.refs.iter().any(|r| spells(&r.target))))
+            .map(|(uid, _)| *uid)
+            .collect()
+    }
+
+    /// The leaves whose bindings read a producer's stream: what a wire made or cut re-derives.
+    fn stream_readers(&self) -> Vec<Uid> {
+        self.runtime
+            .bindings
+            .iter()
+            .filter(|(_, m)| m.values().any(|b| b.refs.iter().any(|r| matches!(r.target, Target::Node { .. }))))
+            .map(|(uid, _)| *uid)
+            .collect()
+    }
+
+    /// The leaves whose bindings read one of the params `edited` names: a param read follows an
+    /// authored edit of that param, so each re-derives.
+    fn param_readers(&self, edited: &[(Uid, ParamKey)]) -> Vec<Uid> {
+        if edited.is_empty() {
+            return Vec::new();
+        }
+        let named: Vec<(&str, &ParamKey)> =
+            edited.iter().filter_map(|(u, k)| Some((self.name(*u)?, k))).collect();
+        let reads = |consumer: Uid, t: &Target| match t {
+            Target::NodeParam { name, group, param } => {
+                named.iter().any(|(n, k)| *n == name && k.group == *group && k.name == *param)
+            }
+            Target::MeParam { group, param } => {
+                edited.iter().any(|(u, k)| *u == consumer && k.group == *group && k.name == *param)
+            }
+            _ => false,
+        };
+        self.runtime
+            .bindings
+            .iter()
+            .filter(|(uid, m)| m.values().any(|b| b.refs.iter().any(|r| reads(**uid, &r.target))))
+            .map(|(uid, _)| *uid)
+            .collect()
+    }
+
+    /// Derive one source against the graph, and keep the result when it says something the held
+    /// binding does not. Answers whether it moved.
+    fn derive_one(&mut self, uid: Uid, key: &ParamKey, edited: &[(Uid, ParamKey)]) -> bool {
+        let Some(state) = self.leaf(uid).and_then(|e| e.sources.get(key)).cloned() else { return false };
+        let derived = self.derive(uid, key, &state);
+        let fresh;
+        let prior = match self.binding(uid, key) {
+            Some(b) => b,
+            None => {
+                fresh = Binding::fresh(state.clone());
+                &fresh
+            }
+        };
+        if self.binding(uid, key).is_some() && prior.state == state && !self.moved(uid, prior, &derived, edited) {
+            return false;
         }
         let (id, error) = self.compiled(prior, &derived);
-        let record = ParamSource {
+        let record = Binding {
             state,
             id,
             rewritten: derived.rewritten,
@@ -982,15 +1125,13 @@ impl Graph {
             refs: derived.refs,
             bind_error: error,
         };
-        if let Some(e) = self.leaf_mut(uid) {
-            e.sources.insert(key.clone(), record);
-        }
-        self.notify_param(uid, key);
+        self.runtime.bindings.entry(uid).or_default().insert(key.clone(), record);
+        true
     }
 
     /// Whether a derivation says something the record does not. A param read follows an authored
     /// edit of that param, never its evaluation, or driven params would cascade through every settle.
-    fn moved(&self, consumer: Uid, prior: &ParamSource, next: &Derived, edited: &[(Uid, ParamKey)]) -> bool {
+    fn moved(&self, consumer: Uid, prior: &Binding, next: &Derived, edited: &[(Uid, ParamKey)]) -> bool {
         if prior.rewritten != next.rewritten || prior.bind_error != next.error || prior.refs != next.refs {
             return true;
         }
@@ -1008,7 +1149,7 @@ impl Graph {
     /// The handle for a derivation: the prior one where the rewritten text is the text it
     /// compiled, else a fresh compile, and the prior released. A refused compile is the error. A
     /// BARE text compiles to nothing: the engine reads its one target in Rust.
-    fn compiled(&self, prior: &ParamSource, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
+    fn compiled(&self, prior: &Binding, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
         let evaluator = self.runtime.evaluator.as_ref();
         if prior.state.mode == Mode::Expression && next.error.is_none() && !expr_rewrite::is_bare(&next.rewritten) {
             if prior.id.is_some() && prior.rewritten == next.rewritten {
@@ -1032,7 +1173,7 @@ impl Graph {
     }
 
     fn source_state(&self, uid: Uid, key: &ParamKey) -> Option<SourceState> {
-        self.leaf(uid).and_then(|e| e.sources.get(key)).map(|s| s.state.clone())
+        self.leaf(uid).and_then(|e| e.sources.get(key)).cloned()
     }
 
     /// The evaluator the graph compiles against, for the manager's own worker.
@@ -1111,12 +1252,13 @@ impl Graph {
     /// slot's view door. Answers whether that moved, which the settle then delivers.
     pub fn set_view_watch(&mut self, uid: Uid, slot: &str, on: bool) -> bool {
         let key = (uid, slot.to_string());
-        let name = self.leaf(uid).and_then(|l| l.manifest.outputs.iter().find(|o| o.name == slot)).map(|o| o.name);
         // A node removed since the caller looked is never marked watched: its removal ran past.
-        let Some(name) = name else { return !on && self.runtime.watched.remove(&key) };
+        if !self.leaf(uid).is_some_and(|l| l.manifest.outputs.iter().any(|o| o.name == slot)) {
+            return !on && self.runtime.watched.remove(&key);
+        }
         let changed = if on { self.runtime.watched.insert(key) } else { self.runtime.watched.remove(&key) };
         if changed {
-            self.touched.push(Touched::Watch(uid, name));
+            self.runtime.rewatched.push(uid);
         }
         changed
     }
@@ -1422,7 +1564,7 @@ impl Graph {
 
     /// The one write door, held by [`command::Command::EditLayoutEntry`] and by a load.
     pub fn arrangement_mut(&mut self) -> &mut layout::Layout {
-        &mut self.patch.arrangement
+        Arc::make_mut(&mut self.patch.arrangement)
     }
 
     /// The client-local viewpoint blob (see the field).
@@ -1478,7 +1620,7 @@ impl Graph {
     }
 
     fn leaf_mut(&mut self, uid: Uid) -> Option<&mut Leaf> {
-        self.patch.nodes.get_mut(&uid)?.leaf_mut()
+        self.entry_mut(uid)?.leaf_mut()
     }
 
     /// Every running node, in insertion order.
@@ -1530,7 +1672,7 @@ impl Graph {
     /// clears. Initialization failure wins, then a process error, then the smallest errored key.
     pub fn last_error(&self, uid: Uid) -> Option<&str> {
         // A facade runs nothing, so its health is its members': the first errored descendant.
-        self.subtree_of(&[uid]).into_iter().find_map(|u| entry_error(self.leaf(u)?, self.health(u)))
+        self.subtree_of(&[uid]).into_iter().filter(|u| self.is_leaf(*u)).find_map(|u| entry_error(self.runtime.bindings.get(&u), self.health(u)))
     }
 
     /// How long this node's CURRENT error has been standing, or `None` when it is healthy. The
@@ -1622,7 +1764,7 @@ impl Graph {
         };
         let uid = self.claim(uid);
         let born = self.pick_name(name, &base, None);
-        self.patch.nodes.insert(uid, NodeEntry::new(kind, born, [0.0, 0.0]));
+        self.patch.nodes.insert(uid, Arc::new(NodeEntry::new(kind, born, [0.0, 0.0])));
         self.set_member_scope(uid, scope);
         Ok(uid)
     }
@@ -1704,9 +1846,8 @@ impl Graph {
         entry: LibraryEntry,
         values: doc::Values,
     ) {
-        self.runtime.changed.push(Change::Added(uid));
         let leaf = Leaf { manifest: entry.manifest, isolation: entry.isolation, engine, values: Record::new(values), sources: HashMap::new() };
-        self.patch.nodes.insert(uid, NodeEntry::new(Kind::Leaf(Box::new(leaf)), name, [0.0, 0.0]));
+        self.patch.nodes.insert(uid, Arc::new(NodeEntry::new(Kind::Leaf(Box::new(leaf)), name, [0.0, 0.0])));
     }
 
     /// Every display name in the patch with the uid wearing it — leaves, sub-patch facades and
@@ -1780,9 +1921,10 @@ impl Graph {
 
     /// The library moved: every typed memo derives again on its next read.
     fn forget_typed(&mut self) {
-        for leaf in self.patch.nodes.values_mut().filter_map(|e| e.leaf_mut()) {
+        for leaf in self.patch.nodes.values_mut().filter_map(|e| Arc::make_mut(e).leaf_mut()) {
             leaf.values.typed.take();
         }
+        self.runtime.redeliver = true;
     }
 
     /// The class's params with `values` folded in, each coerced to its declared type; a value
@@ -1822,18 +1964,11 @@ impl Graph {
         }
         // A facade, a boundary port and a leaf all wear a name in the ONE namespace `nd()` reads,
         // and now in one map — so the rename is one write and the rewrite below is shared.
-        let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let old_name = std::mem::replace(&mut e.name, name.to_string());
         // `name_taken` guarantees `name != old_name`, so the rename moved the
         // display name — propagate it into every expression that referenced it.
         let touched = self.rewrite_nd_refs_for_rename(uid, &old_name, name);
-        // A multi slot names its senders, so the new name must reach every leaf this node feeds —
-        // the resolved consumers, because a port relays and no engine plans a port.
-        let fed: Vec<(Uid, &'static str)> =
-            self.resolved_edges().into_iter().filter(|e| e.producer.0 == uid).map(|e| e.consumer).collect();
-        for (node_in, slot_in) in fed {
-            self.touched.push(Touched::Slot(node_in, slot_in));
-        }
         Ok(touched)
     }
 
@@ -1857,7 +1992,7 @@ impl Graph {
     }
 
     pub fn set_node_pos(&mut self, uid: Uid, pos: [f64; 2]) -> Result<(), String> {
-        let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.pos = pos;
         Ok(())
     }
@@ -1865,7 +2000,7 @@ impl Graph {
     /// Replace a node's opaque viewer view-state blob (persisted to `.gfi`, echoed in node
     /// info). The backend never interprets it — it is the editor's per-slot kind/settings.
     pub fn set_node_viewers(&mut self, uid: Uid, viewers: serde_json::Value) -> Result<(), String> {
-        let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.viewers = viewers;
         Ok(())
     }
@@ -1878,7 +2013,7 @@ impl Graph {
     /// Replace the values the touched filter counts from, WHOLE — the whole blob, which is what
     /// makes the command's inverse exact.
     pub fn set_node_baseline(&mut self, uid: Uid, baseline: serde_json::Value) -> Result<(), String> {
-        let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.baseline = baseline;
         Ok(())
     }
@@ -1895,13 +2030,13 @@ impl Graph {
                 if matches!(p, Param::Pulse) {
                     continue;
                 }
-                let source = leaf.sources.iter().find(|(k, _)| k.group == *group && k.name == *name).map(|(_, b)| b);
+                let source = leaf.sources.get(&ParamKey::new(group, name));
                 out.insert(
                     format!("{group}/{name}"),
                     serde_json::json!({
                         "value": param_value_json(p),
-                        "mode": source.map(|b| b.state.mode).unwrap_or_default(),
-                        "expression": source.map(|b| b.state.expression.clone()).unwrap_or_default(),
+                        "mode": source.map(|s| s.mode).unwrap_or_default(),
+                        "expression": source.map(|s| s.expression.clone()).unwrap_or_default(),
                     }),
                 );
             }
@@ -1917,25 +2052,27 @@ impl Graph {
     /// Replace the output slots armed for recording. The whole vector, which is what makes the
     /// command's inverse exact.
     pub fn set_recorded(&mut self, uid: Uid, mut record: Vec<RecordedOutput>) -> Result<(), String> {
-        let e = self.patch.nodes.get_mut(&uid).ok_or_else(|| format!("no such node {uid}"))?;
+        let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         // A slot still armed keeps its serial; every other arming is a new one, minted at settle,
         // an undo's re-arm included: its old service name is one the recorder may have let go of.
         for output in &mut record {
             output.serial = e.record.iter().find(|held| held.slot == output.slot).map_or(0, |held| held.serial);
         }
         e.record = record;
-        self.touched.push(Touched::Record(uid));
         Ok(())
     }
 
     /// Every arming the batch left unnumbered gets the next serial: one per slot however often
     /// the batch armed it.
     fn mint_serials(&mut self, uid: Uid) {
-        let Some(e) = self.patch.nodes.get_mut(&uid) else { return };
-        for output in e.record.iter_mut().filter(|o| o.serial == 0) {
-            self.runtime.arm_serial += 1;
-            output.serial = self.runtime.arm_serial;
+        let mut serial = self.runtime.arm_serial;
+        if let Some(e) = self.entry_mut(uid) {
+            for output in e.record.iter_mut().filter(|o| o.serial == 0) {
+                serial += 1;
+                output.serial = serial;
+            }
         }
+        self.runtime.arm_serial = serial;
     }
 
     /// The output slots armed for recording on anything a uid can name.
@@ -2056,27 +2193,6 @@ impl Graph {
         }
     }
 
-    /// Every real leaf INPUT an output address reaches, walking forward through any chain of ports.
-    /// A port relays, so what a producer really feeds is whatever sits past it — and it may fan out.
-    fn sinks(&self, node: Uid, slot: &'static str) -> Vec<(Uid, &'static str)> {
-        let (mut out, mut seen) = (Vec::new(), Vec::new());
-        let mut stack = vec![(node, slot)];
-        while let Some((n, s)) = stack.pop() {
-            for l in self.patch.links.values().filter(|l| l.node_out == n && l.slot_out == s) {
-                match self.stub(l.node_in).is_some() {
-                    // A hand-edited `.gfi` can persist a cyclic chain; walking it must stop.
-                    true if !seen.contains(&l.node_in) => {
-                        seen.push(l.node_in);
-                        stack.push((l.node_in, l.slot_in));
-                    }
-                    true => {}
-                    false => out.push((l.node_in, l.slot_in)),
-                }
-            }
-        }
-        out
-    }
-
     /// One hop back from a port to whatever feeds it: the wire arriving AT it, whichever side of
     /// the wall that is.
     fn stub_feed(&self, port: Uid) -> Option<(Uid, &'static str)> {
@@ -2132,7 +2248,7 @@ impl Graph {
 
     /// Re-tag a member's scope: the one place membership changes. `None` = ROOT scope.
     fn set_member_scope(&mut self, member: Uid, scope: Option<Uid>) {
-        if let Some(e) = self.patch.nodes.get_mut(&member) {
+        if let Some(e) = self.entry_mut(member) {
             e.scope = scope;
         }
     }
@@ -2239,7 +2355,7 @@ impl Graph {
         // Registered BEFORE its ports are minted, so each port's fresh name sees the ones before it
         // and `nd()` can tell two ports apart.
         let disp = goofi_core::fresh_name("subpatch", 0, |name| self.name_taken(name, None));
-        self.patch.nodes.insert(scope_uid, NodeEntry::new(Kind::Facade, disp, pos));
+        self.patch.nodes.insert(scope_uid, Arc::new(NodeEntry::new(Kind::Facade, disp, pos)));
         self.set_member_scope(scope_uid, parent);
 
         // 2. A link with exactly one end inside (transitively) is SPLIT at a port minted for the
@@ -2293,7 +2409,7 @@ impl Graph {
         }
         // The whole cable goes, so the two halves replace it rather than racing its single-input
         // eviction — a port wired to a member's input would otherwise evict the very cable it carries.
-        self.patch.links.retain(|_, l| !cut.contains(l));
+        self.links_mut().retain(|_, l| !cut.contains(l));
 
         // 3. Re-tag membership. Members stay live; only `scope_of` changes.
         for &m in members {
@@ -2324,7 +2440,7 @@ impl Graph {
         // The parent is captured, not derived from members, so an EMPTY scope restores. An empty
         // name mints one, which lets a COPY land beside its original.
         let name = self.pick_name(&name, "subpatch", Some(scope_id));
-        self.patch.nodes.insert(scope_id, NodeEntry::new(Kind::Facade, name, pos));
+        self.patch.nodes.insert(scope_id, Arc::new(NodeEntry::new(Kind::Facade, name, pos)));
         for &m in members {
             if self.patch.nodes.contains_key(&m) {
                 self.set_member_scope(m, Some(scope_id));
@@ -2359,7 +2475,7 @@ impl Graph {
                 splices.push((feed.0, feed.1, l.node_in, l.slot_in));
             }
         }
-        self.patch.links.retain(|_, l| !ports.contains(&l.node_in) && !ports.contains(&l.node_out));
+        self.links_mut().retain(|_, l| !ports.contains(&l.node_in) && !ports.contains(&l.node_out));
 
         for &m in &restored {
             self.set_member_scope(m, parent);
@@ -2415,7 +2531,7 @@ impl Graph {
         self.cut_cables(port);
         let e = self.patch.nodes.shift_remove(&port)?;
         let Kind::Port(p) = e.kind else { return None };
-        Some((p, e.name, e.pos))
+        Some((p, e.name.clone(), e.pos))
     }
 
     /// All links as resolved views (snapshot projection).
@@ -2423,41 +2539,36 @@ impl Graph {
         self.patch.links.values().copied().collect()
     }
 
-    /// Release every compiled expression handle a node entry holds, so the evaluator's
-    /// registry doesn't leak across a node/graph teardown.
-    fn release_entry_bindings(&self, entry: &NodeEntry) {
-        if let (Some(ev), Some(leaf)) = (&self.runtime.evaluator, entry.leaf()) {
-            for b in leaf.sources.values() {
-                if let Some(id) = b.id {
-                    ev.release(id);
-                }
+    /// Drop one derived binding and release its compiled handle.
+    fn release_binding(&mut self, uid: Uid, key: &ParamKey) {
+        let Some(b) = self.runtime.bindings.get_mut(&uid).and_then(|m| m.remove(key)) else { return };
+        if let (Some(ev), Some(id)) = (&self.runtime.evaluator, b.id) {
+            ev.release(id);
+        }
+    }
+
+    /// Drop every derived binding of a node and release each compiled handle, so the evaluator's
+    /// registry does not leak across a node or graph teardown.
+    fn release_bindings(&mut self, uid: Uid) {
+        let Some(held) = self.runtime.bindings.remove(&uid) else { return };
+        if let Some(ev) = &self.runtime.evaluator {
+            for id in held.values().filter_map(|b| b.id) {
+                ev.release(id);
             }
         }
     }
 
     pub fn remove_node(&mut self, uid: Uid) -> Result<(), String> {
-        let Some(removed) = self.patch.nodes.shift_remove(&uid) else {
+        if self.patch.nodes.shift_remove(&uid).is_none() {
             return Err(format!("no such node {uid}"));
-        };
+        }
         self.runtime.watched.retain(|(u, _)| *u != uid);
         self.runtime.view_wants.retain(|(u, _), _| *u != uid);
-        self.release_entry_bindings(&removed);
-        if removed.leaf().is_some() {
-            self.runtime.changed.push(Change::Removed(uid));
-        }
-        // Drop links touching the node, then re-plan every consumer slot one of them fed. Links
-        // INTO it need none: its thread is halted and its services are going with it.
-        let dropped: Vec<Link> = self
-            .patch
-            .links
-            .values()
-            .filter(|l| l.node_out == uid || l.node_in == uid)
-            .copied()
-            .collect();
-        self.patch.links
-            .retain(|_, l| l.node_out != uid && l.node_in != uid);
-        for l in dropped.iter().filter(|l| l.node_in != uid) {
-            self.touched.push(Touched::Slot(l.node_in, l.slot_in));
+        self.release_bindings(uid);
+        // The links touching the node go with it: the settle re-plans every consumer slot one
+        // of them fed, and its own thread is halted with its services.
+        if self.patch.links.values().any(|l| l.node_out == uid || l.node_in == uid) {
+            self.links_mut().retain(|_, l| l.node_out != uid && l.node_in != uid);
         }
         Ok(())
     }
@@ -2488,7 +2599,7 @@ impl Graph {
 
         // A restart is a rebirth at this uid, which settle does: the corpse is halted and the
         // reborn node takes a fresh generation, so it never re-opens names the corpse still holds.
-        self.runtime.changed.push(Change::Restart(uid));
+        self.runtime.restarts.push(uid);
         let entry = self.leaf_mut(uid).expect("looked up above");
         // The MANIFEST goes with the instance: keeping the old one leaves the graph describing a
         // node not running.
@@ -2508,17 +2619,11 @@ impl Graph {
                 }
             }
         }
-        // The rebirth renamed the node's door, so every subscription onto it is re-planned.
-        let (keys, retired): (Vec<ParamKey>, Vec<ParamKey>) = entry.sources.keys().cloned()
-            .partition(|key| goofi_node::param_dim(&declared, &key.group, &key.name).is_some());
+        // A source on a param the class no longer declares goes with it.
+        let retired: Vec<ParamKey> =
+            entry.sources.keys().filter(|key| goofi_node::param_dim(&declared, &key.group, &key.name).is_none()).cloned().collect();
         for key in retired {
             self.unbind(uid, &key);
-        }
-        for slot in lib.manifest.inputs {
-            self.touched.push(Touched::Slot(uid, slot.name));
-        }
-        for key in keys {
-            self.touched.push(Touched::Param(uid, key));
         }
         // A wire onto a slot the reshape retired can never propagate and cannot be repaired — the
         // slot is gone from the palette. Keeping it draws a cable the runtime ignores.
@@ -2586,9 +2691,8 @@ impl Graph {
             state.mode = Mode::Constant;
             let _ = self.set_source(uid, group, name, state);
         }
-        // The record has moved and the delivery is recorded for settle; nothing else happens
-        // here. `on_param_changed` runs on the node's own thread, so its failure arrives as a fault.
-        self.notify_param(uid, &key);
+        // The record has moved; the settle reads it off the snapshot and delivers it.
+        // `on_param_changed` runs on the node's own thread, so its failure arrives as a fault.
         // A feed's group chosen: the elements offered beside it are that group's now.
         let manifest = self.leaf(uid).expect("looked up above").manifest;
         let elements: Vec<ParamKey> = goofi_node::feed_decls(manifest)
@@ -2648,7 +2752,6 @@ impl Graph {
         // Only an empty record is a true unbind, and `unbind` owns the release on that path.
         if state.is_empty() {
             self.unbind(uid, &key);
-            self.notify_param(uid, &key);
             return Ok(());
         }
         // A record binds a real param: a dangling one is invisible in the descriptor and
@@ -2656,19 +2759,14 @@ impl Graph {
         if goofi_node::param_dim(&self.typed(leaf), group, name).is_none() {
             return Err(format!("no such param `{group}/{name}`"));
         }
-        if let Some(e) = self.leaf_mut(uid) {
-            match e.sources.get_mut(&key) {
-                Some(b) => b.state = state,
-                None => {
-                    e.sources.insert(
-                        key.clone(),
-                        ParamSource { state, id: None, rewritten: String::new(), vars: Vec::new(), refs: Vec::new(), bind_error: None },
-                    );
-                }
+        if self.leaf(uid).and_then(|e| e.sources.get(&key)) != Some(&state) {
+            if let Some(e) = self.leaf_mut(uid) {
+                e.sources.insert(key.clone(), state);
             }
         }
-        self.derive_one(uid, &key);
-        self.notify_param(uid, &key);
+        // Derived at once, so a bind error rides the record rather than refusing; the settle
+        // derives it again against what the batch left.
+        self.derive_one(uid, &key, &[]);
         Ok(())
     }
 
@@ -2730,27 +2828,20 @@ impl Graph {
     /// Drop a source and release its compiled handle — the shared tail of an empty `set_source`
     /// and of a literal write over a driven param. It does NOT re-plan: its callers do, exactly once.
     fn unbind(&mut self, uid: Uid, key: &ParamKey) {
-        let Some(binding) = self.leaf_mut(uid).and_then(|e| e.sources.remove(key)) else {
-            return;
-        };
-        if let (Some(ev), Some(id)) = (&self.runtime.evaluator, binding.id) {
-            ev.release(id);
+        if self.leaf(uid).is_some_and(|e| e.sources.contains_key(key)) {
+            if let Some(e) = self.leaf_mut(uid) {
+                e.sources.remove(key);
+            }
         }
-    }
-
-    /// Storing the record is only HALF of a param edit: a parked node is never rung by a bare
-    /// pointer swap. The delivery is recorded here and runs at [`Self::settle`], once per batch.
-    fn notify_param(&mut self, uid: Uid, key: &ParamKey) {
-        self.touched.push(Touched::Param(uid, key.clone()));
+        self.release_binding(uid, key);
     }
 
     /// Resolve a rewrite's variables against the graph: a producer output, a variable's value, or the
     /// reason neither was found. Event ids come from §3.2's `65..=128` budget, lowest free first.
     fn resolve_vars(&self, consumer: Uid, key: &ParamKey, refs: &[expr_rewrite::VarRef]) -> Vec<BoundVar> {
         let mut taken: Vec<EventId> = self
-            .leaf(consumer)
-            .into_iter()
-            .flat_map(|e| e.sources.iter().filter(|(k, _)| *k != key))
+            .bindings_of(consumer)
+            .filter(|(k, _)| *k != key)
             .flat_map(|(_, b)| &b.vars)
             .filter_map(|v| match v {
                 BoundVar::Stream { event_id, .. } => Some(*event_id),
@@ -2846,10 +2937,16 @@ impl Graph {
     /// The source record on a param, for the bridge descriptor + `.gfi` (or `None` if the param is
     /// a plain literal with nothing retained).
     pub fn param_source(&self, uid: Uid, group: &str, name: &str) -> Option<SourceInfo> {
-        let entry = self.leaf(uid)?;
         let key = ParamKey::new(group, name);
-        let b = entry.sources.get(&key)?;
-        Some(SourceInfo { state: b.state.clone(), error: source_error(entry, self.health(uid), &key) })
+        let state = self.leaf(uid)?.sources.get(&key)?;
+        Some(SourceInfo { state: state.clone(), error: self.source_error(uid, &key) })
+    }
+
+    /// One param's error: the bind the graph refused, or the node's own last evaluation failure.
+    /// The one derivation, so a descriptor and the live sweep cannot answer differently.
+    fn source_error(&self, uid: Uid, key: &ParamKey) -> Option<String> {
+        self.leaf(uid)?.sources.get(key)?;
+        self.binding(uid, key).and_then(|b| b.bind_error.clone()).or_else(|| self.health(uid)?.param_errors.get(key).cloned())
     }
 
     /// Every param error on `uid` as `(group, name, message)` — what the live sweep broadcasts, so
@@ -2859,9 +2956,7 @@ impl Graph {
         entry
             .sources
             .keys()
-            .filter_map(|key| {
-                source_error(entry, self.health(uid), key).map(|m| (key.group.as_str(), key.name.as_str(), m))
-            })
+            .filter_map(|key| self.source_error(uid, key).map(|m| (key.group.as_str(), key.name.as_str(), m)))
             .collect()
     }
 
@@ -2870,14 +2965,14 @@ impl Graph {
     pub fn param_sources(&self, uid: Uid) -> Vec<(String, String, SourceState)> {
         self.leaf(uid)
             .map(|e| {
-                e.sources.iter().map(|(k, b)| (k.group.clone(), k.name.clone(), b.state.clone())).collect()
+                e.sources.iter().map(|(k, s)| (k.group.clone(), k.name.clone(), s.clone())).collect()
             })
             .unwrap_or_default()
     }
 
     /// Whether any param of `uid` has a source other than its literal.
     pub fn driven(&self, uid: Uid) -> bool {
-        self.leaf(uid).is_some_and(|e| e.sources.values().any(|s| s.state.mode != Mode::Constant))
+        self.leaf(uid).is_some_and(|e| e.sources.values().any(|s| s.mode != Mode::Constant))
     }
 
     /// What the params with a live mode currently evaluate to — the inspector's preview. A constant
@@ -2889,7 +2984,7 @@ impl Graph {
         health
             .evaluated
             .iter()
-            .filter(|(key, _)| entry.sources.get(key).is_some_and(|b| b.state.mode != Mode::Constant))
+            .filter(|(key, _)| entry.sources.get(key).is_some_and(|s| s.mode != Mode::Constant))
             .map(|(key, p)| (key.group.as_str(), key.name.as_str(), p))
             .collect()
     }
@@ -2985,11 +3080,9 @@ impl Graph {
         // A multi slot keeps its wires in connection order, which IS `links`' own order; a single
         // input takes one, so a second wire EVICTS the first. The node hears one declarative set.
         if !inp.multi {
-            self.patch.links
-                .retain(|_, l| !(l.node_in == node_in && l.slot_in == slot_in));
+            self.links_mut().retain(|_, l| !(l.node_in == node_in && l.slot_in == slot_in));
         }
-        self.patch.links.insert(new.key(), new);
-        self.touched.push(Touched::Slot(node_in, slot_in));
+        self.links_mut().insert(new.key(), new);
         Ok(())
     }
 
@@ -3000,11 +3093,8 @@ impl Graph {
         node_in: Uid,
         slot_in: &str,
     ) -> Result<(), String> {
-        if self.patch.links.shift_remove(&doc::link_key(node_out, slot_out, node_in, slot_in)).is_none() {
+        if self.links_mut().shift_remove(&doc::link_key(node_out, slot_out, node_in, slot_in)).is_none() {
             return Err("no such link".into());
-        }
-        if let Some(f) = self.slot_face(node_in, slot_in, Dir::In) {
-            self.touched.push(Touched::Slot(node_in, f.name));
         }
         Ok(())
     }
@@ -3028,45 +3118,112 @@ impl Graph {
         next
     }
 
-    /// Deliver what the batch changed: one decision per touched item, from settled state, each
-    /// item once however often the batch touched it. Free when nothing was.
+    /// Deliver what the batch changed, read off the two snapshots: the patch as it stands and the
+    /// one the last settle delivered, pointer by pointer. One decision per changed node, from
+    /// settled state, however often the batch touched it. Free when nothing moved.
     pub fn settle(&mut self) {
-        self.derive_bindings();
-        let changed = std::mem::take(&mut self.runtime.changed);
-        let raw = std::mem::take(&mut self.touched);
-        if changed.is_empty() && raw.is_empty() && !self.runtime.resettle && !self.engines().any(|e| e.dirty()) {
+        let vars_version = self.variables().version();
+        let vars_moved = vars_version != self.runtime.settled_vars;
+        let redeliver = std::mem::take(&mut self.runtime.redeliver) || vars_moved;
+        let restarts = std::mem::take(&mut self.runtime.restarts);
+        let rewatched = std::mem::take(&mut self.runtime.rewatched);
+        let diff = self.diff();
+        let replan = self.engines().any(|e| e.dirty());
+        if diff.is_empty() && restarts.is_empty() && rewatched.is_empty() && !redeliver && !replan {
             return;
         }
-        self.runtime.resettle = false;
+        self.runtime.settled_vars = vars_version;
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
-        self.net_instances(&changed);
-        // Port consumers expand to the leaf inputs behind them, a node the batch also removed is
-        // owed nothing, and each item is delivered once however often the batch touched it.
-        let mut touched: Vec<Touched> = Vec::new();
-        let expanded = raw.into_iter().flat_map(|t| match t {
-            Touched::Slot(uid, _) if self.leaf(uid).is_none() => {
-                self.sinks(uid, subpatch::BOUNDARY_SLOT).into_iter().map(|(n, sl)| Touched::Slot(n, sl)).collect()
-            }
-            t => vec![t],
-        });
-        for t in expanded {
-            if self.leaf(t.uid()).is_some() && !touched.contains(&t) {
-                touched.push(t);
-            }
+        // Every arming the batch left unnumbered gets its serial, before the snapshot is kept.
+        for uid in &diff.rearmed {
+            self.mint_serials(*uid);
         }
-        for t in &touched {
-            if let Touched::Record(uid) = t {
-                self.mint_serials(*uid);
-            }
+        self.runtime.settled = self.patch.clone();
+
+        // The instances level with the leaves: removals, births, then rebirths — a node whose
+        // class or engine changed under it, or one asked to restart.
+        let was = |g: &Graph, u: Uid| g.runtime.instances.contains_key(&u);
+        let gone: Vec<Uid> = diff.removed.iter().chain(&diff.changed).filter(|u| was(self, **u) && !self.is_leaf(**u)).copied().collect();
+        let born: Vec<Uid> = diff.changed.iter().filter(|u| !was(self, **u) && self.is_leaf(**u)).copied().collect();
+        let reborn: Vec<Uid> = diff
+            .reclassed
+            .iter()
+            .chain(&restarts)
+            .filter(|u| was(self, **u) && self.is_leaf(**u))
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        for uid in &gone {
+            self.halt(*uid);
         }
+        for uid in &born {
+            self.birth(*uid);
+        }
+        for uid in &reborn {
+            self.halt(*uid);
+            self.birth(*uid);
+        }
+
+        // The bindings: of every node when a variable or the library moved, else of the changed
+        // nodes, the referrers of a name that came, went or moved, and the readers of an edited
+        // param. A variable's expression spells nodes as a param's does.
+        if redeliver || !diff.is_empty() {
+            self.derive_variables();
+        }
+        let derive: Vec<Uid> = if redeliver {
+            self.leaves().map(|(u, _)| u).collect()
+        } else {
+            let names: Vec<&str> =
+                diff.renamed.iter().flat_map(|(a, b)| [a.as_str(), b.as_str()]).chain(diff.named.iter().map(String::as_str)).collect();
+            let mut derive: Vec<Uid> = diff.changed.iter().chain(&diff.removed).copied().collect();
+            derive.extend(self.referrers(&names));
+            derive.extend(self.param_readers(&diff.edited));
+            // A stream read resolves through the wires: one made or cut behind a port moves it.
+            if diff.relinked {
+                derive.extend(self.stream_readers());
+            }
+            derive
+        };
+        let derive: Vec<Uid> = derive.into_iter().collect::<HashSet<_>>().into_iter().collect();
+        let rebound = self.derive_nodes(&derive, &diff.edited);
+
+        // What each engine is re-sent: the changed leaves, both ends of every wire that moved,
+        // the neighbours of a node born or reborn (its service names moved), a consumer whose
+        // producer was renamed (a multi slot labels its senders), a binding that moved, a watch
+        // that moved — or every leaf, when a fact every node reads moved.
         let edges = self.resolved_edges();
+        let changed: Vec<Uid> = if redeliver {
+            self.leaves().map(|(u, _)| u).collect()
+        } else {
+            let mut set: HashSet<Uid> = diff.changed.iter().copied().collect();
+            set.extend(rewatched);
+            set.extend(rebound);
+            for e in diff.rewired.iter() {
+                set.insert(e.producer.0);
+                set.insert(e.consumer.0);
+            }
+            let renamed: HashSet<Uid> = diff.renamed_uids.iter().copied().collect();
+            let moved: HashSet<Uid> = born.iter().chain(&reborn).copied().collect();
+            for e in &edges {
+                if moved.contains(&e.producer.0) || moved.contains(&e.consumer.0) {
+                    set.insert(e.producer.0);
+                    set.insert(e.consumer.0);
+                }
+                if renamed.contains(&e.producer.0) {
+                    set.insert(e.consumer.0);
+                }
+            }
+            set.into_iter().filter(|u| self.is_leaf(*u)).collect()
+        };
         let typed: HashMap<Uid, Arc<ParamGroups>> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
-            let Runtime { generations, instance, engines, watched, .. } = &mut self.runtime;
+            let Runtime { generations, instance, engines, watched, bindings, .. } = &mut self.runtime;
             let variables = self.patch.variables.lock();
-            let view = build_view(&self.patch.nodes, &typed, generations, instance, &edges, watched, &variables);
+            let settled = Settled { bindings, generations, watched, instance };
+            let view = build_view(&self.patch.nodes, &settled, &typed, &edges, &variables);
             for e in engines.iter_mut() {
-                e.settle(&view, &touched);
+                e.settle(&view, &changed);
             }
             engines.iter().flat_map(|e| e.published()).collect::<Vec<_>>()
         };
@@ -3077,36 +3234,75 @@ impl Graph {
         for (name, value) in published {
             self.variables().publish(name, value);
         }
+        self.runtime.settled_edges = edges;
     }
 
-    /// Bring the instances level with the leaves the batch left: removals, births, then rebirths.
-    /// A uid changed back to where it began costs nothing.
-    fn net_instances(&mut self, changed: &[Change]) {
-        let mut uids: Vec<Uid> = Vec::new();
-        for uid in changed.iter().map(|c| match c {
-            Change::Added(u) | Change::Removed(u) | Change::Restart(u) => *u,
-        }) {
-            if !uids.contains(&uid) {
-                uids.push(uid);
+    /// What the batch changed, read off the patch and the snapshot the last settle delivered.
+    fn diff(&self) -> Diff {
+        let prev = &self.runtime.settled;
+        let next = &self.patch;
+        let mut d = Diff::default();
+        for (uid, e) in &next.nodes {
+            let Some(p) = prev.nodes.get(uid) else {
+                d.changed.push(*uid);
+                d.named.push(e.name.clone());
+                if !e.record.is_empty() {
+                    d.rearmed.push(*uid);
+                }
+                continue;
+            };
+            if Arc::ptr_eq(p, e) {
+                continue;
+            }
+            d.changed.push(*uid);
+            if p.name != e.name {
+                d.renamed.push((p.name.clone(), e.name.clone()));
+                d.renamed_uids.push(*uid);
+            }
+            if p.record != e.record {
+                d.rearmed.push(*uid);
+            }
+            if let (Some(a), Some(b)) = (p.leaf(), e.leaf()) {
+                if !std::ptr::eq(a.manifest, b.manifest) || a.engine != b.engine {
+                    d.reclassed.push(*uid);
+                }
+                // An authored edit of a param: its literal or its source moved.
+                let keys = b.values.get().iter().flat_map(|(g, names)| names.keys().map(move |n| ParamKey::new(g, n)));
+                let old = a.values.get();
+                for key in keys.chain(b.sources.keys().cloned()).chain(a.sources.keys().cloned()) {
+                    fn lit<'v>(v: &'v doc::Values, key: &ParamKey) -> Option<&'v Data> {
+                        v.get(&key.group).and_then(|g| g.get(&key.name))
+                    }
+                    let moved = lit(old, &key) != lit(b.values.get(), &key) || a.sources.get(&key) != b.sources.get(&key);
+                    if moved && !d.edited.contains(&(*uid, key.clone())) {
+                        d.edited.push((*uid, key));
+                    }
+                }
             }
         }
-        let was = |g: &Graph, u: &Uid| g.runtime.instances.contains_key(u);
-        let gone: Vec<Uid> = uids.iter().filter(|u| was(self, u) && !self.is_leaf(**u)).copied().collect();
-        let born: Vec<Uid> = uids.iter().filter(|u| !was(self, u) && self.is_leaf(**u)).copied().collect();
-        let reborn: Vec<Uid> = uids
-            .iter()
-            .filter(|u| was(self, u) && self.is_leaf(**u) && changed.iter().any(|c| matches!(c, Change::Restart(r) if r == *u) || matches!(c, Change::Removed(r) if r == *u)))
-            .copied()
-            .collect();
+        for (uid, p) in &prev.nodes {
+            if !next.nodes.contains_key(uid) {
+                d.removed.push(*uid);
+                d.named.push(p.name.clone());
+            }
+        }
+        d.relinked = !Arc::ptr_eq(&prev.links, &next.links);
+        if d.relinked || !d.changed.is_empty() || !d.removed.is_empty() {
+            // A port's wires resolve to leaves, so a wire that moved shows as a resolved edge
+            // that one settle's walk found and the other's did not.
+            let before: HashSet<Edge> = self.runtime.settled_edges.iter().copied().collect();
+            let after: HashSet<Edge> = self.resolved_edges().into_iter().collect();
+            d.rewired = before.symmetric_difference(&after).copied().collect();
+        }
+        d
+    }
+
+    /// Halt every instance whose leaf is gone from the patch — what a `clear` on the way to a
+    /// load does at once, into the workspace being replaced, before the settle would.
+    fn halt_gone(&mut self) {
+        let gone: Vec<Uid> = self.runtime.instances.keys().filter(|u| !self.is_leaf(**u)).copied().collect();
         for uid in gone {
             self.halt(uid);
-        }
-        for uid in born {
-            self.birth(uid);
-        }
-        for uid in reborn {
-            self.halt(uid);
-            self.birth(uid);
         }
     }
 
@@ -3175,13 +3371,12 @@ impl Graph {
     /// Every leaf-to-leaf wire, ports resolved away, in link order — which IS a multi input's
     /// wire order. Computed once per settle, so no engine re-implements the relay walk.
     fn resolved_edges(&self) -> Vec<Edge> {
-        self.patch.links
+        self.patch
+            .links
             .values()
             .filter(|l| self.leaf(l.node_in).is_some())
             .filter_map(|l| match self.stream(l.node_out, l.slot_out)? {
-                Stream::At(u, s) => {
-                    Some(Edge { producer: (u, s), consumer: (l.node_in, l.slot_in) })
-                }
+                Stream::At(u, s) => Some(Edge { producer: (u, s), consumer: (l.node_in, l.slot_in) }),
                 Stream::Open(_) => None,
             })
             .collect()
@@ -3193,12 +3388,12 @@ impl Graph {
     pub fn drain_status(&mut self) -> Drained {
         let mut drained = Drained::default();
         {
-            let Runtime { instances, refreshed, engines, .. } = &mut self.runtime;
+            let Runtime { instances, refreshed, engines, bindings, .. } = &mut self.runtime;
             let nodes = &self.patch.nodes;
             let staged = &mut drained.staged;
             let mut apply = |uid: Uid, status: Status| {
                 *staged |= matches!(status, Status::Stage { .. });
-                apply_status_to(nodes, instances, refreshed, uid, status)
+                apply_status_to(nodes, bindings, instances, refreshed, uid, status)
             };
             for e in engines.iter_mut() {
                 drained.reports += e.drain(&mut apply);
@@ -3219,23 +3414,21 @@ impl Graph {
     pub fn clear(&mut self) {
         // Release each node's compiled expression handles before dropping them (load_doc
         // goes through here, so a File→Open cycle can't leak the evaluator's registry).
-        for e in self.patch.nodes.values() {
-            self.release_entry_bindings(e);
+        let held: Vec<Uid> = self.runtime.bindings.keys().copied().collect();
+        for uid in held {
+            self.release_bindings(uid);
         }
-        // N explicit removes, then the nodes wholesale — a removal derived from absence would be
-        // the engine-observes-the-graph mirror the seam rejects.
-        let removed: Vec<Uid> = self.leaves().map(|(u, _)| u).collect();
-        self.runtime.changed.extend(removed.into_iter().map(Change::Removed));
+        // The nodes go wholesale; the settle reads each removal off the snapshot and halts it.
+        // The generations stay, keeping whatever is born at those uids next clear of what died.
         self.patch.nodes.clear();
-        self.patch.links.clear();
-        // Whatever the batch touched addressed nodes this clear destroyed; the generations stay,
-        // keeping whatever is born at those uids next clear of what just died.
-        self.touched.clear();
+        self.links_mut().clear();
+        self.runtime.restarts.clear();
+        self.runtime.rewatched.clear();
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
         // Variables and machines are patch CONTENT, so a load starts from a fresh seeded store.
-        self.patch.machines.clear();
+        self.machines_mut().clear();
         self.variables().reset();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
@@ -3275,7 +3468,7 @@ impl Graph {
                         .filter_map(|(name, p)| {
                             let entry = doc::ParamEntry { value: control::data_of(p), ..Default::default() };
                             let entry = match leaf.sources.get(&ParamKey::new(group, name)) {
-                                Some(b) => entry.with_source(&b.state),
+                                Some(s) => entry.with_source(s),
                                 None => entry,
                             };
                             // A pulse has no literal, so it is written only for the source it carries.
@@ -3482,7 +3675,7 @@ impl Graph {
             .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), expression: v.expression.clone(), lock: v.lock }))
             .collect();
         patch.variable_groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
-        patch.machines = self.patch.machines.clone();
+        patch.machines = (*self.patch.machines).clone();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
         patch
@@ -3542,8 +3735,7 @@ impl Graph {
         self.clear();
         // The outgoing nodes retire NOW, into the workspace being replaced: an engine saves a
         // node's state where it is halted, and the archive's own must not be written over.
-        let retired = std::mem::take(&mut self.runtime.changed);
-        self.net_instances(&retired);
+        self.halt_gone();
         self.set_workspace(workspace);
         // Variables load BEFORE nodes so a node's `variables.*` default-expression resolves at
         // instantiation, IN FILE ORDER. Malformed entries are skipped (best-effort load).
@@ -3625,14 +3817,14 @@ impl Graph {
         self.viewpoint = archive.viewpoint.unwrap_or(serde_json::Value::Null);
         // A corrupt arrangement costs the CHROME, never the patch. The reason is kept for the load
         // reply; an ABSENT arrangement is not a corrupt one and warns about nothing.
-        self.patch.arrangement = match doc.arrangement.as_ref().map(layout::Layout::from_json) {
+        self.patch.arrangement = Arc::new(match doc.arrangement.as_ref().map(layout::Layout::from_json) {
             None => layout::Layout::default(),
             Some(Ok(l)) => l,
             Some(Err(e)) => {
                 warnings.push(e);
                 layout::Layout::default()
             }
-        };
+        });
         Ok(warnings)
     }
 }
@@ -3706,7 +3898,7 @@ fn element_sources(leaf: &Leaf, group: &str, names: &IndexMap<String, Param>) ->
             let (base, element) = goofi_node::element(&key.name);
             key.group == group && element.is_some() && names.contains_key(base)
         })
-        .map(|(key, b)| (key.name.clone(), doc::ParamEntry::default().with_source(&b.state)))
+        .map(|(key, s)| (key.name.clone(), doc::ParamEntry::default().with_source(s)))
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
@@ -3741,14 +3933,15 @@ fn pick_output<'a, T>(
 /// The health plane's one mutator: apply one report off any engine's drain. A free function so
 /// the drain can hold the engines and the node map apart.
 fn apply_status_to(
-    nodes: &IndexMap<Uid, NodeEntry>,
+    nodes: &IndexMap<Uid, Arc<NodeEntry>>,
+    bindings: &HashMap<Uid, HashMap<ParamKey, Binding>>,
     instances: &mut HashMap<Uid, Instance>,
     refreshed: &mut Vec<(Uid, ParamKey)>,
     uid: Uid,
     status: Status,
 ) {
     // A report from an instance settle has since halted lands nowhere.
-    let (Some(entry), Some(health)) = (nodes.get(&uid).and_then(NodeEntry::leaf), instances.get_mut(&uid).map(|i| &mut i.health)) else { return };
+    let (Some(entry), Some(health)) = (nodes.get(&uid).and_then(|e| e.leaf()), instances.get_mut(&uid).map(|i| &mut i.health)) else { return };
     match status {
         Status::Stage { stage } => health.stage = stage.as_str(),
         Status::Ufreq { hz } => health.ufreq = Some(hz),
@@ -3796,29 +3989,37 @@ fn apply_status_to(
     }
     // Stamp when the error first read the way it does now — re-stamped only when the message
     // changes, so the instant is its onset.
-    let current = entry_error(entry, Some(health)).map(str::to_string);
+    let current = entry_error(bindings.get(&uid), Some(health)).map(str::to_string);
     if health.error_since.as_ref().map(|(m, _)| m.as_str()) != current.as_deref() {
         health.error_since = current.map(|m| (m, Instant::now()));
     }
 }
 
+/// The runtime's part of a settled view, borrowed apart from the engines the view is handed to.
+struct Settled<'a> {
+    bindings: &'a HashMap<Uid, HashMap<ParamKey, Binding>>,
+    generations: &'a HashMap<Uid, u64>,
+    watched: &'a HashSet<(Uid, String)>,
+    instance: &'a str,
+}
+
 /// The settled view, borrowed from the one model — built at the settle point and nowhere else.
 fn build_view<'a>(
-    nodes: &'a IndexMap<Uid, NodeEntry>,
+    nodes: &'a IndexMap<Uid, Arc<NodeEntry>>,
+    settled: &Settled<'a>,
     typed: &'a HashMap<Uid, Arc<ParamGroups>>,
-    generations: &HashMap<Uid, u64>,
-    instance: &'a str,
     edges: &'a [Edge],
-    watched: &HashSet<(Uid, String)>,
     variables: &'a goofi_core::variables::VariableStore,
 ) -> GraphView<'a> {
+    let Settled { bindings, generations, watched, instance } = *settled;
     let nodes = nodes
         .iter()
         .filter_map(|(uid, e)| {
             let leaf = e.leaf()?;
-            let bindings = leaf
-                .sources
-                .iter()
+            let bindings = bindings
+                .get(uid)
+                .into_iter()
+                .flat_map(|m| m.iter())
                 .map(|(key, b)| BindingView {
                     key,
                     rewritten: &b.rewritten,
@@ -3842,19 +4043,12 @@ fn build_view<'a>(
             ))
         })
         .collect();
-    GraphView { instance, edges, nodes, variables }
-}
-
-/// One param's error: the bind the graph refused, or the node's own last evaluation failure. The
-/// one derivation, so a descriptor and the live sweep cannot answer differently.
-fn source_error(e: &Leaf, health: Option<&Health>, key: &ParamKey) -> Option<String> {
-    let b = e.sources.get(key)?;
-    b.bind_error.clone().or_else(|| health?.param_errors.get(key).cloned())
+    GraphView::new(instance, edges, nodes, variables)
 }
 
 /// One node's current error, derived fresh from the places one can arise. A free function so the
-/// status drain can read it while holding a `&mut NodeEntry`.
-fn entry_error<'a>(e: &'a Leaf, health: Option<&'a Health>) -> Option<&'a str> {
+/// status drain can read it while holding the instances apart from the bindings.
+fn entry_error<'a>(bindings: Option<&'a HashMap<ParamKey, Binding>>, health: Option<&'a Health>) -> Option<&'a str> {
     // Initialization failure outranks a process error, and is the only thing that CAN be true
     // beside one: if `setup` failed, `process` never ran.
     if let Some(err) = health.and_then(|h| h.setup_error.as_deref()) {
@@ -3865,8 +4059,9 @@ fn entry_error<'a>(e: &'a Leaf, health: Option<&'a Health>) -> Option<&'a str> {
     }
     // Both param-keyed error records, ordered by key together, so which record an error landed in
     // cannot decide whether the badge ever shows it.
-    e.sources
-        .iter()
+    bindings
+        .into_iter()
+        .flat_map(|m| m.iter())
         .filter_map(|(k, b)| b.bind_error.as_deref().map(|s| (k, s)))
         .chain(health.into_iter().flat_map(|h| h.param_errors.iter().map(|(k, m)| (k, m.as_str()))))
         .min_by(|a, b| a.0.cmp(b.0))

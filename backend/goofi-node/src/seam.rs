@@ -72,7 +72,7 @@ impl DrainWaker {
 }
 
 /// One port-resolved leaf-to-leaf edge, in link order — which IS a multi input's wire order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Edge {
     pub producer: (Uid, &'static str),
     pub consumer: (Uid, &'static str),
@@ -120,25 +120,59 @@ pub struct NodeView<'a> {
     pub watched: Vec<&'static str>,
 }
 
-/// The settled graph, as every engine reads it after a batch: the WHOLE graph — engines filter.
+/// One live stream binding reading a producer output: the consumer, the index of the binding on
+/// it, and the doorbell id it is rung with.
+type Reader = (Uid, usize, EventId);
+
+/// The settled graph, as every engine reads it after a batch: the WHOLE graph, indexed by node
+/// at both ends of every wire and every stream binding, so a node's question costs its degree.
 pub struct GraphView<'a> {
     pub instance: &'a str,
     pub edges: &'a [Edge],
     pub nodes: HashMap<Uid, NodeView<'a>>,
     pub variables: &'a goofi_core::variables::VariableStore,
+    /// The edges into each consumer, in wire order.
+    into: HashMap<Uid, Vec<Edge>>,
+    /// The edges out of each producer, in wire order.
+    out_of: HashMap<Uid, Vec<Edge>>,
+    /// Per producer output, every live stream binding reading it: the consumer, the index of the
+    /// binding on it, and the doorbell id.
+    readers: HashMap<(Uid, &'static str), Vec<Reader>>,
 }
 
-impl GraphView<'_> {
+impl<'a> GraphView<'a> {
+    pub fn new(
+        instance: &'a str,
+        edges: &'a [Edge],
+        nodes: HashMap<Uid, NodeView<'a>>,
+        variables: &'a goofi_core::variables::VariableStore,
+    ) -> GraphView<'a> {
+        let mut into: HashMap<Uid, Vec<Edge>> = HashMap::new();
+        let mut out_of: HashMap<Uid, Vec<Edge>> = HashMap::new();
+        for e in edges {
+            into.entry(e.consumer.0).or_default().push(*e);
+            out_of.entry(e.producer.0).or_default().push(*e);
+        }
+        let mut readers: HashMap<(Uid, &'static str), Vec<Reader>> = HashMap::new();
+        for (uid, n) in &nodes {
+            for (i, b) in n.bindings.iter().enumerate().filter(|(_, b)| b.live) {
+                for v in b.vars {
+                    if let BoundVar::Stream { producer, slot, event_id, .. } = v {
+                        readers.entry((*producer, slot)).or_default().push((*uid, i, *event_id));
+                    }
+                }
+            }
+        }
+        GraphView { instance, edges, nodes, variables, into, out_of, readers }
+    }
+
     /// A consumer input slot's desired producers, in wire order.
     pub fn wires_into<'s>(
         &'s self,
         uid: Uid,
         slot: &'s str,
     ) -> impl Iterator<Item = (Uid, &'static str)> + 's {
-        self.edges
-            .iter()
-            .filter(move |e| e.consumer.0 == uid && e.consumer.1 == slot)
-            .map(|e| e.producer)
+        self.into.get(&uid).into_iter().flatten().filter(move |e| e.consumer.1 == slot).map(|e| e.producer)
     }
 }
 
@@ -164,28 +198,6 @@ pub enum Origin {
 /// What [`Engine::editor`] hands back: the open or close itself, run once the graph lock is
 /// released, because a plugin's window takes its time to come up and every other op would wait.
 pub type EditorAction = Box<dyn FnOnce() -> Result<bool, String> + Send>;
-
-/// One thing a batch of ops changed, recorded by the op path for the settle that follows. The
-/// delivery half of a write is deferred so one batch yields ONE decision, from settled state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Touched {
-    /// A consumer input whose wire set may have moved.
-    Slot(Uid, &'static str),
-    /// A param whose value or binding moved and must reach its node.
-    Param(Uid, ParamKey),
-    /// A node whose armed output slots moved.
-    Record(Uid),
-    /// A producer output a reducer started or stopped watching.
-    Watch(Uid, &'static str),
-}
-
-impl Touched {
-    pub fn uid(&self) -> Uid {
-        match self {
-            Touched::Slot(u, _) | Touched::Param(u, _) | Touched::Record(u) | Touched::Watch(u, _) => *u,
-        }
-    }
-}
 
 /// One node class an engine advertises: the shared manifest plus the display tier. The engine a
 /// type belongs to is WHICH library advertises it — no tag field exists anywhere.
@@ -287,9 +299,11 @@ pub trait Engine: Send {
         params: &ParamGroups,
     ) -> Option<String>;
     fn remove(&mut self, uid: Uid);
-    /// Deliver a settled batch: the touched items, plus whatever the engine's own drain marked
-    /// pending. The ONLY place an engine composes messages — drain collects, settle decides.
-    fn settle(&mut self, view: &GraphView<'_>, touched: &[Touched]);
+    /// Deliver a settled batch: `changed` names every node of any engine whose desired state may
+    /// have moved — its record, a wire at either end, a neighbour reborn, a binding or a watch —
+    /// plus whatever the engine's own drain marked pending. The ONLY place an engine composes
+    /// messages — drain collects, settle decides.
+    fn settle(&mut self, view: &GraphView<'_>, changed: &[Uid]);
     /// Hand over every queued health report. A pull: the caller owns the pace.
     fn drain(&mut self, apply: &mut dyn FnMut(Uid, Status)) -> usize;
     /// The facts this engine ALONE decides, such as a rate or a driver, for the graph to write into
@@ -343,20 +357,13 @@ impl GraphView<'_> {
     /// Every doorbell `(producer, slot)` rings: wired slots by manifest position, `nd()` channels
     /// by event id, slots past the budget sharing the last. One order per settled state.
     pub fn ringers(&self, producer: Uid, slot: &str) -> Vec<Ringer<'_>> {
-        let wired = self.edges.iter().filter(|e| e.producer.0 == producer && e.producer.1 == slot).filter_map(|e| {
+        let wired = self.out_of.get(&producer).into_iter().flatten().filter(|e| e.producer.1 == slot).filter_map(|e| {
             let node = self.nodes.get(&e.consumer.0)?;
             let at = node.manifest.inputs.iter().position(|s| s.name == e.consumer.1)?;
             Some(Ringer { consumer: e.consumer.0, event_id: (at + 1).min(64) as EventId, via: Via::Slot(e.consumer.1) })
         });
-        let bound = self.nodes.iter().flat_map(|(uid, n)| {
-            n.bindings.iter().filter(|b| b.live).flat_map(move |b| {
-                b.vars.iter().filter_map(move |v| match v {
-                    BoundVar::Stream { producer: p, slot: s, event_id, .. } if *p == producer && *s == slot => {
-                        Some(Ringer { consumer: *uid, event_id: *event_id, via: Via::Binding(b) })
-                    }
-                    _ => None,
-                })
-            })
+        let bound = self.readers.get(&(producer, slot)).into_iter().flatten().filter_map(|(uid, i, event_id)| {
+            Some(Ringer { consumer: *uid, event_id: *event_id, via: Via::Binding(self.nodes.get(uid)?.bindings.get(*i)?) })
         });
         let mut ringers: Vec<Ringer<'_>> = wired.chain(bound).collect();
         ringers.sort_by_key(|r| (r.consumer.0, r.event_id));

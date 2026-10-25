@@ -20,7 +20,7 @@ pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
     Edit, Origin, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeView,
-    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Touched, Via,
+    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
 };
 pub use tags::Tag;
 pub use type_id::{bare, qualify, split as split_type_id};

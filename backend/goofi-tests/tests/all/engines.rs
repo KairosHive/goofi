@@ -12,7 +12,7 @@ use goofi_audio_sdk::{Face, AudioNode, Block, ParamDecl, ParamSpec, Port, PortMu
 use goofi_core::SlotType;
 use goofi_node::{
     DrainWaker, Engine, EventId, GraphView, LibraryEntry, NodeManifest, NodeStage,
-    OutputDecl, ParamGroups, SlotDecl, Status, Touched, Uid,
+    OutputDecl, ParamGroups, SlotDecl, Status, Uid,
 };
 use goofi_tests::{ep, f32s, fixtures::LibraryEngine, hex, j, shape, Goofi};
 
@@ -195,7 +195,7 @@ impl Engine for Skeleton {
         self.dirty = true;
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, _changed: &[Uid]) {
         self.dirty = false;
         let hub = goofi_tests::hub();
         let mut s = self.shared.lock();

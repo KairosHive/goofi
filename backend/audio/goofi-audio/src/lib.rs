@@ -14,7 +14,7 @@ use goofi_audio_sdk::{AudioNode, BLOCK, MAX_PORTS};
 use goofi_core::{Param, SlotType};
 use goofi_node::{
     DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeView,
-    ParamGroups, ParamKey, Status, Touched, Uid, NATIVE,
+    ParamGroups, ParamKey, Status, Uid, NATIVE,
 };
 
 mod chanmap;
@@ -1046,7 +1046,7 @@ impl Engine for AudioEngine {
         }
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, changed: &[Uid]) {
         self.land_births();
         self.land_device();
         self.dirty = false;
@@ -1054,7 +1054,7 @@ impl Engine for AudioEngine {
             self.sweep_state();
         }
         self.shared.replan.store(false, Ordering::Release);
-        for uid in self.live.keys().copied().collect::<Vec<_>>() {
+        for uid in changed.iter().copied().filter(|u| self.live.contains_key(u)).collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
             let values = self.plugin_values(uid, &desired.consts);

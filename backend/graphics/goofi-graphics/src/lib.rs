@@ -13,7 +13,7 @@ use std::time::Duration;
 use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
 use goofi_core::SlotType;
 use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
-    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Touched, Uid,
+    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Uid,
 };
 
 mod gpu;
@@ -444,11 +444,11 @@ impl Engine for GraphicsEngine {
         }
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, changed: &[Uid]) {
         self.dirty = false;
         self.shared.replan.store(false, Ordering::Release);
         self.fps.store(fps_of(view.variables.get("graphics.fps")), Ordering::Relaxed);
-        for uid in self.live.keys().copied().collect::<Vec<_>>() {
+        for uid in changed.iter().copied().filter(|u| self.live.contains_key(u)).collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
             // The universal group ends the decls: width, then height. A constant is read here,

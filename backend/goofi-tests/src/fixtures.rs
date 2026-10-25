@@ -10,7 +10,7 @@ use goofi_supervisor::sync::{Condvar, Mutex};
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
 use goofi_node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
-    ParamKey, ParamSpec, Params, SlotDecl, Status, Touched, Uid,
+    ParamKey, ParamSpec, Params, SlotDecl, Status, Uid,
 };
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 
@@ -145,7 +145,7 @@ impl Engine for LibraryEngine {
         self.shown.lock().remove(&uid);
     }
 
-    fn settle(&mut self, _view: &GraphView<'_>, _touched: &[Touched]) {}
+    fn settle(&mut self, _view: &GraphView<'_>, _changed: &[Uid]) {}
 
     fn has_editor(&self, type_name: &str) -> bool {
         self.types.iter().any(|t| t.manifest.type_name == type_name)
