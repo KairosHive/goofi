@@ -166,9 +166,7 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:SignalIn");
     g.ready(up);
-    // A door for frames follows the frame: its size rests at a constant 0, not the patch's default.
-    let width = g.doc()["nodes"][hex(up)]["params"]["common"]["width"].clone();
-    assert_eq!(width, j!({ "value": 0 }), "the size is a constant 0, not a seeded expression");
+    // Its size is the patch's default, seeded below once an evaluator is present; here, by hand.
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
@@ -843,6 +841,14 @@ fn shaders_render_on_the_gpu() {
     g.call("variable entry edit", j!({ "name": "graphics.default_width", "value": 96 }));
     g.call("variable entry edit", j!({ "name": "graphics.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    // A door for frames has no texture to follow, so it takes the patch's default the same way.
+    let door = g.add("graphics:SignalIn");
+    g.ready(door);
+    let bound = g.doc()["nodes"][hex(door)]["params"]["common"]["height"].clone();
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.graphics.default_height"), &j!("expression")),
+               "a door for frames is seeded live too: {bound}");
+    drawn(&g, door, "the door at the patch's default", |d| shape(d) == vec![48, 96, 4]);
+    g.call("node remove", j!({ "node": hex(door) }));
     // A loop that follows itself at 0,0 can follow nothing: it takes the patch's default too, not
     // the number the variables were born with.
     let (fb, comp) = (g.add("graphics:Feedback"), g.add("graphics:Composite"));
