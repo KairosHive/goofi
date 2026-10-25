@@ -200,7 +200,7 @@ export class BrainDrawing extends Base {
 			lo,
 			hi
 		});
-		// The head's outline and nose, and the electrodes as dots.
+		// The head's outline and nose, and the electrodes as dots unless the setting hides them.
 		const p = paths();
 		const ring: number[] = [];
 		for (let k = 0; k <= 64; k++) {
@@ -209,7 +209,9 @@ export class BrainDrawing extends Base {
 		}
 		p.stroke(ring, 1.5, HEAD);
 		p.stroke([(cx - 8) / w, (cy - radius) / h, cx / w, (cy - radius - 10) / h, (cx + 8) / w, (cy - radius) / h], 1.5, HEAD);
-		for (const q of knownPos) p.dot((cx + (q[0] - 0.5) * side) / w, (cy + (q[1] - 0.5) * side) / h, 2 * DOT, ELECTRODE);
+		if (s.electrodes !== false) {
+			for (const q of knownPos) p.dot((cx + (q[0] - 0.5) * side) / w, (cy + (q[1] - 0.5) * side) / h, 2 * DOT, ELECTRODE);
+		}
 		this.path.push(p.build());
 	}
 
