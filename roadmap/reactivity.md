@@ -29,81 +29,58 @@ Autosave's 12 ms/s is a workspace walk, a whole archive and its YAML every five 
 
 ## The model
 
-The backend holds a document tree, as a browser holds a DOM, and a settle is its flush. The
-design follows a fine-grained reactive runtime (Svelte 5's signals): a **source** is a field a
-writer sets; a **derived** is a memo computed from sources and other deriveds, kept until an
-input moves, and compared on recompute so an unchanged result stops the wave (equality cut-off);
-an **effect** is a delivery to the world (a `Desired` sent to a node, a document op broadcast, a
-follower told, a file written). A batch writes any number of sources; one flush marks what each
-write reaches, recomputes the dirty deriveds in dependency order, then runs the effects whose
-inputs moved. Nothing is recomputed that no write reached; nothing is delivered that did not
-change; nothing runs on a clock that can run on an event.
+The patch is a value. Each commit publishes a new snapshot that shares every untouched part with
+the one before: the node map holds an `Arc` per node, and links, machines and the arrangement sit
+behind an `Arc` of their own. A write does `Arc::make_mut` on the one node it touches, so a
+snapshot is a clone of pointers and the change set after a batch is one pointer compare per
+node. The design is the Zustand store rather than Elm or Redux: the ops stay the plain functions
+they are and call the graph; there is no message enum and no reducer. Consumers subscribe with a
+selector and run at commit, once, on the settled snapshot: each engine, the projection, the
+followers, the recorder and autosave compare the part they read by pointer and recurse into what
+differs. Readers on other threads hold the last snapshot and never take the writer's lock.
 
-One decision departs from Svelte: dependencies are **declared, not tracked**. Svelte records what
-a derived read while it ran; here the structure is known (a binding reads the names it spells, a
-`Desired` reads its node and its wires), so each level declares its inputs and the flush is a
-fixed topological order. Tracking through `&self` reads would need interior mutability on every
-getter and buy nothing the structure does not already say.
+Dependencies are neither declared nor tracked. They fall out of the tree: a node's record changed
+when its pointer did. The few inputs that cross nodes are spelled once, where the change set is
+computed from the two snapshots: a changed edge reaches both its ends, a reborn node reaches its
+neighbours, a changed name or variable reaches the bindings that spell it, and a library scan
+reaches every node.
 
-### The primitive, and who owns it
+Undo is one history of snapshots. A transaction takes the snapshot before its first write and
+pushes it with its label at commit; a preview publishes without pushing, and the commit that ends
+a drag pushes the snapshot from before the drag's first step. Undo and redo swap a snapshot in and
+let the settle's diff deliver the consequences: births, removals, re-derivations and the document
+ops. There is one stack for every client, tab, shell and agent, so the command inverses, the
+replay tolerance for stale targets, the forward planners for layout inverses and the per-actor
+bookkeeping go. The variable store is shared with the data plane, so its values stay in place and
+its configuration is snapshotted at history time through `config` and put back through `restore`.
 
-`goofi_supervisor::react`, beside `timing` and `ready`: `goofi-supervisor` is under every crate
-that needs it (core, node, graph, runtime, the engines, the bridge, record) and holds no goofi
-knowledge of its own. The ops use it; the graph uses it; neither owns it. Four pieces:
-
-- `Version`: a counter a source bumps on write. Every source is a plain field plus a version;
-  no wrapper type, so a `&mut` write stays a `&mut` write.
-- `Memo<T>`: a derived value with the versions of its declared inputs it was computed from, a
-  recompute closure, and `PartialEq` on `T` for the cut-off. `memo.read(inputs, compute)` answers
-  the held value when every input version matches, else recomputes, compares, and bumps its own
-  version only when the value moved.
-- `Ledger<K, Bits>`: the dirty set of one owner, keyed by what the owner addresses (a uid, a
-  `(uid, slot)`, a variable name) with a bitset per key naming which part moved, plus root bits
-  for the owner's singletons. Writers `mark`; the flush `take`s. A mark pass spreads bits along
-  declared arrows through reverse indexes the owner keeps (referrers, edges in and out).
-- `Door`: the cross-thread edge, which is `timing::Event` as it stands. An owner on another
-  thread is an effect: it is rung with the keys that moved, never told to re-read everything.
-
-Each owner (the graph, an engine's control half, a node half, the bridge's workers, the
-recorder) runs its own flush under its own lock; the primitive holds no lock and no thread.
+What is not in the snapshot is runtime: instances and their health, generations, the compiled
+bindings, the watched outputs and the viewers' wants. The derived bindings move to the runtime,
+keyed by `(uid, key)`, and re-derive for changed nodes and for every node on the rare global moves.
 
 ### The graph's levels
 
 ```
-Patch
-├─ library (manifests)                → every node's typed params, a type → entry index
-├─ variables  name → {value, control, expression, lock}
-│                                     → the bindings that spell `variables.<name>`, the feeds
-│                                       that name it, the variable's own bind, the follower,
-│                                       the machines that read it
-├─ machines                           → the machines thread (the edited machine), the document
-├─ arrangement, viewpoint             → the document
-├─ links                              → edges (ports resolved) → both endpoints' Desired
-└─ node (leaf, facade or port)
-   ├─ identity  name, pos, scope, kind → the document record; the name: every binding that
-   │                                     spells `nd('<name>')` and every multi-slot consumer
-   │                                     downstream (its `source` label)
-   ├─ literals  values               → typed (memo, per key) → its Desired consts, the record
-   ├─ sources   key → authored text  → the binding (memo per key) → the node's Desired subs,
-   │                                     the referenced-groups set, the document record
-   ├─ wiring    edges in, edges out  → its Desired (subs, targets) and its neighbours' Desired
-   ├─ runtime   generation, health   → its Desired and its neighbours' (the service names), the
-   │                                     armed set, the live pair, the status beat
-   ├─ arming    record               → its Desired, the armed set, the document record
-   └─ watch     watched outputs      → its Desired
+Patch (a snapshot)
+├─ nodes   uid → Arc<NodeEntry>      identity, literals, authored sources, viewers, arming
+├─ links   Arc<IndexMap>             → edges (ports resolved) → both endpoints' Desired
+├─ machines  Arc<IndexMap>           → the machines thread, the document
+├─ arrangement  Arc<Layout>          → the document
+└─ variables (shared store)          values on the data plane; configuration snapshotted
+Runtime
+├─ bindings  (uid, key) → derived    ← the node's sources, the names, the variables, the library
+├─ instances, generations, health    ← the engines' reports
+└─ watched, view wants               ← the reducers
 Engine
-├─ plan (audio, graphics)             ← the engine's nodes and the edges among them; a stage is
-│                                       a memo over its node, the order a memo over the edges
-└─ published facts (`system.*`)       ← the device and the rate, not the settle
-Document (derived)                    ← every node record, links, variables, machines, arrangement
+├─ Desired per node (memo)           ← the node, its edges, its neighbours' identity and generation
+└─ plan (audio, graphics)            ← the engine's nodes and the edges among them
+Document                             ← per changed node, diffed against the record it holds
 ```
 
-The flush: **mark** (writers set bits; the pass spreads them through the referrers and edge
-indexes), **derive** (typed, the bindings of dirty keys, the edges when links moved, the plans
-of engines with a dirty node), **deliver** (`Engine::settle` over the dirty set, `Desired` built
-for those nodes with `wires_into` and `ringers` answered by the edge index; the followers on
-their bits), **project** (each dirty node's record serialized once and diffed against the record
-the document holds; `replica()` only for a socket seed and after a load).
+The settle: the changed set from the two snapshots, the bindings of changed nodes derived,
+`Engine::settle(view, changed)` with `wires_into` and `ringers` answered by an edge index, the
+followers run on the roots that moved, the document patched per changed node, and the snapshot
+kept as the one the next settle diffs against.
 
 ## Where it applies
 
@@ -184,25 +161,22 @@ call where an index kept by the ledger's own marks answers in O(1).
 
 ## Order of work
 
-Each step lands with a probe number before and after and a fixture that fails on the broken
-variant and passes on the fix, five runs each way.
+One commit per step, the situations and the browser suite green at each, a probe number before
+and after where one exists.
 
-1. **The primitive** in `goofi_supervisor::react`, with its own tests of the semantics (a memo
-   recomputes once per input move, an equal result does not bump, a ledger takes what was marked).
-2. **The graph's ledger and the engines** (A: `settle`, the edge index, `Engine::settle` over
-   the dirty set; C: the plans as memos, `replan` as a bit on the moved cell). Probe: `settle`
-   flat across 50 to 500 nodes. Fixtures: a link cut re-targets the producer; a rebirth
-   re-subscribes every consumer; a rename reaches a multi-slot consumer's label; a graphics size
-   move settles no audio node.
-3. **Projection by record** (A). Fixture: the replicated document equals a whole `replica()`
+1. The roadmap, to this model.
+2. The patch as a snapshot in `goofi-graph`: `Arc` per node and per root, authored sources apart
+   from derived bindings, the settled snapshot, the changed set by pointer compare,
+   `Engine::settle` over the changed set with an edge index; `touched` and `changed` go. Probe:
+   `settle` flat across 50 to 500 nodes.
+3. Projection by diff in the bridge: ops per changed node from the two snapshots; `replica()`
+   for a seed and a load alone. Fixture: the replicated document equals a whole `replica()`
    after every op kind. Probe: the whole op under a millisecond at 500 nodes.
-4. **Bindings and indexes** (A, E): the referrers index, dirty keys derived alone, the type and
-   name indexes. Fixtures: `nd('x')` binds when `x` is born after it; a removed variable errors
-   its readers. Probe: 500 expression sources, the idle settle and a param edit both flat.
-5. **The clocks** (B): the drain's settle on an empty ledger, autosave on the doc version and
-   the watcher's paths, the beat and the live pair from one per-node memo, the variables producer
-   and the machines thread rung with keys. Probe: `idle_cost` at 200 nodes with expressions
-   under 5 ms/s.
-6. **The halves and the frame paths** (D): wake on demand, `Desired` applied by field,
-   `ParamValues` as a delta, the render tick's groups cached. Probes: `hop_latency`,
-   `graphics_lag`, and `idle_cost` with audio and graphics nodes.
+4. One history of snapshots: the `Command` enum, inverses, replay and the per-actor stacks go;
+   ops call the graph; previews keep the pre-drag snapshot; the variable configuration rides the
+   entry; the labels reach every client. Frontend, CLI docs, skills and tests follow.
+5. The clocks: autosave, the variables producer, the machines thread, the taps and the recorder
+   follow their root alone; the producer's 500 ms timeout goes. Probe: `idle_cost` at 200 nodes
+   with expressions under 5 ms/s.
+6. AGENTS.md and the roadmap, with what shipped removed. The halves and the frame paths (D)
+   stay as the remaining work.
