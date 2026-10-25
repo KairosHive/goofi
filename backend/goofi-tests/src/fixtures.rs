@@ -592,8 +592,9 @@ impl Node for Ramp {
         let sfreq = p.f64("ramp", "sfreq").unwrap_or(256.0);
         let length = p.i64("ramp", "length").unwrap_or(512).max(1) as usize;
         let channels = p.i64("ramp", "channels").unwrap_or(1).max(1) as usize;
+        let scale = p.f64("ramp", "scale").unwrap_or(1.0) as f32;
         let buf: Vec<u8> = (0..channels)
-            .flat_map(|c| (0..length).flat_map(move |i| (c as f32 + i as f32 / length as f32).to_le_bytes()))
+            .flat_map(|c| (0..length).flat_map(move |i| ((c as f32 + i as f32 / length as f32) * scale).to_le_bytes()))
             .collect();
         let mut meta = Meta::new().with_sfreq(Some(sfreq));
         if p.bool("ramp", "named").unwrap_or(false) {
@@ -644,6 +645,16 @@ static RAMP_PARAMS: &[ParamDecl] = &[
         group: "ramp",
         name: "channels",
         spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
+        expression: None,
+        doc: None,
+        section: 0,
+        show: &[],
+        role: None,
+    },
+    ParamDecl {
+        group: "ramp",
+        name: "scale",
+        spec: ParamSpec::Num { default: &[1.0], min: 1e-12, max: 1e12, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,

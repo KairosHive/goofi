@@ -105,12 +105,13 @@ fn ordinate(v: f32) -> f32 {
     return v;
 }
 
-/// The range a value is read against: the data's own, or the one asked for.
+/// The range a value is read against: the data's own, or the one asked for, over the scale the
+/// texels are carried at.
 fn window() -> vec2f {
     if (p.autoscale != 0u) {
         return vec2f(p.input_lo, p.input_hi);
     }
-    return vec2f(p.min, p.max);
+    return vec2f(p.min, p.max) / p.input_scale;
 }
 
 /// The range the drawing maps onto the frame. A log axis takes a positive window, and a

@@ -195,6 +195,14 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "signal", "colormap", "gray");
     let frame = drawn(&g, up, "the gray frame", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "gray is the value itself: {:?}", px(&frame, 0, 63));
+    // A frame past the half floats' reach is carried over a power of two, so it reads the same;
+    // held raw, every value over 65504 would be infinite and read as the ceiling.
+    g.set_param(ramp, "ramp", "scale", 1e6);
+    let mid = 31.0 / 63.0;
+    let frame = drawn(&g, up, "the frame of millions", |d| close(px(d, 0, 31), [mid, mid, mid, 1.0]));
+    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "from the floor: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "to the ceiling: {:?}", px(&frame, 0, 63));
+    g.set_param(ramp, "ramp", "scale", 1.0);
     // Off autoscale, the range is the one asked for: the ramp's last step, 63/64, on a window
     // to 2 is half that gray.
     g.set_param(up, "signal", "autoscale", false);
