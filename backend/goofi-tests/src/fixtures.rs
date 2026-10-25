@@ -582,7 +582,10 @@ static CONST_PARAMS: &[ParamDecl] = &[
 
 /// `_TestRamp` — one `[C, T]` frame per run, channel `c` rising from `c` to `c + 1` over
 /// `length` samples at `sfreq`: ordered samples with a rate, which is what a crossing resamples.
+/// `named` labels the channels with 10-20 electrodes, which is what a topomap places.
 struct Ramp;
+
+const ELECTRODES: &[&str] = &["Cz", "C3", "C4", "Fz", "Pz", "F3", "F4", "P3", "P4", "O1", "O2", "Fp1", "Fp2", "T7", "T8"];
 
 impl Node for Ramp {
     fn process(&mut self, _inp: &Inputs<'_>, out: &mut Outputs<'_>, _ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
@@ -592,14 +595,31 @@ impl Node for Ramp {
         let buf: Vec<u8> = (0..channels)
             .flat_map(|c| (0..length).flat_map(move |i| (c as f32 + i as f32 / length as f32).to_le_bytes()))
             .collect();
-        let data = Data::array_f32(vec![channels, length], buf, Meta::new().with_sfreq(Some(sfreq)))
-            .map_err(|e| e.to_string())?;
+        let mut meta = Meta::new().with_sfreq(Some(sfreq));
+        if p.bool("ramp", "named").unwrap_or(false) {
+            use goofi_core::{Axes, Axis, Coord};
+            let names: Vec<Coord> = (0..channels)
+                .map(|c| Coord::Str(ELECTRODES.get(c).map_or_else(|| format!("ch{c}"), |n| (*n).to_string()).into()))
+                .collect();
+            meta.set_channels(Axes::new().with(0, Axis::coords(names)));
+        }
+        let data = Data::array_f32(vec![channels, length], buf, meta).map_err(|e| e.to_string())?;
         out.set("out", data);
         Ok(())
     }
 }
 
 static RAMP_PARAMS: &[ParamDecl] = &[
+    ParamDecl {
+        group: "ramp",
+        name: "named",
+        spec: ParamSpec::Bool { default: false },
+        expression: None,
+        doc: None,
+        section: 0,
+        show: &[],
+        role: None,
+    },
     ParamDecl {
         group: "ramp",
         name: "sfreq",

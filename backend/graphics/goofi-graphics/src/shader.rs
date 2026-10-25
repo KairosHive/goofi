@@ -27,6 +27,12 @@ fn range_fields(input: &str) -> [String; 3] {
     [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels")]
 }
 
+/// The texture bound beside one ARRAY input: where each channel of the frame's first axis sits
+/// on the 10-20 head, `(x, y, known, 0)` per channel, or the blank texel for unnamed channels.
+fn layout_name(input: &str) -> String {
+    format!("{input}_layout")
+}
+
 /// The header's manifest, with the one output added. The file's WHOLE text stays the source that
 /// naga reads, so a line number it reports is the line an author sees.
 pub fn header(source: &str) -> Result<Introspection, String> {
@@ -63,6 +69,7 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     for input in &intro.inputs {
         if SlotType::from_name(&input.kind) != Some(SlotType::Texture) {
             taken.extend(range_fields(&input.name));
+            taken.push(layout_name(&input.name));
         }
     }
     let clash = intro
@@ -139,6 +146,9 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
     s.push_str("@group(0) @binding(4) var<uniform> frame: u32;\n");
     for (i, input) in manifest.inputs.iter().enumerate() {
         s.push_str(&format!("@group(1) @binding({i}) var {}: texture_2d<f32>;\n", input.name));
+    }
+    for (k, input) in array_inputs(manifest).enumerate() {
+        s.push_str(&format!("@group(1) @binding({}) var {}: texture_2d<f32>;\n", manifest.inputs.len() + k, layout_name(input)));
     }
     // A state buffer reads as the LAST tick left it and is written through its own function, so
     // the two never name one thing.

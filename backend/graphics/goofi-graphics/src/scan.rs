@@ -91,7 +91,8 @@ pub(crate) fn shader(gpu: &Arc<Gpu>, shared: &Arc<goofi_runtime::Shared>, manife
     let full = format!("{source}{}", shader::prelude(manifest, state));
     shader::validate(&full)?;
     let params = !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some();
-    let job = Job { source: full, params, inputs: manifest.inputs.len(), state: state.len() };
+    let inputs = manifest.inputs.len() + shader::array_inputs(manifest).count();
+    let job = Job { source: full, params, inputs, state: state.len() };
     let gpu = gpu.clone();
     let built = goofi_supervisor::ready::prepare("goofi-graphics-compile", move || compile(&gpu, &job));
     let shared = shared.clone();

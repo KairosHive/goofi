@@ -242,6 +242,29 @@ fn shaders_render_on_the_gpu() {
     assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
     assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
 
+    // …and channels named for 10-20 electrodes are a topomap: the field between them on the head
+    // disc, transparent off it, under the outline — and nothing for channels without names.
+    g.set_param(up, "signal", "mode", "topomap");
+    g.set_param(up, "signal", "colormap", "gray");
+    g.set_param(up, "signal", "electrodes", false);
+    g.set_param(up, "common", "width", 64);
+    g.set_param(up, "common", "height", 64);
+    g.set_param(ramp, "ramp", "channels", 3);
+    g.set_param(ramp, "ramp", "named", true);
+    let head = drawn(&g, up, "the topomap", |d| shape(d) == vec![64, 64, 4] && px(d, 32, 32)[3] == 1.0 && px(d, 32, 3)[3] > 0.9);
+    assert!(close(px(&head, 0, 0), [0.0, 0.0, 0.0, 0.0]), "off the head is transparent: {:?}", px(&head, 0, 0));
+    // Cz, C3 and C4 rise in that order, so the field reads brighter from the centre to the left
+    // and brightest on the right.
+    let (centre, left, right) = (px(&head, 32, 32)[0], px(&head, 32, 17)[0], px(&head, 32, 47)[0]);
+    assert!(centre < left && left < right, "Cz under C3 under C4: {centre} {left} {right}");
+    let rim = px(&head, 32, 3);
+    assert!(rim[0] > 0.7 && rim[2] > rim[0], "the outline in the viewers' head grey: {rim:?}");
+    g.set_param(up, "signal", "electrodes", true);
+    drawn(&g, up, "the electrodes", |d| px(d, 32, 17)[0] < 0.1 && px(d, 32, 17)[3] == 1.0);
+    g.set_param(ramp, "ramp", "named", false);
+    drawn(&g, up, "the unnamed topomap", |d| px(d, 32, 32)[3] == 0.0 && px(d, 32, 3)[3] == 0.0);
+    g.set_param(up, "common", "height", 32);
+
     g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
     drawn(&g, up, "the gray frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));

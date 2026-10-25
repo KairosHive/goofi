@@ -18,6 +18,7 @@ use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, Librar
 
 mod gpu;
 mod half;
+mod montage;
 mod plan;
 mod runtime;
 mod scan;
