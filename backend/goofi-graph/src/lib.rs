@@ -546,6 +546,13 @@ struct Runtime {
     settled: Patch,
     /// The resolved edges of that snapshot: what a wire that moved is told apart against.
     settled_edges: Vec<Edge>,
+    /// The snapshot the document last projected, and the variable store's version then: what
+    /// [`Graph::projection`] reads the changed records off.
+    projected: Patch,
+    projected_vars: u64,
+    /// A variable's binding error moved since the last projection: the one runtime fact the
+    /// document carries beside a variable.
+    binds_moved: bool,
     /// The variable store's configuration version at the last settle: a variable added, removed,
     /// renamed or re-sourced re-derives every binding and re-sends every node.
     settled_vars: u64,
@@ -645,9 +652,19 @@ impl Graph {
                 evaluator: None,
                 variable_binds: IndexMap::new(),
                 bindings: HashMap::new(),
-                settled: patch,
+                settled: patch.clone(),
                 settled_edges: Vec::new(),
                 settled_vars: 0,
+                // Roots of its own, so the first projection carries every root, empty or not.
+                projected: Patch {
+                    nodes: IndexMap::new(),
+                    links: Arc::new(IndexMap::new()),
+                    arrangement: Arc::new(layout::Layout::default()),
+                    variables: patch.variables.clone(),
+                    machines: Arc::new(IndexMap::new()),
+                },
+                projected_vars: 0,
+                binds_moved: false,
                 unavailable: std::collections::BTreeMap::new(),
                 origins: std::collections::HashMap::new(),
                 next_uid: 1,
@@ -801,6 +818,7 @@ impl Graph {
         let gone: Vec<String> = self.runtime.variable_binds.keys().filter(|k| !wanted.iter().any(|(n, _)| n == *k)).cloned().collect();
         for name in gone {
             if let Some(b) = self.runtime.variable_binds.shift_remove(&name) {
+                self.runtime.binds_moved |= b.bind_error.is_some();
                 if let (Some(ev), Some(id)) = (&self.runtime.evaluator, b.id) {
                     ev.release(id);
                 }
@@ -811,6 +829,7 @@ impl Graph {
             let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| Binding::fresh(state.clone()));
             let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
             let (id, error) = self.compiled(&prior, &derived);
+            self.runtime.binds_moved |= prior.bind_error != error;
             let record = Binding { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
             self.runtime.variable_binds.insert(name, record);
         }
@@ -3456,44 +3475,15 @@ impl Graph {
     /// a clipboard and a patch are ONE format.
     pub fn fragment(&self, uids: &[Uid]) -> doc::PatchDoc {
         let want: HashSet<Uid> = uids.iter().copied().collect();
-        let mut nodes = IndexMap::new();
         // ONE loop over ONE map: a leaf, a facade and a port are all node records, and membership
         // rides each record rather than a member list beside what `scope_of` owns.
-        for (uid, e) in self.patch.nodes.iter().filter(|(u, _)| want.contains(u)) {
-            let mut params = IndexMap::new();
-            if let Some(leaf) = e.leaf() {
-                for (group, names) in self.typed(leaf).iter() {
-                    let entries: IndexMap<String, doc::ParamEntry> = names
-                        .iter()
-                        .filter_map(|(name, p)| {
-                            let entry = doc::ParamEntry { value: control::data_of(p), ..Default::default() };
-                            let entry = match leaf.sources.get(&ParamKey::new(group, name)) {
-                                Some(s) => entry.with_source(s),
-                                None => entry,
-                            };
-                            // A pulse has no literal, so it is written only for the source it carries.
-                            (entry.value.is_some() || entry.mode.is_some()).then(|| (name.clone(), entry))
-                        })
-                        .chain(element_sources(leaf, group, names))
-                        .collect();
-                    params.insert(group.clone(), entries);
-                }
-            }
-            let blob = |v: &serde_json::Value| v.as_object().is_some_and(|m| !m.is_empty()).then(|| v.clone());
-            nodes.insert(
-                uid.to_hex(),
-                doc::NodeRecord {
-                    type_id: self.node_type(*uid).unwrap_or_default(),
-                    name: e.name.clone(),
-                    pos: e.pos,
-                    scope: self.scope_of(*uid).filter(|p| want.contains(p)).map(|p| p.to_hex()),
-                    params,
-                    viewers: blob(&e.viewers),
-                    baseline: blob(&e.baseline),
-                    record: e.record.clone(),
-                },
-            );
-        }
+        let nodes = self
+            .patch
+            .nodes
+            .iter()
+            .filter(|(u, _)| want.contains(u))
+            .map(|(uid, e)| (uid.to_hex(), self.node_record(*uid, e, &|p| want.contains(&p))))
+            .collect();
         // A port's inner wire is a link like any other — the same one `add_link` writes — so a
         // fragment has one relation kind as well as one entity kind.
         let links = self
@@ -3501,17 +3491,109 @@ impl Graph {
             .links
             .values()
             .filter(|l| want.contains(&l.node_out) && want.contains(&l.node_in))
-            .map(|l| {
-                let link = doc::Link {
-                    node_out: l.node_out.to_hex(),
-                    slot_out: l.slot_out.to_string(),
-                    node_in: l.node_in.to_hex(),
-                    slot_in: l.slot_in.to_string(),
-                };
-                (link.key(), link)
-            })
+            .map(link_record)
             .collect();
         doc::PatchDoc { nodes, links, ..Default::default() }
+    }
+
+    /// One node's record as the document carries it. `kept` says whether a scope rides: a
+    /// fragment drops a parent it does not carry, a projection carries every parent.
+    fn node_record(&self, uid: Uid, e: &NodeEntry, kept: &dyn Fn(Uid) -> bool) -> doc::NodeRecord {
+        let mut params = IndexMap::new();
+        if let Some(leaf) = e.leaf() {
+            for (group, names) in self.typed(leaf).iter() {
+                let entries: IndexMap<String, doc::ParamEntry> = names
+                    .iter()
+                    .filter_map(|(name, p)| {
+                        let entry = doc::ParamEntry { value: control::data_of(p), ..Default::default() };
+                        let entry = match leaf.sources.get(&ParamKey::new(group, name)) {
+                            Some(s) => entry.with_source(s),
+                            None => entry,
+                        };
+                        // A pulse has no literal, so it is written only for the source it carries.
+                        (entry.value.is_some() || entry.mode.is_some()).then(|| (name.clone(), entry))
+                    })
+                    .chain(element_sources(leaf, group, names))
+                    .collect();
+                params.insert(group.clone(), entries);
+            }
+        }
+        let blob = |v: &serde_json::Value| v.as_object().is_some_and(|m| !m.is_empty()).then(|| v.clone());
+        doc::NodeRecord {
+            type_id: self.node_type(uid).unwrap_or_default(),
+            name: e.name.clone(),
+            pos: e.pos,
+            scope: self.scope_of(uid).filter(|p| kept(*p)).map(|p| p.to_hex()),
+            params,
+            viewers: blob(&e.viewers),
+            baseline: blob(&e.baseline),
+            record: e.record.clone(),
+        }
+    }
+
+    /// The variables and their groups as the document carries them: the configuration, never
+    /// a value, which is a frame on the data plane.
+    fn variable_records(&self) -> (IndexMap<String, doc::VariableRecord>, IndexMap<String, goofi_core::variables::Group>) {
+        let variables = self.variables();
+        let records = variables
+            .entries()
+            .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), expression: v.expression.clone(), lock: v.lock }))
+            .collect();
+        let groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
+        (records, groups)
+    }
+
+    /// The variables root a replica holds: beside a variable's expression, why it cannot bind —
+    /// the one runtime fact the panel shows inline.
+    fn variables_root(&self, records: &IndexMap<String, doc::VariableRecord>) -> serde_json::Value {
+        let mut root = serde_json::to_value(records).expect("a plain record");
+        for (name, b) in &self.runtime.variable_binds {
+            if let (Some(error), Some(record)) = (&b.bind_error, root.get_mut(name)) {
+                record["error"] = serde_json::Value::String(error.clone());
+            }
+        }
+        root
+    }
+
+    /// What the document must be told since the last projection, read off the patch and the
+    /// snapshot last projected: each changed node's record, each removed node, and each root that
+    /// moved, whole. The first call after a boot carries every root. Serialized here, under the
+    /// graph lock, so the diff against the document runs off it.
+    pub fn projection(&mut self) -> Projection {
+        let prev = &self.runtime.projected;
+        let mut out = Projection::default();
+        for (uid, e) in &self.patch.nodes {
+            if prev.nodes.get(uid).is_some_and(|p| Arc::ptr_eq(p, e)) {
+                continue;
+            }
+            let record = self.node_record(*uid, e, &|_| true);
+            out.nodes.push((uid.to_hex(), Some(serde_json::to_value(record).expect("a plain record"))));
+        }
+        for uid in prev.nodes.keys() {
+            if !self.patch.nodes.contains_key(uid) {
+                out.nodes.push((uid.to_hex(), None));
+            }
+        }
+        if !Arc::ptr_eq(&prev.links, &self.patch.links) {
+            let links: IndexMap<String, doc::Link> = self.patch.links.values().map(link_record).collect();
+            out.roots.push(("links", serde_json::to_value(links).expect("a plain record")));
+        }
+        let vars_version = self.variables().version();
+        if vars_version != self.runtime.projected_vars || self.runtime.binds_moved {
+            let (records, groups) = self.variable_records();
+            out.roots.push(("variables", self.variables_root(&records)));
+            out.roots.push(("variable_groups", serde_json::to_value(groups).expect("a plain record")));
+        }
+        if !Arc::ptr_eq(&prev.machines, &self.patch.machines) {
+            out.roots.push(("machines", serde_json::to_value(&*self.patch.machines).expect("a plain record")));
+        }
+        if !Arc::ptr_eq(&prev.arrangement, &self.patch.arrangement) {
+            out.roots.push(("arrangement", self.patch.arrangement.to_json()));
+        }
+        self.runtime.projected = self.patch.clone();
+        self.runtime.projected_vars = vars_version;
+        self.runtime.binds_moved = false;
+        out
     }
 
     /// The literals a record asks for, folded over the type's defaults. NON-seeding, because a
@@ -3669,12 +3751,7 @@ impl Graph {
     /// The whole patch as one document: every record, every variable in order, the arrangement.
     fn document(&self) -> doc::PatchDoc {
         let mut patch = self.fragment(&self.all_uids());
-        let variables = self.variables();
-        patch.variables = variables
-            .entries()
-            .map(|(name, v)| (name.to_string(), doc::VariableRecord { value: None, control: v.control.clone(), expression: v.expression.clone(), lock: v.lock }))
-            .collect();
-        patch.variable_groups = variables.groups().map(|(g, rec)| (g.to_string(), rec.clone())).collect();
+        (patch.variables, patch.variable_groups) = self.variable_records();
         patch.machines = (*self.patch.machines).clone();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
@@ -3684,15 +3761,13 @@ impl Graph {
     /// The document a browser replica holds: the patch, every root present, and beside a
     /// variable's expression why it cannot bind — the one runtime fact the panel shows inline.
     pub fn replica(&self) -> serde_json::Value {
-        let mut doc = serde_json::to_value(self.document()).expect("a plain record");
+        let document = self.document();
+        let variables = self.variables_root(&document.variables);
+        let mut doc = serde_json::to_value(document).expect("a plain record");
         for root in ["nodes", "links", "variables", "variable_groups", "machines"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
-        for (name, b) in &self.runtime.variable_binds {
-            if let (Some(error), Some(record)) = (&b.bind_error, doc["variables"].get_mut(name)) {
-                record["error"] = serde_json::Value::String(error.clone());
-            }
-        }
+        doc["variables"] = variables;
         doc
     }
 
@@ -3885,6 +3960,25 @@ fn remap_slots(viewers: &serde_json::Value, idmap: &HashMap<String, Uid>) -> ser
                 .collect(),
         ),
     }
+}
+
+/// One link as the document carries it, under its key.
+fn link_record(l: &Link) -> (String, doc::Link) {
+    let link = doc::Link {
+        node_out: l.node_out.to_hex(),
+        slot_out: l.slot_out.to_string(),
+        node_in: l.node_in.to_hex(),
+        slot_in: l.slot_in.to_string(),
+    };
+    (link.key(), link)
+}
+
+/// What the document is told after a batch: the records that moved, serialized, and the roots that
+/// moved, whole. A node with no record was removed.
+#[derive(Default)]
+pub struct Projection {
+    pub nodes: Vec<(String, Option<serde_json::Value>)>,
+    pub roots: Vec<(&'static str, serde_json::Value)>,
 }
 
 /// The source records a node record carries, in the shape [`command::Command::AddNode`] re-applies.

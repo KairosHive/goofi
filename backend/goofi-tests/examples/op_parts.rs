@@ -1,5 +1,5 @@
 //! Where one op's time goes (not a test): the pieces of a `node param edit` on N echo nodes,
-//! each timed alone on the held graph — the command, the settle, the projection, the diff — and
+//! each timed alone on the held graph — the command, the settle, the projection — and
 //! what the status drain pays on a quiet graph, which it pays on every wake without an op.
 //!   cargo run -p goofi-tests --example op_parts --release
 use std::time::Instant;
@@ -41,21 +41,18 @@ fn main() {
         );
         let mut graph = g.graph();
         let t = Instant::now();
-        let before = graph.replica();
-        let replica = us(t);
-        let t = Instant::now();
-        let text = before.to_string();
-        let to_string = us(t);
+        let replica = graph.replica();
+        let whole_replica = us(t);
         let t = Instant::now();
         graph.update_param(src, "constant", "value", Param::float(0.25, -1e9, 1e9)).unwrap();
         let command = us(t);
         let t = Instant::now();
         graph.settle();
         let settle = us(t);
-        let after = graph.replica();
         let t = Instant::now();
-        let ops = goofi_bridge::doc::diff_ops(&before, &after);
-        let diff = us(t);
+        let projection = graph.projection();
+        let project = us(t);
+        let text = replica.to_string();
         // Nothing touched: what the drain's settle and the drain itself cost on a quiet graph.
         let t = Instant::now();
         graph.settle();
@@ -65,9 +62,9 @@ fn main() {
         let idle_drain = us(t);
         drop(graph);
         println!(
-            "{n:>4} nodes: whole op {whole:>9.0} µs | replica {replica:>8.0} µs ({} KB, to_string {to_string:>6.0} µs) | update_param {command:>8.0} µs | settle {settle:>8.0} µs | diff {diff:>8.0} µs ({} ops) | idle settle {idle_settle:>8.0} µs | idle drain {idle_drain:>8.0} µs",
+            "{n:>4} nodes: whole op {whole:>9.0} µs | update_param {command:>8.0} µs | settle {settle:>8.0} µs | projection {project:>8.0} µs ({} records) | idle settle {idle_settle:>8.0} µs | idle drain {idle_drain:>8.0} µs | whole replica {whole_replica:>8.0} µs ({} KB)",
+            projection.nodes.len(),
             text.len() / 1024,
-            ops.len(),
         );
     }
 }

@@ -225,7 +225,7 @@ impl AppState {
         let (mut graph_val, recorder) = fresh_graph(hub.clone(), (!mode.demo).then_some(clock), render)?;
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
-        doc.reconcile_root(graph_val.replica());
+        doc.apply_projection(graph_val.projection());
         // On the plane before anything reads: the seeded system values are its first frames. Every
         // wire is named under the GRAPH's instance, the one its nodes' services carry.
         let variables = Arc::new(variables::Variables::new(hub.clone(), graph_val.instance()));
@@ -1486,22 +1486,22 @@ fn dispatch(state: &AppState, req: Request) -> Option<String> {
     }
 }
 
-/// Settle the graph and project it, taking the document guard before the caller releases the
-/// graph: apply→re-project is atomic, and the diff runs off the graph lock.
-pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (MutexGuard<'a, crate::doc::GraphDoc>, Value) {
+/// Settle the graph and project what moved, taking the document guard before the caller releases
+/// the graph: apply→re-project is atomic, and the diff against the document runs off the graph lock.
+pub(crate) fn settle_and_project<'a>(state: &'a AppState, g: &mut Graph) -> (MutexGuard<'a, crate::doc::GraphDoc>, goofi_graph::Projection) {
     g.settle();
     record::follow(state, g);
     state.changed.notify();
     sync_followers(state, g);
     state.live.fill(g);
-    (state.doc.lock(), g.replica())
+    (state.doc.lock(), g.projection())
 }
 
-/// Take the document to `projection` and broadcast the delta, then `outbox` behind it, under the
-/// document guard: nothing a later tail says can overtake what this one said.
-pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: Value, outbox: Vec<Event>) {
+/// Take the document to what `projection` says and broadcast the delta, then `outbox` behind it,
+/// under the document guard: nothing a later tail says can overtake what this one said.
+pub(crate) fn reconcile_and_broadcast(state: &AppState, mut doc: MutexGuard<crate::doc::GraphDoc>, projection: goofi_graph::Projection, outbox: Vec<Event>) {
     let from = doc.version();
-    if let Some(ops) = doc.reconcile_root(projection) {
+    if let Some(ops) = doc.apply_projection(projection) {
         state.events.send(Event::DocPatch { from, v: doc.version(), ops });
     }
     for event in outbox {
