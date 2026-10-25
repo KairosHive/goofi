@@ -16,34 +16,8 @@ rate or a latency.
 
 ## Signal
 
-- The op tail (`Txn::commit` → `settle_and_project` → `reconcile_and_broadcast`) walks the
-  whole graph on every write, whatever the write touched. Measured 2026-10-24 (`op_cost`,
-  `op_parts`, release, the node threads running beside the op thread): a param edit p50 5.5 ms
-  at 50 nodes, 53 ms at 200, 309 ms at 500; a node move, which moves nothing an engine reads,
-  39 ms at 200 and 269 ms at 500. The parts at 200 nodes: `replica` 15 to 77 ms, `settle` 8 to
-  13 ms, the diff 0.4 ms; at 500 nodes `settle` is 42 to 85 ms, superlinear. Each walk, and
-  what should bound it:
-  - `Graph::replica` → `document` → `fragment(all_uids)` rebuilds every node's record and every
-    link, serializes the whole, then clones each root once more. Keep a node's record as a memo
-    beside its `typed` one, cleared by the node's own writes (literal, source, name, pos, scope,
-    viewers, record), and assemble the document from the memos; or emit the path ops from the
-    command and drop the whole-document diff. Target: a flat sub-millisecond op at 500 nodes.
-  - Every engine's `settle` ignores `touched` and recomputes `desired_of` for every live node;
-    `desired_of` scans every edge per input (`wires_into`) and per output (`ringers`), so the
-    settle is O(nodes × edges). Index the edges by consumer and by producer, and visit the
-    touched nodes and their neighbours only.
-  - `derive_bindings` re-parses and re-resolves every expression source of every leaf at every
-    settle, the status drain's included (one per wake, at least every 50 ms); `moved` scans
-    `touched` per key and `uid_by_name` scans every node per reference. Derive the touched keys,
-    and the keys whose references name what the batch renamed, added, removed or re-valued.
-    Not measured: the probe graph holds no expressions, so its idle settle is 2 to 25 µs.
-  - The followers run whole each op: `record::follow` walks every uid for armed outputs,
-    `midi.resync` → `referenced_groups` walks every leaf's sources and typed params,
-    `machines.configure` clones every machine, `live.fill` re-serializes every displayed node.
-    Run each only when its input moved: a `Touched::Record`, a source or feed change, a machine
-    edit, a driven value.
-  - A preview (a drag) pays the same tail per step; at 200 nodes the op thread serves at most
-    one step per 53 ms, and every other op waits on the graph lock behind it.
+- The op tail walks the whole graph on every write: `roadmap/op-reactivity.md` holds the
+  measurements, the reactive model and its phases.
 - `Buffer` memmoves its whole window on every frame: a ring, so a frame costs one copy.
 - A Python node copies an array three times out and once in, rebuilds its `params` namespaces
   every call and reads `_is_gil_enabled` twice a call: cache the namespaces, rebuild on
