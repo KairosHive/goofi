@@ -106,7 +106,7 @@ export class LineDrawing extends Base {
 				yMin: Number(s.yMin ?? -1),
 				yMax: Number(s.yMax ?? 1),
 				points: Boolean(s.points),
-				width: 2,
+				width: Number(s.thickness ?? 2),
 				alpha: 0.75,
 				square: false
 			});
@@ -155,7 +155,7 @@ export class TrajectoryDrawing extends Base {
 				yMax: Number(s.yMax ?? 1),
 				points: dotted,
 				pointWidth: Number(s.pointSize ?? 2),
-				width: 1.4,
+				width: Number(s.thickness ?? 2),
 				alpha: 1,
 				square: true
 			});
