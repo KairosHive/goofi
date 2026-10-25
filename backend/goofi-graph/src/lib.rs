@@ -22,8 +22,8 @@ pub use doc::MANIFEST_VERSION;
 pub mod subpatch;
 pub mod layout;
 
-pub mod command;
-pub use command::{open_preview, Applied, Command, CommandHistory, Ctx, Flip, Outcome, PreviewScope, Skip, SourceState};
+pub mod history;
+pub use history::{Flip, History, Snapshot};
 
 pub mod expr_rewrite;
 pub mod machine;
@@ -243,58 +243,63 @@ pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
     }
 }
 
-/// The one params bag, `{group: {param: value | {value, expression, mode}}}`,
-/// as one [`Command::EditParam`] per entry, typed against the params the node holds NOW.
-pub fn param_commands(
-    g: &Graph,
-    uid: Uid,
-    params: &serde_json::Value,
-) -> Result<Vec<Command>, String> {
-    let groups = params.as_object().ok_or("params is {group: {param: …}}")?;
-    let declared = g.params(uid);
-    let mut cmds = Vec::new();
-    for (group, entries) in groups {
-        let entries =
-            entries.as_object().ok_or_else(|| format!("params.{group} is {{param: …}}"))?;
-        for (name, spec) in entries {
-            // `name[i]` is one dimension of a vector: it edits that element's literal or source.
-            let existing = declared
-                .as_ref()
-                .and_then(|p| goofi_node::param_dim(p, group, name))
-                .ok_or_else(|| format!("no param {group}.{name}"))?;
-            let cur = g.param_source(uid, group, name).map(|s| s.state);
-            let (value, source) = param_change(&existing, cur, spec)
-                .map_err(|e| format!("params.{group}.{name}: {e}"))?;
-            // A LIST of expressions on a vector is one expression per element: each element takes
-            // its own, and the whole param steps back to its literal with the list retained.
-            if let Some(items) = element_expressions(&existing, name, spec) {
-                let mut element_spec = spec.clone();
-                element_spec.as_object_mut().expect("a list expression spec").shift_remove("value");
-                for (k, item) in items.iter().enumerate() {
-                    let element = format!("{name}[{k}]");
-                    let cur = g.param_source(uid, group, &element).map(|s| s.state);
-                    element_spec["expression"] = serde_json::json!(item);
-                    let (_, source) = param_change(&existing.dim(k), cur, &element_spec)
-                        .map_err(|e| format!("params.{group}.{element}: {e}"))?;
-                    cmds.push(Command::EditParam { uid, group: group.clone(), name: element, value: None, source });
-                }
-                let whole = SourceState { mode: Mode::Constant, ..source.expect("a list expression source") };
-                cmds.push(Command::EditParam { uid, group: group.clone(), name: name.clone(), value, source: Some(whole) });
-                continue;
-            }
-            if value.is_none() && source.is_none() {
-                return Err(format!("params.{group}.{name} sets neither a value nor a source"));
-            }
-            cmds.push(Command::EditParam {
-                uid,
-                group: group.clone(),
-                name: name.clone(),
-                value,
-                source,
-            });
+impl Graph {
+    /// Apply the one params bag, `{group: {param: value | {value, expression, mode}}}`, typed
+    /// against the params the node holds NOW. A literal lands before a source on the same param:
+    /// a literal write switches the mode to constant, which the source then says over it.
+    pub fn apply_params(&mut self, uid: Uid, params: &serde_json::Value) -> Result<(), String> {
+        let groups = params.as_object().ok_or("params is {group: {param: …}}")?;
+        if !self.is_leaf(uid) {
+            return Err(format!("no node {}", uid.to_hex()));
         }
+        let declared = self.params(uid);
+        for (group, entries) in groups {
+            let entries =
+                entries.as_object().ok_or_else(|| format!("params.{group} is {{param: …}}"))?;
+            for (name, spec) in entries {
+                // `name[i]` is one dimension of a vector: it edits that element's literal or source.
+                let existing = declared
+                    .as_ref()
+                    .and_then(|p| goofi_node::param_dim(p, group, name))
+                    .ok_or_else(|| format!("no param {group}.{name}"))?;
+                let cur = self.param_source(uid, group, name).map(|s| s.state);
+                let (value, source) = param_change(&existing, cur, spec)
+                    .map_err(|e| format!("params.{group}.{name}: {e}"))?;
+                // A LIST of expressions on a vector is one expression per element: each element
+                // takes its own, and the whole param steps back to its literal with the list retained.
+                if let Some(items) = element_expressions(&existing, name, spec) {
+                    let mut element_spec = spec.clone();
+                    element_spec.as_object_mut().expect("a list expression spec").shift_remove("value");
+                    for (k, item) in items.iter().enumerate() {
+                        let element = format!("{name}[{k}]");
+                        let cur = self.param_source(uid, group, &element).map(|s| s.state);
+                        element_spec["expression"] = serde_json::json!(item);
+                        let (_, source) = param_change(&existing.dim(k), cur, &element_spec)
+                            .map_err(|e| format!("params.{group}.{element}: {e}"))?;
+                        if let Some(s) = source {
+                            self.set_source(uid, group, &element, s)?;
+                        }
+                    }
+                    let whole = SourceState { mode: Mode::Constant, ..source.expect("a list expression source") };
+                    if let Some(v) = value {
+                        self.update_param(uid, group, name, v)?;
+                    }
+                    self.set_source(uid, group, name, whole)?;
+                    continue;
+                }
+                if value.is_none() && source.is_none() {
+                    return Err(format!("params.{group}.{name} sets neither a value nor a source"));
+                }
+                if let Some(v) = value {
+                    self.update_param(uid, group, name, v)?;
+                }
+                if let Some(s) = source {
+                    self.set_source(uid, group, name, s)?;
+                }
+            }
+        }
+        Ok(())
     }
-    Ok(cmds)
 }
 
 /// A CLI `--value` arrives as its raw string; for a param that is no string it is read as JSON
@@ -409,6 +414,20 @@ pub enum Mode {
     Expression,
 }
 
+/// A param's authored source: the mode, and the expression it retains whatever the mode. Nothing
+/// retained and a constant mode is no record.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SourceState {
+    pub mode: Mode,
+    pub expression: String,
+}
+
+impl SourceState {
+    pub fn is_empty(&self) -> bool {
+        self.mode == Mode::Constant && self.expression.is_empty()
+    }
+}
+
 /// What a param's authored source derives to against the graph, at settle: the state it was
 /// derived from, and everything below it. The runtime's, keyed by node and param.
 struct Binding {
@@ -509,7 +528,7 @@ struct Patch {
     /// Keyed by [`Link::key`], in connection order — which IS a multi input's wire order.
     links: Arc<IndexMap<String, Link>>,
     /// The panel arrangement, held FLAT — the fifth doc root. Every mutation is an ordinary
-    /// command, so the layout has exactly one projection, as nodes and links do.
+    /// write, so the layout has exactly one projection, as nodes and links do.
     arrangement: Arc<layout::Layout>,
     /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load. Under a
     /// lock of its own: a value write is the store's and the plane's, never the graph's.
@@ -1576,12 +1595,12 @@ impl Graph {
     }
 
     /// The flat arrangement — pages, splits and panels. Reads plan against this; writes go through
-    /// a command, so undo/redo and the CRDT mirror come for free.
+    /// a transaction, so undo and the replica come for free.
     pub fn arrangement(&self) -> &layout::Layout {
         &self.patch.arrangement
     }
 
-    /// The one write door, held by [`command::Command::EditLayoutEntry`] and by a load.
+    /// The one write door, held by the layout ops and by a load.
     pub fn arrangement_mut(&mut self) -> &mut layout::Layout {
         Arc::make_mut(&mut self.patch.arrangement)
     }
@@ -2029,8 +2048,7 @@ impl Graph {
         self.patch.nodes.get(&uid).map(|e| &e.viewers)
     }
 
-    /// Replace the values the touched filter counts from, WHOLE — the whole blob, which is what
-    /// makes the command's inverse exact.
+    /// Replace the values the touched filter counts from, WHOLE.
     pub fn set_node_baseline(&mut self, uid: Uid, baseline: serde_json::Value) -> Result<(), String> {
         let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         e.baseline = baseline;
@@ -2068,8 +2086,7 @@ impl Graph {
         self.patch.nodes.get(&uid).map(|e| &e.baseline)
     }
 
-    /// Replace the output slots armed for recording. The whole vector, which is what makes the
-    /// command's inverse exact.
+    /// Replace the output slots armed for recording, whole.
     pub fn set_recorded(&mut self, uid: Uid, mut record: Vec<RecordedOutput>) -> Result<(), String> {
         let e = self.entry_mut(uid).ok_or_else(|| format!("no such node {uid}"))?;
         // A slot still armed keeps its serial; every other arming is a new one, minted at settle,
@@ -2287,14 +2304,13 @@ impl Graph {
     }
 
     /// The inner-slot key a group boundary stub should reference for a crossing link: the real slot,
-    /// a nested scope's existing stub, or a freshly MINTED chain of ports, each recorded in `minted`.
+    /// a nested scope's existing stub, or a freshly MINTED chain of ports.
     fn expose_in_nested_member(
         &mut self,
         member: Uid,
         leaf: Uid,
         slot: &str,
         dir: subpatch::Dir,
-        minted: &mut Vec<(Uid, Uid)>,
     ) -> String {
         if member == leaf {
             return slot.to_string();
@@ -2313,14 +2329,13 @@ impl Graph {
         let inner = if child == leaf {
             (leaf, slot.to_string())
         } else {
-            let child_stub = self.expose_in_nested_member(child, leaf, slot, dir, minted);
+            let child_stub = self.expose_in_nested_member(child, leaf, slot, dir);
             (child, child_stub)
         };
         let at = self.pos(member).unwrap_or([0.0, 0.0]);
         let Ok(id) = self.mint_port(member, dir, leaf, slot, at) else {
             return slot.to_string();
         };
-        minted.push((member, id));
         let (node, slot) = inner;
         let _ = match dir {
             Dir::In => self.add_link(id, subpatch::BOUNDARY_SLOT, node, &slot),
@@ -2359,14 +2374,9 @@ impl Graph {
         Ok(parent.unwrap())
     }
 
-    /// Group `members` into a new scope at `pos`, recording into `minted` every port it MINTS on a
-    /// pre-existing nested member, so the `Group` inverse can un-mint them.
-    pub fn group_nodes_capturing(
-        &mut self,
-        members: &[Uid],
-        pos: [f64; 2],
-        minted: &mut Vec<(Uid, Uid)>,
-    ) -> Result<Uid, String> {
+    /// Group `members` into a new scope at `pos`: the facade, a port for every wire that crosses
+    /// its boundary, and the members moved inside. Answers the scope's uid.
+    pub fn group_nodes(&mut self, members: &[Uid], pos: [f64; 2]) -> Result<Uid, String> {
         // 1. Validate BEFORE any mutation: each exists, and all share one parent scope.
         let parent = self.common_parent(members)?;
         let member_set: std::collections::HashSet<Uid> = members.iter().copied().collect();
@@ -2401,7 +2411,7 @@ impl Graph {
                 Some(id) => *id,
                 None => {
                     let (dir, n) = if outward { (Dir::Out, &mut out_n) } else { (Dir::In, &mut in_n) };
-                    let inner_slot = self.expose_in_nested_member(member, end, at_slot, dir, minted);
+                    let inner_slot = self.expose_in_nested_member(member, end, at_slot, dir);
                     let id = self.mint_port(scope_uid, dir, end, at_slot, [pos[0], pos[1] + 40.0 * *n as f64])?;
                     *n += 1;
                     let b = subpatch::BOUNDARY_SLOT.to_string();
@@ -2442,35 +2452,6 @@ impl Graph {
         }
         Ok(scope_uid)
     }
-
-    /// Recreate a scope EXACTLY — the inverse of `expand_instance`, moving the members back under
-    /// `scope_id` with the captured stubs verbatim, so undo/redo is uid-stable.
-    pub fn restore_scope(
-        &mut self,
-        scope_id: Uid,
-        name: String,
-        pos: [f64; 2],
-        members: &[Uid],
-        parent: Option<Uid>,
-    ) -> Result<Uid, String> {
-        if self.is_facade(scope_id) {
-            return Err(format!("restore_scope: scope {scope_id} already live"));
-        }
-        // The parent is captured, not derived from members, so an EMPTY scope restores. An empty
-        // name mints one, which lets a COPY land beside its original.
-        let name = self.pick_name(&name, "subpatch", Some(scope_id));
-        self.patch.nodes.insert(scope_id, Arc::new(NodeEntry::new(Kind::Facade, name, pos)));
-        for &m in members {
-            if self.patch.nodes.contains_key(&m) {
-                self.set_member_scope(m, Some(scope_id));
-            }
-        }
-        // A peer may have dissolved the captured parent since. Writing it verbatim would install a
-        // dangling-parent orphan, so degrade to ROOT, as the `SetScope` child does.
-        self.set_member_scope(scope_id, parent.filter(|p| self.is_facade(*p)));
-        Ok(scope_id)
-    }
-
 
     /// Dissolve a scope, answering the cables its removal JOINED — each pair of halves that met at
     /// a port, now one link. Uid-stable.
@@ -2577,6 +2558,58 @@ impl Graph {
         }
     }
 
+    /// Remove anything a uid names, with what its going takes along: a leaf hands each consumer of
+    /// its outputs the first wired input of its own whose kind feeds that consumer's slot, so a
+    /// chain stays one; a panel bound to a uid the removal takes stops naming it; a port comes off
+    /// its scope, a facade tears its subtree down. Nothing live at the uid is the no-op, answered.
+    pub fn remove_entry(&mut self, uid: Uid) -> Result<bool, String> {
+        if !self.exists(uid) {
+            return Ok(false);
+        }
+        let bridges = if self.is_leaf(uid) { self.bridges_around(uid) } else { Vec::new() };
+        let gone: HashSet<Uid> = self.subtree_of(&[uid]).into_iter().collect();
+        let unbind = self.arrangement().unbind(&gone);
+        if let Some((scope, _)) = self.stub(uid) {
+            self.remove_stub(scope, uid);
+        } else if self.is_facade(uid) {
+            self.remove_instance(uid)?;
+        } else {
+            self.remove_node(uid)?;
+        }
+        for (node_out, slot_out, node_in, slot_in) in bridges {
+            let _ = self.add_link(node_out, slot_out, node_in, slot_in);
+        }
+        if !unbind.is_empty() {
+            self.arrangement_mut().set_contents(&unbind);
+        }
+        Ok(true)
+    }
+
+    /// The wires a leaf about to go leaves behind: each consumer of one of its outputs is fed by
+    /// the first wired input of the leaf, in declaration order, whose source feeds the consumer's
+    /// slot.
+    fn bridges_around(&self, uid: Uid) -> Vec<(Uid, &'static str, Uid, &'static str)> {
+        let links = self.links_view();
+        let kind_of = |slots: Vec<(String, String, goofi_core::SlotType)>, name: &str| {
+            slots.into_iter().find(|(n, _, _)| n == name).map(|(_, _, kind)| kind)
+        };
+        let sources: Vec<(Uid, &'static str, goofi_core::SlotType)> = self
+            .slots(uid, Dir::In)
+            .iter()
+            .filter_map(|(name, _, _)| links.iter().find(|l| l.node_in == uid && l.slot_in == name.as_str()))
+            .filter_map(|l| kind_of(self.slots(l.node_out, Dir::Out), l.slot_out).map(|kind| (l.node_out, l.slot_out, kind)))
+            .collect();
+        links
+            .iter()
+            .filter(|l| l.node_out == uid && l.node_in != uid)
+            .filter_map(|l| {
+                let into = kind_of(self.slots(l.node_in, Dir::In), l.slot_in)?;
+                let &(node_out, slot_out, _) = sources.iter().find(|(src, _, kind)| *src != l.node_in && kind.feeds(into))?;
+                Some((node_out, slot_out, l.node_in, l.slot_in))
+            })
+            .collect()
+    }
+
     pub fn remove_node(&mut self, uid: Uid) -> Result<(), String> {
         if self.patch.nodes.shift_remove(&uid).is_none() {
             return Err(format!("no such node {uid}"));
@@ -2662,8 +2695,9 @@ impl Graph {
         Ok(())
     }
 
-    /// A value the node's own state took, written as the param's literal: no command, so no undo
-    /// step, and a param a source drives keeps its source and its literal. Whether the literal moved.
+    /// A value the node's own state took, written as the param's literal: no transaction, so no
+    /// undo step, and a param a source drives keeps its source and its literal. Whether the literal
+    /// moved.
     pub fn project_param(&mut self, uid: Uid, key: &ParamKey, value: Param) -> Result<bool, String> {
         if self.source_state(uid, key).is_some_and(|s| s.mode != Mode::Constant) {
             return Ok(false);
@@ -2726,7 +2760,7 @@ impl Graph {
     }
 
     /// One request to a node's own thread: a refresh re-enumerates a `Str`'s options, a pulse fires.
-    /// Not a command: a request holds no state, so there is nothing to undo.
+    /// Not a write: a request holds no state, so there is nothing to undo.
     pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_node::RequestKind) -> Result<(), String> {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let typed = self.typed(entry);
@@ -2979,16 +3013,6 @@ impl Graph {
             .collect()
     }
 
-    /// Every source record on a node as `(group, name, state)` — what a delete's inverse must
-    /// re-apply, since params alone carry only the literal value.
-    pub fn param_sources(&self, uid: Uid) -> Vec<(String, String, SourceState)> {
-        self.leaf(uid)
-            .map(|e| {
-                e.sources.iter().map(|(k, s)| (k.group.clone(), k.name.clone(), s.clone())).collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Whether any param of `uid` has a source other than its literal.
     pub fn driven(&self, uid: Uid) -> bool {
         self.leaf(uid).is_some_and(|e| e.sources.values().any(|s| s.mode != Mode::Constant))
@@ -3022,18 +3046,7 @@ impl Graph {
         }
     }
 
-    /// The wire currently feeding a SINGLE input `(node_in, slot)` — the one an `add_link` would
-    /// evict, so the `AddLink` command's inverse can restore it. `None` for a multi input.
-    pub fn single_input_source(&self, node_in: Uid, slot: &str) -> Option<(Uid, &'static str)> {
-        let slot = self.slot_face(node_in, slot, Dir::In).filter(|f| !f.multi)?.name;
-        self.patch.links
-            .values()
-            .find(|l| l.node_in == node_in && l.slot_in == slot)
-            .map(|l| (l.node_out, l.slot_out))
-    }
-
-    /// Does this exact (resolved) wire already exist? Lets a command detect an idempotent AddLink,
-    /// so its inverse is a no-op too instead of destroying the pre-existing wire.
+    /// Does this exact (resolved) wire already exist? What makes a `link add` of it the no-op.
     pub fn has_link(&self, node_out: Uid, slot_out: &str, node_in: Uid, slot_in: &str) -> bool {
         let (Some(out), Some(inp)) = (self.slot_face(node_out, slot_out, Dir::Out), self.slot_face(node_in, slot_in, Dir::In))
         else {
@@ -3173,6 +3186,10 @@ impl Graph {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
+        for uid in &diff.removed {
+            self.runtime.watched.retain(|(u, _)| u != uid);
+            self.runtime.view_wants.retain(|(u, _), _| u != uid);
+        }
         for uid in &gone {
             self.halt(*uid);
         }
@@ -3249,7 +3266,7 @@ impl Graph {
         // A wire made or cut, or a node reborn, changes what its producer owes its viewers.
         self.offer_view_wants(&edges);
         // The engines' own facts into `system.*`, from the state this settle reached. Not a
-        // command: the user's undoable act is the param they moved.
+        // write of the user's: the undoable act is the param they moved.
         for (name, value) in published {
             self.variables().publish(name, value);
         }
@@ -3555,6 +3572,30 @@ impl Graph {
         root
     }
 
+    /// The patch and the variable store as they stand: what a history entry keeps.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { patch: self.patch.clone(), variables: self.variables().snapshot() }
+    }
+
+    /// Put a snapshot back whole. The settle that follows reads every consequence off the diff:
+    /// births, removals, re-derivations, the document's ops.
+    pub fn restore(&mut self, s: &Snapshot) {
+        self.patch = s.patch.clone();
+        self.variables().restore(&s.variables);
+    }
+
+    /// Whether the patch or the store's configuration moved since `s` was taken: a write that
+    /// changed nothing records no step.
+    pub fn differs(&self, s: &Snapshot) -> bool {
+        let p = &s.patch;
+        self.patch.nodes.len() != p.nodes.len()
+            || !Arc::ptr_eq(&self.patch.links, &p.links)
+            || !Arc::ptr_eq(&self.patch.machines, &p.machines)
+            || !Arc::ptr_eq(&self.patch.arrangement, &p.arrangement)
+            || self.patch.nodes.iter().any(|(u, e)| !p.nodes.get(u).is_some_and(|q| Arc::ptr_eq(q, e)))
+            || self.variables().version() != s.variables.version
+    }
+
     /// What the document must be told since the last projection, read off the patch and the
     /// snapshot last projected: each changed node's record, each removed node, and each root that
     /// moved, whole. The first call after a boot carries every root. Serialized here, under the
@@ -3650,15 +3691,15 @@ impl Graph {
         Ok((doc, warnings))
     }
 
-    /// Add an admitted fragment under `scope`, shifted by `offset`, on FRESH uids. Answers the ONE
-    /// command that does it, and what each record's uid became.
+    /// Paste a fragment into `scope` at `offset`: every record under a fresh uid and a fresh
+    /// name, with its sources respelled to the copies, then the memberships, then the links.
+    /// Answers `old uid -> new uid`, for the viewers that key by it.
     pub fn import_fragment(
         &mut self,
         doc: &doc::PatchDoc,
         scope: Option<Uid>,
         offset: [f64; 2],
-    ) -> Result<(command::Command, HashMap<String, String>), String> {
-        use command::Command;
+    ) -> Result<HashMap<String, String>, String> {
         let nodes = &doc.nodes;
         if let Some(s) = scope.filter(|s| !self.is_facade(*s)) {
             return Err(format!("paste: no such scope {s}"));
@@ -3691,61 +3732,54 @@ impl Graph {
         let at = |p: [f64; 2]| [p[0] + offset[0], p[1] + offset[1]];
         let mut order: Vec<&String> = nodes.keys().collect();
         order.sort_by_key(|old| kind_order(&nodes[*old].type_id));
-        let mut cmds: Vec<Command> = Vec::new();
         for old in &order {
             let rec = &nodes[*old];
             let ty = rec.type_id.as_str();
             let inner = rec.scope.as_deref().and_then(|s| idmap.get(s)).copied();
-            cmds.push(Command::AddNode {
-                type_name: ty.to_string(),
-                pos: at(rec.pos),
-                uid: Some(idmap[*old]),
-                name: by_old(&rec.name),
-                params: (!structural(ty)).then(|| self.record_params(rec)).transpose()?,
-                sources: sources_of(rec)
-                    .into_iter()
-                    .map(|(group, name, mut s)| {
-                        let remap = |named: &str, slot: Option<&str>| {
-                            let label = slot
-                                .filter(|s| port_labels.get(named).is_some_and(|ports| ports.contains(s)))
-                                .and_then(by_old);
-                            (by_old(named), label)
-                        };
-                        if let Some(src) = expr_rewrite::rename_refs(&s.expression, remap) {
-                            s.expression = src;
-                        }
-                        (group, name, s)
-                    })
-                    .collect(),
-                viewers: rec.viewers.as_ref().map(|v| remap_slots(v, &idmap)),
+            let params = (!structural(ty)).then(|| self.record_params(rec)).transpose()?;
+            let sources: Vec<(String, String, SourceState)> = sources_of(rec)
+                .into_iter()
+                .map(|(group, name, mut s)| {
+                    let remap = |named: &str, slot: Option<&str>| {
+                        let label = slot
+                            .filter(|s| port_labels.get(named).is_some_and(|ports| ports.contains(s)))
+                            .and_then(by_old);
+                        (by_old(named), label)
+                    };
+                    if let Some(src) = expr_rewrite::rename_refs(&s.expression, remap) {
+                        s.expression = src;
+                    }
+                    (group, name, s)
+                })
+                .collect();
+            // A port cannot exist without a scope, so it takes the paste target when its own
+            // facade is not in the fragment — the same fallback every other kind gets below.
+            let port_scope = subpatch::boundary_type(ty).and(inner.or(scope));
+            let uid = self.create_node(ty, Some(idmap[*old]), by_old(&rec.name).as_deref().unwrap_or(""), params, port_scope)?;
+            self.restore_extras(
+                uid,
+                at(rec.pos),
+                &sources,
+                rec.viewers.as_ref().map(|v| remap_slots(v, &idmap)),
                 // NOT slot-remapped: a baseline is keyed by `group/param`, which a paste does not
                 // renumber the way it renumbers the slot uids a viewer blob is keyed by.
-                baseline: rec.baseline.clone(),
-                record: Some(rec.record.clone()),
-                // A port cannot exist without a scope, so it takes the paste target when its own
-                // facade is not in the fragment — the same fallback every other kind gets below.
-                scope: subpatch::boundary_type(ty).and(inner.or(scope)),
-            });
+                rec.baseline.clone(),
+                Some(rec.record.clone()),
+            );
         }
         for old in &order {
             let inner = nodes[*old].scope.as_deref().and_then(|s| idmap.get(s)).copied();
             // A record naming no scope INSIDE the fragment is a root of it, so it lands where the
             // paste was aimed; one naming a scope in here keeps the shape it was copied with.
-            cmds.push(Command::SetScope { uid: idmap[*old], scope: inner.or(scope) });
+            self.reparent(idmap[*old], inner.or(scope))?;
         }
         for l in doc.links.values() {
             let (Some(no), Some(ni)) = (idmap.get(&l.node_out).copied(), idmap.get(&l.node_in).copied()) else {
                 continue;
             };
-            cmds.push(Command::AddLink {
-                node_out: no,
-                slot_out: l.slot_out.clone(),
-                node_in: ni,
-                slot_in: l.slot_in.clone(),
-            });
+            self.add_link(no, &l.slot_out, ni, &l.slot_in)?;
         }
-        let rename = idmap.into_iter().map(|(old, new)| (old, new.to_hex())).collect();
-        Ok((Command::Compound(cmds), rename))
+        Ok(idmap.into_iter().map(|(old, new)| (old, new.to_hex())).collect())
     }
 
     /// The whole patch as one document: every record, every variable in order, the arrangement.
@@ -3981,7 +4015,7 @@ pub struct Projection {
     pub roots: Vec<(&'static str, serde_json::Value)>,
 }
 
-/// The source records a node record carries, in the shape [`command::Command::AddNode`] re-applies.
+/// The source records a node record carries, in the shape a paste re-applies.
 /// A group's ELEMENT sources as entries of their own, `name[i]` with no literal (the literal is
 /// the whole param's list), in name order so a written patch is the same patch twice.
 fn element_sources(leaf: &Leaf, group: &str, names: &IndexMap<String, Param>) -> Vec<(String, doc::ParamEntry)> {

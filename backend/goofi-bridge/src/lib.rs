@@ -62,8 +62,9 @@ pub const DEV_ROUTE_PREFIX: &str = "/dev/";
 /// The undo actor for a caller that names none — one shared stack, isolated from every named one.
 pub const DEFAULT_ACTOR: &str = "default";
 
-/// Who is calling: the actor whose undo stack it joins, an opaque navigation `context`, a `label`
-/// that overrides the op's own, and a `group` token under which several calls merge into one step.
+/// Who is calling: the actor whose drag a preview belongs to, an opaque navigation `context` the
+/// step keeps, a `label` that overrides the op's own, and a `group` token under which several
+/// calls merge into one step.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct Caller {
     #[serde(default)]
@@ -140,8 +141,8 @@ pub struct AppState {
     /// What the status beat last broadcast: each node's live pair and rate. A beat sends what
     /// moved since; a seed hands a new client this whole, so it is current at once.
     pub(crate) beat: Arc<Mutex<Readings>>,
-    /// The central per-session command history. Locked AFTER `graph`, BEFORE `doc`.
-    pub history: Arc<Mutex<goofi_graph::CommandHistory>>,
+    /// The one history of snapshots. Locked AFTER `graph`, BEFORE `doc`.
+    pub history: Arc<Mutex<goofi_graph::History>>,
     /// Liveness policy for `/data` sockets, injectable so a test need not sit through a
     /// production-length deadline.
     pub data_liveness: DataLiveness,
@@ -256,7 +257,7 @@ impl AppState {
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             beat: Arc::new(Mutex::new(Readings::default())),
-            history: Arc::new(Mutex::new(goofi_graph::CommandHistory::new())),
+            history: Arc::new(Mutex::new(goofi_graph::History::new())),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(),
             custom: goofi_supervisor::layout::custom_nodes(),
@@ -1190,7 +1191,7 @@ pub(crate) async fn blocking<T: Send + 'static>(state: &AppState, work: impl FnO
 /// Seed (or re-seed) a control socket: the hello snapshot, then the whole document; false when a
 /// send fails. The filesystem reads happen BEFORE the graph lock, which the status drain waits on.
 /// A fresh socket takes the palette too; a re-seed's client holds it, and `node_types` moves it.
-async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, actor: &str) -> bool {
+async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState) -> bool {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
     let roster = state.harnesses.roster(&goofi_supervisor::layout::agents());
@@ -1199,8 +1200,8 @@ async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, stat
         let mut snap = schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster);
         // A lag may have dropped a `node_types` event, so a re-seed carries the palette too.
         snap["node_types"] = schemas::catalog_types(&g, schemas::Detail::Full);
-        // The actor's stack outlives its socket: a reload finds its undo where it left it.
-        snap["history"] = state.history_labels(actor);
+        // The history outlives every socket: a reload finds the undo where it left it.
+        snap["history"] = state.history_labels();
         Event::Hello(snap).text()
     };
     let doc = {
@@ -1220,7 +1221,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     // neither, and the replica desyncs silently. A re-delivery is read as stale and skipped.
     let mut events = state.events.subscribe();
 
-    if !seed(&mut tx, &state, named.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
+    if !seed(&mut tx, &state).await {
         return;
     }
 
@@ -1311,7 +1312,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
                 // Lagged past the shared ring, so both halves are re-seeded exactly as a fresh
                 // connection seeds them.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    if !seed(&mut tx, &state, actor.as_deref().unwrap_or(DEFAULT_ACTOR)).await {
+                    if !seed(&mut tx, &state).await {
                         break;
                     }
                 }
@@ -1331,7 +1332,7 @@ impl AppState {
     pub fn end_previews(&self, actor: &str) {
         let reverted = {
             let mut g = self.graph.lock();
-            self.history.lock().revert_previews(&mut g, actor)
+            self.history.lock().end_previews(&mut g, actor)
         };
         if reverted {
             resync_and_broadcast(self);
@@ -1405,15 +1406,15 @@ impl AppState {
         self.call_as(op, payload, &Caller::new(actor), false)
     }
 
-    /// The op run as a PREVIEW: the same arm and command, and the graph moves for real, but the
-    /// history keeps no entry and the patch stays clean. The commit is the same op without the flag.
+    /// The op run as a PREVIEW: the same arm, and the graph moves for real, but the history keeps
+    /// no entry and the patch stays clean. The commit is the same op without the flag.
     pub fn preview(&self, op: &str, payload: Value, actor: &str) -> Result<Value, String> {
         self.call_as(op, payload, &Caller::new(actor), true)
     }
 
-    /// What this actor's next undo and redo would take back — what a write reply carries.
-    pub fn history_labels(&self, actor: &str) -> Value {
-        let (undo, redo) = self.history.lock().labels(actor);
+    /// What the next undo and redo would take back — what a write reply and the hello carry.
+    pub fn history_labels(&self) -> Value {
+        let (undo, redo) = self.history.lock().labels();
         json!({ "undo": undo, "redo": redo })
     }
 
@@ -1425,7 +1426,6 @@ impl AppState {
         if preview && !spec.handler.is_write() {
             return Err(format!("`{op}` cannot be previewed: only an undoable write can"));
         }
-        let _previewing = preview.then(goofi_graph::open_preview);
         let _scope = plugins::CallScope::enter(op)?;
         let _record_start = (op == "record start").then(|| self.plugins.record_start.lock());
         // A plugin patches the JSON; deserializing into the op's `Args` is the validation after it.
@@ -1433,9 +1433,13 @@ impl AppState {
         let result = match spec.handler {
             ops::Handler::PluginRead | ops::Handler::PluginEffect => self.plugins.call(op, &payload, actor),
             ops::Handler::Read(f) | ops::Handler::Write(f) => {
-                let mut tx = Txn::begin(self, caller, preview);
+                let mut tx = Txn::begin(self, caller, preview, spec.handler.is_write());
                 let result = f(&mut tx, &payload);
-                // A refusal drops the transaction, which takes back what it applied.
+                // Only a drag's write keeps a way back: a preview of anything else is refused, and
+                // the drop takes back what it applied. A refusal drops the transaction likewise.
+                if preview && result.is_ok() && !tx.keyed() {
+                    return Err(format!("`{op}` cannot be previewed: only a drag's write can"));
+                }
                 if result.is_ok() {
                     tx.commit();
                 }
@@ -1478,12 +1482,18 @@ fn dispatch(state: &AppState, req: Request) -> Option<String> {
     let steps = state.find_op(&op).is_some_and(|o| o.handler.is_write() || o.moves_history());
     match id {
         Value::Number(_) => Some(match result {
-            Ok(r) if steps => json!({ "id": id, "result": r, "history": state.history_labels(&caller.actor) }).to_string(),
+            Ok(r) if steps => json!({ "id": id, "result": r, "history": state.history_labels() }).to_string(),
             Ok(r) => json!({ "id": id, "result": r }).to_string(),
             Err(e) => json!({ "id": id, "error": e }).to_string(),
         }),
         _ => None,
     }
+}
+
+/// The history's labels as the event every client takes them from.
+pub(crate) fn history_event(history: &goofi_graph::History) -> Event {
+    let (undo, redo) = history.labels();
+    Event::History { undo, redo }
 }
 
 /// Settle the graph and project what moved, taking the document guard before the caller releases

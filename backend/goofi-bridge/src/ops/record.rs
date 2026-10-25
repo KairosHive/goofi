@@ -66,7 +66,7 @@ fn set_armed(tx: &mut Txn, output: &Endpoint, arm: bool) -> Result<Value, String
     }
     // The op arms and nothing else. Each engine's own drain observes the settled set and closes
     // the stream after it has read what was already delivered — closing here raced that.
-    tx.apply(goofi_graph::Command::SetRecorded { uid, record })?;
+    tx.g.set_recorded(uid, record)?;
     Ok(json!({ "ok": true, "changed": true }))
 }
 
@@ -111,7 +111,7 @@ impl WriteOp for Quality {
             return Ok(json!({ "ok": true, "changed": false }));
         }
         output.quality = quality;
-        tx.apply(goofi_graph::Command::SetRecorded { uid, record })?;
+        tx.g.set_recorded(uid, record)?;
         Ok(json!({ "ok": true, "changed": true }))
     }
 

@@ -1,5 +1,5 @@
-/** Undo/redo as the manager keeps it: every write is a step in this actor's history there, and
- * this store mirrors the labels the replies put on top. */
+/** Undo/redo as the manager keeps it: one history for every client, every write a step in it, and
+ * this store mirrors the labels the replies and the `history` event put on top. */
 import { getControl, historyFeed, type Control, type HistoryLabels, type Step } from '$lib/api/control';
 import { asNavContext, captureNavContext, restoreNavContext } from './navContext';
 import { flash } from './flash.svelte';
@@ -10,7 +10,6 @@ import { notify } from './notify.svelte';
 interface FlipReply extends HistoryLabels {
 	changed: boolean;
 	context: unknown;
-	stale: string | null;
 }
 
 export class HistoryStore {
@@ -39,7 +38,7 @@ export class HistoryStore {
 		this.graph = graph;
 	}
 
-	/** Take the labels a reply or the hello carried. */
+	/** Take the labels a reply, the hello or the `history` event carried. */
 	adopt(h: HistoryLabels): void {
 		this.undoLabel = h.undo;
 		this.redoLabel = h.redo;
@@ -59,7 +58,6 @@ export class HistoryStore {
 			this.replaying = false;
 		}
 		this.adopt(reply);
-		if (reply.stale) notify().raise(`${verb}: “${reply.stale}” no longer applies and was dropped`);
 		const ctx = reply.changed ? asNavContext(reply.context) : null;
 		if (ctx) {
 			await restoreNavContext(ctx);

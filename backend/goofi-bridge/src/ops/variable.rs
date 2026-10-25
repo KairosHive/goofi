@@ -6,7 +6,7 @@ use super::{op, Any, NoArgs, ReadOp, WriteOp};
 use crate::{inspect, Txn};
 use goofi_core::variables::{Control, ControlKind, Lock};
 use goofi_core::Data;
-use goofi_graph::{Command, Graph};
+use goofi_graph::Graph;
 
 op!(List, "variable list", 0, NoArgs,
     "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The groups `system`, `signal`, `graphics` and `audio` are goofi's own: config-locked for life, and their EPHEMERAL members — `system.goofi_home` and the `audio.*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
@@ -173,7 +173,7 @@ impl WriteOp for EntryAdd {
             (true, None) => Data::number(0.0),
             (_, val) => literal(val.ok_or("missing value")?)?,
         };
-        tx.apply(Command::EditVariable { name: name.clone(), value: Some(value.clone()), at: None, control: a.control })?;
+        tx.g.apply_variable_change(&name, Some(value.clone()), None, a.control)?;
         Ok(json!({ "name": name, "value": value }))
     }
 
@@ -196,14 +196,13 @@ impl WriteOp for EntryEdit {
             None => return Err("missing value".to_string()),
         };
         let stored = value.clone().unwrap_or(held);
-        let mut cmds = Vec::new();
+        tx.key(format!("variable {name}"));
         if value.is_some() || a.control.is_some() {
-            cmds.push(Command::EditVariable { name: name.clone(), value, at: None, control: a.control });
+            tx.g.apply_variable_change(&name, value, None, a.control)?;
         }
         if let Some(expression) = a.expression {
-            cmds.push(Command::SourceVariable { name, expression: Some(expression) });
+            tx.g.set_variable_expression(&name, Some(expression))?;
         }
-        tx.apply(compound(cmds))?;
         Ok(json!({ "value": stored }))
     }
 
@@ -216,17 +215,9 @@ impl WriteOp for EntryEdit {
     }
 }
 
-/// One command or several as one undo step.
-fn compound(mut cmds: Vec<Command>) -> Command {
-    match cmds.len() {
-        1 => cmds.pop().expect("one"),
-        _ => Command::Compound(cmds),
-    }
-}
-
 impl WriteOp for EntryRemove {
     fn run(tx: &mut Txn, a: EntryRemoveArgs) -> Result<Value, String> {
-        tx.apply(Command::RemoveVariable { name: a.name })?;
+        tx.g.variables().remove(&a.name)?;
         Ok(json!({ "removed": true }))
     }
 
@@ -244,7 +235,7 @@ fn lock_over(held: Lock, config: Option<bool>, value: Option<bool>) -> Lock {
 impl WriteOp for EntryLock {
     fn run(tx: &mut Txn, a: EntryLockArgs) -> Result<Value, String> {
         let lock = lock_over(tx.g.variables().own_lock(&a.name), a.config, a.value);
-        tx.apply(Command::LockVariable { name: a.name, lock })?;
+        tx.g.variables().set_lock(&a.name, lock)?;
         Ok(json!({ "lock": lock }))
     }
 
@@ -255,7 +246,7 @@ impl WriteOp for EntryLock {
 
 impl WriteOp for EntryRename {
     fn run(tx: &mut Txn, a: EntryRenameArgs) -> Result<Value, String> {
-        tx.apply(Command::RenameVariable { from: a.name, to: a.to.clone() })?;
+        tx.g.rename_variable(&a.name, &a.to)?;
         Ok(json!({ "name": a.to }))
     }
 
@@ -267,7 +258,7 @@ impl WriteOp for EntryRename {
 impl WriteOp for GroupAdd {
     fn run(tx: &mut Txn, a: GroupAddArgs) -> Result<Value, String> {
         let group = a.group.unwrap_or_else(|| goofi_core::fresh_name("group", 0, |n| tx.g.group_taken(n)));
-        tx.apply(Command::AddVariableGroup { group: group.clone(), at: None })?;
+        tx.g.add_variable_group(&group, None)?;
         Ok(json!({ "group": group }))
     }
 
@@ -278,7 +269,7 @@ impl WriteOp for GroupAdd {
 
 impl WriteOp for GroupRename {
     fn run(tx: &mut Txn, a: GroupRenameArgs) -> Result<Value, String> {
-        tx.apply(Command::RenameVariableGroup { from: a.from, to: a.to.clone(), members: None })?;
+        tx.g.rename_variable_group(&a.from, &a.to)?;
         Ok(json!({ "group": a.to }))
     }
 
@@ -289,19 +280,22 @@ impl WriteOp for GroupRename {
 
 impl WriteOp for GroupRemove {
     fn run(tx: &mut Txn, a: GroupRemoveArgs) -> Result<Value, String> {
-        let mut cmds: Vec<Command> = tx.g.variables()
+        let members: Vec<String> = tx.g.variables()
             .entries()
             .filter(|(n, _)| n.rsplit_once('.').is_some_and(|(g, _)| g == a.group))
-            .map(|(n, _)| Command::RemoveVariable { name: n.to_string() })
+            .map(|(n, _)| n.to_string())
             .collect();
         let drawn = tx.g.arrangement().control_panels().iter().any(|(_, held)| *held == a.group);
-        if !drawn && tx.g.variables().groups().any(|(g, _)| g == a.group) {
-            cmds.push(Command::RemoveVariableGroup { group: a.group.clone() });
-        }
-        if cmds.is_empty() {
+        let record = !drawn && tx.g.variables().groups().any(|(g, _)| g == a.group);
+        if members.is_empty() && !record {
             return Err(format!("no variable group `{}`", a.group));
         }
-        tx.apply(compound(cmds))?;
+        for name in &members {
+            tx.g.variables().remove(name)?;
+        }
+        if record {
+            tx.g.remove_variable_group(&a.group)?;
+        }
         Ok(json!({ "removed": true }))
     }
 
@@ -313,7 +307,7 @@ impl WriteOp for GroupRemove {
 impl WriteOp for GroupLock {
     fn run(tx: &mut Txn, a: GroupLockArgs) -> Result<Value, String> {
         let lock = lock_over(tx.g.variables().group_lock(&a.group), a.config, a.value);
-        tx.apply(Command::LockVariableGroup { group: a.group, lock: Some(lock) })?;
+        tx.g.variables().set_group_lock(&a.group, Some(lock))?;
         Ok(json!({ "lock": lock }))
     }
 
@@ -414,7 +408,7 @@ impl WriteOp for ControlAdd {
             Some(v) => literal(v)?,
             None => control.born_value(),
         };
-        tx.apply(Command::EditVariable { name: name.clone(), value: Some(value), at: None, control: Some(Some(control)) })?;
+        tx.g.apply_variable_change(&name, Some(value), None, Some(Some(control)))?;
         Ok(json!({ "name": name, "control": record }))
     }
 
@@ -426,15 +420,18 @@ impl WriteOp for ControlAdd {
 impl WriteOp for ControlEdit {
     fn run(tx: &mut Txn, a: ControlEditArgs) -> Result<Value, String> {
         let name = element_of(&tx.g, &a.group, &a.element)?;
-        let mut cmds = Vec::new();
+        // The widget as held, read before any rename moves it.
+        let mut record = serde_json::to_value(tx.g.variables().control(&name)).expect("a plain record");
+        let mut changed = false;
         let mut target = name.clone();
         if let Some(to) = &a.name {
             target = format!("{}.{to}", a.group);
             if target != name {
-                cmds.push(Command::RenameVariable { from: name.clone(), to: target.clone() });
+                tx.g.rename_variable(&name, &target)?;
+                changed = true;
             }
         }
-        let mut record = serde_json::to_value(tx.g.variables().control(&name)).expect("a plain record");
+        tx.key(format!("variable {target}"));
         let mut touched = false;
         if let Some(kind) = &a.kind {
             parse_kind(kind)?;
@@ -454,15 +451,16 @@ impl WriteOp for ControlEdit {
             let control: Control = serde_json::from_value(record).map_err(|e| e.to_string())?;
             // A pad re-sized starts clear: its array is the one shape the widget draws.
             let value = (a.resolution.is_some() && control.kind == ControlKind::Paint).then(|| control.born_value());
-            cmds.push(Command::EditVariable { name: target.clone(), value, at: None, control: Some(Some(control)) });
+            tx.g.apply_variable_change(&target, value, None, Some(Some(control)))?;
+            changed = true;
         }
         if let Some(expression) = a.expression {
-            cmds.push(Command::SourceVariable { name: target.clone(), expression: Some(expression) });
+            tx.g.set_variable_expression(&target, Some(expression))?;
+            changed = true;
         }
-        if cmds.is_empty() {
+        if !changed {
             return Err("nothing to change — give a name, a kind, a range, options, a cell or an expression".into());
         }
-        tx.apply(Command::Compound(cmds))?;
         Ok(json!({ "name": target }))
     }
 
@@ -474,7 +472,7 @@ impl WriteOp for ControlEdit {
 impl WriteOp for ControlRemove {
     fn run(tx: &mut Txn, a: ControlRemoveArgs) -> Result<Value, String> {
         let name = element_of(&tx.g, &a.group, &a.element)?;
-        tx.apply(Command::RemoveVariable { name })?;
+        tx.g.variables().remove(&name)?;
         Ok(json!({ "removed": true }))
     }
 
@@ -509,7 +507,8 @@ impl WriteOp for ControlPaint {
         let drawn = goofi_core::drawing::raster(&texels, *w as u32, *h as u32, &ops)?;
         let bytes = drawn.iter().flat_map(|v| v.to_le_bytes()).collect();
         let value = Data::array_f32(vec![*h, *w, 4], bytes, goofi_core::Meta::default()).map_err(|e| e.to_string())?;
-        tx.apply(Command::EditVariable { name, value: Some(value), at: None, control: None })?;
+        tx.key(format!("variable {name}"));
+        tx.g.apply_variable_change(&name, Some(value), None, None)?;
         Ok(json!({ "ops": ops.len(), "shape": [h, w, 4] }))
     }
 

@@ -459,6 +459,15 @@ impl Variable {
 /// Told the name of every value that moved.
 pub type Watch = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
+/// The store as it stood at one instant: every entry and group, and the configuration version
+/// then. What a history entry keeps and puts back; the values are shared, so it is pointers.
+#[derive(Clone)]
+pub struct Snapshot {
+    entries: IndexMap<String, Variable>,
+    groups: IndexMap<String, Group>,
+    pub version: u64,
+}
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
 /// the plane from here, under the store's own lock, so the order the plane sees is the store's.
@@ -491,6 +500,38 @@ impl VariableStore {
     /// The configuration version: moved by every change to what the store holds.
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { entries: self.entries.clone(), groups: self.groups.clone(), version: self.version }
+    }
+
+    /// Put a snapshot back: every entry and group as it was, an ephemeral one excepted, since goofi
+    /// says what that holds now. A value that moved goes out on the plane and to the watch; a
+    /// variable the snapshot does not hold retires its wire.
+    pub fn restore(&mut self, s: &Snapshot) {
+        self.version += 1;
+        let mut entries = s.entries.clone();
+        for (name, held) in &self.entries {
+            if is_ephemeral(name) {
+                entries.insert(name.clone(), held.clone());
+            } else if !entries.contains_key(name) {
+                self.retire(name);
+            }
+        }
+        let moved: Vec<String> = entries
+            .iter()
+            .filter(|(name, v)| self.entries.get(*name).is_none_or(|held| held.value != v.value))
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.entries = entries;
+        self.groups = s.groups.clone();
+        for name in moved {
+            self.emit(&name, &self.entries[&name].value);
+            if let Some(watch) = &self.watch {
+                watch(&name);
+            }
+        }
     }
 
     /// Have every moved value's name told to `watch`.

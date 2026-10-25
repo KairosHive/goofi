@@ -72,7 +72,7 @@ impl Harnesses {
         session_id: &str,
         env: &[(OsString, OsString)],
         events: crate::Broadcaster,
-        history: Arc<Mutex<goofi_graph::CommandHistory>>,
+        state: crate::AppState,
     ) -> Result<String, String> {
         let (agents, _) = goofi_supervisor::layout::agents();
         let command = agents
@@ -185,9 +185,9 @@ impl Harnesses {
             // The exit is published FIRST — `wait` freed the pid, and the grace thread must see
             // it before it can aim a kill at a recycled process group.
             exited.exit.send_replace(Some(code));
-            // A stack's lifetime follows its actor: dropped where the actor DIES, before the
-            // broadcast — so an observer of `harness_changed` sees the stack gone too.
-            history.lock().drop_actor(&actor_of(&reaped));
+            // A drag the actor left in flight ends where the actor DIES, before the broadcast,
+            // so an observer of `harness_changed` sees the patch settled too.
+            state.end_previews(&actor_of(&reaped));
             events.send(crate::Event::HarnessChanged(harnesses.roster(&goofi_supervisor::layout::agents())));
         });
         if let Ok(reaper) = reaper {
@@ -434,8 +434,7 @@ fn signal(inst: &Instance, how: fn(&goofi_supervisor::child::Tree) -> Result<(),
     how(inst.tree.as_ref().ok_or("the harness reported no pid to signal")?)
 }
 
-/// The undo stack a spawned shell's ops land in — dropped with the instance, so a stopped
-/// agent's history goes with it.
+/// The actor a spawned shell's ops carry: whose drags end with the instance.
 pub fn actor_of(id: &str) -> String {
     format!("agent-{id}")
 }

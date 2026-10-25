@@ -22,8 +22,8 @@ HD video) with many simultaneous viewers.
 The graph you edit is the graph that is running: add a node, move a cable, turn a parameter, and
 the next frame is the one you changed. There is no global tick — nodes schedule themselves and
 frames travel node to node over shared memory, so a kHz EEG stream and an audio chain sit in one
-patch without either holding the other up. Several people can work inside it at once, each with
-their own undo.
+patch without either holding the other up. Several people can work inside it at once, on one
+history: undo takes back the last write, whoever made it.
 
 ## Running it
 

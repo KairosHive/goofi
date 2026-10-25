@@ -673,7 +673,7 @@ test.describe('the control socket', () => {
 		}
 	});
 
-	test('two tabs on one manager converge, and each undoes only its own work', async ({
+	test('two tabs on one manager converge, and undo takes back the last write whoever made it', async ({
 		page,
 		browser
 	}: {
@@ -766,16 +766,20 @@ test.describe('the control socket', () => {
 					.toBe(2);
 			});
 
-			await test.step('an undo here takes back MY node, and leaves the peer’s standing', async () => {
-				// The manager filters undo by session, which is what makes two tabs independent editors
-				// of one document rather than two hands on one stack.
+			await test.step('an undo here takes back the last write, whoever made it, and the peer sees it', async () => {
+				// One history for every tab: two hands on one stack, and each step reaches both. The
+				// peer's rename is the last write; its add sits under the tab it opened and closed.
 				await undo(page);
 				await expect
-					.poll(() => backendNodes(page), { message: 'my add was rolled back' })
-					.toEqual([theirs]);
+					.poll(async () => (await nodes(page)).map((n) => n.name), { message: 'the peer’s rename was taken back' })
+					.not.toContain('renamed');
+				for (let i = 0; i < 4 && (await backendNodes(page)).includes(theirs); i++) await undo(page);
 				await expect
-					.poll(() => replicaNodes(other), { message: 'and the peer saw the removal, not its own loss' })
-					.toEqual([theirs]);
+					.poll(() => backendNodes(page), { message: 'then the peer’s add, under its layout steps' })
+					.toEqual([mine]);
+				await expect
+					.poll(() => replicaNodes(other), { message: 'and the peer saw its node go' })
+					.toEqual([mine]);
 			});
 		} finally {
 			await clearGraph(page);

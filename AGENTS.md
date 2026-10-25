@@ -76,9 +76,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   Electron shell in `frontend/electron` runs it with `--shell`, holds its stdin, and installs the
   update that the `update start` op requests.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated with
-  versioned path operations (`put`, `del`). Mutations are commands with inverses and per-actor
-  undo; fresh calls are strict, replay tolerates stale targets, and layout inverses use forward
-  planners.
+  versioned path operations (`put`, `del`). The patch is a value: a write copies the one record it
+  touches, a settle reads what a batch changed off the two snapshots, and the document is patched
+  per changed record. One history of snapshots serves every client: a write pushes the snapshot
+  from before it, undo and redo swap one in, a preview publishes without pushing.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
 - Params have one active source: constant or expression. Values use `/params/<node>`; errors use

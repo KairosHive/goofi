@@ -242,37 +242,16 @@ impl WriteOp for Add {
         // Never silently rooted on a bad `inst_id`: the canvas draws only the entered scope, so a
         // rooted node would be invisible exactly where the user placed it.
         let scope = a.inst_id.map(|s| s.resolve(&tx.g)).transpose()?;
-        // Inline params are applied AFTER: RemoveNode's inverse captures the LIVE node, so an
-        // undo→redo restores them without threading them through the command.
-        let cmd = goofi_graph::Command::AddNode {
-            type_name: a.ty,
-            pos: a.pos.unwrap_or([0.0, 0.0]),
-            uid: restore,
-            name,
-            params: None,
-            sources: vec![],
-            viewers: None,
-            baseline: None,
-            record: None,
-            scope,
-        };
-        let uid = match tx.apply(cmd)? {
-            goofi_graph::Outcome::Uid(u) => u,
-            _ => return Err("no uid returned".into()),
-        };
+        let uid = tx.g.create_node(&a.ty, restore, name.as_deref().unwrap_or(""), None, scope)?;
         // No place named: the manager packs the node as born, so its footprint is read. One
         // transaction, so the add and the move are one history entry.
-        if a.pos.is_none() {
-            let pos = Some(goofi_graph::canvas::place_node(&tx.g, scope, uid));
-            tx.apply(goofi_graph::Command::EditNode { uid, name: None, pos, viewers: None })?;
-        }
+        let pos = a.pos.unwrap_or_else(|| goofi_graph::canvas::place_node(&tx.g, scope, uid));
+        tx.g.set_node_pos(uid, pos)?;
         // Applied UNDER THE GRAPH LOCK, so the node is born configured before the resync mirrors it
         // into the doc.
         if let Some(entries) = a.param {
             let bag = param_entries_bag(&entries)?;
-            for cmd in goofi_graph::param_commands(&tx.g, uid, &bag)? {
-                cmd.execute(&mut tx.g, goofi_graph::Ctx::Fresh)?;
-            }
+            tx.g.apply_params(uid, &bag)?;
         }
         // A bare uid: the node itself arrives via the doc mirror.
         tx.emit(Event::NodeAdded { uid: uid.to_hex() });
@@ -327,8 +306,8 @@ impl WriteOp for Edit {
         if let Some(n) = &a.name {
             check_name(&tx.g, n, Some(uid))?;
         }
-        // Viewer entries MERGE slot by slot, and the command sets the whole blob so its inverse is
-        // exact. Only the PATCH is checked: a stale slot already stored is inert.
+        // Viewer entries MERGE slot by slot into the whole blob the record holds. Only the PATCH
+        // is checked: a stale slot already stored is inert.
         let viewers = match &a.viewer {
             Some(entries) => {
                 let patch = viewer_entries_patch(entries)?;
@@ -342,12 +321,18 @@ impl WriteOp for Edit {
         if a.name.is_none() && a.pos.is_none() && viewers.is_none() {
             return Err("give a name, pos or viewer".into());
         }
-        let out = tx.apply(goofi_graph::Command::EditNode { uid, name: a.name, pos: a.pos, viewers })?;
-        // The runtime `error` is doc-invisible, so echo every referrer a rename rewrote.
-        if let goofi_graph::Outcome::Nodes(referrers) = out {
-            for r in referrers {
+        tx.key(format!("node {}", uid.0));
+        if let Some(name) = &a.name {
+            // The runtime `error` is doc-invisible, so echo every referrer a rename rewrote.
+            for r in tx.g.rename_node(uid, name)? {
                 tx.echo(r);
             }
+        }
+        if let Some(pos) = a.pos {
+            tx.g.set_node_pos(uid, pos)?;
+        }
+        if let Some(v) = viewers {
+            tx.g.set_node_viewers(uid, v)?;
         }
         Ok(json!({ "ok": true, "name": named(&tx.g, uid) }))
     }
@@ -425,15 +410,12 @@ impl WriteOp for ParamEdit {
         // A value rides the doc patch and its error the live plane; a source edit changes the
         // descriptor, which only the echo carries.
         let describes = entry.keys().any(|k| k != "value");
-        let bag = json!({ &group: { &name: entry } });
-        // One address may be several commands: a list of expressions lands one per element.
-        let cmds = goofi_graph::param_commands(&tx.g, uid, &bag)?;
-        if cmds.is_empty() {
+        if entry.is_empty() {
             return Err("nothing to change".into());
         }
-        for cmd in cmds {
-            tx.apply(cmd)?;
-        }
+        let bag = json!({ &group: { &name: entry } });
+        tx.key(format!("param {} {group}/{name}", uid.0));
+        tx.g.apply_params(uid, &bag)?;
         if describes {
             tx.echo(uid);
         }
@@ -476,11 +458,9 @@ impl EffectOp for ParamRequest {
 impl WriteOp for Remove {
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
         let uid = a.node.resolve(&tx.g)?;
-        // The command is idempotent, so a uid naming nothing succeeds; the reply says which of the
-        // two happened.
-        let existed = tx.g.exists(uid);
+        // A uid naming nothing succeeds; the reply says which of the two happened.
         let name = named(&tx.g, uid);
-        tx.apply(goofi_graph::Command::RemoveNode { uid })?;
+        let existed = tx.g.remove_entry(uid)?;
         Ok(json!({ "removed": existed, "name": name }))
     }
 
@@ -492,9 +472,8 @@ impl WriteOp for Remove {
 impl WriteOp for Baseline {
     fn run(tx: &mut Txn, a: BaselineArgs) -> Result<Value, String> {
         let uid = a.node.resolve(&tx.g)?;
-        // `None` means "snapshot what is there", which the command does under the history lock so
-        // the inverse captures the blob it replaced.
-        tx.apply(goofi_graph::Command::SetBaseline { uid, baseline: None })?;
+        let baseline = tx.g.touched_baseline(uid);
+        tx.g.set_node_baseline(uid, baseline)?;
         let cleared = tx.g.baseline(uid).and_then(|b| b.as_object()).map_or(0, serde_json::Map::len);
         Ok(json!({ "ok": true, "cleared": cleared, "name": named(&tx.g, uid) }))
     }
@@ -505,7 +484,7 @@ impl WriteOp for Baseline {
 }
 
 impl EffectOp for Restart {
-    /// Recovery, not an edit, so it is NOT routed through the command history.
+    /// Recovery, not an edit: no transaction, no history entry.
     fn run(state: &AppState, a: RestartArgs, _: &Caller) -> Result<Value, String> {
         {
             let mut g = state.graph.lock();
@@ -551,8 +530,7 @@ impl WriteOp for NodesPaste {
         let scope = a.inst_id.map(|s| s.resolve(&tx.g)).transpose()?;
         let doc = serde_json::from_value(a.doc).map_err(|e| format!("doc: {e}"))?;
         let (doc, warnings) = tx.g.admit(doc)?;
-        let (cmd, rename) = tx.g.import_fragment(&doc, scope, a.pos.unwrap_or([0.0, 0.0]))?;
-        tx.apply(cmd)?;
+        let rename = tx.g.import_fragment(&doc, scope, a.pos.unwrap_or([0.0, 0.0]))?;
         for uid in rename.values() {
             tx.emit(Event::NodeAdded { uid: uid.clone() });
         }
@@ -564,11 +542,7 @@ impl WriteOp for NodesGroup {
     const LABEL: &str = "Group nodes";
     fn run(tx: &mut Txn, a: NodesGroupArgs) -> Result<Value, String> {
         let uids = NodeRef::resolve_all(&a.nodes, &tx.g)?;
-        let out = tx.apply(goofi_graph::Command::Group { members: uids, pos: a.pos.unwrap_or([0.0, 0.0]), restore: None })?;
-        let inst = match out {
-            goofi_graph::Outcome::Uid(u) => u,
-            _ => return Err("no scope uid returned".into()),
-        };
+        let inst = tx.g.group_nodes(&uids, a.pos.unwrap_or([0.0, 0.0]))?;
         Ok(json!({ "name": named(&tx.g, inst), "inst_id": inst.to_hex() }))
     }
 }
@@ -577,16 +551,14 @@ impl WriteOp for NodesArrange {
     const LABEL: &str = "Arrange";
     fn run(tx: &mut Txn, a: NodesArrangeArgs) -> Result<Value, String> {
         let scope = a.inst_id.map(|s| s.resolve(&tx.g)).transpose()?;
-        let moves: Vec<goofi_graph::Command> = goofi_graph::canvas::arrange_scope(&tx.g, scope)
+        let moves: Vec<(goofi_graph::Uid, [f64; 2])> = goofi_graph::canvas::arrange_scope(&tx.g, scope)
             .into_iter()
             .filter(|(uid, pos)| tx.g.pos(*uid) != Some(*pos))
-            .map(|(uid, pos)| goofi_graph::Command::EditNode { uid, name: None, pos: Some(pos), viewers: None })
             .collect();
-        let moved = moves.len();
-        if moved > 0 {
-            tx.apply(goofi_graph::Command::Compound(moves))?;
+        for (uid, pos) in &moves {
+            tx.g.set_node_pos(*uid, *pos)?;
         }
-        Ok(json!({ "moved": moved }))
+        Ok(json!({ "moved": moves.len() }))
     }
 }
 
@@ -594,7 +566,7 @@ impl WriteOp for NodesUngroup {
     const LABEL: &str = "Ungroup";
     fn run(tx: &mut Txn, a: NodesUngroupArgs) -> Result<Value, String> {
         let inst = a.subpatch.resolve(&tx.g)?;
-        tx.apply(goofi_graph::Command::Expand { scope: inst })?;
+        tx.g.expand_instance(inst)?;
         Ok(json!({ "ok": true }))
     }
 }
@@ -621,7 +593,10 @@ impl WriteOp for LinkAdd {
         let (b_uid, si) = a.to.resolve(&tx.g, "to")?;
         let (a_uid, so) = wirable_endpoint(&tx.g, a_uid, &so, "from")?;
         let (b_uid, si) = wirable_endpoint(&tx.g, b_uid, &si, "to")?;
-        tx.apply(goofi_graph::Command::AddLink { node_out: a_uid, slot_out: so.clone(), node_in: b_uid, slot_in: si.clone() })?;
+        // The exact wire already there is the idempotent no-op.
+        if !tx.g.has_link(a_uid, &so, b_uid, &si) {
+            tx.g.add_link(a_uid, &so, b_uid, &si)?;
+        }
         // The wire AS MADE, not as named: a boundary endpoint resolves to its inner leaf, and the
         // agreed dtype gates the next link to this output.
         let dtype = vocab::output_slots(&tx.g, a_uid)
@@ -643,9 +618,11 @@ impl WriteOp for LinkRemove {
         let (b_uid, si) = a.to.resolve(&tx.g, "to")?;
         let (a_uid, so) = tx.g.normalise(a_uid, &so);
         let (b_uid, si) = tx.g.normalise(b_uid, &si);
-        // Idempotent for the same reason `remove_node` is, and answered the same way.
+        // Idempotent for the same reason `node remove` is, and answered the same way.
         let existed = tx.g.has_link(a_uid, &so, b_uid, &si);
-        tx.apply(goofi_graph::Command::RemoveLink { node_out: a_uid, slot_out: so, node_in: b_uid, slot_in: si })?;
+        if existed {
+            tx.g.remove_link(a_uid, &so, b_uid, &si)?;
+        }
         Ok(json!({ "removed": existed }))
     }
 }

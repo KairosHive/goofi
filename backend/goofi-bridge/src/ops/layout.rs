@@ -5,7 +5,14 @@ use serde_json::{json, Value};
 use super::{op, EffectOp, PanelType, ReadOp, WriteOp};
 use crate::{inspect, vocab, AppState, Caller, Txn};
 use goofi_graph::machine::Machine;
-use goofi_graph::{Command, Graph, Uid};
+use goofi_graph::{Graph, Uid};
+
+/// What a panel is born over, made in the same step: a control panel's own group, or the
+/// patch's first machine.
+enum Born {
+    Group(String),
+    Machine(String),
+}
 
 op!(Inspect, "layout inspect", 1, InspectArgs {
     pub tab: Option<String>,
@@ -71,10 +78,15 @@ op!(ViewpointEdit, "layout viewpoint edit", 0, ViewpointEditArgs {
     "Store where this client is looking — active tab, maximize, camera, each panel's sub-patch path. ONE stored value, replaced whole, last writer wins; persisted in the `.gfi`, never converged, never dirtying.",
     "{ok: true}");
 
-/// Route a layout planner's per-entry writes through the command history as ONE undo step, and
-/// answer with the arrangement they produced, drawn as `layout inspect` draws it.
-fn apply_layout(tx: &mut Txn, cmd: goofi_graph::Command) -> Result<Value, String> {
-    tx.apply(cmd)?;
+/// Land a layout planner's arrangement, and answer with it drawn as `layout inspect` draws it.
+fn apply_layout(tx: &mut Txn, next: goofi_graph::layout::Layout) -> Result<Value, String> {
+    tx.g.arrangement_mut().apply(next);
+    Ok(json!({ "text": inspect::layout_tree(&tx.g, None) }))
+}
+
+/// Land a planner's per-entry writes, and answer with the arrangement drawn.
+fn apply_writes(tx: &mut Txn, writes: &[goofi_graph::layout::Write]) -> Result<Value, String> {
+    tx.g.arrangement_mut().set_contents(writes);
     Ok(json!({ "text": inspect::layout_tree(&tx.g, None) }))
 }
 
@@ -112,16 +124,14 @@ impl WriteOp for PanelAdd {
             Some(target) => {
                 let side = parse_side(a.side.as_deref())?;
                 let (plan, fresh) = tx.g.arrangement().split_panel(target, side, ratio)?;
-                let cmd = goofi_graph::Command::LayoutBirth { plan, born: fresh.clone() };
-                let text = apply_layout(tx, cmd)?;
+                let text = apply_layout(tx, plan)?;
                 let tab = tx.g.arrangement().tab_of(&fresh).unwrap_or_default();
                 Ok(json!({ "id": fresh, "tab": tab, "text": text["text"] }))
             }
             // On a tab of its own, at `index` in the strip, labelled `name` or minted.
             None => {
                 let (plan, tab) = tx.g.arrangement().add_tab(a.name.as_deref(), index_of(a.index), None)?;
-                let cmd = goofi_graph::Command::LayoutBirth { plan, born: tab.clone() };
-                let text = apply_layout(tx, cmd)?;
+                let text = apply_layout(tx, plan)?;
                 // The root panel's id, which a caller cannot otherwise know.
                 let id = tx.g.arrangement().root_of(&tab).unwrap_or_default();
                 Ok(json!({ "id": id, "tab": tab, "text": text["text"] }))
@@ -166,12 +176,13 @@ impl WriteOp for PanelEdit {
         // A panel over one of many instances is born over one, in the step that makes it, so no
         // panel ever waits on a name and no client has to mint one — which would fight undo.
         let named = |key: &str| panel_state.as_ref().and_then(|s| s.get(key)).is_some();
-        let mut born: Option<Command> = None;
+        // What the panel is born over, made in this same step.
+        let mut born: Option<Born> = None;
         let instance: Option<(&str, String)> = match ty.as_deref() {
             // A control panel: a group of its own, `control0`, `control1`, … recorded with it.
             Some("control") if !named("group") => {
                 let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
-                born = Some(Command::AddVariableGroup { group: fresh.clone(), at: None });
+                born = Some(Born::Group(fresh.clone()));
                 Some(("group", fresh))
             }
             // A machine panel: the first machine the patch has, or a fresh empty one.
@@ -179,7 +190,7 @@ impl WriteOp for PanelEdit {
                 Some(first) => first.clone(),
                 None => {
                     let fresh = goofi_core::fresh_name("machine", 0, |n| tx.g.machines().contains_key(n));
-                    born = Some(Command::SetMachine { name: fresh.clone(), machine: Some(Box::new(Machine::default())), at: None });
+                    born = Some(Born::Machine(fresh.clone()));
                     fresh
                 }
             })),
@@ -194,11 +205,15 @@ impl WriteOp for PanelEdit {
             None => panel_state,
         };
         let writes = tx.g.arrangement().set_panel(&a.panel, ty.as_deref(), panel_state)?;
-        let layout = Command::LayoutContents { writes };
-        apply_layout(tx, match born {
-            Some(first) => Command::Compound(vec![first, layout]),
-            None => layout,
-        })
+        match born {
+            Some(Born::Group(group)) => tx.g.add_variable_group(&group, None)?,
+            Some(Born::Machine(name)) => {
+                tx.g.set_machine(&name, Some(Machine::default()), None)?;
+            }
+            None => {}
+        }
+        tx.key(format!("contents {}", a.panel));
+        apply_writes(tx, &writes)
     }
 
     fn label(a: &PanelEditArgs, _: &Value) -> String {
@@ -231,22 +246,19 @@ impl WriteOp for Move {
             }
             (None, None) if is_tab => {
                 let at = index.ok_or("a tab moves to an `--index` in the strip")?;
-                tx.g.arrangement().reorder_tab(&entry, at)?;
-                let cmd = goofi_graph::Command::LayoutReorderTab { tab: entry.clone(), to_index: at };
-                let text = apply_layout(tx, cmd)?;
+                let plan = tx.g.arrangement().reorder_tab(&entry, at)?;
+                let text = apply_layout(tx, plan)?;
                 return Ok(json!({ "id": entry, "tab": entry, "text": text["text"] }));
             }
             // Onto a tab of its own — the drag onto the tab bar. A tab built AROUND an existing
             // subtree is a MOVE, so its undo gives the subtree back.
             (None, None) => {
                 let (plan, tab) = tx.g.arrangement().add_tab(a.name.as_deref(), index, Some(&entry))?;
-                let cmd = goofi_graph::Command::LayoutMove { plan: Some(plan), root: entry.clone(), home: None };
-                let text = apply_layout(tx, cmd)?;
+                let text = apply_layout(tx, plan)?;
                 return Ok(json!({ "id": entry, "tab": tab, "text": text["text"] }));
             }
         };
-        let cmd = goofi_graph::Command::LayoutMove { plan: Some(plan), root: placed.clone(), home: None };
-        let text = apply_layout(tx, cmd)?;
+        let text = apply_layout(tx, plan)?;
         let tab = tx.g.arrangement().tab_of(&placed).unwrap_or_default();
         Ok(json!({ "id": placed, "tab": tab, "text": text["text"] }))
     }
@@ -255,13 +267,12 @@ impl WriteOp for Move {
 impl WriteOp for Remove {
     const LABEL: &str = "Close panel";
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
-        // Planned here only so a bad id answers teachably: `LayoutClose` re-plans it under this
-        // same lock, and DEGRADES rather than errors.
-        match tx.g.arrangement().tab_index(&a.entry) {
+        // A tab is closed whole; anything else is closed with promote.
+        let plan = match tx.g.arrangement().tab_index(&a.entry) {
             Some(_) => tx.g.arrangement().remove_tab(&a.entry)?,
             None => tx.g.arrangement().remove_subtree(&a.entry)?,
         };
-        apply_layout(tx, goofi_graph::Command::LayoutClose { born: a.entry })
+        apply_layout(tx, plan)
     }
 }
 
@@ -269,7 +280,7 @@ impl WriteOp for TabEdit {
     /// Relabel a TAB — refused for any other kind of id, because an `edit` op edits ONE kind.
     fn run(tx: &mut Txn, a: TabEditArgs) -> Result<Value, String> {
         let writes = tx.g.arrangement().rename_tab(&a.tab, &a.name)?;
-        apply_layout(tx, goofi_graph::Command::LayoutContents { writes })
+        apply_writes(tx, &writes)
     }
 
     fn label(a: &TabEditArgs, _: &Value) -> String {
@@ -280,10 +291,9 @@ impl WriteOp for TabEdit {
 impl WriteOp for SplitEdit {
     const LABEL: &str = "Resize split";
     fn run(tx: &mut Txn, a: SplitEditArgs) -> Result<Value, String> {
-        // Planned here only so a bad split or a wrong fraction count answers teachably; the
-        // command re-plans it under this same lock.
-        tx.g.arrangement().resize_split(&a.split, &a.fraction)?;
-        apply_layout(tx, goofi_graph::Command::LayoutResizeSplit { split: a.split, fractions: a.fraction })
+        let plan = tx.g.arrangement().resize_split(&a.split, &a.fraction)?;
+        tx.key(format!("split {}", a.split));
+        apply_layout(tx, plan)
     }
 }
 

@@ -9,7 +9,7 @@ use goofi_core::ease::Curve;
 use goofi_core::Data;
 use goofi_graph::expr_rewrite;
 use goofi_graph::machine::{Attribute, AttributeKind, Machine, Decision, Playhead, State, Transition, OWN};
-use goofi_graph::{Command, Graph};
+use goofi_graph::{Graph};
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
 const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: on a playhead's arrival the attribute plays the envelope times the value — up from 0 over `attack` seconds, down over `decay` seconds to `sustain` (0..1), then down to 0 over `release` seconds; a release of -1 holds the sustain. A transition out eases the attribute from wherever the envelope stands to the next state's value, or to 0 where that state's own envelope plays on it";
@@ -231,7 +231,8 @@ fn machine_of(g: &Graph, name: &str) -> Result<Machine, String> {
 /// leaves its state goes with it.
 fn set(tx: &mut Txn, name: &str, mut next: Machine) -> Result<(), String> {
     next.prune();
-    tx.apply(Command::SetMachine { name: name.to_string(), machine: Some(Box::new(next)), at: None })?;
+    tx.key(format!("machine {name}"));
+    tx.g.set_machine(name, Some(next), None)?;
     Ok(())
 }
 
@@ -308,14 +309,14 @@ impl WriteOp for Add {
 impl WriteOp for Remove {
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
         machine_of(&tx.g, &a.machine)?;
-        let mut cmds = vec![Command::SetMachine { name: a.machine.clone(), machine: None, at: None }];
-        if let Some(next) = tx.g.machines().keys().find(|n| **n != a.machine) {
-            let writes = tx.g.arrangement().retarget("machine", "machine", &a.machine, next);
+        tx.g.set_machine(&a.machine, None, None)?;
+        // A panel over the removed machine shows the next one the patch has.
+        if let Some(next) = tx.g.machines().keys().next().cloned() {
+            let writes = tx.g.arrangement().retarget("machine", "machine", &a.machine, &next);
             if !writes.is_empty() {
-                cmds.push(Command::LayoutContents { writes });
+                tx.g.arrangement_mut().set_contents(&writes);
             }
         }
-        tx.apply(if cmds.len() == 1 { cmds.remove(0) } else { Command::Compound(cmds) })?;
         Ok(json!({ "removed": true }))
     }
 
@@ -326,7 +327,7 @@ impl WriteOp for Remove {
 
 impl WriteOp for Rename {
     fn run(tx: &mut Txn, a: RenameArgs) -> Result<Value, String> {
-        tx.apply(Command::RenameMachine { from: a.machine, to: a.to.clone() })?;
+        tx.g.rename_machine(&a.machine, &a.to)?;
         Ok(json!({ "name": a.to }))
     }
 
@@ -428,7 +429,9 @@ impl WriteOp for AttributeRename {
         if OWN.contains(&a.to.as_str()) {
             return Err(format!("`{}` is the machine's own element of a playhead; an attribute cannot take it", a.to));
         }
-        tx.apply(Command::RenameAttribute { machine: a.machine, from: a.name, to: a.to.clone() })?;
+        for r in tx.g.rename_attribute(&a.machine, &a.name, &a.to)? {
+            tx.echo(r);
+        }
         Ok(json!({ "name": a.to }))
     }
 
@@ -695,7 +698,9 @@ impl WriteOp for PlayheadRemove {
 
 impl WriteOp for PlayheadRename {
     fn run(tx: &mut Txn, a: PlayheadRenameArgs) -> Result<Value, String> {
-        tx.apply(Command::RenamePlayhead { machine: a.machine, from: a.name, to: a.to.clone() })?;
+        for r in tx.g.rename_playhead(&a.machine, &a.name, &a.to)? {
+            tx.echo(r);
+        }
         Ok(json!({ "name": a.to }))
     }
 
