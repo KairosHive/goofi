@@ -79,8 +79,10 @@ pub(crate) struct State {
     /// Readbacks taken for the recording, numbered from one.
     pub(crate) recorded: u64,
     pub(crate) uploads: Vec<Option<Target>>,
-    /// The range each upload spanned, in the uniform's own order.
-    pub(crate) ranges: Vec<[f32; 3]>,
+    /// Beside each upload, the head layout of its channels; `None` binds the blank texel.
+    pub(crate) layouts: Vec<Option<Target>>,
+    /// The range, channel count and scale of each upload, in the uniform's own order.
+    pub(crate) ranges: Vec<[f32; 4]>,
     pub(crate) time: wgpu::Buffer,
     pub(crate) frame: wgpu::Buffer,
     pub(crate) resolution: wgpu::Buffer,
@@ -105,6 +107,7 @@ impl State {
             count: 0,
             recorded: 0,
             uploads: Vec::new(),
+            layouts: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
@@ -240,7 +243,7 @@ impl State {
     pub(crate) fn submit_upload(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, up: &Upload) {
         let out = self.out.as_ref().expect("output allocated");
         if out.size == (up.width, up.height) {
-            write_upload(gpu, &out.texture, up);
+            write_texels(gpu, &out.texture, out.size, &up.texels);
         } else {
             self.upload(gpu, 0, up);
             gpu.resize(
@@ -256,18 +259,28 @@ impl State {
     pub(crate) fn upload(&mut self, gpu: &Gpu, k: usize, up: &Upload) {
         if self.uploads.len() <= k {
             self.uploads.resize_with(k + 1, || None);
+            self.layouts.resize_with(k + 1, || None);
         }
         if self.ranges.len() <= k {
-            self.ranges.resize(k + 1, [0.0, 1.0, 1.0]);
+            self.ranges.resize(k + 1, [0.0, 1.0, 1.0, 1.0]);
         }
-        self.ranges[k] = [up.lo, up.hi, up.channels as f32];
+        self.ranges[k] = [up.lo, up.hi, up.channels as f32, up.scale];
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
-            let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
             self.uploads[k] = Some(Target::new(gpu, "upload", size, crate::gpu::FORMAT, usage));
         }
-        let held = self.uploads[k].as_ref().expect("just made");
-        write_upload(gpu, &held.texture, up);
+        write_texels(gpu, &self.uploads[k].as_ref().expect("just made").texture, size, &up.texels);
+        match &up.layout {
+            Some((n, texels)) => {
+                let size = (*n, 1);
+                if self.layouts[k].as_ref().is_none_or(|t| t.size != size) {
+                    self.layouts[k] = Some(Target::new(gpu, "layout", size, crate::gpu::FORMAT, usage));
+                }
+                write_texels(gpu, &self.layouts[k].as_ref().expect("just made").texture, size, texels);
+            }
+            None => self.layouts[k] = None,
+        }
     }
 
     pub(crate) fn group0(&self, gpu: &Gpu) -> wgpu::BindGroup {
@@ -288,12 +301,13 @@ impl State {
     }
 }
 
-fn write_upload(gpu: &Gpu, texture: &wgpu::Texture, up: &Upload) {
+/// RGBA16F texels, `size` of them, into a texture of that size.
+fn write_texels(gpu: &Gpu, texture: &wgpu::Texture, size: (u32, u32), texels: &[u8]) {
     gpu.queue.write_texture(
         texture.as_image_copy(),
-        &up.texels,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(up.width * 8), rows_per_image: None },
-        wgpu::Extent3d { width: up.width, height: up.height, depth_or_array_layers: 1 },
+        texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.0 * 8), rows_per_image: None },
+        wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
     );
 }
 
@@ -301,15 +315,20 @@ use goofi_core::{Data, Value};
 /// One arrival as the render thread takes it: `width * height * 4` f16 texels, row 0 the top,
 /// and the range the frame's own values spanned — what a body needs to draw the frame to scale,
 /// and the one thing a shader cannot work out for itself without reading every texel at every
-/// texel.
+/// texel. The values and the range are both over `scale`, so a frame past the half floats fits.
 pub struct Upload {
     pub width: u32,
     pub height: u32,
     pub texels: Vec<u8>,
     pub lo: f32,
     pub hi: f32,
+    /// The power of two the values are divided by: 1 for a frame the half floats hold as it is.
+    pub scale: f32,
     /// How many channels the frame had, which the texels alone cannot say: gray fills three.
     pub channels: u32,
+    /// Where each channel of the first axis sits on the 10-20 head, by its name: a `[N, 1]`
+    /// texture of `(x, y, known, 0)`, or `None` for a frame whose channels have no names.
+    pub layout: Option<(u32, Vec<u8>)>,
 }
 
 impl Upload {
@@ -333,11 +352,12 @@ impl Upload {
                 }
             }
         }
-        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, channels: channels as u32 }
+        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, scale: 1.0, channels: channels as u32, layout: None }
     }
 
     /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
-    /// the channels it has, with alpha 1 where it has none.
+    /// the channels it has, with alpha 1 where it has none. The alpha is an opacity and stays as
+    /// it is; the values are over the scale that brings the frame's largest under 2^15.
     pub fn of(frame: &Data) -> Option<Upload> {
         let Value::Array(a) = frame.value() else { return None };
         let (h, w, c) = match *a.shape() {
@@ -357,21 +377,24 @@ impl Upload {
             lo = lo.min(*v);
             hi = hi.max(*v);
         }
+        let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
+        let scale = 2f32.powi((lo.abs().max(hi.abs()).log2().floor() - 14.0).max(0.0) as i32);
+        let over = |v: f32| v / scale;
         let mut texels = Vec::with_capacity(h * w * 8);
         for i in 0..h * w {
             let s = &x[i * c..(i + 1) * c];
             let rgba = match c {
-                1 => [s[0], s[0], s[0], 1.0],
-                2 => [s[0], s[0], s[0], s[1]],
-                3 => [s[0], s[1], s[2], 1.0],
-                _ => [s[0], s[1], s[2], s[3]],
+                1 => [over(s[0]), over(s[0]), over(s[0]), 1.0],
+                2 => [over(s[0]), over(s[0]), over(s[0]), s[1]],
+                3 => [over(s[0]), over(s[1]), over(s[2]), 1.0],
+                _ => [over(s[0]), over(s[1]), over(s[2]), s[3]],
             };
             texels.extend(
                 rgba.iter()
                     .flat_map(|v| half::f16::from_f32(if v.is_finite() { *v } else { 0.0 }).to_bits().to_le_bytes()),
             );
         }
-        let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
-        Some(Upload { width: w as u32, height: h as u32, texels, lo, hi, channels: c as u32 })
+        let layout = crate::montage::layout_of(frame);
+        Some(Upload { width: w as u32, height: h as u32, texels, lo: over(lo), hi: over(hi), scale, channels: c as u32, layout })
     }
 }

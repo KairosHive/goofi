@@ -2,7 +2,7 @@
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, type ImagePlot, type LineData } from 'plotluck';
 import { decimateMinMax } from './decimate';
-import { sampleRange } from './depth';
+import { sampleRange, toUnit } from './depth';
 import type { SettingsMap } from './module';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
@@ -28,11 +28,16 @@ export function lineData(frame: DataFrame, cols: number, logX: boolean): LineDat
  * One and two channels share one window: the LUT input, or red and green alike. */
 export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsMap): void {
 	const arr = frame.data as ArrayData;
-	const values = arr.values;
 	const [height, width] = arr.shape;
 	const channels = arr.shape.length === 3 ? arr.shape[2] : 1;
-	// An 8-bit texel samples in [0, 1] whatever the frame's units, so a manual range is scaled with it.
 	const range = sampleRange(arr.dtype, frame.meta);
+	if (channels <= 2 && settings.log === true) {
+		const { values, lo, hi } = logImage(arr.values, range, settings);
+		plot.push({ values, width, height, channels, lo, hi });
+		return;
+	}
+	const values = arr.values;
+	// An 8-bit texel samples in [0, 1] whatever the frame's units, so a manual range is scaled with it.
 	const [t0, t1] = range ?? [0, 1];
 	const tw = t1 - t0 || 1;
 	let lo = 0;
@@ -44,6 +49,35 @@ export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsM
 		[lo, hi] = extent(values) ?? [0, 1];
 	}
 	plot.push({ values: channels === 4 ? overChecker(values, width, height) : values, width, height, channels, lo, hi });
+}
+
+/** The frame as log10 of its values in the node's units, windowed over its positive extent or
+ * the manual range: a value at or below zero sits at the bottom of the window. */
+export function logImage(
+	values: Uint8Array | Float32Array,
+	range: [number, number] | null,
+	settings: SettingsMap
+): { values: Float32Array; lo: number; hi: number } {
+	const out = new Float32Array(values.length);
+	let min = Infinity;
+	let max = -Infinity;
+	for (let i = 0; i < values.length; i++) {
+		const v = range ? toUnit(values[i], range) : values[i];
+		if (v > 0) {
+			const l = Math.log10(v);
+			out[i] = l;
+			if (l < min) min = l;
+			if (l > max) max = l;
+		} else out[i] = -Infinity;
+	}
+	let [lo, hi] = min <= max ? [min, max] : [0, 1];
+	if (settings.auto === false) {
+		const bound = (x: unknown, fallback: number) => (Number(x) > 0 ? Math.log10(Number(x)) : fallback);
+		lo = bound(settings.vmin, lo);
+		hi = bound(settings.vmax, hi);
+	}
+	for (let i = 0; i < out.length; i++) if (out[i] === -Infinity) out[i] = lo;
+	return { values: out, lo, hi };
 }
 
 /** How many texels a square of the checkerboard spans. */

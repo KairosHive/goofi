@@ -241,7 +241,7 @@ impl Runtime {
             }
             if let Some(pipeline) = pipeline {
                 // Cloned handles, so reading another stage's output ends the borrow of `states`.
-                let views: Vec<wgpu::TextureView> = stage
+                let mut views: Vec<wgpu::TextureView> = stage
                     .inputs
                     .iter()
                     .map(|input| match input {
@@ -260,6 +260,10 @@ impl Runtime {
                     .cloned()
                     .collect();
                 let state = &self.states[&stage.uid];
+                // After the inputs, one head layout per ARRAY input, in the prelude's order.
+                views.extend((0..stage.cells.uploads.len()).map(|k| {
+                    state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
+                }));
                 let group0 = state.group0(&self.gpu);
                 let group1 = self.gpu.texture_group(&views);
                 let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
@@ -536,6 +540,6 @@ fn post(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id) {
 /// A stage's uniform block length, measured by the writer so there is one layout.
 pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
     let zeros = goofi_runtime::cells_of(&goofi_node::ParamGroups::new(), manifest.params);
-    let ranges = vec![[0.0, 1.0, 1.0]; shader::array_inputs(manifest).count()];
+    let ranges = vec![[0.0, 1.0, 1.0, 1.0]; shader::array_inputs(manifest).count()];
     shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

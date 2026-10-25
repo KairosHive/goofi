@@ -22,7 +22,8 @@ export const line: ViewerModule = {
 		{ key: 'yMin', label: 'Min', type: 'number', default: -1, step: 0.1, showWhen: manual('yAuto') },
 		{ key: 'yMax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('yAuto') },
 		{ key: 'points', label: 'Show points', type: 'toggle', default: false, showWhen: series },
-		{ key: 'pointSize', label: 'Point size', type: 'number', default: 2, min: 0, max: 12, step: 1, showWhen: trajectory }
+		{ key: 'pointSize', label: 'Point size', type: 'number', default: 2, min: 0, max: 12, step: 1, showWhen: trajectory },
+		{ key: 'thickness', label: 'Thickness', type: 'number', default: 2, min: 0.5, max: 8, step: 0.5 }
 	],
 	ask(w, _h, s) {
 		if (s.mode === 'trajectory') {

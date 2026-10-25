@@ -18,6 +18,7 @@ use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, Librar
 
 mod gpu;
 mod half;
+mod montage;
 mod plan;
 mod runtime;
 mod scan;
@@ -122,11 +123,11 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], face: Face::Plain },
         expression: Some(ExprDecl {
             source,
-            mode: if m.producer { ExprMode::On } else { ExprMode::Off },
+            mode: if m.inputs.iter().any(|s| s.kind == SlotType::Texture) { ExprMode::Off } else { ExprMode::On },
         }),
         doc: Some(
             "Texture size in pixels; 0 follows the first wired texture input, or the frame \
-             uploaded to the first array input. A node that makes its own frames follows the \
+             uploaded to the first array input. A node with no texture input follows the \
              patch's default instead.",
         ),
         section: 0,

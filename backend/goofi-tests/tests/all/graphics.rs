@@ -166,9 +166,7 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:SignalIn");
     g.ready(up);
-    // A door for frames follows the frame: its size rests at a constant 0, not the patch's default.
-    let width = g.doc()["nodes"][hex(up)]["params"]["common"]["width"].clone();
-    assert_eq!(width, j!({ "value": 0 }), "the size is a constant 0, not a seeded expression");
+    // Its size is the patch's default, seeded below once an evaluator is present; here, by hand.
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
@@ -195,6 +193,14 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "signal", "colormap", "gray");
     let frame = drawn(&g, up, "the gray frame", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "gray is the value itself: {:?}", px(&frame, 0, 63));
+    // A frame past the half floats' reach is carried over a power of two, so it reads the same;
+    // held raw, every value over 65504 would be infinite and read as the ceiling.
+    g.set_param(ramp, "ramp", "scale", 1e6);
+    let mid = 31.0 / 63.0;
+    let frame = drawn(&g, up, "the frame of millions", |d| close(px(d, 0, 31), [mid, mid, mid, 1.0]));
+    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "from the floor: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "to the ceiling: {:?}", px(&frame, 0, 63));
+    g.set_param(ramp, "ramp", "scale", 1.0);
     // Off autoscale, the range is the one asked for: the ramp's last step, 63/64, on a window
     // to 2 is half that gray.
     g.set_param(up, "signal", "autoscale", false);
@@ -241,6 +247,29 @@ fn shaders_render_on_the_gpu() {
     let (at_left, at_right) = (ridge(&traj)[left].expect("ink"), ridge(&traj)[right].expect("ink"));
     assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
     assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
+
+    // …and channels named for 10-20 electrodes are a topomap: the field between them on the head
+    // disc, transparent off it, under the outline — and nothing for channels without names.
+    g.set_param(up, "signal", "mode", "topomap");
+    g.set_param(up, "signal", "colormap", "gray");
+    g.set_param(up, "signal", "electrodes", false);
+    g.set_param(up, "common", "width", 64);
+    g.set_param(up, "common", "height", 64);
+    g.set_param(ramp, "ramp", "channels", 3);
+    g.set_param(ramp, "ramp", "named", true);
+    let head = drawn(&g, up, "the topomap", |d| shape(d) == vec![64, 64, 4] && px(d, 32, 32)[3] == 1.0 && px(d, 32, 3)[3] > 0.9);
+    assert!(close(px(&head, 0, 0), [0.0, 0.0, 0.0, 0.0]), "off the head is transparent: {:?}", px(&head, 0, 0));
+    // Cz, C3 and C4 rise in that order, so the field reads brighter from the centre to the left
+    // and brightest on the right.
+    let (centre, left, right) = (px(&head, 32, 32)[0], px(&head, 32, 17)[0], px(&head, 32, 47)[0]);
+    assert!(centre < left && left < right, "Cz under C3 under C4: {centre} {left} {right}");
+    let rim = px(&head, 32, 3);
+    assert!(rim[0] > 0.7 && rim[2] > rim[0], "the outline in the viewers' head grey: {rim:?}");
+    g.set_param(up, "signal", "electrodes", true);
+    drawn(&g, up, "the electrodes", |d| px(d, 32, 17)[0] < 0.1 && px(d, 32, 17)[3] == 1.0);
+    g.set_param(ramp, "ramp", "named", false);
+    drawn(&g, up, "the unnamed topomap", |d| px(d, 32, 32)[3] == 0.0 && px(d, 32, 3)[3] == 0.0);
+    g.set_param(up, "common", "height", 32);
 
     g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
@@ -812,6 +841,14 @@ fn shaders_render_on_the_gpu() {
     g.call("variable entry edit", j!({ "name": "graphics.default_width", "value": 96 }));
     g.call("variable entry edit", j!({ "name": "graphics.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    // A door for frames has no texture to follow, so it takes the patch's default the same way.
+    let door = g.add("graphics:SignalIn");
+    g.ready(door);
+    let bound = g.doc()["nodes"][hex(door)]["params"]["common"]["height"].clone();
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.graphics.default_height"), &j!("expression")),
+               "a door for frames is seeded live too: {bound}");
+    drawn(&g, door, "the door at the patch's default", |d| shape(d) == vec![48, 96, 4]);
+    g.call("node remove", j!({ "node": hex(door) }));
     // A loop that follows itself at 0,0 can follow nothing: it takes the patch's default too, not
     // the number the variables were born with.
     let (fb, comp) = (g.add("graphics:Feedback"), g.add("graphics:Composite"));

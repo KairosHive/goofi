@@ -27,10 +27,10 @@ fn to_segment(here: vec2f, a: vec2f, b: vec2f) -> f32 {
 }
 
 /// The frame's own range mapped onto [-1, 1], one range for every axis so the figure is not
-/// stretched. The range is what the engine carries in beside the params.
+/// stretched. The range is what the engine carries in beside the params, as is the scale.
 fn scaled(v: f32) -> f32 {
     if p.autoscale == 0u {
-        return v;
+        return v * p.out_scale;
     }
     return (v - (p.out_lo + p.out_hi) * 0.5) / max((p.out_hi - p.out_lo) * 0.5, 1e-6);
 }
