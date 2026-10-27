@@ -561,6 +561,51 @@ async fn a_drag_previews_and_commits_as_one_step_and_a_cut_socket_takes_it_back(
     assert!(dirty(&g), "the commit before the drag is still an edit");
 }
 
+/// A drag is a layer over the committed state: a write another client lands meanwhile records the
+/// state without the drag, the drag's commit records the state that write left, and an undo walks
+/// them back in order — neither takes the other's work, and no step of the drag survives.
+#[test]
+fn a_write_landing_during_another_clients_drag_keeps_its_place_in_the_history() {
+    let g = Goofi::new();
+    let a = g.client("a");
+    let b = g.client("b");
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "amplitude", 1.0);
+    let other = g.add("LFO");
+    g.call("node edit", j!({ "node": hex(other), "pos": [10.0, 10.0] }));
+    let amp = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
+    let pos = |g: &Goofi| g.doc()["nodes"][hex(other)]["pos"].clone();
+    let edit = |v: f64| j!({ "node": hex(osc), "param": "lfo/amplitude", "value": v });
+
+    a.preview("node param edit", edit(0.2));
+    a.preview("node param edit", edit(0.4));
+    b.call("node edit", j!({ "node": hex(other), "pos": [50.0, 50.0] }));
+    assert_eq!((amp(&g), pos(&g)), (j!(0.4), j!([50.0, 50.0])), "the write lands under the drag");
+    a.preview("node param edit", edit(0.6));
+    a.call("node param edit", edit(0.7));
+
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo keeps the move that landed during it");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([10.0, 10.0])), "the move's undo takes back the move alone");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])));
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(0.7), j!([50.0, 50.0])));
+
+    // An undo by the other client while the drag runs takes the last step back under it; the
+    // drag's way back is then where that undo left the patch.
+    a.preview("node param edit", edit(0.2));
+    assert_eq!(b.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1), "another client's undo takes the committed step back");
+    a.preview("node param edit", edit(0.3));
+    a.call("node param edit", edit(0.5));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo puts back what the undo under it left");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.5));
+}
+
 /// One history for every client: an undo takes back the last write whoever made it, the stack
 /// walks to empty and forward again from either side, and a refused write leaves the document and
 /// the history exactly as they were.

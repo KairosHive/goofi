@@ -1,7 +1,7 @@
 //! One transaction per read or write op: the graph and history held for its whole run, an outbox
 //! of events, and one tail that settles, projects and broadcasts when something changed. A write
-//! takes the snapshot before it runs; what it changed is the history's next entry, and a refusal
-//! puts the snapshot back.
+//! takes the snapshot before it runs; what it changed, less the drags in flight, is the history's
+//! next entry, and a refusal puts the snapshot back.
 
 use std::sync::MutexGuard;
 
@@ -91,17 +91,18 @@ impl<'a> Txn<'a> {
         }
         if let Some(before) = before.filter(|_| edited) {
             let actor = self.caller.actor.as_str();
+            let after = self.g.snapshot();
             match (self.preview, &self.key) {
-                (true, Some(key)) => self.history.preview(actor, key, before),
+                (true, Some(key)) => self.history.preview(actor, key, before, &after),
                 (true, None) => {}
                 (false, key) => {
-                    let before = key.as_deref().and_then(|k| self.history.take_preview(actor, k)).unwrap_or(before);
                     // The caller's own label, where it gave one, names the step over the op's.
                     let label = self.caller.label.clone().unwrap_or_else(|| match self.labels.as_slice() {
                         [one] => one.clone(),
                         many => format!("{} edits", many.len()),
                     });
-                    self.history.record(before, label, self.caller.context.clone(), self.caller.group.clone());
+                    let step = goofi_graph::Step { label, context: self.caller.context.clone(), group: self.caller.group.clone() };
+                    self.history.record(actor, key.as_deref(), before, &after, step);
                     outbox.push(crate::history_event(&self.history));
                 }
             }

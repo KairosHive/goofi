@@ -468,6 +468,36 @@ pub struct Snapshot {
     pub version: u64,
 }
 
+impl Snapshot {
+    /// The variables `other` holds differently from this one, by name, and whether the groups do.
+    pub fn differing(&self, other: &Snapshot) -> (Vec<String>, bool) {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.entries.keys().chain(other.entries.keys()) {
+            if self.entries.get(name) != other.entries.get(name) && !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        (names, self.groups != other.groups)
+    }
+
+    /// `names` as `from` holds them, and the groups too where `groups`; the rest stays.
+    pub fn take(&mut self, from: &Snapshot, names: &[String], groups: bool) {
+        for name in names {
+            match from.entries.get(name) {
+                Some(v) => {
+                    self.entries.insert(name.clone(), v.clone());
+                }
+                None => {
+                    self.entries.shift_remove(name);
+                }
+            }
+        }
+        if groups {
+            self.groups = from.groups.clone();
+        }
+    }
+}
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
 /// the plane from here, under the store's own lock, so the order the plane sees is the store's.

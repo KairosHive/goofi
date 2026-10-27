@@ -23,7 +23,7 @@ pub mod subpatch;
 pub mod layout;
 
 pub mod history;
-pub use history::{Flip, History, Snapshot};
+pub use history::{Flip, History, Snapshot, Step};
 
 pub mod expr_rewrite;
 pub mod machine;
