@@ -257,13 +257,20 @@ pub fn param_value_json(p: &Param) -> serde_json::Value {
     serde_json::to_value(control::data_of(p)).unwrap_or_default()
 }
 
-/// A JSON literal as a `Param` of `existing`'s kind, keeping its bounds; what is no literal
-/// leaves `existing` as it is.
-pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Param {
-    match serde_json::from_value::<Data>(v.clone()) {
-        Ok(d) => control::read(&d, existing),
-        Err(_) => existing.clone(),
+/// A JSON literal as a `Param` of `existing`'s kind, keeping its bounds. A text on a number or
+/// a truth is what it parses to, and one that parses to nothing is refused, never read as zero.
+pub fn param_from_json(existing: &Param, v: &serde_json::Value) -> Result<Param, String> {
+    let d = serde_json::from_value::<Data>(v.clone()).map_err(|_| format!("{v} is no literal"))?;
+    if matches!(d.value(), goofi_core::Value::Str(_)) && !matches!(existing, Param::Str { .. }) && control::numbers(&d).next().is_none() {
+        let holds = match existing {
+            Param::Num { value, .. } if value.len() > 1 => "numbers",
+            Param::Num { .. } => "a number",
+            Param::Bool { .. } | Param::Pulse => "a truth",
+            Param::Str { .. } => "a string",
+        };
+        return Err(format!("`{}` is a string, and this param holds {holds}", control::text(&d)));
     }
+    Ok(control::read(&d, existing))
 }
 
 impl Graph {
@@ -327,7 +334,7 @@ impl Graph {
 
 /// A CLI `--value` arrives as its raw string; for a param that is no string it is read as JSON
 /// first, so `true` and `[1, 0]` mean what they say, and bare `1 0 0 1` reads as its numbers.
-fn coerced_value(existing: &Param, v: &serde_json::Value) -> Param {
+fn coerced_value(existing: &Param, v: &serde_json::Value) -> Result<Param, String> {
     let parsed = match (existing, v.as_str()) {
         (Param::Str { .. }, _) | (_, None) => None,
         (_, Some(s)) => serde_json::from_str::<serde_json::Value>(s).ok(),
@@ -388,7 +395,7 @@ fn param_change(
         if pulse {
             return Err(PULSE_HOLDS_NO_VALUE.to_string());
         }
-        return Ok((Some(coerced_value(existing, spec)), None));
+        return Ok((Some(coerced_value(existing, spec)?), None));
     };
     if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "value" | "expression" | "mode")) {
         return Err(format!("unknown field `{k}` — value, expression, mode"));
@@ -397,7 +404,7 @@ fn param_change(
     if pulse && field("value").is_some() {
         return Err(PULSE_HOLDS_NO_VALUE.to_string());
     }
-    let value = field("value").map(|v| coerced_value(existing, v));
+    let value = field("value").map(|v| coerced_value(existing, v)).transpose()?;
     let text = |k: &str| {
         field(k)
             .map(|v| v.as_str().map(str::to_string).ok_or_else(|| format!("{k} is a string, not {v}")))

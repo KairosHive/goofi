@@ -606,6 +606,27 @@ fn a_write_landing_during_another_clients_drag_keeps_its_place_in_the_history() 
     assert_eq!(amp(&g), j!(0.5));
 }
 
+/// A text that reads as no number is refused on a number param — never read as zero: the value,
+/// the source and the history stand as they were.
+#[test]
+fn a_text_on_a_number_param_is_refused_and_nothing_moves() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "expression": "0.5" }));
+    let entry = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"].clone();
+    let held = entry(&g);
+    assert_eq!(held["mode"], "expression", "{held}");
+    let labels = g.state.history_labels();
+    let why = g.refuse("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "abc" }));
+    assert!(why.contains("`abc` is a string, and this param holds a number"), "{why}");
+    assert_eq!(entry(&g), held, "a refused value leaves the literal and the source");
+    assert_eq!(g.state.history_labels(), labels, "and records no step");
+    // A text that reads as numbers is those numbers, which is what a shell hands over.
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "0.25" }));
+    assert_eq!(entry(&g)["value"], j!(0.25));
+    assert_eq!(entry(&g)["mode"], "constant", "a literal switches a driven param to constant");
+}
+
 /// One history for every client: an undo takes back the last write whoever made it, the stack
 /// walks to empty and forward again from either side, and a refused write leaves the document and
 /// the history exactly as they were.
