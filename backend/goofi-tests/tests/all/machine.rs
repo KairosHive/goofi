@@ -330,6 +330,35 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     bound(&g, "loaded over itself", shared, 0.0);
 }
 
+/// A load restarts the patch clock, so every instant a run holds is of the patch before: the
+/// machines start over at their playheads' starts, and no flight replays on the new clock.
+#[test]
+fn a_load_starts_every_machine_over_and_replays_no_flight() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
+    for (op, payload) in [
+        ("machine add", j!({ "name": "amp" })),
+        ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "low", "values": { "level": 0.25 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "high", "values": { "level": 1.0 } })),
+        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "duration": 30.0, "curve": "linear" })),
+        ("machine state edit", j!({ "machine": "amp", "name": "low", "noop": 1.0, "weights": { "t1": 0.0 } })),
+        ("machine playhead add", j!({ "machine": "amp", "name": "h", "start": "low" })),
+    ] {
+        g.call(op, payload);
+    }
+    at_rest_in(&g, "h", "low");
+    g.call("machine fire", j!({ "machine": "amp", "playhead": "h", "transition": "t1" }));
+    g.until("the flight to be under way", |g| (text(g, "h.prev") == "low").then_some(()));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flight.gfi");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    at_rest_in(&g, "h", "low");
+    assert_eq!(number(&g, "h.level"), 0.25, "the attribute is the start state's value, not the flight on the new clock");
+    assert_eq!(number(&g, "h.progress"), 1.0);
+}
+
 /// A playhead variable among an advance's writes.
 fn written<'a>(writes: &'a [(String, Data)], name: &str) -> &'a Data {
     &writes.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no write of {name}: {writes:?}")).1

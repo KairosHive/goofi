@@ -502,6 +502,8 @@ pub struct Machines {
     /// The functionals the last advance handed out, by source: a flight's stay the same for
     /// its whole duration, and each compile is a Python call.
     functionals: HashMap<String, Arc<[u8]>>,
+    /// The instant of the last advance: one earlier than it says the clock restarted.
+    last: f64,
 }
 
 impl Machines {
@@ -613,6 +615,15 @@ impl Machines {
     /// own instant, in order, then the instant itself. Answers every playhead variable as it
     /// stands, a functional for an attribute in flight.
     pub fn advance(&mut self, now: f64, read: &dyn Fn(&str) -> Option<Data>) -> Vec<(String, Data)> {
+        // The clock restarted — a load, a new patch — so every instant a run or a request holds
+        // is of the patch before: every run starts over at its playheads' starts.
+        if now < self.last {
+            self.runs.clear();
+            self.requests.clear();
+            self.functionals.clear();
+            self.reconcile = true;
+        }
+        self.last = now;
         if std::mem::take(&mut self.reconcile) {
             let ctx = Ctx::new(&self.compiled, &self.evaluator, read, now);
             self.runs.retain(|name, _| self.config.contains_key(name));
