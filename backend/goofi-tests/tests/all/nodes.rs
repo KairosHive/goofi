@@ -236,6 +236,27 @@ fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
     });
 }
 
+/// A load scans every type again. A shipped Rust node's library has been open in this process
+/// since boot, so it is the build that runs: native still, never a child per instance.
+#[test]
+fn a_load_keeps_the_libraries_the_boot_scan_opened_native() {
+    let g = Goofi::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native.gfi");
+    let constant = g.add("signal:Constant");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    for ty in ["signal:Constant", "signal:Math", "signal:Noise", "signal:Reshape"] {
+        let r = g.call("library get", j!({ "type": ty }));
+        assert_eq!((&r["language"], &r["tier"]), (&j!("rust"), &j!("native")), "{r}");
+    }
+    g.call("node param request", j!({ "node": goofi_tests::hex(constant), "param": "common/trigger", "request": "pulse" }));
+    let hosts: Vec<String> = g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+        .filter(|e| e["kind"] == "child")
+        .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node")).map(str::to_string).collect();
+    assert!(hosts.is_empty(), "a shipped node runs in this process after a load, not in a child: {hosts:?}");
+}
+
 #[test]
 fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rides_an_archive() {
     let g = Goofi::new();

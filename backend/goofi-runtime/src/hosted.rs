@@ -13,7 +13,8 @@ use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
 use goofi_transport::{Exchange, Hub, Served};
 
-/// Load a native host type. After boot, its library belongs to a child of `host`.
+/// Load a native host type. After boot, a library this process has not opened belongs to a child
+/// of `host`; one it opened at boot is the build that runs, whatever scan asks again.
 pub fn load(
     hub: Arc<Hub>,
     artifact: PathBuf,
@@ -22,7 +23,7 @@ pub fn load(
     host: Option<&Path>,
     booted: bool,
 ) -> Result<(&'static NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
-    let host = if booted {
+    let host = if booted && !goofi_build::is_open(&artifact) {
         Some(host.ok_or("no host executable was named, so a node built after boot cannot run")?.to_path_buf())
     } else {
         None

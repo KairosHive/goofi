@@ -428,6 +428,12 @@ pub fn library(path: &Path) -> Result<&'static libloading::Library, String> {
     Ok(library)
 }
 
+/// Whether [`library`] has opened `path` in this process — a library that is, is current for
+/// its bytes, since an artifact's path is a key over them.
+pub fn is_open(path: &Path) -> bool {
+    opened().contains_key(path)
+}
+
 /// The OS handle of a library [`library`] opened — what a module's own entry hook is handed.
 #[cfg(unix)]
 pub fn handle(path: &Path) -> Option<*mut std::ffi::c_void> {
