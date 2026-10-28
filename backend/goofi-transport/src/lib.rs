@@ -1,112 +1,112 @@
-//! Cross-engine transport: iceoryx2 names, rendezvous and endpoints for every engine. Names are
-//! pure derivation, and whichever side settles first waits on `open_or_create`.
+//! goofi's transport: the in-process plane every engine, the recorder and the bridge share, and
+//! the exchange a child is called over. Names are pure derivation from the graph, and the [`Hub`]
+//! is where any end finds the other by that name, whichever settles first.
 
-use iceoryx2::config::Config;
-use iceoryx2::prelude::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
+use goofi_supervisor::sync::Mutex;
+
+pub mod door;
 pub mod exchange;
+mod link;
 pub mod names;
-pub mod services;
+pub mod queue;
+mod shm;
+pub mod slot;
 
+pub use door::*;
 pub use exchange::*;
 pub use names::*;
-pub use services::*;
+pub use queue::*;
+pub use slot::*;
 
-/// An iceoryx2 service name — a wire's identity, which is why slot messages carry no source uid.
+/// A service name: a wire's identity, which is why a payload carries no source uid.
 pub type ServiceName = String;
 
-/// The service variant every goofi port uses. `ipc_threadsafe` (rather than `ipc`) is what makes
-/// the ports `Send + Sync`, which an engine's transport must be.
-type Svc = ipc_threadsafe::Service;
-/// An iceoryx2 node under the session's root and prefix, entered in the process's resource index
-/// for as long as it lives. Declare it AFTER the ports it minted, so they are dropped first.
-pub struct IoxNode {
-    node: iceoryx2::node::Node<Svc>,
-    _lease: goofi_supervisor::scope::Lease,
+/// The id a door is rung with: `0` is a control message; `1..=64` an input slot, the slots past
+/// 63 sharing 64; `65..=128` an `nd()` channel; the rest a door's own.
+pub use goofi_node::EventId;
+
+/// The per-session registry: every slot, door and queue by name, made by whichever end asks
+/// first and gone when the last end lets go.
+pub struct Hub {
+    session: String,
+    slots: Mutex<HashMap<String, Weak<slot::Cell>>>,
+    doors: Mutex<HashMap<String, Weak<Door>>>,
+    queues: Mutex<HashMap<String, Weak<queue::Queue>>>,
+    /// Exchanges opened so far: each names its own mailboxes.
+    exchanges: AtomicU64,
 }
 
-impl std::ops::Deref for IoxNode {
-    type Target = iceoryx2::node::Node<Svc>;
-    fn deref(&self) -> &Self::Target {
-        &self.node
-    }
-}
-pub type BytePublisher = iceoryx2::port::publisher::Publisher<Svc, [u8], ()>;
-pub type ByteSubscriber = iceoryx2::port::subscriber::Subscriber<Svc, [u8], ()>;
-pub type ByteService = iceoryx2::service::port_factory::publish_subscribe::PortFactory<Svc, [u8], ()>;
-pub type EventService = iceoryx2::service::port_factory::event::PortFactory<Svc>;
-pub type Listener = iceoryx2::port::listener::Listener<Svc>;
-/// The id a listener is handed per wake, as iceoryx2 spells it.
-pub type WakeId = iceoryx2::prelude::EventId;
-
-/// Park on `listener` for at most `within`, at least 1 µs: iceoryx2 reads a zero timeval as NO
-/// timeout, so a shorter wait would park until something rings, which a source never gets.
-pub fn wait_within(listener: &Listener, within: std::time::Duration, f: impl FnMut(WakeId)) {
-    let _ = listener.timed_wait_all(f, within.max(std::time::Duration::from_micros(1)));
-}
-
-/// The iceoryx2 root and prefix every port of one session is built against. The dead-node passes
-/// are off: the session lock is the one liveness answer.
-pub struct Iox {
-    id: String,
-    config: Config,
-}
-
-impl Iox {
-    pub fn new(session: &goofi_supervisor::session::Session) -> Result<Iox, String> {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            set_log_level_from_env_or(LogLevel::Error);
-            raise_fd_limit();
-        });
-        let id = session.id().to_string();
-        let mut config = Config::global_config().clone();
-        let root = iox_root(&id).to_string_lossy().replace('\\', "/");
-        let path = iceoryx2::prelude::Path::new(root.as_bytes()).map_err(|e| format!("iceoryx2 refuses the root {root}: {e:?}"))?;
-        config.global.set_root_path(&path);
-        let prefix = goofi_supervisor::session::shm_prefix(&id);
-        config.global.prefix = iceoryx2::prelude::FileName::new(prefix.as_bytes()).map_err(|e| format!("iceoryx2 refuses the prefix {prefix}: {e:?}"))?;
-        config.global.service.cleanup_dead_nodes_on_open = false;
-        config.global.node.cleanup_dead_nodes_on_creation = false;
-        config.global.node.cleanup_dead_nodes_on_destruction = false;
-        let _ = std::fs::create_dir_all(iox_root(&id));
-        Ok(Iox { id, config })
+impl Hub {
+    pub fn new(session: &str) -> Hub {
+        Hub {
+            session: session.to_string(),
+            slots: Mutex::new(HashMap::new()),
+            doors: Mutex::new(HashMap::new()),
+            queues: Mutex::new(HashMap::new()),
+            exchanges: AtomicU64::new(0),
+        }
     }
 
-    /// A child's: the session its parent named in `GOOFI_SESSION`.
-    pub fn from_env() -> Result<Iox, String> {
-        Iox::new(&goofi_supervisor::session::Session::join_from_env()?)
-    }
-
+    /// The session every name of this hub belongs to.
     pub fn id(&self) -> &str {
-        &self.id
+        &self.session
     }
 
-    /// One iceoryx2 node per port OWNER, never per port: each is a directory under the session's
-    /// root and each is counted by every service's `max_nodes`.
-    pub fn node(&self) -> Result<IoxNode, String> {
-        let node = NodeBuilder::new().config(&self.config).create::<Svc>().map_err(|e| explained(format!("iox node: {e}")))?;
-        // Named by the thread that opened it, which is what a reader of the inventory can act on.
-        let owner = std::thread::current().name().unwrap_or("?").to_string();
-        Ok(IoxNode { node, _lease: goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Port, owner) })
+    /// The entry `name` holds in `map`, or a fresh one; entries whose every end left are swept
+    /// on the way.
+    fn entry<T>(map: &Mutex<HashMap<String, Weak<T>>>, name: &str, make: impl FnOnce() -> T) -> Arc<T> {
+        let mut map = map.lock();
+        if let Some(live) = map.get(name).and_then(Weak::upgrade) {
+            return live;
+        }
+        map.retain(|_, weak| weak.strong_count() > 0);
+        let made = Arc::new(make());
+        map.insert(name.to_string(), Arc::downgrade(&made));
+        made
     }
-}
 
-/// An iceoryx2 error as a reader can act on it. On Windows the platform layer allows 1024 handles
-/// per process, about 50 nodes with their viewers, and a full table answers every open with an
-/// internal failure, a corrupted state or a hang in creation: those words get the explanation
-/// and where to report it. Elsewhere, and for every other error, the text stands as it is.
-pub fn explained(error: String) -> String {
-    const SIGNS: [&str; 4] = ["InternalFailure", "InternalError", "ServiceInCorruptedState", "HangsInCreation"];
-    if cfg!(windows) && SIGNS.iter().any(|sign| error.contains(sign)) {
-        format!(
-            "{error} — on Windows goofi's transport (iceoryx2) allows 1024 handles per process, about 50 nodes \
-             with their viewers, and this patch has likely reached that limit; please open an issue at {} \
-             with this message and the patch",
-            goofi_supervisor::ISSUES
-        )
-    } else {
-        error
+    /// The one publisher of a slot. `held` keeps the newest payload for a subscriber that comes
+    /// late, which a variable wants and a node's output never does.
+    pub fn publisher(&self, name: &str, held: bool) -> Publisher {
+        let cell = Self::entry(&self.slots, name, slot::Cell::default);
+        cell.held.store(held, Ordering::Relaxed);
+        Publisher::new(cell)
+    }
+
+    /// A reader of a slot — a wire's consumer end, a viewer's feed, a probe.
+    pub fn subscribe(&self, name: &str) -> Subscriber {
+        Subscriber::new(Self::entry(&self.slots, name, slot::Cell::default))
+    }
+
+    /// How many readers a slot has right now: its demand, as its producer reads it.
+    pub fn readers(&self, name: &str) -> usize {
+        self.slots.lock().get(name).and_then(std::sync::Weak::upgrade).map_or(0, |cell| cell.readers())
+    }
+
+    /// The door `name` names: parked on by its owner, rung by anyone holding it.
+    pub fn door(&self, name: &str) -> Arc<Door> {
+        Self::entry(&self.doors, name, || Door::new(name))
+    }
+
+    /// A producer's end of a queue `depth` frames deep: an armed slot's, feeding the recorder.
+    pub fn sender(&self, name: &str, depth: usize) -> Sender {
+        Sender::new(Self::entry(&self.queues, name, || queue::Queue::new(depth)))
+    }
+
+    /// The reader's end of a queue `depth` frames deep: both ends name the depth, from the
+    /// engine, so whichever comes first makes the same queue.
+    pub fn receiver(&self, name: &str, depth: usize) -> Receiver {
+        Receiver::new(Self::entry(&self.queues, name, || queue::Queue::new(depth)))
+    }
+
+    /// A fresh exchange number: what names its mailboxes, unique for the session.
+    pub(crate) fn next_exchange(&self) -> u64 {
+        self.exchanges.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -118,62 +118,70 @@ pub fn scratch(session: &str, name: &str) -> Result<std::path::PathBuf, String> 
     Ok(dir.join(name))
 }
 
-/// Where iceoryx2 keeps a session's files: node directories, service configs, monitors.
-fn iox_root(id: &str) -> std::path::PathBuf {
-    goofi_supervisor::session::system_dir(id).join("iox")
+/// The survivor `keep` names, taken out of what a reconcile held; what is left is what the new
+/// set does not name, and dropping it IS the unsubscribe.
+pub fn take_where<T>(held: &mut Vec<T>, keep: impl Fn(&T) -> bool) -> Option<T> {
+    held.iter().position(keep).map(|i| held.remove(i))
 }
 
-/// Raise the soft descriptor limit (a node costs about 45) toward the hard one. Capped, because
-/// macOS refuses the infinite hard limit it often reports.
-#[cfg(unix)]
-fn raise_fd_limit() {
-    const WANTED: libc::rlim_t = 65536;
-    let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
-        return;
+/// A CEILING on a teardown, not a join: a wedged node must not be able to wedge the exit.
+pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+
+/// Wait for every halt to release, up to [`SHUTDOWN_WAIT`]. Whether they all did.
+pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>) -> bool {
+    let deadline = goofi_supervisor::timing::Deadline::within(SHUTDOWN_WAIT);
+    let mut all = true;
+    for halt in halts {
+        all &= halt.wait_released_until(deadline.instant());
     }
-    let want = WANTED.min(lim.rlim_max);
-    if want > lim.rlim_cur {
-        lim.rlim_cur = want;
-        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) };
-    }
+    all
 }
 
-/// Windows bounds the CRT's handles rather than a per-process descriptor rlimit, and its ceiling
-/// is already far above what a patch opens.
-#[cfg(not(unix))]
-fn raise_fd_limit() {}
-
-/// Ports and the node they were built from, dropped in that order: a node dropped before its
-/// ports cannot remove its own directory. The ports are reached through `Deref`.
-pub struct PortBundle<P> {
-    ports: P,
-    node: IoxNode,
+thread_local! {
+    static WORN: std::cell::RefCell<Option<Arc<Halt>>> = const { std::cell::RefCell::new(None) };
 }
 
-impl<P> PortBundle<P> {
-    /// Build the ports on a fresh node of this session.
-    pub fn open(iox: &Iox, build: impl FnOnce(&IoxNode) -> Result<P, String>) -> Result<PortBundle<P>, String> {
-        let node = iox.node()?;
-        let ports = build(&node)?;
-        Ok(PortBundle { ports, node })
-    }
-
-    pub fn node(&self) -> &IoxNode {
-        &self.node
-    }
+/// The two flags a node's thread is born holding: told to stop, and released once its thread
+/// has let go of everything it held.
+#[derive(Default)]
+pub struct Halt {
+    stop: AtomicBool,
+    /// Rung by the stop, for a thread parked on its own pace that must leave at once.
+    bell: goofi_supervisor::timing::Event,
+    released: goofi_supervisor::sync::Latch,
 }
 
-impl<P> std::ops::Deref for PortBundle<P> {
-    type Target = P;
-    fn deref(&self) -> &P {
-        &self.ports
+impl Halt {
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.bell.ring(0);
+    }
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+    /// Park until the stop or `deadline`; whether it was the stop.
+    pub fn wait_stopped_until(&self, deadline: Instant) -> bool {
+        while !self.stopped() {
+            if self.bell.wait_until(deadline).is_empty() {
+                return self.stopped();
+            }
+        }
+        true
+    }
+    pub fn release(&self) {
+        self.released.open();
+    }
+    /// Wear this halt on the calling thread: a wait the thread makes on another process ends
+    /// when the halt is raised.
+    pub fn wear(self: &Arc<Halt>) {
+        WORN.with(|w| *w.borrow_mut() = Some(self.clone()));
+    }
+    /// Whether the halt the calling thread wears, if any, was raised.
+    pub fn worn_stopped() -> bool {
+        WORN.with(|w| w.borrow().as_ref().is_some_and(|h| h.stopped()))
+    }
+    /// Park until released or `deadline`; whether it was released.
+    pub fn wait_released_until(&self, deadline: Instant) -> bool {
+        self.released.wait_until(deadline)
     }
 }
-
-impl<P> std::ops::DerefMut for PortBundle<P> {
-    fn deref_mut(&mut self) -> &mut P {
-        &mut self.ports
-    }
-}
-

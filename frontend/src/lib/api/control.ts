@@ -198,6 +198,8 @@ export interface RecordStreamStatus {
 	frames: number;
 	dropped: number;
 	fill: number;
+	/** Why the stream has no file: an encoder this machine lacks, a frame the disk refused. */
+	error?: string;
 }
 
 /** The recording SESSION — runtime, so it rides `record status` and `record_changed`, never the
@@ -249,6 +251,8 @@ export type ControlEvent =
 	// Carries the WHOLE roster, so a client never has to diff transitions.
 	| { event: 'harness_changed'; payload: HarnessRoster }
 	| { event: 'graph_replaced'; payload: GraphSnapshot }
+	// The one history moved: what every client's next undo and redo would take back.
+	| { event: 'history'; payload: HistoryLabels }
 	// The whole document — on connect, and again to recover a client that lagged past the ring.
 	| { event: 'doc_state'; payload: { v: number; doc: Record<string, unknown> } }
 	// `from` is the version the delta applies TO, `v` the version it produces.
@@ -282,7 +286,7 @@ export const historyFeed = {
 
 /** Minimal structural surface of the control client — the seam a test fake substitutes for. */
 export interface Control {
-	/** This client's stable ACTOR id; it scopes the manager's per-actor undo history. */
+	/** This client's stable ACTOR id: whose drag a preview belongs to, and whose context a step keeps. */
 	readonly actor: string;
 	call<T = unknown>(op: OpName, payload?: Record<string, unknown>, step?: Step): Promise<T>;
 	/** One step of a drag: the op as a PREVIEW, no reply, and the newest per `key` each frame. */
@@ -439,8 +443,8 @@ export class ControlClient implements Control {
 		const id = this.nextId++;
 		return new Promise<T>((resolve, reject) => {
 			this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-			// `actor` rides at the top level: the manager scopes its undo/redo history by it —
-			// whose undo, where GOOFI_SESSION names which server.
+			// `actor` rides at the top level: whose drag a preview belongs to, and whose context a
+			// step keeps — where GOOFI_SESSION names which server.
 			this.ws!.send(JSON.stringify({ id, op, payload, actor: this.actor, context: historyFeed.context(), ...step }));
 		});
 	}

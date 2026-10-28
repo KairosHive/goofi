@@ -117,6 +117,12 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 /** How many columns a control panel's grid is, whatever its pixel width. */
 export const CONTROL_COLUMNS = 16;
 
+/** What `st('state')` answers a machine's expression: the residents, their names from the
+* longest resident to the newest, and the arrivals and departures of this instant. */
+export const STATE_FIELDS = ['residents', 'playheads', 'arrivals', 'departures'] as const;
+/** What `me` answers a machine's expression before the playhead's attributes. */
+export const ME_FIELDS = ['name', 'state', 'arrived'] as const;
+
 /** The type a sub-patch facade wears in the document. It is not in the palette — grouping
 * is what makes one. */
 export const SCOPE_TYPE = 'SubPatch';

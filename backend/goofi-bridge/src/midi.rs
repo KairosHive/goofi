@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_core::variables::{VariableStore, MIDI_ENTRIES};
 use goofi_core::Data;
@@ -28,7 +28,7 @@ struct Inner {
     /// The open ports, by group.
     open: HashMap<String, Grab>,
     /// When the learn under way ends; none outside a learn.
-    learn: Option<Instant>,
+    learn: Option<goofi_supervisor::timing::Deadline>,
 }
 
 pub struct Midi {
@@ -150,7 +150,7 @@ impl Midi {
 
     /// Start or end a learn: thirty seconds of every port open, ended early by the mapping made.
     pub fn learn(&self, on: bool) {
-        self.inner.lock().learn = on.then(|| Instant::now() + LEARN);
+        self.inner.lock().learn = on.then(|| goofi_supervisor::timing::Deadline::within(LEARN));
     }
 
     /// Every port the host listed at the last probe, and whether it is open.
@@ -170,7 +170,7 @@ impl Midi {
     pub fn resync(&self, g: &Graph) -> (Closed, bool) {
         let referenced = g.referenced_groups();
         let mut inner = self.inner.lock();
-        if inner.learn.is_some_and(|end| Instant::now() >= end) {
+        if inner.learn.is_some_and(|end| end.passed()) {
             inner.learn = None;
         }
         let learning = inner.learn.is_some();

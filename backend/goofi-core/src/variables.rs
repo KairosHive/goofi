@@ -459,6 +459,45 @@ impl Variable {
 /// Told the name of every value that moved.
 pub type Watch = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
+/// The store as it stood at one instant: every entry and group, and the configuration version
+/// then. What a history entry keeps and puts back; the values are shared, so it is pointers.
+#[derive(Clone)]
+pub struct Snapshot {
+    entries: IndexMap<String, Variable>,
+    groups: IndexMap<String, Group>,
+    pub version: u64,
+}
+
+impl Snapshot {
+    /// The variables `other` holds differently from this one, by name, and whether the groups do.
+    pub fn differing(&self, other: &Snapshot) -> (Vec<String>, bool) {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.entries.keys().chain(other.entries.keys()) {
+            if self.entries.get(name) != other.entries.get(name) && !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        (names, self.groups != other.groups)
+    }
+
+    /// `names` as `from` holds them, and the groups too where `groups`; the rest stays.
+    pub fn take(&mut self, from: &Snapshot, names: &[String], groups: bool) {
+        for name in names {
+            match from.entries.get(name) {
+                Some(v) => {
+                    self.entries.insert(name.clone(), v.clone());
+                }
+                None => {
+                    self.entries.shift_remove(name);
+                }
+            }
+        }
+        if groups {
+            self.groups = from.groups.clone();
+        }
+    }
+}
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
 /// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
 /// the plane from here, under the store's own lock, so the order the plane sees is the store's.
@@ -467,8 +506,15 @@ pub struct VariableStore {
     entries: IndexMap<String, Variable>,
     groups: IndexMap<String, Group>,
     plane: Option<std::sync::Arc<dyn Plane>>,
-    /// Told the name of every value that moved: the machines' reason to look again.
+    /// Told the name of every value that moved, whoever wrote it: the machines' reason to look again.
     watch: Option<Watch>,
+    /// Bumped by every change to what the store HOLDS — a variable or a group added, removed,
+    /// renamed, re-sourced, re-controlled or re-locked, and a value an op set — never by a value
+    /// the plane drives. What a settle compares to know the bindings that read the store moved.
+    version: u64,
+    /// Bumped by every value that moved, the plane's included: what autosave compares to know the
+    /// values it would write moved.
+    moves: u64,
 }
 
 impl Default for VariableStore {
@@ -479,9 +525,52 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None, version: 0, moves: 0 };
         s.reassert_system();
         s
+    }
+
+    /// The configuration version: moved by every change to what the store holds.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The value version: moved by every value that moved, whoever wrote it.
+    pub fn moves(&self) -> u64 {
+        self.moves
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { entries: self.entries.clone(), groups: self.groups.clone(), version: self.version }
+    }
+
+    /// Put a snapshot back: every entry and group as it was, an ephemeral one excepted, since goofi
+    /// says what that holds now. A value that moved goes out on the plane and to the watch; a
+    /// variable the snapshot does not hold retires its wire.
+    pub fn restore(&mut self, s: &Snapshot) {
+        self.version += 1;
+        let mut entries = s.entries.clone();
+        for (name, held) in &self.entries {
+            if is_ephemeral(name) {
+                entries.insert(name.clone(), held.clone());
+            } else if !entries.contains_key(name) {
+                self.retire(name);
+            }
+        }
+        let moved: Vec<String> = entries
+            .iter()
+            .filter(|(name, v)| self.entries.get(*name).is_none_or(|held| held.value != v.value))
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.entries = entries;
+        self.groups = s.groups.clone();
+        self.moves += moved.len() as u64;
+        for name in moved {
+            self.emit(&name, &self.entries[&name].value);
+            if let Some(watch) = &self.watch {
+                watch(&name);
+            }
+        }
     }
 
     /// Have every moved value's name told to `watch`.
@@ -511,6 +600,7 @@ impl VariableStore {
 
     /// Back to the seeded store a load starts from, every wire of the old content retired.
     pub fn reset(&mut self) {
+        self.version += 1;
         // The system wires stay open: every node's default expression reads one, and a wire
         // reopened under a live reader is a second service. Their values start over in place.
         // A device's group is the session's as well, and stays as the device does.
@@ -527,6 +617,7 @@ impl VariableStore {
     /// and re-lock goofi's own groups. An EPHEMERAL one is overwritten instead: goofi says what it
     /// holds, never a file.
     pub fn reassert_system(&mut self) {
+        self.version += 1;
         self.seed_system(false);
     }
 
@@ -563,6 +654,7 @@ impl VariableStore {
     /// Set or clear the expression a variable is computed by, answering the one it replaced. An
     /// expression is config.
     pub fn set_expression(&mut self, name: &str, expression: Option<String>) -> Result<Option<String>, String> {
+        self.version += 1;
         if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
@@ -595,6 +687,7 @@ impl VariableStore {
             return false;
         }
         existing.value = value;
+        self.moves += 1;
         self.emit(name, &self.entries[name].value);
         if let Some(watch) = &self.watch {
             watch(name);
@@ -624,6 +717,7 @@ impl VariableStore {
     /// Open a device as a group: the device's flag, which locks the group whole, and its entries
     /// at rest. Not a command — the session owns it, as it owns the system group.
     pub fn grab_midi(&mut self, group: &str, port: &str) -> Result<(), String> {
+        self.version += 1;
         if self.has_group(group) {
             return Err(format!("variable group `{group}` already exists"));
         }
@@ -636,6 +730,7 @@ impl VariableStore {
     /// and takes the widget, a new one is born at its value, one not named is retired. The owner's
     /// write, never a command; a group that is somebody else's is refused.
     pub fn claim(&mut self, group: &str, record: Group, entries: Entries) -> Result<(), String> {
+        self.version += 1;
         if !is_valid_identifier(group) || is_own_group(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
@@ -666,6 +761,7 @@ impl VariableStore {
 
     /// Close an owned group: its entries retired, its record gone. Nothing if `group` is nobody's.
     pub fn release(&mut self, group: &str) {
+        self.version += 1;
         if !self.owned(group) {
             return;
         }
@@ -706,6 +802,7 @@ impl VariableStore {
 
     /// Set a variable's own lock, answering the one it held. Goofi's own groups' are not a caller's.
     pub fn set_lock(&mut self, name: &str, lock: Lock) -> Result<Lock, String> {
+        self.version += 1;
         if is_own_group(group_of(name)) {
             return Err(format!("`{name}` is goofi's own; its lock is not yours to set"));
         }
@@ -719,6 +816,7 @@ impl VariableStore {
 
     /// Set or remove a group record, answering the previous record for undo.
     pub fn set_group_lock(&mut self, group: &str, lock: Option<Lock>) -> Result<Option<Lock>, String> {
+        self.version += 1;
         if is_own_group(group) {
             return Err(format!("`{group}` is goofi's own; its lock is not yours to set"));
         }
@@ -740,6 +838,7 @@ impl VariableStore {
 
     /// Create an empty group at its saved position.
     pub fn add_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
+        self.version += 1;
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
@@ -757,6 +856,7 @@ impl VariableStore {
 
     /// Remove an empty, unlocked group.
     pub fn remove_group(&mut self, group: &str) -> Result<(), String> {
+        self.version += 1;
         if self.group_lock(group).config || self.group_lock(group).value {
             return Err(format!("variable group `{group}` is locked"));
         }
@@ -782,6 +882,7 @@ impl VariableStore {
     /// Set an existing variable. A change of FORM, an array for a string or back, is what every
     /// expression reading it depends on, so it also needs an unlocked configuration.
     pub fn set(&mut self, name: &str, value: Data) -> Result<(), String> {
+        self.version += 1;
         if is_ephemeral(name) {
             return Err(format!("variable `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
         }
@@ -797,14 +898,19 @@ impl VariableStore {
                 format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
             })?;
         }
+        self.moves += 1;
         self.emit(name, &value);
         self.entries[name].value = value;
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         Ok(())
     }
 
     /// Add a NEW user variable, at ordered position `at` (clamped) when given — the re-add a
     /// delete/rename undo needs. Errors on an invalid name or a collision.
     pub fn add(&mut self, name: &str, value: Data, at: Option<usize>) -> Result<(), String> {
+        self.version += 1;
         if !is_valid_variable_name(name) {
             return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
@@ -815,8 +921,12 @@ impl VariableStore {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
         let at = at.unwrap_or(usize::MAX).min(self.entries.len());
+        self.moves += 1;
         self.emit(name, &value);
         self.entries.shift_insert(at, name.to_string(), Variable::of(value));
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         Ok(())
     }
 
@@ -827,6 +937,7 @@ impl VariableStore {
 
     /// Remove a variable; errors when it is config-locked or absent.
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
+        self.version += 1;
         if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
@@ -838,6 +949,7 @@ impl VariableStore {
 
     /// Rename a variable, keeping its ordered position; its own lock travels with it.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), String> {
+        self.version += 1;
         if !self.entries.contains_key(from) {
             return Err(format!("no such variable `{from}`"));
         }
@@ -868,6 +980,7 @@ impl VariableStore {
     /// is not refused here: a control panel naming it is what makes it a group, and only the graph
     /// sees panels.
     pub fn rename_group(&mut self, from: &str, to: &str) -> Result<Vec<(String, String)>, String> {
+        self.version += 1;
         if !is_valid_identifier(to) {
             return Err(format!("invalid group name `{to}`: {VARIABLE_NAME_RULE}"));
         }
@@ -915,6 +1028,7 @@ impl VariableStore {
         at: Option<usize>,
         control: Option<Option<Control>>,
     ) -> Result<(), String> {
+        self.version += 1;
         // The widget that will be held must fit the value that will be held, checked before any write.
         let held = value.as_ref().or_else(|| self.get(name)).ok_or_else(|| format!("no such variable `{name}`"))?;
         let widget = match &control {

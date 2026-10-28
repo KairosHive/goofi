@@ -53,10 +53,9 @@ impl SignalEngine {
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
         let base = goofi_supervisor::layout::runtime().build();
-        let hosted = self.booted;
         let loaded = goofi_build::built(&goofi_build::SIGNAL, path, &base).and_then(|artifact| self.load_rust(artifact, type_name));
         match loaded {
-            Ok(replaced) => Scanned::Registered { isolation: if hosted { Isolation::Hosted } else { Isolation::Native }, replaced },
+            Ok((replaced, isolation)) => Scanned::Registered { isolation, replaced },
             Err(reason) => {
                 self.remove_type(type_name);
                 Scanned::Unavailable(reason)
@@ -64,13 +63,15 @@ impl SignalEngine {
         }
     }
 
-    /// After boot the library is described and run by a child, so this process never loads it
-    /// and a re-authored node's newest build is what runs.
-    fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<bool, String> {
+    /// A library this process opened at boot runs in it; one built after boot is described and
+    /// run by a child, so a re-authored node's newest build is what runs. Answers whether a
+    /// registration was displaced, and the tier the type runs on.
+    fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<(bool, Isolation), String> {
         let (manifest, factory, tier) = goofi_runtime::hosted::load(
-            self.iox.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
+            self.hub.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
         )?;
-        Ok(self.register_dyn_type(manifest, factory, tier))
+        let isolation = tier.get();
+        Ok((self.register_dyn_type(manifest, factory, tier), isolation))
     }
 }
 
@@ -79,7 +80,7 @@ impl SignalEngine {
         let subproc = self.python.as_ref().map(|p| p.subproc.clone()).unwrap_or_default();
         match probed {
             Probed::InProcess(d) | Probed::Subprocess(d) => {
-                let (manifest, factory, tier) = routed(self.iox.clone(), d, &subproc);
+                let (manifest, factory, tier) = routed(self.hub.clone(), d, &subproc);
                 Scanned::Registered { isolation: tier.get(), replaced: self.register_dyn_type(manifest, factory, tier) }
             }
             // The latest scan is the answer: a stale runtime type is displaced first.

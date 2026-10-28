@@ -23,12 +23,15 @@ export class TermSession {
 	private nudge = false;
 	/** The last proposal this view put on the wire, so a settling `ResizeObserver` does not chatter. */
 	private said = '';
+	/** What was typed while the socket was still connecting: a key pressed in the first moments of
+	 * a panel is the user's, and goes out the instant the handshake completes. */
+	private typed: Uint8Array<ArrayBuffer>[] = [];
 
 	constructor(
 		readonly id: string,
 		readonly term: TerminalLike
 	) {
-		term.onData((d) => this.send(new TextEncoder().encode(d)));
+		term.onData((d) => this.input(new TextEncoder().encode(d)));
 		this.open();
 	}
 
@@ -37,7 +40,10 @@ export class TermSession {
 		ws.binaryType = 'arraybuffer';
 		ws.addEventListener('message', (e: MessageEvent) => this.receive(e.data));
 		// The panel measures its container INSIDE this handshake, so that first proposal is dropped.
-		ws.addEventListener('open', () => this.refit());
+		ws.addEventListener('open', () => {
+			for (const bytes of this.typed.splice(0)) this.send(bytes);
+			this.refit();
+		});
 		// Nothing else nulls it, so without this `attach` reuses a dead connection for ever.
 		ws.addEventListener('close', () => {
 			if (this.ws === ws) this.ws = null;
@@ -56,6 +62,12 @@ export class TermSession {
 		// An inbound size sets the terminal DIRECTLY and never re-measures: one PTY window is shared,
 		// so a view that answered by proposing would loop with every other view.
 		if (msg.op === 'size' && msg.cols && msg.rows) this.term.resize(msg.cols, msg.rows);
+	}
+
+	/** Keystrokes: out at once on an open socket, held through a handshake, dropped with no socket. */
+	private input(bytes: Uint8Array<ArrayBuffer>): void {
+		if (this.ws?.readyState === WebSocket.CONNECTING) this.typed.push(bytes);
+		else this.send(bytes);
 	}
 
 	/** Whether it went out — a socket that is not yet OPEN silently drops what is written to it. */

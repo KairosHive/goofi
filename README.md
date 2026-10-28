@@ -22,8 +22,8 @@ HD video) with many simultaneous viewers.
 The graph you edit is the graph that is running: add a node, move a cable, turn a parameter, and
 the next frame is the one you changed. There is no global tick — nodes schedule themselves and
 frames travel node to node over shared memory, so a kHz EEG stream and an audio chain sit in one
-patch without either holding the other up. Several people can work inside it at once, each with
-their own undo.
+patch without either holding the other up. Several people can work inside it at once, on one
+history: undo takes back the last write, whoever made it.
 
 ## Running it
 
@@ -193,9 +193,14 @@ as well as a hand-built one.
 
 A patch can carry state machines beside its graph: boxes on a second canvas, transitions between
 them, and playheads that step through them and set the patch's variables as they go. A state's
-value may play an ADSR envelope on a playhead's arrival, and a transition eases what it sets. `goofi machine
-add`, `machine state add` and `machine arrange` build one from the CLI or an agent; the same ops
-drive the panel, where every setting is reached from the selected state's inspector.
+value may play an ADSR envelope on a playhead's arrival, and a transition eases what it sets. A
+state decides which transition out to take every interval, in turn, by a weighted draw or by an
+expression; a transition's own `condition` takes it the instant the condition turns true. Both are
+the Python a param's expression is, over `variables.*`, `t` and the same functions, plus `me`, the
+playhead the expression is read for, and `st('name')`, a state's residents and the moves of the
+instant. `goofi machine add`, `machine state add` and `machine arrange` build one from the CLI or
+an agent; the same ops drive the panel, where every setting is reached from the selected state's
+inspector.
 
 ## Testing
 

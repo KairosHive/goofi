@@ -47,7 +47,7 @@ fn first_f32(d: &Data) -> f32 {
 /// Watch one node's `out` slot until it carries `want`. The probe is opened per call because a
 /// restart is a REBIRTH onto the next generation's service, and the frame in flight may be old.
 fn emits(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.iox, &g.graph(), uid, "out");
+    let probe = OutputProbe::open(&g.state.hub, &g.graph(), uid, "out");
     g.until(&format!("{uid} to emit {want}"), |g| {
         let mut graph = g.graph();
         probe.frame(&mut graph).filter(|d| first_f32(d) == want)
@@ -229,11 +229,32 @@ const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node
 
 /// Drive the audio clock and watch one node's `out` tap until it holds `want`.
 fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.iox, &g.graph(), uid, "out");
+    let probe = OutputProbe::open(&g.state.hub, &g.graph(), uid, "out");
     g.until(&format!("{uid} to hold {want}"), |g| {
         drive(g, 4800);
         probe.frame(&mut g.graph()).filter(|d| first_f32(d) == want)
     });
+}
+
+/// A load scans every type again. A shipped Rust node's library has been open in this process
+/// since boot, so it is the build that runs: native still, never a child per instance.
+#[test]
+fn a_load_keeps_the_libraries_the_boot_scan_opened_native() {
+    let g = Goofi::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native.gfi");
+    let constant = g.add("signal:Constant");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    for ty in ["signal:Constant", "signal:Math", "signal:Noise", "signal:Reshape"] {
+        let r = g.call("library get", j!({ "type": ty }));
+        assert_eq!((&r["language"], &r["tier"]), (&j!("rust"), &j!("native")), "{r}");
+    }
+    g.call("node param request", j!({ "node": goofi_tests::hex(constant), "param": "common/trigger", "request": "pulse" }));
+    let hosts: Vec<String> = g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+        .filter(|e| e["kind"] == "child")
+        .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node")).map(str::to_string).collect();
+    assert!(hosts.is_empty(), "a shipped node runs in this process after a load, not in a child: {hosts:?}");
 }
 
 #[test]
@@ -270,8 +291,8 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
             .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node Twice")).map(str::to_string).collect()
     };
     assert_eq!(hosts(&g).len(), 1, "one host child for the one instance: {:?}", hosts(&g));
-    // A removed instance's child leaves on its own, taking its iceoryx2 node and services with
-    // it. The session root is shared by every situation, so the check reads only the child's own.
+    // A removed instance's child leaves on its own, taking its exchange's shared memory with it.
+    // The session is shared by every situation, so the check reads only the child's own segments.
     let twice_hosts = || -> std::collections::BTreeSet<u32> {
         std::fs::read_dir("/proc").into_iter().flatten().flatten()
             .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
@@ -294,17 +315,20 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
         true => {
             let [pid] = born[..] else { panic!("one new host child, not {born:?}") };
             let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("the child's environment");
-            let base = environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(b"GOOFI_IOX_BASE=")).expect("a base").to_vec();
-            let iox = goofi_supervisor::session::system_dir(&goofi_tests::session_id()).join("iox");
-            let root = iox.display().to_string();
+            let exchange = environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(b"GOOFI_EXCHANGE=")).expect("an exchange");
+            // `<session>;<exchange>;<port>;<token>`: the segments are `g<session>_<exchange>…`.
+            let fields: Vec<&[u8]> = exchange.split(|b| *b == b';').collect();
+            let prefix = format!("g{}_{}", String::from_utf8_lossy(fields[0]), String::from_utf8_lossy(fields[1]));
             let left_behind = move || -> Vec<String> {
-                let services = std::fs::read_dir(iox.join("services")).into_iter().flatten().flatten()
-                    .filter(|e| std::fs::read(e.path()).unwrap_or_default().windows(base.len()).any(|w| w == base));
-                let nodes = std::fs::read_dir(iox.join("nodes")).into_iter().flatten().flatten()
-                    .filter(|e| e.file_name().to_str().and_then(|n| n.parse::<u128>().ok()).is_some_and(|id| id as u32 == pid));
-                services.chain(nodes).map(|e| e.path().to_string_lossy().into_owned()).collect()
+                std::fs::read_dir("/dev/shm").into_iter().flatten().flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        name.starts_with(&format!("{prefix}q")) || name.starts_with(&format!("{prefix}a"))
+                    })
+                    .map(|e| e.path().to_string_lossy().into_owned())
+                    .collect()
             };
-            assert!(!left_behind().is_empty(), "the running child owns entries under {root}");
+            assert!(!left_behind().is_empty(), "the running child's exchange has segments under /dev/shm");
             Box::new(left_behind)
         }
     };
@@ -316,7 +340,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
         std::thread::sleep(std::time::Duration::from_millis(50));
         after = left_behind();
     }
-    assert!(after.is_empty(), "the removed instance's child left iceoryx2 entries behind: {after:?}");
+    assert!(after.is_empty(), "the removed instance's child left shared memory behind: {after:?}");
     let level = g.add("audio:Level");
     holds(&g, level, 0.25);
     let read = |ty: &str| g.call("library get", j!({ "type": ty, "source": true }));

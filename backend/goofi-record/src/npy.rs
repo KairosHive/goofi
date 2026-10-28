@@ -10,6 +10,10 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use goofi_core::record::Frame;
+
+use crate::stream::{Added, Format};
+
 /// The widest a value count can ever be written, so an appended file's header is sized once and
 /// the count can never outgrow the room reserved for it.
 const COUNT: usize = 20;
@@ -66,30 +70,37 @@ impl Npy {
         Ok(npy)
     }
 
+    fn head(&mut self) -> Result<(), String> {
+        let head = header(&[self.values as usize], self.head);
+        self.file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        self.file.write_all(&head).map_err(|e| e.to_string())
+    }
+}
+
+impl Format for Npy {
     /// One frame's samples, which are `<f4` already and are appended untouched, whatever shape
     /// the frame had.
-    pub fn write(&mut self, samples: &[u8]) -> Result<(), String> {
-        self.file.write_all(samples).map_err(|e| e.to_string())?;
-        self.values += samples.len() as u64 / 4;
+    fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
+        let a = crate::stream::array(frame)?;
+        self.file.write_all(a.as_bytes()).map_err(|e| e.to_string())?;
+        self.values += a.as_bytes().len() as u64 / 4;
         self.frames += 1;
-        Ok(())
+        Ok(Added::Shape(a.shape().to_vec()))
     }
 
-    pub fn frames(&self) -> u64 {
+    fn frames(&self) -> u64 {
         self.frames
     }
 
     /// Reach the disk, and leave the header saying what the file holds.
-    pub fn sync(&mut self) -> Result<(), String> {
+    fn sync(&mut self) -> Result<(), String> {
         let end = self.file.stream_position().map_err(|e| e.to_string())?;
         self.head()?;
         self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
         crate::stream::sync_file(&mut self.file)
     }
 
-    fn head(&mut self) -> Result<(), String> {
-        let head = header(&[self.values as usize], self.head);
-        self.file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        self.file.write_all(&head).map_err(|e| e.to_string())
+    fn finish(&mut self) -> Result<(), String> {
+        self.sync()
     }
 }

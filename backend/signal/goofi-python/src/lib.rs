@@ -1,6 +1,6 @@
 //! The manager side of both Python node tiers, behind one `Node` trait.
 
-/// The subprocess tier: `RemoteNode` and the iceoryx2 round-trip to a child interpreter.
+/// The subprocess tier: `RemoteNode` and the exchange round trip to a child interpreter.
 pub mod subproc;
 
 /// The in-process tier: `PyNode`, the param-expression evaluator, and discovery. Links libpython.

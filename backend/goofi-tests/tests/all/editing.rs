@@ -445,24 +445,25 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
     let _ = scope;
 
-    // The history is per session: s1's undo takes back s1's newest step and leaves a peer's node
-    // standing, and a fresh command discards the redo run.
+    // One history for every session: the undo takes back the peer's newest step, and a fresh
+    // command discards the redo run.
     let two = g.client("s2");
     let peer = two.add("Buffer");
     assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert!(g.instances().is_empty() && g.nodes().contains(&hex(peer)), "s1's undo left s2's node standing");
+    assert!(!g.nodes().contains(&hex(peer)), "the undo took back s2's node, the last write");
     assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert!(g.nodes().contains(&hex(peer)));
     g.call("undo", j!({}));
     let before = g.doc();
-    let labels = g.state.history_labels("test");
+    let labels = g.state.history_labels();
     g.refuse("node add", j!({ "type": "MissingNodeType" }));
-    assert_eq!(g.state.history_labels("test"), labels, "a refused write keeps the redo run");
+    assert_eq!(g.state.history_labels(), labels, "a refused write keeps the redo run");
     g.refuse("compound", j!({ "ops": [
         { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
         { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
     ] }));
     assert_eq!(g.doc(), before, "the refused batch leaves the graph unchanged");
-    assert_eq!(g.state.history_labels("test"), labels, "the refused batch keeps the redo run");
+    assert_eq!(g.state.history_labels(), labels, "the refused batch keeps the redo run");
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     g.call("undo", j!({}));
     g.add("Buffer");
@@ -560,8 +561,77 @@ async fn a_drag_previews_and_commits_as_one_step_and_a_cut_socket_takes_it_back(
     assert!(dirty(&g), "the commit before the drag is still an edit");
 }
 
+/// A drag is a layer over the committed state: a write another client lands meanwhile records the
+/// state without the drag, the drag's commit records the state that write left, and an undo walks
+/// them back in order — neither takes the other's work, and no step of the drag survives.
 #[test]
-fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
+fn a_write_landing_during_another_clients_drag_keeps_its_place_in_the_history() {
+    let g = Goofi::new();
+    let a = g.client("a");
+    let b = g.client("b");
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "amplitude", 1.0);
+    let other = g.add("LFO");
+    g.call("node edit", j!({ "node": hex(other), "pos": [10.0, 10.0] }));
+    let amp = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
+    let pos = |g: &Goofi| g.doc()["nodes"][hex(other)]["pos"].clone();
+    let edit = |v: f64| j!({ "node": hex(osc), "param": "lfo/amplitude", "value": v });
+
+    a.preview("node param edit", edit(0.2));
+    a.preview("node param edit", edit(0.4));
+    b.call("node edit", j!({ "node": hex(other), "pos": [50.0, 50.0] }));
+    assert_eq!((amp(&g), pos(&g)), (j!(0.4), j!([50.0, 50.0])), "the write lands under the drag");
+    a.preview("node param edit", edit(0.6));
+    a.call("node param edit", edit(0.7));
+
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo keeps the move that landed during it");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([10.0, 10.0])), "the move's undo takes back the move alone");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])));
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(0.7), j!([50.0, 50.0])));
+
+    // An undo by the other client while the drag runs takes the last step back under it; the
+    // drag's way back is then where that undo left the patch.
+    a.preview("node param edit", edit(0.2));
+    assert_eq!(b.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1), "another client's undo takes the committed step back");
+    a.preview("node param edit", edit(0.3));
+    a.call("node param edit", edit(0.5));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo puts back what the undo under it left");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.5));
+}
+
+/// A text that reads as no number is refused on a number param — never read as zero: the value,
+/// the source and the history stand as they were.
+#[test]
+fn a_text_on_a_number_param_is_refused_and_nothing_moves() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "expression": "0.5" }));
+    let entry = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"].clone();
+    let held = entry(&g);
+    assert_eq!(held["mode"], "expression", "{held}");
+    let labels = g.state.history_labels();
+    let why = g.refuse("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "abc" }));
+    assert!(why.contains("`abc` is a string, and this param holds a number"), "{why}");
+    assert_eq!(entry(&g), held, "a refused value leaves the literal and the source");
+    assert_eq!(g.state.history_labels(), labels, "and records no step");
+    // A text that reads as numbers is those numbers, which is what a shell hands over.
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "0.25" }));
+    assert_eq!(entry(&g)["value"], j!(0.25));
+    assert_eq!(entry(&g)["mode"], "constant", "a literal switches a driven param to constant");
+}
+
+/// One history for every client: an undo takes back the last write whoever made it, the stack
+/// walks to empty and forward again from either side, and a refused write leaves the document and
+/// the history exactly as they were.
+#[test]
+fn one_history_walks_back_through_every_writer_and_a_refused_write_leaves_it_whole() {
     let one = Goofi::new();
     let two = one.client("s2");
     let osc = one.add("LFO");
@@ -569,29 +639,41 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     let link = j!({ "from": ep(hex(osc), "out"), "to": ep(hex(buf), "input") });
     one.call("link add", link.clone());
     one.call("link remove", link);
-    two.call("node remove", j!({ "node": hex(buf) })); // s1's newest toggle now names a dead uid
-
-    assert_eq!(one.call("undo", j!({}))["changed"], true);
+    two.call("node remove", j!({ "node": hex(buf) }));
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "the peer's removal is the last write");
+    assert!(one.nodes().contains(&hex(buf)), "…and the undo puts the buffer back");
     assert_eq!(one.call("redo", j!({}))["changed"], true);
-    for _ in 0..4 {
-        assert_eq!(one.call("undo", j!({}))["changed"], true, "the stack stays walkable to empty");
+    assert!(!one.nodes().contains(&hex(buf)));
+    for _ in 0..5 {
+        assert_eq!(one.call("undo", j!({}))["changed"], true, "the history walks to empty");
     }
+    assert_eq!(one.call("undo", j!({}))["changed"], false, "…and says so at the bottom");
+    assert!(one.nodes().is_empty());
+    for _ in 0..5 {
+        assert_eq!(two.call("redo", j!({}))["changed"], true, "…and forward again, from either client");
+    }
+    assert!(one.nodes().contains(&hex(osc)) && !one.nodes().contains(&hex(buf)));
 
-    // The same rule for a boundary port: a peer removed the port under s1's newest rename.
-    let osc = one.add("LFO");
+    // A port a peer removed under a rename: both are writes, and both walk back in order.
     let inst = one.call("nodes group", j!({ "nodes": [hex(osc)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
     let port = one.call("node add", j!({ "type": "InArray", "inst_id": inst, "pos": [0.0, 0.0] }))
         ["uid"].as_str().expect("a port uid").to_string();
     one.call("node edit", j!({ "node": port, "name": "left" }));
     two.call("node remove", j!({ "node": port }));
-    assert_eq!(one.call("undo", j!({}))["changed"], true, "the stale port rename still flips");
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "the removal is taken back");
+    assert_eq!(one.name(&port), "left", "…with the name the rename gave");
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "then the rename");
+    assert_ne!(one.name(&port), "left");
     assert_eq!(one.call("redo", j!({}))["changed"], true);
 
+    // A refused write leaves the document and the history as they were.
     let before = one.doc();
+    let labels = one.state.history_labels();
     let bad_control = j!({ "kind": "text", "x": 0, "y": 0, "w": 2, "h": 2 });
     one.refuse("variable entry add", j!({ "name": "audit.bad", "value": 1.0, "control": bad_control }));
     assert_eq!(one.doc(), before);
+    assert_eq!(one.state.history_labels(), labels);
     one.call("variable entry add", j!({ "name": "audit.bad", "value": 1.0 }));
     one.refuse("variable entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
     one.call("variable entry add", j!({ "name": "audit.after", "value": 3.0 }));
@@ -600,14 +682,16 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
         { "op": "variable entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
         { "op": "variable entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
     ] }));
-    assert_eq!(one.variable("audit.after"), 3.0);
+    assert_eq!(one.variable("audit.after"), 3.0, "a refused batch lands nothing");
     one.call("undo", j!({}));
     assert!(one.doc()["variables"].get("audit.after").is_none());
     two.call("variable entry remove", j!({ "name": "audit.bad" }));
     one.call("undo", j!({}));
+    assert_eq!(one.variable("audit.bad"), 1.0, "the peer's removal is taken back");
     one.call("redo", j!({}));
     assert!(one.doc()["variables"].get("audit.bad").is_none());
 
+    // Renames and locks walk back the same way, whoever wrote them.
     one.call("variable entry add", j!({ "name": "first.one", "value": 1.0 }));
     two.call("variable entry add", j!({ "name": "second.two", "value": 2.0 }));
     let before = one.doc();
@@ -623,19 +707,27 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.call("redo", j!({}));
     two.call("variable entry add", j!({ "name": "renamed.peer", "value": 2.0 }));
     one.call("undo", j!({}));
-    assert_eq!(one.variable("renamed.peer"), 2.0);
+    assert!(one.doc()["variables"].get("renamed.peer").is_none(), "the peer's add is the last write");
     assert_eq!(one.variable("renamed.one"), 1.0);
-    assert!(one.doc()["variables"].get("first.peer").is_none());
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("first.one"), 1.0, "then the rename goes");
+    one.call("redo", j!({}));
+    one.call("redo", j!({}));
+    assert_eq!(one.variable("renamed.peer"), 2.0);
 
     one.call("variable entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
     two.call("variable entry lock", j!({ "name": "renamed.one", "value": true }));
-    one.call("undo", j!({}));
-    assert_eq!(one.variable("renamed.one"), 4.0);
     one.refuse("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("renamed.one"), 4.0, "the lock goes and the value stays");
+    one.call("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    assert_eq!(one.variable("renamed.one"), 5.0);
     one.call("variable entry rename", j!({ "name": "second.two", "to": "second.moved" }));
     two.call("variable entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
     one.call("undo", j!({}));
-    assert_eq!(one.variable("second.peer"), 2.0);
+    assert_eq!(one.variable("second.moved"), 2.0, "the peer's rename is taken back first");
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("second.two"), 2.0);
 }
 
 #[test]
@@ -678,11 +770,12 @@ fn a_deleted_sub_patch_comes_back_whole_with_the_panels_that_named_it() {
                "and the panel names its node again");
 }
 
-/// Two people undo layout: every SHAPE a layout write comes in, driven through the one
-/// interleaving that shows a raw-state restore, and the op list from the REGISTRY proves no op
-/// slipped past without one. Then a peer's panel through a foreign undo, and a drag as one step.
+/// One history undoes layout: every SHAPE a layout write comes in, each followed by a peer's
+/// writes and one undo, and the op list from the REGISTRY proves no op slipped past. The undo
+/// takes back the last write whoever made it, and what it leaves is an arrangement the manager
+/// can itself open. Then a drag as one step.
 #[test]
-fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is_one_step() {
+fn one_history_undoes_every_layout_shape_whoever_wrote_last_and_a_drag_is_one_step() {
     let ops: Vec<&str> = goofi_bridge::ops::registry().iter()
         .filter(|o| o.handler.is_write() && o.name.starts_with("layout "))
         .map(|o| o.name)
@@ -708,8 +801,7 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
     ];
     for op in &ops {
         assert!(SHAPES.iter().any(|(_, o)| o == op),
-                "`{op}` is a layout write op with no shape here — drive it through this guard, and \
-                 say why if its inverse may restore a slot");
+                "`{op}` is a layout write op with no shape here — drive it through this guard");
     }
 
     let mut stranded = Vec::new();
@@ -724,6 +816,7 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
         let far = entries(&one)[&e]["parent"].as_str().unwrap().to_string();
         let near = entries(&one)[&b]["parent"].as_str().unwrap().to_string();
         let two_id = tab_id(&one, "Tab 2");
+        let before = entries(&one);
 
         one.call(op, match *shape {
             "a fresh tab" => j!({}),
@@ -739,12 +832,15 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
             "a closed tab" => j!({ "entry": two_id }),
             new => panic!("`{new}` is a shape with no payload here"),
         });
-        // The peer builds exactly where a slot-restore inverse would want to write — both places,
-        // because a merged op's shapes do not all reach for the same one.
+        let after = entries(&one);
+        // The peer writes after; each undo takes back the last write, so three put the shape back.
         two.call("layout panel add", j!({}));
         two.call("layout panel add", j!({ "beside": a }));
         assert_eq!(one.call("undo", j!({}))["changed"], true, "{shape}: the undo flipped nothing");
-
+        assert_eq!(one.call("undo", j!({}))["changed"], true, "{shape}: the second undo flipped nothing");
+        assert_eq!(entries(&one), after, "{shape}: two undos took back the peer's two writes alone");
+        assert_eq!(two.call("undo", j!({}))["changed"], true, "{shape}: the third undo flipped nothing");
+        assert_eq!(entries(&one), before, "{shape}: the third undo took the shape back, from the peer's side");
         if reload_warning(&one) != Value::Null {
             stranded.push(*shape);
         }
@@ -752,37 +848,23 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
     let empty: [&str; 0] = [];
     assert_eq!(stranded, empty, "an undo left an arrangement the manager cannot itself open");
 
-    // A peer's panel survives every shape of foreign undo and redo.
+    // One history: a redo, pressed by either client, puts back what the last undo took.
     let one = Goofi::new();
     let two = one.client("s2");
     let a = first_panel(&one);
-
     let mine = split(&one, &a);
     let theirs = split(&two, &mine);
     assert_eq!(one.call("undo", j!({}))["changed"], true);
-    let up = entries(&one)[&theirs]["parent"].as_str().unwrap().to_string();
-    assert!(entries(&one).contains_key(&up), "the peer's panel still hangs off something");
-
-    let peer2 = split(&two, &a);
-    assert_eq!(one.call("redo", j!({}))["changed"], true);
-    assert!(panels(&one).contains(&peer2), "the peer's panel survived a foreign redo");
-
-    one.call("layout panel add", j!({ "name": "Signals" }));
-    let over = panels(&one).into_iter()
-        .find(|p| ![&a, &mine, &theirs, &peer2].contains(&p)).expect("the new tab's panel");
-    let far = split(&one, &over);
-    let dest = entries(&one)[&far]["parent"].as_str().unwrap().to_string();
-    one.call("layout move", j!({ "entry": mine, "in": dest, "index": 0 }));
-    let peer3 = split(&two, &a);
-    assert_eq!(one.call("undo", j!({}))["changed"], true);
-    assert!(panels(&one).contains(&peer3), "the peer's panel survived a foreign undo");
+    assert!(!panels(&one).contains(&theirs), "the undo took back the peer's split, the last write");
+    assert_eq!(two.call("redo", j!({}))["changed"], true);
+    assert!(panels(&one).contains(&theirs), "the peer's redo put it back");
     assert_eq!(reload_warning(&one), Value::Null);
 
     // The drag feel is FROZEN UX; as primitive ops one drop would cost three to five commands.
     let mover = split(&one, &a);
     one.call("layout panel add", j!({ "name": "Drops", "index": 0 }));
     let target = panels(&one).into_iter()
-        .find(|p| ![&a, &mine, &theirs, &peer2, &peer3, &over, &far, &mover].contains(&p)).expect("its panel");
+        .find(|p| ![&a, &mine, &theirs, &mover].contains(&p)).expect("its panel");
     let before = entries(&one);
 
     one.call("layout move", j!({ "entry": mover, "beside": target,

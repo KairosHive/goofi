@@ -179,7 +179,7 @@ impl Loop {
             }
             let (until, fds) = {
                 let rl = self.host.runloop.borrow();
-                (rl.timers.iter().map(|t| t.next).min(), rl.fds.iter().map(|f| f.fd).collect::<Vec<i32>>())
+                (rl.timers.iter().map(|t| t.pace.next()).min(), rl.fds.iter().map(|f| f.fd).collect::<Vec<i32>>())
             };
             let pumped = self.host.screen.pump(until, &fds);
             self.host.dead = pumped.dead;
@@ -191,12 +191,12 @@ impl Loop {
             for fd in pumped.ready {
                 self.host.fire(|rl| rl.fds.iter_mut().find(|f| f.fd == fd).map(|f| &mut f.handler));
             }
-            let now = Instant::now();
             let due: Vec<usize> =
-                self.host.runloop.borrow().timers.iter().filter(|t| t.next <= now).map(|t| t.key).collect();
+                self.host.runloop.borrow().timers.iter().filter(|t| t.pace.due()).map(|t| t.key).collect();
             for key in due {
                 if let Some(t) = self.host.runloop.borrow_mut().timers.iter_mut().find(|t| t.key == key) {
-                    t.next = now + t.every;
+                    // From now, not the tick just passed: a timer held off owes no burst.
+                    t.pace.reset();
                 }
                 self.host.fire(|rl| rl.timers.iter_mut().find(|t| t.key == key).map(|t| &mut t.handler));
             }
@@ -370,8 +370,7 @@ fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
 
 struct Timer {
     key: usize,
-    every: Duration,
-    next: Instant,
+    pace: goofi_supervisor::timing::Pace,
     handler: Option<Handler>,
 }
 
@@ -383,7 +382,7 @@ struct Fd {
 
 impl Runloop {
     pub fn add_timer(&mut self, key: usize, every: Duration, handler: Handler) {
-        self.timers.push(Timer { key, every, next: Instant::now() + every, handler: Some(handler) });
+        self.timers.push(Timer { key, pace: goofi_supervisor::timing::Pace::new(every), handler: Some(handler) });
     }
 
     pub fn remove_timer(&mut self, key: usize) -> bool {

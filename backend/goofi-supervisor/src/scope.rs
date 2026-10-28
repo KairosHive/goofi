@@ -17,8 +17,6 @@ pub enum Kind {
     Child,
     /// A thread of this process that outlives the call that started it.
     Worker,
-    /// An iceoryx2 node, with the ports it owns.
-    Port,
     /// A file or directory this process made and will remove.
     Path,
     /// A hardware door: an audio stream, a MIDI port, a GPU device, a window loop.
@@ -139,9 +137,9 @@ impl Scope {
 
     /// Join every thread, within `within` for all of them together.
     pub fn close(&self, within: Duration) {
-        let deadline = Instant::now() + within;
+        let deadline = crate::timing::Deadline::within(within);
         for worker in std::mem::take(&mut *self.workers.lock()) {
-            let _ = worker.join_within(deadline.saturating_duration_since(Instant::now()));
+            let _ = worker.join_within(deadline.left());
         }
     }
 }

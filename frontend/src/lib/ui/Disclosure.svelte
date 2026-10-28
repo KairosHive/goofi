@@ -1,6 +1,6 @@
 <!-- Disclosure — a caret plus a `summary` that mounts `children` on toggle, with an `aside` control
      beside the summary that keeps its own gestures. `--disclosure-surface` and `--disclosure-hover`
-     give the summary row a ground of its own. -->
+     give the summary row a ground of its own; `--disclosure-body-pad` sets the body's padding. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -95,6 +95,6 @@
 	}
 	.ui-disclosure-body {
 		min-width: 0;
-		padding: var(--space-3) var(--space-3) var(--space-3) var(--space-7);
+		padding: var(--disclosure-body-pad, var(--space-3) var(--space-3) var(--space-3) var(--space-7));
 	}
 </style>

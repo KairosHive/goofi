@@ -32,7 +32,7 @@ pub fn tap_ring(width: u16) -> usize {
     (1 + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK / 4)
 }
 /// A recording ring holds one second of blocks at `width`: the control half drains it every tick,
-/// and a second is what a parked drain thread may cost before the recorder counts a gap.
+/// and a second is what a parked recorder may cost before it counts a gap.
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
@@ -144,6 +144,8 @@ pub struct AudioHalf {
     /// An `AudioPlayback`'s file; every other node has none.
     play: Option<Play>,
     audio: Arc<AudioShared>,
+    /// Raised once the node is on the audio thread: until then this half is a node in setup.
+    born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
@@ -161,6 +163,7 @@ pub struct Birth {
     pub recs: Vec<rtrb::Consumer<f32>>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
+    pub born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AudioHalf {
@@ -191,6 +194,7 @@ impl AudioHalf {
             ports,
             io: Io::default(),
             audio: birth.audio,
+            born: birth.born,
         }
     }
 
@@ -391,6 +395,11 @@ impl AudioHalf {
 }
 
 impl Executor for AudioHalf {
+    /// Setup while the node is still being made on its own thread; ready once it processes.
+    fn stage(&self) -> goofi_node::NodeStage {
+        if self.born.load(Ordering::Acquire) { goofi_node::NodeStage::Ready } else { goofi_node::NodeStage::Setup }
+    }
+
     /// One frame into the crossing that resamples it to the clock's rate, or that enters its
     /// values as they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
@@ -482,9 +491,8 @@ impl Executor for AudioHalf {
             }
             let t = planar.len() / c;
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let frame = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate)));
-            if let Some(bytes) = frame.ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-                publish(i, Out::Bytes(&bytes));
+            if let Ok(frame) = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate))) {
+                publish(i, Out::Wire(&frame));
             }
         }
         // After the drains, so what the old rings still held went out before they go.
@@ -714,8 +722,8 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
         meta.set_time(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
-        if let Some(bytes) = Data::array_f32(vec![c, BLOCK], bytes, meta).ok().and_then(|f| goofi_codec::encode(&f).ok()) {
-            publish(out, Out::Record(&bytes));
+        if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
+            publish(out, Out::Record(goofi_core::record::Frame::Data(frame)));
         }
     }
 }

@@ -69,7 +69,7 @@ impl goofi_record::video::Encoders for NoEncoder {
     }
 }
 
-use goofi_core::time::{stamp, Time};
+use goofi_supervisor::timing::{stamp, Time};
 use goofi_tests::j;
 
 #[test]
@@ -85,22 +85,50 @@ fn utc_is_anchored_once_and_advances_monotonically() {
     assert_eq!(stamp(a).len(), "YYYYMMDD-HHMMSS.mmm".len());
 }
 
+/// Poll until `f` answers, against the harness budget: the recorder's workers write on threads
+/// of their own, and a frame handed to a queue is on the disk when they say so.
+fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// The frames every open stream of `rec` holds.
+fn written(rec: &goofi_record::Recorder) -> u64 {
+    rec.status().streams.iter().map(|s| s.frames).sum()
+}
+
 #[test]
 fn a_recording_is_a_folder_of_files_their_own_tools_open() {
+    use goofi_core::record::Frame;
     let dir = tempfile::tempdir().expect("a temp root");
     let time = std::sync::Arc::new(Time::new());
-    let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone()));
-    rec.start(dir.path(), "probe", None, None).expect("started");
-    let id = goofi_record::StreamId {
-        uid: goofi_node::Uid(1),
-        node: "src".into(),
-        slot: "out".into(),
-        engine: "signal",
+    let hub = goofi_tests::hub();
+    let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone(), hub.clone()));
+    let id = goofi_record::StreamId { uid: goofi_node::Uid(1), node: "src".into(), slot: "out".into(), engine: "signal" };
+    // An arming, as the settled graph would name it: the queue its frames ride, and how its
+    // frames are dated.
+    let armed = |queue: &str, engine: &'static str, timeline: goofi_record::Timeline| goofi_record::Armed {
+        id: goofi_record::StreamId { engine, ..id.clone() },
+        service: queue.into(),
+        depth: 64,
+        timeline,
+        quality: Default::default(),
     };
+    rec.arm(vec![armed("test-rec-1", "signal", goofi_record::Timeline::Measured)]);
+    let sender = hub.sender("test-rec-1", 64);
+    rec.start(dir.path(), "probe", None, None).expect("started");
+    // Dated from the take's own start: a measured stream holds what came after it.
+    let t0 = time.now();
     // The first four frames come from a labelled 256 Hz source; the rest from one that says neither.
     let array = |shape: Vec<usize>, fill: f32, i: u64| {
         let mut meta = goofi_core::Meta::empty();
-        meta.set_time(Some(i as f64 / 256.0));
+        meta.set_time(Some(t0 + i as f64 / 256.0));
         meta.set_index(Some(i));
         if i < 4 {
             meta.set_sfreq(Some(256.0));
@@ -111,36 +139,30 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         }
         let n: usize = shape.iter().product();
         let body: Vec<u8> = (0..n).flat_map(|_| fill.to_le_bytes()).collect();
-        goofi_codec::encode(&goofi_core::Data::array_f32(shape, body, meta).expect("a frame")).expect("a frame that crosses")
+        Frame::Data(goofi_core::Data::array_f32(shape, body, meta).expect("a frame"))
     };
-    let open = |bytes: &[u8]| {
-        let kind = goofi_record::frame::read(bytes, None).expect("a frame the recorder reads").kind;
-        rec.open(&id, kind, 0.0, goofi_record::StreamMeta::measured(Some(256.0))).expect("opened");
-    };
-    let hand = |bytes: &[u8]| {
-        assert!(
-            rec.take_frame(&id, bytes, None, goofi_record::Timeline::Measured, 0.0, false),
-            "the writer took the frame"
-        );
-    };
-    open(&array(vec![4], 0.0, 0));
     for i in 0..8u64 {
-        hand(&array(vec![4], i as f32, i));
+        assert!(sender.send(array(vec![4], i as f32, i)), "the queue takes the frame");
     }
     // Step: a frame that RESHAPES stays in the same file. The `.npy` is flat and the sidecar's
     // shape line is what splits it, so a node whose shape moves — a filling `Buffer`, a peak
     // count — no longer mints a file per tick.
-    hand(&array(vec![6], 8.0, 8));
-    hand(&array(vec![6], 9.0, 9));
-    // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated.
-    open(&array(vec![4], 0.0, 0));
-    hand(&array(vec![4], 99.0, 0));
+    sender.send(array(vec![6], 8.0, 8));
+    sender.send(array(vec![6], 9.0, 9));
+    until("ten frames to reach the disk", || (written(&rec) == 10).then_some(()));
+    // Step: a re-arm at the very same patch instant is a NEW file, never the last one truncated:
+    // a new arming is a new queue, and the stream before it closes as reborn.
+    rec.arm(vec![armed("test-rec-2", "signal", goofi_record::Timeline::Measured)]);
+    let reborn = hub.sender("test-rec-2", 64);
+    reborn.send(array(vec![4], 99.0, 0));
+    until("the reborn stream to reach the disk alone", || (rec.status().streams.len() == 1 && written(&rec) == 1).then_some(()));
     let folder = rec.stop().expect("the manifest written").expect("a folder");
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).expect("a manifest"))
             .expect("json");
     assert_eq!(manifest["streams"][0]["frames"], 10, "eight of one shape, then two of another");
+    assert_eq!(manifest["streams"][0]["closed_because"], "reborn", "{manifest}");
     assert_eq!(manifest["streams"][1]["frames"], 1);
     assert_ne!(
         manifest["streams"][0]["file"], manifest["streams"][1]["file"],
@@ -185,7 +207,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let lines: Vec<serde_json::Value> =
         beside.lines().map(|l| serde_json::from_str(l).expect("a json line")).collect();
     assert_eq!(lines.len(), 10, "one line per frame");
-    assert_eq!(lines[0]["t"].as_f64(), Some(0.0), "the line carries the frame's own instant");
+    assert_eq!(lines[0]["t"].as_f64(), Some(t0), "the line carries the frame's own instant");
     assert_eq!(lines[0]["shape"], j!([4]), "…and the shape the first frame came in");
     for (i, line) in lines.iter().enumerate() {
         assert_eq!(line.get("n"), None, "an array line carries no row count: line {i}");
@@ -219,27 +241,40 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     std::fs::write(&cut, &bytes[..bytes.len() - 6]).expect("a truncated copy");
     let (_, body) = npy(&std::fs::read(&cut).expect("the truncated stream"));
     assert_eq!(body.len() / 4, 42, "forty-two whole values survive a kill inside the last frame");
+
+    // Step: a table is a `.csv`, its cells quoted by the one rule its columns are.
+    rec.arm(vec![armed("test-rec-3", "signal", goofi_record::Timeline::Measured)]);
+    let table_sender = hub.sender("test-rec-3", 64);
     rec.start(dir.path(), "table-fields", None, None).expect("table recording started");
+    let at = time.now();
+    let mut meta = goofi_core::Meta::empty();
+    meta.set_time(Some(at));
     let table = goofi_core::Data::table([
         ("left,right".into(), goofi_core::Data::string("a,b", goofi_core::Meta::empty())),
         ("value \"quoted\"\nline".into(), goofi_core::Data::string("say \"yes\"", goofi_core::Meta::empty())),
-    ].into_iter().collect(), goofi_core::Meta::empty());
-    assert!(rec.take_frame(
-        &id, &goofi_codec::encode(&table).expect("a table frame"), None, goofi_record::Timeline::Measured, 4.0, true,
-    ));
+    ].into_iter().collect(), meta);
+    assert!(table_sender.send(Frame::Data(table)));
+    until("the table to reach the disk", || (written(&rec) == 1).then_some(()));
     let folder = rec.stop().expect("table stopped").expect("table folder");
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(folder.join("manifest.json")).expect("table manifest"),
     ).expect("json");
     let csv = std::fs::read_to_string(folder.join(manifest["streams"][0]["file"].as_str().expect("table file"))).expect("CSV");
-    assert_eq!(csv, "t,\"left,right\",\"value \"\"quoted\"\"\nline\"\n4,\"a,b\",\"say \"\"yes\"\"\"\n",
+    assert_eq!(csv, format!("t,\"left,right\",\"value \"\"quoted\"\"\nline\"\n{at},\"a,b\",\"say \"\"yes\"\"\"\n"),
         "column names and values use the same CSV quoting rule");
+
+    // Step: audio is a `.wav`, on the DERIVED timeline the block numbers make, and a block of
+    // another width or rate opens a file of its own.
+    rec.arm(vec![armed("test-rec-4", "audio", goofi_record::Timeline::Derived)]);
+    let audio = hub.sender("test-rec-4", 64);
     rec.start(dir.path(), "audio-formats", None, None).expect("audio recording started");
     for (i, (channels, rate, samples)) in
         [(1, 48_000.0, 4), (1, 48_000.0, 6), (2, 48_000.0, 5), (2, 96_000.0, 3)].into_iter().enumerate()
     {
         let mut meta = goofi_core::Meta::empty();
         meta.set_sfreq(Some(rate));
+        meta.set_index(Some(i as u64));
+        meta.set_time(Some(i as f64));
         meta.set_channels(goofi_core::Axes::new().with(
             0,
             goofi_core::Axis::coords(
@@ -248,10 +283,9 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         ));
         let values: Vec<u8> = (0..channels * samples).flat_map(|n| (n as f32).to_le_bytes()).collect();
         let data = goofi_core::Data::array_f32(vec![channels, samples], values, meta).expect("audio block");
-        assert!(rec.take_frame(
-            &id, &goofi_codec::encode(&data).expect("a frame that crosses"), Some(rate), goofi_record::Timeline::Derived, i as f64, true,
-        ));
+        assert!(audio.send(Frame::Data(data)));
     }
+    until("the last block to reach its own file", || (rec.status().streams.len() == 1 && written(&rec) == 3).then_some(()));
     let folder = rec.stop().expect("audio stopped").expect("audio folder");
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(folder.join("manifest.json")).expect("audio manifest"),
@@ -272,6 +306,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         assert_eq!(entry["frames"], samples);
         assert_eq!(entry["channels"], channels);
         assert_eq!(entry["sfreq"].as_f64(), Some(f64::from(rate)));
+        assert_eq!(entry["timeline"], "derived", "{entry}");
         let beside = std::fs::read_to_string(path.with_extension("jsonl")).expect("sidecar");
         let written: Vec<u64> = beside.lines().map(|line| {
             serde_json::from_str::<serde_json::Value>(line).expect("sidecar row")["n"].as_u64().unwrap()
@@ -279,35 +314,32 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         assert_eq!(written, counts);
     }
 
+    // Step: a disarmed video finishes on its stream's own thread, and a stop — or the next take —
+    // waits for nothing of it. Its entry lands in the take it was opened in once the encoder is
+    // done, however late that is.
     use std::sync::atomic::{AtomicBool, Ordering};
     for restart in [false, true] {
         let inside = std::sync::Arc::new(AtomicBool::new(false));
         let release = std::sync::Arc::new(AtomicBool::new(false));
         rec.set_encoders(std::sync::Arc::new(SlowEncoders { inside: inside.clone(), release: release.clone() }));
+        let queue = format!("test-rec-video-{restart}");
+        rec.arm(vec![armed(&queue, "graphics", goofi_record::Timeline::Measured)]);
+        let video = hub.sender(&queue, 4);
         let old = rec.start(dir.path(), &format!("slow-{restart}"), None, None).expect("started");
-        rec.open(&id, goofi_record::Kind::Video { size: (1, 1), fps: 60.0, quality: Default::default() }, time.now(),
-            goofi_record::StreamMeta::measured(None)).expect("video opened");
-        let closing = rec.clone();
-        let stream = id.clone();
-        let close = std::thread::spawn(move || closing.close(&stream, "disarmed"));
-        let deadline = std::time::Instant::now() + goofi_tests::WAIT;
-        while !inside.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        let entered = inside.load(Ordering::Relaxed);
-        let stopped = if entered { rec.stop() } else { Ok(None) };
-        let next = if entered && restart {
-            rec.start(dir.path(), "next", None, None).map(Some)
-        } else { Ok(None) };
+        let mut meta = goofi_core::Meta::new().with_sfreq(Some(60.0)).with_index(Some(1));
+        meta.set_time(Some(time.now()));
+        assert!(video.send(Frame::Texels(std::sync::Arc::new(goofi_core::record::Texels { width: 1, height: 1, rgba: vec![0; 4], meta }))));
+        until("the video to open", || (written(&rec) == 1).then_some(()));
+        rec.arm(Vec::new());
+        until("the disarmed video to reach its encoder's finish", || inside.load(Ordering::Relaxed).then_some(()));
+        let stopped = rec.stop().expect("stopped while the encoder finishes");
+        assert!(stopped.is_some(), "the take was running");
+        let next = restart.then(|| rec.start(dir.path(), "next", None, None).expect("the next take starts while the encoder finishes"));
         release.store(true, Ordering::Relaxed);
-        close.join().expect("close joined");
-        assert!(entered, "the close reached the slow encoder");
-        assert!(stopped.expect("stopped").is_some());
-        let next = next.expect("next recording started");
-        let old_manifest: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(old.join("manifest.json")).expect("old manifest"),
-        ).expect("json");
-        assert_eq!(old_manifest["streams"].as_array().unwrap().len(), 1);
+        let old_manifest = until("the disarmed video's entry to land in its own take", || {
+            let m: serde_json::Value = serde_json::from_slice(&std::fs::read(old.join("manifest.json")).ok()?).ok()?;
+            (m["streams"].as_array()?.len() == 1 && m["streams"][0]["closed_because"].is_string()).then_some(m)
+        });
         assert_eq!(old_manifest["streams"][0]["closed_because"], "disarmed");
         assert!(old_manifest["stopped_utc"].is_string());
         if let Some(next) = next {
@@ -318,7 +350,6 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
             assert_eq!(next_manifest["streams"], j!([]));
         }
     }
-
 }
 
 /// A `.npy` split into its header text and its samples, the way `np.load` reads one.
@@ -334,6 +365,9 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let g = goofi_tests::Goofi::new();
     let booted = g.graph().time().now();
     let src_uid = g.add("_TestConst");
+    // Paced: an uncapped source outruns the queue, and a frame put on it by hand below would be
+    // the oldest dropped before the recorder reads it.
+    g.set_param(src_uid, "common", "max_frequency", 100.0);
     let src = goofi_tests::hex(src_uid);
     let dst = goofi_tests::hex(g.add("_TestSink"));
 
@@ -379,6 +413,13 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     let src_name = name_of(&g, &src);
     g.until("the armed slot to reach the disk", |g| (frames(g, &src_name) > 0).then_some(()));
+    // A re-armed node's new stream, writing, with the stream the disarm departed closed: that one
+    // writes what its queue already held, on its own thread, and the status lists it until it is done.
+    let alone = |g: &goofi_tests::Goofi, node: &str| -> bool {
+        let status = g.call("record status", j!({}));
+        let mine: Vec<&serde_json::Value> = status["streams"].as_array().into_iter().flatten().filter(|e| e["node"] == j!(node)).collect();
+        mine.len() == 1 && mine[0]["frames"].as_u64().unwrap_or(0) > 0
+    };
 
     // Step: a slot armed while the recording ALREADY runs opens a file of its own.
     let late = g.add("_TestConst");
@@ -400,9 +441,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     };
     g.call("node restart", j!({ "node": &src }));
     g.ready(src_uid);
+    // The file before the rebirth is written out and closed on its own thread; the manifest
+    // lists it open until then.
     g.until("the reborn slot to write a second file", |g| {
         let held = mine(&folder, &src_name);
-        (held.len() >= 2 && frames(g, &src_name) > 0).then_some(())
+        (held.len() >= 2 && held[0]["closed_because"].is_string() && frames(g, &src_name) > 0).then_some(())
     });
     let held = mine(&folder, &src_name);
     assert_eq!(held[0]["closed_because"], j!("reborn"), "the manifest names why the second file began");
@@ -461,22 +504,25 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         videos(g).iter().any(|e| e["closed_because"] == j!("disarmed")).then_some(())
     });
 
-    // Step: a machine that cannot encode costs the GRAPHICS stream and nothing else. The node
-    // wears the standing error every other node failure is worn as, and the recording carries on.
+    // Step: a machine that cannot encode costs the GRAPHICS stream and nothing else. The stream
+    // carries the error in the recording's own status, and the recording carries on.
     g.state.recorder.set_encoders(std::sync::Arc::new(NoEncoder));
     let before = frames(&g, &src_name);
     g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
-    let said = g.until("the shader to wear what it could not record", |g| {
+    let stream_error = |g: &goofi_tests::Goofi, node: &str| -> Option<String> {
+        g.call("record status", j!({}))["streams"].as_array()?.iter().find(|e| e["node"] == j!(node))?["error"].as_str().map(str::to_string)
+    };
+    let said = g.until("the stream to say what it could not record", |g| {
         goofi_tests::render(g, 1);
-        g.error(shader)
+        stream_error(g, &shader_name)
     });
     assert!(said.contains(NoEncoder::WHY), "the error names the package to install: {said}");
     assert_eq!(g.call("record status", j!({}))["running"], j!(true), "one stream's failure ends nothing");
     g.until("the signal streams to keep recording through it", |g| (frames(g, &src_name) > before).then_some(()));
     g.call("record disarm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
-    g.until("the error to clear with the arming that caused it", |g| {
+    g.until("the error to go with the arming that caused it", |g| {
         goofi_tests::render(g, 1);
-        g.error(shader).is_none().then_some(())
+        stream_error(g, &shader_name).is_none().then_some(())
     });
 
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
@@ -485,11 +531,18 @@ fn arming_survives_a_rewire_and_rides_the_document() {
 
     // Step: a stream whose disk refused a frame is dead for THAT arming only: what follows is
     // refused rather than counted as written, and a re-arm starts afresh and writes.
-    let id = goofi_record::StreamId { uid: src_uid, node: src_name.clone(), slot: "out".into(), engine: "signal" };
     let refused = |folder: &str| mine(folder, &src_name).iter().any(|e| e["closed_because"].as_str().is_some_and(|w| w.starts_with("the frame could not be written")));
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
-    g.until("the re-armed slot to reach the disk", |g| (frames(g, &src_name) > 0).then_some(()));
-    assert!(g.state.recorder.take_frame(&id, b"not a frame", None, goofi_record::Timeline::Measured, 0.0, true), "the lane takes what it cannot yet read");
+    g.until("the re-armed slot to reach the disk", |g| alone(g, &src_name).then_some(()));
+    // Onto the slot's own queue, as the node would put it: the recorder is what refuses it.
+    let unwritable = goofi_core::Data::functional(Vec::new(), goofi_core::Meta::empty());
+    let queue = {
+        let graph = g.graph();
+        let serial = graph.recorded(src_uid).expect("armed")[0].serial;
+        let base = goofi_transport::service_base(graph.instance(), src_uid, graph.node_generation(src_uid));
+        goofi_transport::record_service(&base, "out", serial)
+    };
+    assert!(g.state.hub.sender(&queue, goofi_transport::record_depth("signal")).send(goofi_core::record::Frame::Data(unwritable)), "the queue takes what the recorder cannot write");
     g.until("the refused frame to end the stream", |_| refused(&folder).then_some(()));
     let late_before = frames(&g, &late_name);
     g.until("a sweep after the end", |g| (frames(g, &late_name) > late_before).then_some(()));
@@ -497,7 +550,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(g.call("record status", j!({}))["running"], j!(true), "one stream's end ends nothing");
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
-    g.until("the re-armed slot to reach the disk again", |g| (frames(g, &src_name) > 0).then_some(()));
+    g.until("the re-armed slot to reach the disk again", |g| alone(g, &src_name).then_some(()));
     g.call("record disarm", j!({ "output": goofi_tests::ep(&src, "out") }));
 
     // Step: a load whose source cannot be read ends nothing — the recording runs on. A manifest
@@ -509,7 +562,14 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     assert_eq!(g.call("record status", j!({}))["folder"], j!(folder));
     g.refuse("session load", j!({ "content": "nodes: [" }));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a refused manifest still restarted the clock");
-    assert_eq!(events.next("record_changed")["running"], j!(false), "the end is announced to every client");
+    // The beat re-announces a running recording, so one sent before the end may still be queued.
+    let ended = loop {
+        let announced = events.next("record_changed");
+        if announced["running"] == j!(false) {
+            break announced;
+        }
+    };
+    assert_eq!(ended["running"], j!(false), "the end is announced to every client");
     assert_eq!(g.doc()["nodes"].as_object().expect("nodes").len(), nodes_before, "the open patch is untouched");
     assert_eq!(g.refuse("record stop", j!({})), "record stop: no recording runs");
     assert!(std::path::Path::new(&folder).join("manifest.json").exists(), "the folder holds a manifest");
@@ -561,7 +621,10 @@ fn arming_survives_a_rewire_and_rides_the_document() {
             .expect("ffmpeg reads back what it wrote");
         assert_eq!(read.stdout.len() as u64, held * texels, "every frame in the file is one frame: {entry}");
         assert!(read.status.success(), "{}", String::from_utf8_lossy(&read.stderr));
-        let red = u16::from_le_bytes(read.stdout[..2].try_into().unwrap()) as f32 / 65535.0;
+        // The LAST frame: a readback is a tick or two behind the render, and the first frame a
+        // take holds may predate the half's write of the colour it was sent.
+        let last = read.stdout.len() - texels as usize;
+        let red = u16::from_le_bytes(read.stdout[last..last + 2].try_into().unwrap()) as f32 / 65535.0;
         assert!((red - 0.5).abs() < 0.04, "the GPU readback keeps the red channel: {red}");
         // …and what a PLAYER finds in it: three components at the rate the manifest states. A
         // 16-bit alpha plane is one VLC cannot allocate, and it plays such a file as nothing.
@@ -683,8 +746,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.call("session new", j!({}));
     assert_eq!(g.call("record status", j!({}))["running"], j!(false), "a new patch ends the recording");
 
-    // Step: the record service overflows the OLDEST frame at the subscriber, which nothing on the
-    // publishing side can see. Every lost frame is still counted, from the indices themselves.
+    // Step: the queue overflows its OLDEST frame, which nothing on the publishing side can see.
+    // Every lost frame is still counted, from the indices themselves.
     let fast = g.add("_TestConst");
     let fast_hex = goofi_tests::hex(fast);
     g.set_param(fast, "constant", "length", 1);
@@ -699,18 +762,16 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         .to_string();
     let fast_name = name_of(&g, &fast_hex);
     g.until("the third recording to be writing", |g| (frames(g, &fast_name) > 0).then_some(()));
-    // The drain resolves under the GRAPH lock whenever the graph's epoch moved, so holding the lock
-    // and moving the epoch freezes it while the producer publishes far past the 64 the service holds.
+    // The recorder HELD parks every worker, so the producer publishes far past the 64 the queue
+    // holds while nothing reads it.
     let reached = {
-        let mut graph = g.graph();
-        graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
-        let from = g.until("a frame under the freeze", |_| index());
-        let reached = g.until("the producer to outrun the service", |_| index().filter(|&i| i >= from + 2 * 64));
-        // Step: what the service already DELIVERED is transported data. The disarm lands with the
-        // service full, so a departure that let the subscriber go unread would lose all of it.
-        let disarm = goofi_graph::Command::SetRecorded { uid: fast, record: Vec::new() };
-        g.state.history.lock().apply(&mut graph, "test", disarm).expect("the disarm applies");
-        graph.settle();
+        g.state.recorder.hold(true);
+        let from = g.until("a frame under the hold", |_| index());
+        let reached = g.until("the producer to outrun the queue", |_| index().filter(|&i| i >= from + 2 * 64));
+        // Step: what the queue already DELIVERED is transported data. The disarm lands with the
+        // queue full, so a departure that let the receiver go unread would lose all of it.
+        g.call("record disarm", j!({ "output": goofi_tests::ep(&fast_hex, "out") }));
+        g.state.recorder.hold(false);
         reached
     };
     let written = |g: &goofi_tests::Goofi| -> u64 {
@@ -921,35 +982,36 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     // rather than as a gap.
     goofi_tests::drive(&g, 64 * 16);
     g.until("the overflow recording to be writing", |g| (frames(g, &osc_name) == 64 * 16).then_some(()));
-    // Frozen as above, the drain leaves a burst to the record service, which keeps its newest
-    // `capacity` blocks. A freeze the drain parked late for took some first, and is taken again.
-    let capacity = goofi_transport::record_shape("audio").buffer as u64;
+    // Held as above, the recorder leaves a burst to the queue, which keeps its newest `capacity`
+    // blocks. A worker mid-frame when the hold came took one first, and is held again.
+    let capacity = goofi_transport::record_depth("audio") as u64;
     let burst = capacity * 3 / 2;
-    let lost = g.until("a burst the frozen service kept its depth of", |g| {
+    let lost = g.until("a burst the held queue kept its depth of", |g| {
         let (kept, lost) = (frames(g, &osc_name) / 64, dropped(g));
+        g.state.recorder.hold(true);
         {
             let mut graph = g.graph();
-            graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
             let audio = goofi_bridge::audio_engine(&mut graph);
             // In pieces the engine's one-second ring holds, each flushed before the next: the depth
-            // under test is the SERVICE's, and a ring overflow drops the newest, which no gap shows.
+            // under test is the QUEUE's, and a ring overflow drops the newest, which no gap shows.
             for _ in 0..3 {
                 audio.drive(64 * burst as usize / 3);
                 for ack in audio.flush_recording() {
-                    ack.recv_timeout(goofi_tests::WAIT).expect("the control half ticks").expect("its ports are armed");
+                    ack.recv_timeout(goofi_tests::WAIT).expect("the control half ticks").expect("its queues are armed");
                 }
             }
         }
+        g.state.recorder.hold(false);
         let (kept, lost) = g.until("every block of the burst to be accounted for", |g| {
             let (k, l) = (frames(g, &osc_name) / 64 - kept, dropped(g) - lost);
             (k + l == burst).then_some((k, l))
         });
         (kept <= capacity).then(|| {
-            assert_eq!(kept, capacity, "the frozen service kept its whole depth");
+            assert_eq!(kept, capacity, "the held queue kept its whole depth");
             lost
         })
     });
-    assert_eq!(lost, burst - capacity, "every block past the service's depth is counted");
+    assert_eq!(lost, burst - capacity, "every block past the queue's depth is counted");
     g.call("record stop", j!({}));
     let overflowed = mine(&seventh, &osc_name).pop().expect("the overflowed entry");
     // The survivors are still where they were rendered — one line through every kept block, gap and
@@ -1002,12 +1064,12 @@ fn arming_survives_a_rewire_and_rides_the_document() {
 
 #[test]
 fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
-    // The recorder's own service carries every tick. Contiguity of `index` in what reached the
+    // The recorder's own queue carries every tick. Contiguity of `index` in what reached the
     // disk is the oracle: a frame count alone would pass against the latest-wins wire.
     let g = goofi_tests::Goofi::new();
     let source = g.add("_TestConst");
     let hex = goofi_tests::hex(source);
-    // Slow enough that the 64 frames the service holds outlast any stall `WAIT` allows.
+    // Slow enough that the 64 frames the queue holds outlast any stall `WAIT` allows.
     g.set_param(source, "common", "max_frequency", 0.3);
     let probe = g.probe(source, "out");
     let index = || probe.latest().and_then(|d| d.meta().index());
@@ -1022,14 +1084,14 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
             .unwrap_or(0)
     };
     g.until("the armed slot to reach the disk", |g| (frames(g) > 0).then_some(()));
-    // The drain frozen as the graph lock and a moved epoch freeze it: a latest-wins wire keeps the
-    // newest of the frames published meanwhile, and the service keeps every one.
+    // The recorder held: a latest-wins wire keeps the newest of the frames published meanwhile,
+    // and the queue keeps every one for the stop to drain.
     let (from, to) = {
-        let graph = g.graph();
-        graph.epoch().fetch_add(1, std::sync::atomic::Ordering::Release);
-        let from = g.until("a frame under the freeze", |_| index());
-        (from, g.until("two more frames under the freeze", |_| index().filter(|&i| i >= from + 2)))
+        g.state.recorder.hold(true);
+        let from = g.until("a frame under the hold", |_| index());
+        (from, g.until("two more frames under the hold", |_| index().filter(|&i| i >= from + 2)))
     };
+    g.state.recorder.hold(false);
     g.call("record stop", j!({}));
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(std::path::Path::new(&folder).join("manifest.json")).expect("a manifest")).expect("json");
@@ -1039,29 +1101,7 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a json line")["meta"]["index"].as_u64().expect("the engine stamps every frame"))
         .collect();
-    assert!((from..=to).all(|i| seen.contains(&i)), "the recording service loses no tick: {from}..={to} in {seen:?}");
-
-    // Step: a frame over the recording service's ceiling is a COUNTED drop the node says, never a
-    // segment quietly grown to hold it — which is what holds an armed slot to `RECORD_BUDGET`.
-    let wide = g.add("_TestRamp");
-    let wide_out = goofi_tests::ep(goofi_tests::hex(wide), "out");
-    g.set_param(wide, "ramp", "channels", 2);
-    g.set_param(wide, "ramp", "length", 600_000);
-    g.set_param(wide, "common", "max_frequency", 5.0);
-    g.ready(wide);
-    g.call("record arm", j!({ "output": &wide_out }));
-    let said = g.until("the node to wear what the recording cost", |g| g.error(wide));
-    assert!(said.starts_with("recording dropped"), "the drop is counted, not swallowed: {said}");
-    assert!(
-        said.contains(&goofi_transport::RECORD_SLICE.to_string()),
-        "and the ceiling it broke is named: {said}"
-    );
-
-    // A re-arm is what clears the complaint, and a frame under the ceiling records again.
-    g.set_param(wide, "ramp", "length", 512);
-    g.call("record disarm", j!({ "output": &wide_out }));
-    g.call("record arm", j!({ "output": &wide_out }));
-    g.until("the recording complaint to clear", |g| g.error(wide).is_none().then_some(()));
+    assert!((from..=to).all(|i| seen.contains(&i)), "the recording queue loses no tick: {from}..={to} in {seen:?}");
 }
 
 /// A stream's sidecar, read as the instants it carries — the one sidecar shape every kind has.

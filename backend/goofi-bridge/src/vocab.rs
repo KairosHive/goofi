@@ -179,6 +179,9 @@ pub fn typescript() -> String {
         })
         .collect::<String>();
     let columns = goofi_core::variables::CONTROL_COLUMNS;
+    let quoted = |fields: &[&str]| fields.iter().map(|f| format!("'{f}'")).collect::<Vec<_>>().join(", ");
+    let state_fields = quoted(&goofi_graph::machine::STATE_FIELDS);
+    let me_fields = quoted(&goofi_graph::machine::ME_FIELDS);
     let boundaries = BOUNDARY_TYPES
         .iter()
         .map(|(name, dir, dtype)| {
@@ -251,6 +254,12 @@ pub fn typescript() -> String {
          \n\
          /** How many columns a control panel's grid is, whatever its pixel width. */\n\
          export const CONTROL_COLUMNS = {columns};\n\
+         \n\
+         /** What `st('state')` answers a machine's expression: the residents, their names from the\n\
+          * longest resident to the newest, and the arrivals and departures of this instant. */\n\
+         export const STATE_FIELDS = [{state_fields}] as const;\n\
+         /** What `me` answers a machine's expression before the playhead's attributes. */\n\
+         export const ME_FIELDS = [{me_fields}] as const;\n\
          \n\
          /** The type a sub-patch facade wears in the document. It is not in the palette — grouping\n\
           * is what makes one. */\n\

@@ -36,7 +36,13 @@ pub struct Cells {
     pub tap: Mutex<Option<Tapped>>,
     /// The box the readers want the readback fitted into, LIVE: a viewer never re-plans.
     pub tap_box: AtomicU64,
+    /// The frames the render thread read back for the recording, until the half hands them
+    /// to its queue. A few, oldest dropped: a gap in their numbers is what the recorder counts.
+    pub record: Mutex<std::collections::VecDeque<Arc<goofi_core::record::Texels>>>,
 }
+
+/// How many readbacks the cell holds between two ticks of the half.
+pub const RECORD_HELD: usize = 4;
 
 pub struct GraphicsHalf {
     producer: Option<(HostExecutor, crate::producer::Source)>,
@@ -133,20 +139,26 @@ impl Executor for GraphicsHalf {
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.cells.readers.store(readers, Ordering::Relaxed);
-        // Taken from UNDER the lock and encoded outside it: the render thread waits on this
-        // mutex, so an encode held across it is the frontend stalling a node tick.
+        // Taken from UNDER the lock and put out outside it: the render thread waits on this
+        // mutex, so work held across it is the frontend stalling a node tick. A full frame goes
+        // as it is; the 8-bit texels go as the GOOF frame they are, which their readers forward.
+        let recorded = std::mem::take(&mut *self.cells.record.lock());
+        for texels in recorded {
+            publish(0, Out::Record(goofi_core::record::Frame::Texels(texels)));
+        }
         let taken = self.cells.tap.lock().take();
-        let encoded = match taken {
-            Some(Tapped::Full(frame)) => Some(goofi_codec::encode(&frame)),
-            Some(Tapped::Texels { shape, bytes, meta }) => Some(goofi_codec::encode_u8(&shape, &bytes, &meta)),
-            None => None,
-        };
-        match encoded {
-            Some(Ok(bytes)) => {
+        match taken {
+            Some(Tapped::Full(frame)) => {
                 self.refused = None;
-                publish(0, Out::Bytes(&bytes));
+                publish(0, Out::Wire(&frame));
             }
-            Some(Err(why)) => self.refused = Some(format!("the output frame cannot cross: {why}")),
+            Some(Tapped::Texels { shape, bytes, meta }) => match goofi_codec::encode_u8(&shape, &bytes, &meta) {
+                Ok(encoded) => {
+                    self.refused = None;
+                    publish(0, Out::Bytes(bytes::Bytes::from(encoded)));
+                }
+                Err(why) => self.refused = Some(format!("the output frame cannot cross: {why}")),
+            },
             None => {}
         }
         let seen = (crate::plan::asked(cx.params, self.size), self.cells.uploaded.load(Ordering::Relaxed));

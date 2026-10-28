@@ -41,6 +41,9 @@ fn fixture() -> (Goofi, String) {
     g.call("link add", j!({ "from": ep(hex(osc), "out"), "to": ep(&scope, &bnd) }));
     // The fault is a REPORT — the graph does not hold it until the node has run and said so.
     g.until("the failing node's first fault", |g| g.error(boom));
+    // The buffer ran on a hole before its wire landed and reported that; the report clears on
+    // its next run, and the scope wears a fault until it has. Read the state reached.
+    g.until("the buffer's fault clears", |g| g.error(buf).is_none().then_some(()));
     (g, scope)
 }
 
@@ -73,11 +76,9 @@ names: a node's mermaid id is its name, which every op takes.
     assert_eq!(errs[0]["path"], "testfail0");
     assert_eq!(errs[0]["error"], "the sensor is unplugged");
     assert!(errs[0]["standing"].as_f64().is_some(), "and how long it has stood: {health}");
-    // What the process HOLDS: every running node has a port of its own, each one an entry in
+    // What the process HOLDS: every running node has a thread of its own, each one an entry in
     // the resource index a lease enters and leaves.
     let held = health["resources"].as_array().cloned().unwrap_or_default();
-    let ports = held.iter().filter(|r| r["kind"] == "port").count();
-    assert!(ports >= 3, "a port per running node, and the graph's own: {held:?}");
     let workers: Vec<&str> = held.iter().filter(|r| r["kind"] == "worker").filter_map(|r| r["name"].as_str()).collect();
     assert!(workers.iter().any(|n| n.starts_with("goofi-status-drain")), "the manager's own threads: {workers:?}");
     assert!(workers.iter().any(|n| n.to_lowercase().contains("lfo")), "each node's thread: {workers:?}");

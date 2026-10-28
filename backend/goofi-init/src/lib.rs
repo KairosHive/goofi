@@ -3,8 +3,9 @@
 //! pyo3 at the interpreter, the frontend's dependencies. It must not depend on pyo3.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+#[cfg(any(target_os = "linux", windows))]
 use std::process::Command;
+use std::time::Duration;
 
 use goofi_provision::{answers, query, run, uv};
 use goofi_supervisor::layout::{self, Tool};
@@ -58,7 +59,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     let (shared, gil_only) = goofi_provision::requirement_sets(&dirs);
     for (label, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
         if !goofi_provision::has_goofi(py) {
-            let wheels = build_wheel(root, &runtime, label, py)?;
+            let wheels = ensure_wheel(root, &runtime, label, py)?;
             goofi_provision::ensure_wheels(&runtime, py, &wheels)?;
         }
         if !reqs.is_empty() {
@@ -192,6 +193,40 @@ fn require_uv(runtime: &layout::Runtime) -> Result<(), String> {
          on. Install it from https://docs.astral.sh/uv/ and re-run."
             .to_string()
     })
+}
+
+/// What the wheel is built from, as one key: the pymod crate, the workspace crates it links and
+/// the lock, by content. A wheel built from these bytes is this wheel, whenever it was built.
+fn wheel_key(root: &Path) -> String {
+    let mut sources: Vec<PathBuf> = [
+        "backend/signal/goofi-pymod",
+        "backend/goofi-supervisor",
+        "backend/goofi-core",
+        "backend/goofi-codec",
+        "backend/goofi-transport",
+    ]
+    .iter()
+    .map(|d| root.join(d))
+    .collect();
+    sources.push(root.join("Cargo.lock"));
+    goofi_provision::tree_digest(env!("CARGO_PKG_VERSION"), &sources)
+}
+
+/// The wheel for THIS interpreter: the one under `target/wheels/<label>` when it was built from
+/// these very sources, else built now. Answers its directory.
+fn ensure_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) -> Result<PathBuf, String> {
+    let out = root.join("target").join("wheels").join(label);
+    let key = wheel_key(root);
+    let stamp = out.join("built-from");
+    let held = std::fs::read_to_string(&stamp).is_ok_and(|k| k == key)
+        && std::fs::read_dir(&out).is_ok_and(|mut d| d.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "whl"))));
+    if held {
+        println!("  the goofi wheel for {label} is built from these sources already");
+        return Ok(out);
+    }
+    build_wheel(root, runtime, label, py)?;
+    std::fs::write(&stamp, key).map_err(|e| format!("{}: {e}", stamp.display()))?;
+    Ok(out)
 }
 
 /// Build the wheel for THIS interpreter into a directory of its own, emptied first, so the wheel

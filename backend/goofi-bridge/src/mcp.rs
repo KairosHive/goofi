@@ -38,8 +38,7 @@ repeats its flag; a `json` arg takes one JSON string.\n\n\
 The reply is every command's result, in order, as one JSON list. SEVERAL commands execute as \
 one batch and ONE undo step: a step is a read or an undoable write — an effect runs alone — and \
 a refused step takes the whole batch back. To wire nodes made in the same batch, choose their \
-uids yourself with `node add --member_uid`. `actor` names your undo stack; calls that share it \
-share undo.";
+uids yourself with `node add --member_uid`. `actor` names you, for the context a step keeps.";
 
 /// The tool list: the one tool.
 fn tools() -> Vec<Value> {
@@ -56,7 +55,7 @@ fn tools() -> Vec<Value> {
                 },
                 "actor": {
                     "type": "string",
-                    "description": "The undo stack these commands land in (default \"mcp\").",
+                    "description": "Who is calling, for the context a step keeps (default \"mcp\").",
                 },
             },
             "required": ["commands"],

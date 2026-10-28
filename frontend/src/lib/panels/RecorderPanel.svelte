@@ -94,6 +94,8 @@
 		/** Dropping NOW: the count moved on the last report, which the cumulative one cannot say. */
 		losing: boolean;
 		fill: number;
+		/** Why the stream has no file: what the recorder could not open or write. */
+		error?: string;
 	};
 
 	const rows = $derived.by((): Row[] =>
@@ -112,7 +114,8 @@
 				frames: st?.frames ?? 0,
 				dropped: st?.dropped ?? 0,
 				losing: g.dropping.has(`${st?.node ?? label}/${a.slot}`),
-				fill: st?.fill ?? 0
+				fill: st?.fill ?? 0,
+				error: st?.error
 			};
 		})
 	);
@@ -197,11 +200,13 @@
 					<li class="row" data-testid="recorder-stream" data-output={`${r.uid}/${r.slot}`}>
 						<div class="stream-status">
 							<StatusDot
-								tone={r.losing ? 'warning' : 'success'}
+								tone={r.error ? 'danger' : r.losing ? 'warning' : 'success'}
 								size="sm"
-								title={r.losing
-									? `Dropping frames — ${r.dropped} lost`
-									: `${r.dropped} frames lost`}
+								title={r.error
+									? `Not recorded: ${r.error}`
+									: r.losing
+										? `Dropping frames — ${r.dropped} lost`
+										: `${r.dropped} frames lost`}
 							/>
 							<span class="who">
 								<span class="name">{r.label}/{r.slot}</span>

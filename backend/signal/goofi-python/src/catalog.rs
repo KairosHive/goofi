@@ -135,7 +135,7 @@ fn free_threaded() -> Option<String> {
 /// A discovered type, registered ROUTED: its tier cell decides the tier at every build, so the
 /// runtime GIL tripwire demoting it is all a re-route takes.
 pub fn routed(
-    iox: std::sync::Arc<goofi_transport::Iox>,
+    hub: std::sync::Arc<goofi_transport::Hub>,
     d: Discovered,
     subproc: &str,
 ) -> (&'static goofi_node::NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell) {
@@ -148,7 +148,7 @@ pub fn routed(
     let factory: goofi_host_sdk::NodeFactory = Box::new(move |_p| match tier.get() {
         #[cfg(feature = "embed")]
         goofi_node::Isolation::InProcess => crate::inproc::build_routed(&source, in_slots.clone(), out_slots.clone(), tier),
-        _ => Box::new(crate::subproc::RemoteNode::new(crate::subproc::subproc(iox.clone(), &python, &source), in_slots.clone()))
+        _ => Box::new(crate::subproc::RemoteNode::new(crate::subproc::subproc(hub.clone(), &python, &source), in_slots.clone()))
             as Box<dyn goofi_host_sdk::Node>,
     });
     (manifest, factory, tier)

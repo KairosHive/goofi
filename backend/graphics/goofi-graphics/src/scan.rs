@@ -1,19 +1,17 @@
-//! The engine's scan of one `nodes_graphics/` folder, and the thread that builds a pipeline for
-//! what it registered. A driver takes its time over a compile, so no op waits on one: the class
-//! holds a cell, and the plan picks it up at the tick after it is filled.
+//! The engine's scan of one `nodes_graphics/` folder, and the pipeline built for what it
+//! registered. A driver takes its time over a compile, so no op and no tick waits on one: the
+//! class holds a cell a thread of its own fills, and the plan picks it up at the tick after.
 
 use std::path::Path;
-use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use goofi_node::{NodeManifest, Scanned, ScannedType};
 
 use crate::gpu::Gpu;
 use crate::{shader, GraphicsEngine};
 
-/// A pipeline once the compile thread answers, or why the device refused it.
-pub type Built = Arc<OnceLock<Result<Arc<wgpu::RenderPipeline>, String>>>;
+/// A pipeline once its compile answers, or why the device refused it.
+pub type Built = goofi_supervisor::ready::Ready<Arc<wgpu::RenderPipeline>>;
 
 /// One graphics source as the engine holds it.
 pub struct Class {
@@ -39,7 +37,7 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
         let unchanged = seen.is_some() && engine.stamps.get(&type_name) == seen.as_ref() && engine.classes.contains_key(&type_name);
         let registered = match unchanged {
             true => Ok(false),
-            false => engine.register(&path, &type_name).map(|class| engine.classes.insert(type_name.clone(), class).map(crate::gpu::give_back).is_some()),
+            false => engine.register(&path, &type_name).map(|class| engine.classes.insert(type_name.clone(), class).is_some()),
         };
         let outcome = match registered {
             Ok(replaced) => {
@@ -52,7 +50,7 @@ pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> 
             Err(reason) => {
                 // A file that no longer loads displaces its registration, so the palette greys the
                 // type rather than offering one nothing can build.
-                crate::gpu::give_back(engine.classes.remove(type_name.as_str()));
+                engine.classes.remove(type_name.as_str());
                 engine.stamps.remove(&type_name);
                 Scanned::Unavailable(reason)
             }
@@ -73,7 +71,7 @@ impl GraphicsEngine {
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
         let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Texture))?;
-        let pipeline = self.compiler.shader(manifest, &source, &intro.state)?;
+        let pipeline = shader(&self.gpu, &self.shared, manifest, &source, &intro.state)?;
         Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER }))
     }
 }
@@ -86,80 +84,25 @@ struct Job {
     state: usize,
 }
 
-impl Compiler {
-    /// `source` plus the prelude, once naga passes it, queued for a pipeline.
-    pub fn shader(&self, manifest: &'static NodeManifest, source: &str, state: &[String]) -> Result<Built, String> {
-        let full = format!("{source}{}", shader::prelude(manifest, state));
-        shader::validate(&full)?;
-        let params = !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some();
-        Ok(self.build(Job { source: full, params, inputs: manifest.inputs.len(), state: state.len() }))
-    }
+/// `source` plus the prelude, once naga passes it, built into a pipeline on a thread of its own,
+/// as every compile is: the tick picks the cell up by itself once it is filled, and the settle it
+/// asks for is for a refusal, which only a plan can turn into the node's error.
+pub(crate) fn shader(gpu: &Arc<Gpu>, shared: &Arc<goofi_runtime::Shared>, manifest: &'static NodeManifest, source: &str, state: &[String]) -> Result<Built, String> {
+    let full = format!("{source}{}", shader::prelude(manifest, state));
+    shader::validate(&full)?;
+    let params = !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some();
+    let inputs = manifest.inputs.len() + shader::array_inputs(manifest).count();
+    let job = Job { source: full, params, inputs, state: state.len() };
+    let gpu = gpu.clone();
+    let built = goofi_supervisor::ready::prepare("goofi-graphics-compile", move || compile(&gpu, &job));
+    let shared = shared.clone();
+    built.on_ready(move || shared.ask_settle());
+    Ok(built)
 }
 
-/// One job on the compile thread's queue: what to build, and where to leave it.
-struct Order {
-    job: Job,
-    cell: Built,
-}
-
-/// One engine's compile thread, so no op waits on a compile. Its stop drops what is still queued,
-/// waits out the compile in flight and joins the thread, so no compile outlives the engine.
-pub struct Compiler {
-    jobs: Option<mpsc::Sender<Order>>,
-    halt: Arc<AtomicBool>,
-    thread: Option<goofi_supervisor::worker::Worker>,
-}
-
-impl Compiler {
-    pub fn start(gpu: Arc<Gpu>, shared: Arc<goofi_runtime::Shared>) -> Compiler {
-        let (jobs, take) = mpsc::channel::<Order>();
-        let halt = Arc::new(AtomicBool::new(false));
-        let stopped = halt.clone();
-        let thread = goofi_supervisor::worker::thread("goofi-graphics-compile")
-            .spawn(move || {
-                while let Ok(order) = take.recv() {
-                    if stopped.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let _ = order.cell.set(compile(&gpu, &order.job));
-                    // The tick picks the cell up by itself; the settle is for a refusal, which
-                    // only a plan can turn into the node's standing error.
-                    shared.ask_settle();
-                    // The order may hold the last handle on the pipeline it just built.
-                    crate::gpu::give_back(order);
-                }
-            })
-            .ok();
-        Compiler { jobs: thread.is_some().then_some(jobs), halt, thread }
-    }
-
-    fn build(&self, job: Job) -> Built {
-        let cell: Built = Arc::new(OnceLock::new());
-        let sent = self.jobs.as_ref().is_some_and(|jobs| jobs.send(Order { job, cell: cell.clone() }).is_ok());
-        if !sent {
-            let _ = cell.set(Err("no compile thread".into()));
-        }
-        cell
-    }
-
-    /// Called WITHOUT the device gate, which the compile in flight holds.
-    pub fn stop(&mut self) {
-        self.halt.store(true, Ordering::Release);
-        self.jobs = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-impl Drop for Compiler {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
+/// The device's compile, on the preparing thread. wgpu keeps an error scope per thread, so the
+/// refusal this catches is this pipeline's and a tick drawing meanwhile is untouched.
 fn compile(gpu: &Gpu, job: &Job) -> Result<Arc<wgpu::RenderPipeline>, String> {
-    let _gate = crate::gpu::gate();
     let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,

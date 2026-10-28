@@ -1,6 +1,6 @@
 //! `goofi.serve()` — the subprocess child loop (wheel only; `extension-module`): read the node
-//! source and the exchange base from the environment, run the node over the same [`crate::exec`]
-//! seam the in-process tier uses, and answer `[entry][now]` calls over iceoryx2.
+//! source from stdin and the exchange from the environment, run the node over the same
+//! [`crate::exec`] seam the in-process tier uses, and answer `[entry][now]` calls over it.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -26,7 +26,6 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
     let mut source = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("no node source on stdin: {e}")))?;
-    let base = env("GOOFI_IOX_BASE")?;
 
     let module = module_from_source(py, "goofi_node_main", &source)?;
     let instance = find_node_class(py, &module)?.call0()?;
@@ -35,17 +34,12 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
         crate::introspect::slots(&instance.getattr("INPUTS")?)?.into_iter().map(|s| (s.name, s.multi)).collect();
     let out_refs: Vec<&str> = out_slots.iter().map(|s| s.as_str()).collect();
 
-    run_loop(py, &instance, &in_slots, &out_refs, &base).map_err(pyo3::exceptions::PyRuntimeError::new_err)
+    run_loop(py, &instance, &in_slots, &out_refs).map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
 /// The slot names one declaration constant holds, in declaration order.
 fn slot_names(instance: &Bound<'_, PyAny>, constant: &str) -> PyResult<Vec<String>> {
     instance.getattr(constant)?.cast::<PyDict>()?.iter().map(|(k, _)| k.extract()).collect()
-}
-
-/// Read a required env var, or a clean Python error naming it.
-fn env(key: &str) -> PyResult<String> {
-    std::env::var(key).map_err(|_| pyo3::exceptions::PyRuntimeError::new_err(format!("{key} unset")))
 }
 
 /// How long one wait for a call lasts; the parent's liveness is watched by its own thread.
@@ -57,10 +51,8 @@ fn run_loop(
     instance: &Bound<'_, PyAny>,
     in_slots: &[(String, bool)],
     out_slots: &[&str],
-    base: &str,
 ) -> Result<(), String> {
-    // The parent's session, joined through `GOOFI_SESSION`: the same root, prefix and limits.
-    let mut served = goofi_transport::Served::open(&goofi_transport::Iox::from_env()?, base)?;
+    let mut served = goofi_transport::Served::open_from_env()?;
     let mut warned: HashSet<SrcDtype> = HashSet::new();
     // The live params, seeded by the setup and moved one at a time: a tick carries none.
     let mut params = crate::exec::Groups::new();

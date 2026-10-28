@@ -49,7 +49,9 @@ export default defineConfig({
 		baseURL: BASE_URL,
 		actionTimeout: WAIT,
 		headless: true,
-		trace: 'on-first-retry'
+		// Kept for a failed test alone: with no retries, a trace on the first retry is never written,
+		// and a failure seen once on CI needs its socket frames and screenshots to be read at all.
+		trace: 'retain-on-failure'
 	},
 	// The projects are the geometries the specs are asked in. Only the
 	// integrity sweep is asked more than once: it is the responsive test, and re-asking it is what

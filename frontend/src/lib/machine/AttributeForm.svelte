@@ -1,5 +1,6 @@
 <!-- An attribute of the machine, for every state: its name, kind, range or options, default, and
-     its removal. Shown in the inspector under a state's attribute row. -->
+     its removal. Shown in the inspector under a state's attribute row, dressed by the inspector's
+     `.fields` grid. -->
 <script lang="ts">
 	import type { Attribute } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
@@ -32,6 +33,10 @@
 </script>
 
 <div class="attribute-form" data-testid={`attribute-${attr}`} data-face={faceOf(a)}>
+	<div class="form-head">
+		<span class="form-name">definition</span>
+		<Button variant="danger" size="sm" title="Remove the attribute from every state and every playhead" data-testid="attribute-remove" onclick={() => call('machine attribute remove', {})}>remove</Button>
+	</div>
 	<div class="fields">
 		<Field label="name" row>
 			<RenameField value={attr} valid={isValidIdentifier} label="Attribute name" testid="attribute-name" onRename={(to) => call('machine attribute rename', { to })} />
@@ -61,16 +66,23 @@
 	</div>
 	<ParamField paramName={attr} label="default" descriptor={descriptorFor(a, a.default)} literal viewKey={`${name}/${attr}`}
 		onCommit={(v) => call('machine attribute edit', { value: literalOf(v) })} />
-	<div class="actions">
-		<Button variant="danger" size="sm" data-testid="attribute-remove" onclick={() => call('machine attribute remove', {})}>remove from the machine</Button>
-	</div>
 </div>
 
 <style>
 	.attribute-form {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-2);
+		gap: var(--space-3);
+	}
+	.form-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+	}
+	.form-name {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
 	}
 	.pair {
 		display: flex;

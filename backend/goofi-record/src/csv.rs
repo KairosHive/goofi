@@ -8,6 +8,11 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use goofi_core::record::Frame;
+use goofi_core::Value;
+
+use crate::stream::{Added, Format};
+
 pub struct Csv {
     file: BufWriter<File>,
     columns: Vec<String>,
@@ -23,25 +28,48 @@ impl Csv {
         Ok(csv)
     }
 
+}
+
+impl Format for Csv {
     /// One frame as one row. A column the frame does not hold is empty rather than absent, so
     /// every row has the same width as the header.
-    pub fn write(&mut self, at: f64, cells: &[(String, String)]) -> Result<(), String> {
+    fn write(&mut self, frame: &Frame, at: f64) -> Result<Added, String> {
+        let Frame::Data(d) = frame else { return Err("the frame is not the shape this stream holds".into()) };
+        let Value::Table(map) = d.value() else { return Err("the frame is not the shape this stream holds".into()) };
         let mut row = vec![at.to_string()];
         for column in &self.columns {
-            let held = cells.iter().find(|(k, _)| k == column);
-            row.push(held.map(|(_, v)| quoted(v)).unwrap_or_default());
+            row.push(map.get(column).map(|child| quoted(&cell(child))).unwrap_or_default());
         }
         writeln!(self.file, "{}", row.join(",")).map_err(|e| e.to_string())?;
         self.rows += 1;
-        Ok(())
+        Ok(Added::Rows(1))
     }
 
-    pub fn rows(&self) -> u64 {
+    fn frames(&self) -> u64 {
         self.rows
     }
 
-    pub fn sync(&mut self) -> Result<(), String> {
+    fn sync(&mut self) -> Result<(), String> {
         crate::stream::sync_file(&mut self.file)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        self.sync()
+    }
+}
+
+/// A table's cell as text. A column holding one number is that number; anything wider is the
+/// shape it has, because a CSV cell holds one value and a reader must not be told otherwise.
+fn cell(d: &goofi_core::Data) -> String {
+    match d.value() {
+        Value::Str(s) => s.to_string(),
+        Value::Table(_) => "<table>".into(),
+        Value::Texture(_) => "<texture submission>".into(),
+        Value::Functional(_) => "<functional>".into(),
+        Value::Array(a) => match (a.shape().iter().product::<usize>(), a.values().next()) {
+            (1, Some(v)) => v.to_string(),
+            _ => format!("<{:?}>", a.shape()),
+        },
     }
 }
 

@@ -299,15 +299,28 @@ async fn recv_text(ws: &mut Ws) -> Value {
 
 /// Send an RPC on `/control` and return its reply, skipping interleaved broadcast events.
 async fn call(ws: &mut Ws, id: i64, op: &str, payload: Value) -> Value {
+    call_with_events(ws, id, op, payload).await.0
+}
+
+/// As [`call`], with the broadcast events that arrived before the reply: an event the op causes
+/// may land on the socket ahead of its own reply, and a test that waits for it must not skip it.
+async fn call_with_events(ws: &mut Ws, id: i64, op: &str, payload: Value) -> (Value, Vec<Value>) {
     ws.send(Message::Text(json!({ "id": id, "op": op, "payload": payload }).to_string().into()))
         .await.unwrap();
+    let mut events = Vec::new();
     loop {
         let v = recv_text(ws).await;
         if v["id"] == json!(id) {
             assert!(v["error"].is_null(), "{op} failed: {v}");
-            return v["result"].clone();
+            return (v["result"].clone(), events);
         }
+        events.push(v);
     }
+}
+
+/// Whether `ev` is the `harness_changed` that reports the one instance exited.
+fn reports_exited(ev: &Value) -> bool {
+    ev["event"] == json!("harness_changed") && ev["payload"]["instances"][0]["state"] == json!("exited")
 }
 
 /// A control socket past its `hello`, and one spawned `_sh` harness with its PTY attached.
@@ -381,19 +394,10 @@ async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it
     assert!(read_until(&mut late, "exit_code").await.contains("\"exit_code\":7"),
             "a late attach was told nothing");
 
-    // A shell that ends on its OWN loses its undo stack too — the reaper owns the drop, and its
-    // broadcast comes after it, so the exited event is the settled signal.
+    // A shell that ends on its OWN is reported, and its broadcast comes after the reaper, so the
+    // exited event is the settled signal.
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let ev = recv_text_by(&mut ctl, deadline).await;
-        if ev["event"] == json!("harness_changed")
-            && ev["payload"]["instances"][0]["state"] == json!("exited")
-        {
-            break;
-        }
-    }
-    assert_eq!(g.client(&term::actor_of(&id)).call("undo", json!({}))["changed"], json!(false),
-               "the self-exited shell's stack has something to undo");
+    while !reports_exited(&recv_text_by(&mut ctl, deadline).await) {}
 
     let roster = call(&mut ctl, 2, "agent list", json!({})).await;
     let inst = &roster["instances"][0];
@@ -476,7 +480,7 @@ async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overl
         ("PYTHONHOME".into(), "/embedded".into()), ("PYTHONPATH".into(), "/embedded".into())];
     let stated = state.harnesses
         .spawn("_sh", &state.mount(), "http://127.0.0.1:1", &env, state.events.clone(),
-               state.history.clone())
+               state.clone())
         .expect("a spawn with a stated parent environment");
     let (mut term, _) = connect_async(format!("ws://{addr}/term/{stated}")).await.unwrap();
     let seen = report(&mut term).await;
@@ -641,24 +645,21 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     assert!(field(&said, "P[").contains(&format!("{before}/{last}")),
             "goofi's own directory is not on the agent's PATH: {said}");
 
-    // A stack's lifetime follows its actor: the stopped shell keeps its edits, loses its undo.
-    // The reaper drops the stack and THEN broadcasts, so the exited event is the settled signal.
+    // The stopped shell's edits stay in the one history: the graph keeps what the agent built,
+    // and any client's undo takes it back. The reaper ends its drags and THEN broadcasts, so the
+    // exited event is the settled signal.
     let actor = term::actor_of(&id);
     g.client(&actor).call("node add", json!({ "type": "LFO" }));
-    call(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
+    // A shell that leaves on the ask is reaped before the reply is written, so the exited event
+    // may already have ridden the socket ahead of it.
+    let (_, before) = call_with_events(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let ev = recv_text_by(&mut ctl, deadline).await;
-        if ev["event"] == json!("harness_changed")
-            && ev["payload"]["instances"][0]["state"] == json!("exited")
-        {
-            break;
-        }
-    }
-    assert_eq!(g.client(&actor).call("undo", json!({}))["changed"], json!(false),
-               "the dropped stack has nothing to undo");
+    while !before.iter().any(reports_exited) && !reports_exited(&recv_text_by(&mut ctl, deadline).await) {}
     assert_eq!(g.call("session state", json!({}))["nodes"].as_object().map(|n| n.len()), Some(1),
-               "…and the graph keeps what the agent built");
+               "the graph keeps what the agent built");
+    assert_eq!(g.call("undo", json!({}))["changed"], json!(true), "…and the one history takes it back from any client");
+    assert_eq!(g.call("session state", json!({}))["nodes"].as_object().map(|n| n.len()), Some(0));
+    assert_eq!(g.call("redo", json!({}))["changed"], json!(true));
 
     // Replacing the patch reaps the running agents, and the central /mcp stays open.
     let (mut ctl2, _, mut second) = harness(&addr, "_sh").await;

@@ -1,5 +1,5 @@
 //! One goofi session owns every process-scoped resource; its held `<id>.alive` lock is the ONE
-//! aliveness answer. Everything ephemeral — the lock, the record, the iceoryx2 root — lives in
+//! aliveness answer. Everything ephemeral — the lock, the record, the scratch files — lives in
 //! one machine-wide directory every sweep reads, so a boot under any `GOOFI_HOME` sees the same
 //! answer and never sweeps a live session. Only a crash's workspace is kept, under recovery.
 
@@ -23,9 +23,7 @@ pub struct Record {
 }
 
 /// Where every session's ephemeral directory lives. A FIXED short path, not the user's temp dir:
-/// a unix socket path under it is capped at 108 bytes, half of which a macOS `$TMPDIR` spends and
-/// all of which `%LOCALAPPDATA%\Temp` can (iceoryx2 emulates the socket on Windows, cap and all).
-/// On Windows it sits beside `C:\Temp\iceoryx2`, which iceoryx2 keeps its shared memory in.
+/// a unix socket path under it is capped at 108 bytes, half of which a macOS `$TMPDIR` spends.
 pub fn system_base() -> PathBuf {
     if cfg!(unix) {
         PathBuf::from("/tmp/goofi-system")
@@ -267,21 +265,16 @@ pub fn sweep_dead() -> Swept {
     swept
 }
 
-/// The name every shared-memory segment of a session carries. Segments live in one platform
-/// directory iceoryx2 cannot be pointed away from, so the prefix is what makes them a session's.
-/// Short, because it is also part of a unix socket path capped at 108 bytes.
+/// The prefix every shared-memory segment of a session carries — an exchange's mailboxes — so a
+/// crash's leftovers are a session's to sweep. Short, for macOS's 31-character segment names.
 pub fn shm_prefix(id: &str) -> String {
     format!("g{id}_")
 }
 
-/// The directory the iceoryx2 platform layer keeps its shared memory in — a compile-time
-/// constant there, restated here because a sweep by prefix has to know where to look.
+/// Where POSIX shared memory is listed. Linux lists it here; macOS cannot list its namespace,
+/// and a Windows section goes with its last handle, so neither has anything to sweep.
 fn shm_dir() -> PathBuf {
-    if cfg!(windows) {
-        PathBuf::from(r"C:\Temp\iceoryx2\shm")
-    } else {
-        PathBuf::from("/dev/shm")
-    }
+    PathBuf::from("/dev/shm")
 }
 
 /// The session id a segment name carries, when the name is one of ours.
@@ -304,75 +297,6 @@ fn sweep_shared_memory(mut dead: impl FnMut(&str) -> bool) -> usize {
 }
 
 /// Remove a tree a session owns.
-#[cfg(not(windows))]
 pub fn remove_tree(path: &Path) {
     let _ = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
-}
-
-/// On Windows iceoryx2's files carry a protected DACL (eclipse-iceoryx/iceoryx2#1869), so each
-/// path is taken back by name, contents first, then unlinked.
-#[cfg(windows)]
-pub fn remove_tree(path: &Path) {
-    let dir = path.is_dir();
-    if dir {
-        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
-            remove_tree(&entry.path());
-        }
-    }
-    grant_owner(path);
-    let _ = if dir { std::fs::remove_dir(path) } else { std::fs::remove_file(path) };
-}
-
-/// Grant OWNER RIGHTS full control on ONE path, explicitly. Naming the file is the whole point: a
-/// protected DACL is precisely one that refuses an inherited ace, so a grant on the parent — an
-/// `icacls /T` walk, which this replaces — never reaches the file it was meant for.
-#[cfg(windows)]
-fn grant_owner(path: &Path) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, LocalFree};
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSidToSidW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SET_ACCESS,
-        SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
-    };
-    use windows_sys::Win32::Security::{
-        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    // `S-1-3-4` is OWNER RIGHTS: it grants the object's own owner, which is this user, and nobody else.
-    let sid_text: Vec<u16> = "S-1-3-4".encode_utf16().chain(std::iter::once(0)).collect();
-    let mut sid = std::ptr::null_mut();
-    if unsafe { ConvertStringSidToSidW(sid_text.as_ptr(), &mut sid) } == 0 {
-        return;
-    }
-    let access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: GENERIC_ALL,
-        grfAccessMode: SET_ACCESS,
-        grfInheritance: NO_INHERITANCE,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
-            ptstrName: sid.cast(),
-        },
-    };
-    let mut acl: *mut ACL = std::ptr::null_mut();
-    if unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) } == ERROR_SUCCESS {
-        unsafe {
-            SetNamedSecurityInfoW(
-                wide.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                acl,
-                std::ptr::null(),
-            );
-        }
-    }
-    unsafe {
-        LocalFree(acl.cast());
-        LocalFree(sid.cast());
-    }
 }

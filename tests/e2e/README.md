@@ -14,7 +14,7 @@ npm run e2e                      # typechecks, builds the frontend + backend, th
 npm test                         # just `playwright test`, against whatever is already built
 ```
 
-`npm run e2e` = `tsc --noEmit`, the frontend build plus `cargo build -p goofi-cli`, then `playwright test`.
+`npm run e2e` = `tsc --noEmit`, the frontend build plus `cargo build --workspace --all-targets` (one target selection, so the suite's host and `BIN` come from one resolve), then `playwright test`.
 
 **One backend per worker.** `globalSetup.ts` spawns a fleet of `goofi`s on
 `8500 + <worker slot>` (override the base with `GOOFI_E2E_PORT`, the width with
@@ -24,8 +24,8 @@ worker still owns its backend alone, so the hermeticity rules below are unchange
 leaks reaches the other specs on *its* worker. `--workers=1` still works and lands on the base port.
 Each backend's stdout goes to `test-results/backend/backend-<slot>.log` (it no longer interleaves
 into the report), and `globalSetup` warms the node-library cache with one `GOOFI_BOOT_ONLY=1`
-boot before the fleet. There is no `/dev/shm/iox2*` sweep: iceoryx2 reclaims a dead sibling's
-segments itself.
+boot before the fleet. There is no `/dev/shm` sweep here: a boot's own session sweep removes
+what a dead session's exchanges left, by the session's prefix and the lock that says it is dead.
 
 ## Layout
 - `playwright.config.ts` — the per-worker port arithmetic, the worker count, and the four

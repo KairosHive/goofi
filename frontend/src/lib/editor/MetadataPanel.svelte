@@ -119,11 +119,9 @@
 	}
 	.stats {
 		margin: 0 0 var(--space-5);
-		padding: 0 0 var(--space-5);
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--space-1) var(--space-7);
-		border-bottom: 1px solid var(--border);
 	}
 	.stats .stat {
 		display: flex;

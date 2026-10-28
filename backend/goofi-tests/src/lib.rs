@@ -178,19 +178,19 @@ pub fn sole_session() -> std::sync::MutexGuard<'static, ()> {
     SOLE.lock()
 }
 
-/// The one session this test process holds, and the transport built against it. A test binary
-/// that exits leaves its record for the next boot's sweep.
-pub fn session() -> &'static (goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Iox>) {
-    static HELD: std::sync::OnceLock<(goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Iox>)> = std::sync::OnceLock::new();
+/// The one session this test process holds, and the hub every slot and door is found through.
+/// A test binary that exits leaves its record for the next boot's sweep.
+pub fn session() -> &'static (goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Hub>) {
+    static HELD: std::sync::OnceLock<(goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Hub>)> = std::sync::OnceLock::new();
     HELD.get_or_init(|| {
         let session = goofi_supervisor::session::Session::hold().expect("the test process holds a session");
-        let iox = Arc::new(goofi_transport::Iox::new(&session).expect("the session's transport"));
-        (goofi_supervisor::sync::Mutex::new(session), iox)
+        let hub = Arc::new(goofi_transport::Hub::new(session.id()));
+        (goofi_supervisor::sync::Mutex::new(session), hub)
     })
 }
 
-/// The transport every port a test opens is built against.
-pub fn iox() -> Arc<goofi_transport::Iox> {
+/// The hub every slot a test opens is found through.
+pub fn hub() -> Arc<goofi_transport::Hub> {
     session().1.clone()
 }
 
@@ -246,7 +246,7 @@ impl Goofi {
         // The window thread has no screen: a `Window` node and a plugin editor open on a loop the
         // suite owns, and no test reaches a desktop.
         let windows = (!mode.demo).then(window_thread);
-        let mut config = goofi_bridge::Config::new(iox(), mode, goofi_bridge::Clock::External, render);
+        let mut config = goofi_bridge::Config::new(hub(), mode, goofi_bridge::Clock::External, render);
         // The suite's own stand-in for the binary scans a bundle and hosts a node built after
         // boot; no platform folder, so an installed plugin never reaches a test.
         config.host = Some(scanner());
@@ -484,7 +484,7 @@ impl Goofi {
     /// Open a subscriber on one output slot — the same door `/data` opens.
     #[track_caller]
     pub fn probe(&self, node: Uid, slot: &str) -> OutputProbe {
-        OutputProbe::open(&self.state.iox, &self.state.graph(), node, slot)
+        OutputProbe::open(&self.state.hub, &self.state.graph(), node, slot)
     }
 
     /// Poll `f` until it answers `Some`, or fail naming `what`.

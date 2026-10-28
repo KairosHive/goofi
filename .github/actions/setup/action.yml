@@ -1,5 +1,15 @@
 name: Set up a goofi build
-description: The toolchains, the caches and `goofi-init`, the same on every runner.
+description: The toolchains, the caches, `goofi-init`, ONE cargo build and the boot, the same on every runner.
+inputs:
+  targets:
+    description: >
+      The one target selection every cargo command of the job uses. A second selection resolves
+      features anew and rebuilds the crates whose features moved, so a job that builds `--bins`
+      must not run `cargo test` after. The situations are named one by one: `--tests` would also
+      link a test harness per workspace crate, twenty-odd binaries nothing runs.
+    default: >-
+      --lib --bins --example plugin_host
+      --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire
 runs:
   using: composite
   steps:
@@ -13,6 +23,12 @@ runs:
     - uses: actions/setup-node@v7
       with:
         node-version: '24'
+
+    # The frontend's packages, which `goofi-init` installs: a hit makes its `npm install` a check.
+    - uses: actions/cache@v4
+      with:
+        path: frontend/node_modules
+        key: frontend-npm-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
 
     # The bundles' packages, keyed on the requirement files goofi-init installs from.
     - uses: astral-sh/setup-uv@v7
@@ -32,47 +48,78 @@ runs:
       shell: bash
       run: echo 'LIBCLANG_PATH=C:\Program Files\LLVM\bin' >> "$GITHUB_ENV"
 
-    # The shipped nodes and the Python probes, built into the binary and read back at boot.
-    # Restored here, saved by the job's last step under this run's id, so each run's is the newest.
-    - uses: actions/cache/restore@v4
+    # The ASIO SDK, which asio-sys would otherwise download into TEMP at its first build and
+    # watch there, newer than that build and so a rebuild of the tree at the next cargo command.
+    # Fetched before any build, into a dir of its own that the cache keeps.
+    - if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: target/asio_sdk
+        key: asio-sdk-${{ runner.os }}-1
+    - if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if [ ! -f target/asio_sdk/common/asio.h ]; then
+          mkdir -p target/asio_sdk_dl && cd target/asio_sdk_dl
+          curl -sSL -A 'Mozilla/5.0' -o asio_sdk.zip https://www.steinberg.net/asiosdk
+          7z x -y asio_sdk.zip > /dev/null
+          header=$(find . -type f -name asio.h -path '*common*' | head -1)
+          if [ -z "$header" ]; then
+            echo "the download holds no common/asio.h:"; ls -la; head -c 400 asio_sdk.zip; exit 1
+          fi
+          mv "$(dirname "$(dirname "$header")")" ../asio_sdk
+          cd .. && rm -rf asio_sdk_dl
+        fi
+        echo "CPAL_ASIO_DIR=$GITHUB_WORKSPACE/target/asio_sdk" >> "$GITHUB_ENV"
+
+    # The shipped nodes' artifacts and the Python probes' answers, both keyed by content inside,
+    # so the cache is keyed on what can change them: the SDKs, the bundles, the build pipeline
+    # and the lock. An exact hit saves nothing; a changed key starts from the last cache and
+    # saves once. The nodes' own cargo target dir stays out: it is most of the bytes, and only a
+    # run whose key moved builds a node.
+    - uses: actions/cache@v4
       with:
         path: |
           target/goofi-runtime/*/build
+          !target/goofi-runtime/*/build/target
           target/goofi-runtime/cache/cargo
-        key: goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+        key: goofi-runtime-${{ runner.os }}-${{ hashFiles('backend/**/*-sdk/**', 'backend/goofi-build/**', 'node-bundles/**', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
         restore-keys: |
-          goofi-runtime-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-
           goofi-runtime-${{ runner.os }}-
 
+    # The goofi wheels, which goofi-init builds in release with LTO and reuses by content key.
+    - uses: actions/cache@v4
+      with:
+        path: target/wheels
+        key: goofi-wheels-${{ runner.os }}-${{ hashFiles('backend/signal/goofi-pymod/**', 'backend/goofi-supervisor/**', 'backend/goofi-core/**', 'backend/goofi-codec/**', 'backend/goofi-transport/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
+    # goofi-init's own build is the one package-scoped cargo command: the Python it provisions is
+    # what goofi-python links, so nothing of the workspace builds before it.
     - name: Provision (cargo run -p goofi-init)
       shell: bash
       run: cargo run -p goofi-init
+
+    # THE build of the job. Cargo's own warnings are not clippy's: both gates read this log.
+    - name: Build (cargo build --workspace ${{ inputs.targets }})
+      shell: bash
+      run: |
+        cargo build --workspace ${{ inputs.targets }} 2>&1 | tee build.log
+        ! grep -n '^warning' build.log
 
     # One boot fills the node build dir with the Python probes every test binary would otherwise
     # take, so the tests that follow start warm, however many run at once.
     - name: Boot the node library
       shell: bash
-      run: cargo run -p goofi-cli -- --headless
+      run: target/debug/goofi --headless
       env:
         GOOFI_BOOT_ONLY: "1"
 
-    # The browser suite's own prerequisites, where the browser suite runs. Chromium is keyed on
-    # the Playwright that installed, which the unpinned package.json does not name.
-    - if: runner.os == 'Linux'
+    # Nothing the build script wrote, and nothing the boot wrote, may dirty the build: the gates
+    # after this would each pay the rebuild. A crate rebuilt here names what it watched.
+    - name: Still fresh after the boot
       shell: bash
-      run: npm install
-      working-directory: tests/e2e
-    - if: runner.os == 'Linux'
-      id: playwright
-      shell: bash
-      run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
-      working-directory: tests/e2e
-    - if: runner.os == 'Linux'
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-    - if: runner.os == 'Linux'
-      shell: bash
-      run: npx playwright install --with-deps chromium
-      working-directory: tests/e2e
+      run: |
+        cargo build --workspace ${{ inputs.targets }} 2>&1 | tee fresh.log | grep -iE 'stale: changed|Compiling' || true
+        ! grep -q 'Compiling' fresh.log
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info

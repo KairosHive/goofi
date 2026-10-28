@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::{op, EffectOp, Handler, NoArgs, ReadOp};
 use crate::{AppState, Caller, Txn};
-use goofi_graph::{CommandHistory, Flip, Graph};
+use goofi_graph::{Flip, Graph, History};
 
 op!(OpList, "op list", 0, OpListArgs {
     pub doc: Option<bool>,
@@ -20,12 +20,12 @@ op!(OpComplete, "op complete", 1, OpCompleteArgs {
     "{text: string} — one candidate per line, `word<TAB>doc`");
 
 op!(Undo, "undo", 0, NoArgs,
-    "Undo this actor's last graph command. Each actor — a browser tab, a shell, the MCP — has its own stack.",
-    "{changed: bool, context, stale: string | null, undo: string | null, redo: string | null} — `context` is what the actor sent with the step; `stale` names an entry that no longer applied and was dropped; `undo`/`redo` are the labels now on top");
+    "Undo the last write, whoever made it: one history for every browser tab, shell and agent, so what you take back is what the patch last did.",
+    "{changed: bool, context, undo: string | null, redo: string | null} — `context` is what the actor sent with the step; `undo`/`redo` are the labels now on top");
 
 op!(Redo, "redo", 0, NoArgs,
-    "Redo this actor's last undone graph command.",
-    "{changed: bool, context, stale: string | null, undo: string | null, redo: string | null}");
+    "Redo the last undone write.",
+    "{changed: bool, context, undo: string | null, redo: string | null}");
 
 op!(Compound, "compound", 0, CompoundArgs {
     pub ops: Value,
@@ -67,25 +67,27 @@ impl ReadOp for OpComplete {
 
 impl EffectOp for Undo {
     fn run(state: &AppState, _: NoArgs, caller: &Caller) -> Result<Value, String> {
-        flip(state, caller, CommandHistory::undo)
+        flip(state, caller, History::undo)
     }
 }
 
 impl EffectOp for Redo {
     fn run(state: &AppState, _: NoArgs, caller: &Caller) -> Result<Value, String> {
-        flip(state, caller, CommandHistory::redo)
+        flip(state, caller, History::redo)
     }
 }
 
 /// A flip's reply and tail. Only a flip that CHANGED something raises the dot: an empty stack
-/// is not an edit. The reply carries the flipped entry's context and the labels now on top.
-fn flip(state: &AppState, caller: &Caller, f: fn(&mut CommandHistory, &mut Graph, &str) -> Flip) -> Result<Value, String> {
-    let mut tx = Txn::begin(state, caller, false);
+/// is not an edit. The reply carries the flipped entry's context and the labels now on top, and
+/// every client hears the labels.
+fn flip(state: &AppState, caller: &Caller, f: fn(&mut History, &mut Graph, &str) -> Flip) -> Result<Value, String> {
+    let mut tx = Txn::begin(state, caller, false, false);
     let flip = f(&mut tx.history, &mut tx.g, &caller.actor);
-    let (undo, redo) = tx.history.labels(&caller.actor);
-    let result = json!({ "changed": flip.changed, "context": flip.context, "stale": flip.stale, "undo": undo, "redo": redo });
+    let (undo, redo) = tx.history.labels();
+    let result = json!({ "changed": flip.changed, "context": flip.context, "undo": undo, "redo": redo });
     if flip.changed {
         tx.touch();
+        tx.emit(crate::history_event(&tx.history));
     }
     tx.commit();
     Ok(result)
@@ -115,7 +117,7 @@ impl EffectOp for Compound {
         }
         // One transaction for every step: the graph is held throughout, so nothing is delivered or
         // projected between two steps, and a refused step drops it, which takes the others back.
-        let mut tx = Txn::begin(state, caller, false);
+        let mut tx = Txn::begin(state, caller, false, true);
         let mut results = Vec::with_capacity(resolved.len());
         for (i, (op, f, arg)) in resolved.iter().enumerate() {
             match f(&mut tx, arg) {

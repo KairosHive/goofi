@@ -238,6 +238,40 @@ fn fetch(runtime: &Runtime, archive: &Archive) -> Result<PathBuf, String> {
     Ok(file)
 }
 
+/// One digest over `salt` and every file under `roots`, each by its path relative to its root and
+/// its bytes, in path order: what a set of trees IS, so an artifact built from them is found
+/// again by content and never by date.
+pub fn tree_digest(salt: &str, roots: &[PathBuf]) -> String {
+    fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut hash = Sha256::new();
+    hash.update(salt.as_bytes());
+    for root in roots {
+        let mut found = Vec::new();
+        if root.is_dir() {
+            files(root, &mut found);
+        } else {
+            found.push(root.clone());
+        }
+        found.sort();
+        for path in found {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            hash.update(rel.as_bytes());
+            hash.update(std::fs::read(&path).unwrap_or_default());
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
 fn digest_of(file: &Path) -> std::io::Result<String> {
     let mut hash = Sha256::new();
     std::io::copy(&mut std::fs::File::open(file)?, &mut hash)?;

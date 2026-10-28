@@ -67,10 +67,10 @@ pub enum Handler {
     PluginEffect,
     /// Reads state, changes nothing: never dirties, never re-mirrors.
     Read(TxnFn),
-    /// Routes every mutation through the command history, so it has an exact inverse; the shared
-    /// tail in [`AppState::call`] re-mirrors and raises the unsaved dot.
+    /// Runs on a transaction that keeps the snapshot from before it as the history's next entry;
+    /// the shared tail in [`AppState::call`] re-mirrors and raises the unsaved dot.
     Write(TxnFn),
-    /// Owns its consequences itself, because they are not a graph command's: a save, a process,
+    /// Owns its consequences itself, because they are not a graph write's: a save, a process,
     /// a restart, the history ops.
     Effect(EffectFn),
 }

@@ -26,6 +26,12 @@ pub fn home() -> PathBuf {
         .join(".goofi")
 }
 
+/// The folders of the last patches loaded or saved, newest first: one path per line. The user's,
+/// as the patches are, so two goofis with homes of their own keep lists of their own.
+pub fn recent_folders() -> PathBuf {
+    home().join("recent-folders")
+}
+
 /// The private node library: one flat node root the user owns, scanned after every other root
 /// and before the patch's own, so a node saved here beats a shipped one and loses to the patch.
 pub fn custom_nodes() -> PathBuf {
@@ -232,14 +238,9 @@ impl Runtime {
         self.root.join("cache")
     }
 
-    /// What survives an update: the recent folders, the update-check stamp.
+    /// What survives an update: the update-check stamp.
     pub fn state(&self) -> PathBuf {
         self.root.join("state")
-    }
-
-    /// The folders of the last patches loaded or saved, newest first: one path per line.
-    pub fn recent_folders(&self) -> PathBuf {
-        self.state().join("recent-folders")
     }
 
     /// The program to run for `tool`: the bundled one when it is there, else PATH's.

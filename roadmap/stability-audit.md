@@ -22,8 +22,9 @@ Found by reading; each fix lands with a fixture that fails on the broken variant
 - A preview in flight when its `/control` socket closes stays applied, with no history entry and no
   dirty flag: `end_previews` is not ordered after the pending dispatch (`goofi-bridge/src/lib.rs:1297`).
   Await `pending` first. Also: an unparsable request gets no reply; the per-socket queue is unbounded.
-- `Recorder::settle` waits with no deadline; a drain whose subscriber failed to open never reports,
-  and `record stop` and shutdown hang (`goofi-record/src/lib.rs:279`). `Ffmpeg::finish` likewise.
+- `Recorder::stop` waits with no deadline for every armed worker to close its file, and a worker
+  closing a video waits in `Ffmpeg::finish` for the child; an encoder that never ends its
+  container holds `record stop` and shutdown. Bound the finish, and file the entry as unfinished.
 - `load_patch` stops a running recording before the parse can refuse (`ops/session.rs:512`).
 - Host reads (`dir list`, `session status`, `midi list`, `log list`) run as read ops under the graph
   and history locks. Serve them off the lock, as `fsbrowse.rs` already claims.

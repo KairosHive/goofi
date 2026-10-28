@@ -62,14 +62,6 @@ pub enum Input {
     None,
 }
 
-/// A stage's armed recording, from SETTLED state: the names the recorder files it under. Whether
-/// a recording actually runs is the recorder's own, and is asked of it once per tick.
-pub struct Record {
-    pub node: String,
-    pub slot: String,
-    pub quality: goofi_core::record::VideoQuality,
-}
-
 pub enum Pass {
     Shader(Built),
     Host { source: crate::producer::Source, program: Option<(Arc<str>, Built)> },
@@ -89,8 +81,9 @@ pub struct Stage {
     /// surface the GPU presents into it; without one the frame is read back for the window thread.
     pub window: Option<goofi_window::Id>,
     pub surface: Option<Arc<wgpu::Surface<'static>>>,
-    /// This output slot's arming, as the last settle left it.
-    pub record: Option<Record>,
+    /// Whether this stage's texture output is armed, as the last settle left it; the recorder
+    /// names and files the stream, and whether a recording runs is its word too.
+    pub record: bool,
 }
 
 impl Stage {
@@ -110,7 +103,7 @@ impl Stage {
         wants[which as usize] = self.cells.readers.load(Ordering::Relaxed).then_some(tap);
         // A recorder takes the frame at its own size: a recording is the evidence, and evidence
         // is never fitted to a box somebody's screen happened to have.
-        wants[Want::Record as usize] = (recording && self.record.is_some()).then_some(self.size);
+        wants[Want::Record as usize] = (recording && self.record).then_some(self.size);
         wants
     }
 
@@ -185,10 +178,10 @@ pub fn compile(
     for uid in &order {
         let inst = &live[uid];
         if let crate::scan::Kind::Shader(built) = &inst.class.kind {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("shader: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("shader: {why}"))); }
         }
         if let Some((_, built)) = &inst.program {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("texture program: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("texture program: {why}"))); }
         }
         let manifest = inst.class.manifest;
         let inputs = manifest
@@ -221,18 +214,12 @@ pub fn compile(
     (Plan { stages }, faults)
 }
 
-/// The armed TEXTURE output of a node, from the settled view. A slot the node does not have, or
-/// one that carries no texture, is nothing to record.
-fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> Option<Record> {
-    let nv = view.nodes.get(&uid)?;
-    let slot = inst
-        .class
-        .manifest
-        .outputs
-        .iter()
-        .find(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r.slot == o.name))?;
-    Some(Record { node: nv.name.to_string(), slot: slot.name.to_string(),
-        quality: nv.recorded.iter().find(|r| r.slot == slot.name)?.quality })
+/// Whether a node's TEXTURE output is armed, from the settled view. A slot the node does not
+/// have, or one that carries no texture, is nothing to record.
+fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> bool {
+    view.nodes.get(&uid).is_some_and(|nv| {
+        inst.class.manifest.outputs.iter().any(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r.slot == o.name))
+    })
 }
 
 /// Every wire between two live nodes, by the input it lands on.

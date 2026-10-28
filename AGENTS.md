@@ -76,9 +76,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   Electron shell in `frontend/electron` runs it with `--shell`, holds its stdin, and installs the
   update that the `update start` op requests.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated with
-  versioned path operations (`put`, `del`). Mutations are commands with inverses and per-actor
-  undo; fresh calls are strict, replay tolerates stale targets, and layout inverses use forward
-  planners.
+  versioned path operations (`put`, `del`). The patch is a value: a write copies the one record it
+  touches, a settle reads what a batch changed off the two snapshots, and the document is patched
+  per changed record. One history of snapshots serves every client: a write pushes the snapshot
+  from before it, undo and redo swap one in, a preview publishes without pushing.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
 - Params have one active source: constant or expression. Values use `/params/<node>`; errors use
@@ -100,10 +101,31 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   a path or tool from the environment. `goofi-init` provisions a development build and removes
   `target/` artifacts untouched for three days.
 - A session (`goofi_supervisor::session`) owns every ephemeral resource; its lock is the one
-  aliveness answer. Children, long-lived threads, iceoryx2 nodes, scratch paths and devices are
-  minted through `goofi_supervisor::{child, worker, scope}` and `goofi_transport`, and listed by
-  `session status`. Declare an iceoryx2 node after its ports. A child's output goes to the process
-  log unless its owner wires a pipe or a file. `AppState::shutdown` is the one release order.
+  aliveness answer. Children, long-lived threads, scratch paths and devices are minted through
+  `goofi_supervisor::{child, worker, scope}`, and listed by `session status`. A child's output
+  goes to the process log unless its owner wires a pipe or a file. `AppState::shutdown` is the one
+  release order.
+- `goofi_transport` is the data layer: a `Hub` per session hands every end its slot, door or
+  queue by a name derived from the graph. Between nodes a slot is one latest-wins cell of `Arc`
+  payloads, never a buffer; a queue is bounded, drops its oldest, never blocks its sender, and
+  only the recorder reads one. A door is a `goofi_supervisor::timing::Event`. A child (a hosted
+  Rust node, a Python subprocess) is called over an exchange: shared-memory mailboxes and a
+  loopback doorbell.
+- `goofi_supervisor::timing` is the one time module: the patch clock (`Time`) every stamp reads,
+  and every way anything waits, paces or measures (`Event`, `Deadline`, `Pace`, `Grid`,
+  `RateMeter`, `sleep_until`, `wait_readable`). Nothing else sleeps in a loop, sets a socket
+  timeout, rounds a deadline to a tick or keeps a clock of its own.
+- `goofi_supervisor::ready` is how a component is built: compilation and configuration (a node's
+  instantiation and `prepare`, a shader's pipeline, a device's open) run through `ready::prepare`
+  on a thread of their own, the system keeps running on what it has, and the owner takes the
+  `Ready` at its next settle or tick and swaps it in whole. A tick never waits on a build and never
+  sees a half-built component; a build that fails or panics is a refusal the owner reports.
+- `goofi_record` is the one recorder. An engine publishes an armed output's frames (`Out::Record`,
+  a `Data` or a texture's texels) and never touches a file; the manager tells the recorder the
+  settled armed set after every settle; a worker per armed stream takes frames off its queue and
+  writes the file its kind takes (`.npy`, `.csv`, `.txt`, `.wav`, video) with one sidecar and one
+  manifest for all. A take's boundary is an instant for a measured timeline and the audio
+  clock's block for the derived one.
 - `plugins/` ships plugins as source, loaded from `~/.goofi/plugins/<id>`; `sdk/README.md` is the
   plugin interface. `skills/` holds agent guides, embedded at build and seeded into a patch's
   workspace when it has none.
@@ -123,6 +145,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   failure. Use Playwright for socket integration, layout and gestures, and typecheck for Svelte.
 - A test asserts the state reached, never how fast: no rate floors, latency ceilings or sleeps.
   Poll against the harness `WAIT`. No test simulates load, opens audio hardware or native windows.
+- CI is a quick validation, not a second development loop: one job per gate on a runner of its
+  own (the situations, the browser suite, each platform that can answer differently), one cargo
+  build per job under one target selection, and every job under ten minutes. A test that only
+  fails beside another suite's load, or that proves a node or a library detail, is cut.
 
 ```sh
 cargo run -p goofi-init          # provision, then: cargo run

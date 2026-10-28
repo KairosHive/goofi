@@ -1,11 +1,10 @@
-//! Service names: pure derivation from the graph's facts, so every end of a wire spells it alike.
+//! Service names: pure derivation from the graph's facts, so every end of a wire spells it alike,
+//! and the hub hands both ends the same slot, door or queue by it.
 
 use goofi_node::{BoundVar, EventId, GraphView, Uid, Var};
 
 use crate::ServiceName;
 
-/// The id every armed slot rings the recorder's door with; the drain ignores it, so one is enough.
-pub const RECORD_EVENT_ID: EventId = 0;
 /// The id a producer rings a slot's view door with: a frame is out.
 pub const VIEW_EVENT_ID: EventId = 0;
 /// The id the bridge rings a view door with: what the reducer should do may have moved — a
@@ -40,16 +39,10 @@ pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
     format!("goofi_{instance}_{}_view_{slot}", uid.to_hex())
 }
 
-/// One output slot's recording service, one per ARMING: a name whose subscriber left is never
-/// reopened, which iceoryx2 can answer with a second service under the same name.
+/// One output slot's recording queue, one per ARMING: a new arming is a new queue, so a frame
+/// of the old one is never read as the new one's.
 pub fn record_service(base: &str, slot: &str, serial: u64) -> ServiceName {
     format!("goofi_{base}_rec_{slot}_{serial}")
-}
-
-/// The ONE door every armed slot rings once its frame is out. It is the recorder's, not a node's,
-/// so a burst across every armed slot coalesces into one sweep of every armed buffer.
-pub fn record_door_service(instance: &str) -> ServiceName {
-    format!("goofi_{instance}_recdoor")
 }
 
 /// One node's door, from the view's birth facts.
@@ -85,10 +78,10 @@ pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceNa
 pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
     match v {
         BoundVar::Stream { var, producer, slot, .. } => {
-            // The variables producer holds its last frame; a node slot has only what comes next.
-            let held = (*producer == Uid::VARIABLES).then(|| door_service(&variables_base(view.instance)));
+            // A variable's slot holds its last frame for a late subscriber; a node's has only
+            // what comes next. The slot knows which it is, so the reader asks nothing.
             let src = output_of(view, *producer, slot)
-                .map_or_else(|| Var::Missing(format!("`{var}` names no running node")), |service| Var::Stream { service, held });
+                .map_or_else(|| Var::Missing(format!("`{var}` names no running node")), |service| Var::Stream { service });
             (var.clone(), src)
         }
         BoundVar::Value { var, value } => (var.clone(), Var::Value(value.clone())),

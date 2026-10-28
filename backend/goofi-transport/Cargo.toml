@@ -6,12 +6,17 @@ license.workspace = true
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
+goofi-core = { path = "../goofi-core" }
 goofi-node = { path = "../goofi-node" }
 
-# The cross-engine plane, at the version the Python child links — the two open the same services
-# over the shared 0.9.3 ABI, and `Cargo.lock` is what actually holds them together (this is a
-# caret requirement, as in the other crates that already depend on it).
-iceoryx2 = "0.9.3"
-
-# The descriptor limit.
+# A `Wire` payload: one buffer, shared by every reader and forwarded to a socket uncopied.
+bytes = "1"
+# The exchange's shared memory and its doorbell socket's readiness.
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Pagefile-backed sections for the exchange's mailboxes.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+] }

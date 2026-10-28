@@ -34,13 +34,6 @@ fn fold_panic(panicked: String) -> NodeResult {
 /// One wire's cell on a `multi` slot: its service, its `node.slot` source, and its newest frame.
 type MultiCells = Vec<(String, String, Option<Data>)>;
 
-/// The `ufreq` meter's state: when this node last emitted, and the smoothed interval between emits.
-#[derive(Default)]
-struct UfreqMeter {
-    last_emit: Option<f64>,
-    ema: Option<f64>,
-}
-
 pub struct HostExecutor {
     manifest: &'static NodeManifest,
     decls: Vec<ParamDecl>,
@@ -62,9 +55,10 @@ pub struct HostExecutor {
     ctx: NodeCtx,
     /// The node's emit counter for `meta["index"]` — engine-owned, the node never sees it.
     emits: u64,
-    meter: UfreqMeter,
+    meter: goofi_supervisor::timing::RateMeter,
     initialized: bool,
-    last_attempt: Option<Instant>,
+    /// Until when a setup that failed is not tried again on a wake.
+    retry: Option<goofi_supervisor::timing::Deadline>,
     fault: Option<Fault>,
 }
 
@@ -98,9 +92,9 @@ impl HostExecutor {
             multi_wires: manifest.inputs.iter().filter(|s| s.multi).map(|s| (s.name, Vec::new())).collect(),
             ctx: NodeCtx::new(),
             emits: 0,
-            meter: UfreqMeter::default(),
+            meter: goofi_supervisor::timing::RateMeter::default(),
             initialized: false,
-            last_attempt: None,
+            retry: None,
             fault,
         };
         exec.initialize();
@@ -127,7 +121,7 @@ impl HostExecutor {
         if self.initialized {
             return true;
         }
-        if self.last_attempt.is_some_and(|t| t.elapsed() < SETUP_RETRY) {
+        if self.retry.is_some_and(|until| !until.passed()) {
             return false;
         }
         self.ensure_initialized()
@@ -137,7 +131,7 @@ impl HostExecutor {
     /// panic in either is the node's boot error, never an unwind through the caller's lock.
     fn initialize(&mut self) {
         let Some(node) = self.node.as_mut() else { return };
-        self.last_attempt = Some(Instant::now());
+        self.retry = Some(goofi_supervisor::timing::Deadline::within(SETUP_RETRY));
         let mut last_error = None;
         for (group, entries) in &self.effective {
             if group == COMMON {
@@ -435,31 +429,14 @@ fn stamp_meta(
     emit: f64,
     source: Vec<MetaValue>,
     emits: &mut u64,
-    meter: &mut UfreqMeter,
+    meter: &mut goofi_supervisor::timing::RateMeter,
 ) -> Option<f64> {
     // Nothing emitted → no meta to stamp, and the meter only advances on a productive emit.
     if outputs.values().all(|o| o.is_none()) {
         return None;
     }
-    // EMA of the inter-emit interval, inverted. `None` until the second emit; a non-advancing
-    // clock (`dt <= 0`) keeps the prior estimate.
-    let node_ufreq = match meter.last_emit {
-        None => {
-            meter.last_emit = Some(now);
-            None
-        }
-        Some(prev) => {
-            let dt = now - prev;
-            meter.last_emit = Some(now);
-            if dt > 0.0 {
-                let ema = meter.ema.map_or(dt, |p| UFREQ_EMA_ALPHA * dt + (1.0 - UFREQ_EMA_ALPHA) * p);
-                meter.ema = Some(ema);
-                Some(1.0 / ema)
-            } else {
-                meter.ema.map(|e| 1.0 / e)
-            }
-        }
-    };
+    // The smoothed inter-emit interval, inverted: `None` until the second emit.
+    let node_ufreq = meter.note(now, UFREQ_EMA_ALPHA);
     let index = *emits;
     *emits += 1;
     for (slot, slot_opt) in outputs.iter_mut() {

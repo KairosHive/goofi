@@ -605,3 +605,43 @@ fn panel_id(g: &Goofi) -> String {
     goofi_tests::panel_ids(&g.doc()["arrangement"]).first().cloned().expect("the default panel")
 }
 
+
+/// The replicated document is one projection carried as deltas: after every kind of write, what a
+/// client holds equals the whole document read fresh off the graph.
+#[test]
+fn the_document_a_client_holds_is_the_whole_projection_after_every_write() {
+    let g = Goofi::new();
+    let same = |what: &str| {
+        let held = g.doc();
+        let whole = g.graph().replica();
+        assert_eq!(held, whole, "after {what}, the replicated document is not the whole projection");
+    };
+    same("the boot");
+    let src = g.add("_TestConst");
+    let sink = g.add("_TestSink");
+    same("two nodes added");
+    g.link(src, "out", sink, "input");
+    same("a link");
+    g.call("node param edit", j!({ "node": hex(src), "param": "constant/value", "value": 0.5 }));
+    same("a literal");
+    let name = g.name(&hex(src));
+    g.call("node param edit", j!({ "node": hex(sink), "param": "control/value",
+                                   "expression": format!("nd('{name}').out"), "mode": "expression" }));
+    same("an expression");
+    g.call("node edit", j!({ "node": hex(src), "name": "source", "pos": [10.0, 20.0] }));
+    same("a rename and a move");
+    g.call("variable entry add", j!({ "name": "knobs.gain", "value": 0.25 }));
+    same("a variable");
+    g.call("machine add", j!({ "name": "seq" }));
+    same("a machine");
+    g.call("layout panel add", j!({}));
+    same("a panel");
+    g.call("record arm", j!({ "output": format!("{}/out", hex(src)) }));
+    same("an arming");
+    g.call("node remove", j!({ "node": hex(sink) }));
+    same("a removal");
+    g.call("undo", j!({}));
+    same("an undo");
+    g.call("session new", j!({}));
+    same("a new session");
+}

@@ -552,11 +552,11 @@ pub struct Anchor {
     /// What the audio thread stamps into every block; a new tie is a new epoch.
     epoch: AtomicU64,
     ties: Mutex<Vec<(u64, Tie)>>,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
 }
 
 impl Anchor {
-    pub fn new(time: Arc<goofi_core::time::Time>) -> Anchor {
+    pub fn new(time: Arc<goofi_supervisor::timing::Time>) -> Anchor {
         let tie = Tie { at: 0, time: time.now(), rate: crate::RATE };
         Anchor {
             blocks: AtomicU64::new(0),
@@ -623,7 +623,6 @@ pub enum Msg {
     Rings { idx: usize, serial: u64, rings: Rings },
     Plan { plan: Plan, arena: Vec<f32> },
     Grow(Vec<Option<Slot>>),
-    RecordBoundary { window: Arc<goofi_core::record::FrameWindow>, begin: bool, done: Arc<AtomicBool> },
 }
 
 /// Why a node left the plan.
@@ -647,7 +646,6 @@ pub enum Retired {
     Rings(Rings),
     Plan(Plan, Vec<f32>),
     Slab(Vec<Option<Slot>>),
-    RecordBoundary(Arc<goofi_core::record::FrameWindow>, Arc<AtomicBool>),
     Faulted { uid: Uid, serial: u64, fault: Fault },
 }
 
@@ -707,12 +705,6 @@ impl Runtime {
 
     fn apply(&mut self, msg: Msg) {
         let retired = match msg {
-            Msg::RecordBoundary { window, begin, done } => {
-                let block = self.anchor.blocks.load(Ordering::Relaxed);
-                if begin { window.begin(block); } else { window.finish(block); }
-                done.store(true, Ordering::Release);
-                Some(Retired::RecordBoundary(window, done))
-            }
             Msg::Insert { idx, slot } => self.slab[idx].replace(slot).map(Retired::Slot),
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
             Msg::Rings { idx, serial, mut rings } => {

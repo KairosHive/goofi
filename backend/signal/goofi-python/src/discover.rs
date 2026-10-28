@@ -1,9 +1,13 @@
 //! Python node discovery: one probe per file, in the interpreter that will run it, answering the
 //! manifest the engine registers — or why it could not.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use std::time::Duration;
+
+use goofi_supervisor::sync::Mutex;
 
 use goofi_core::probe;
 use goofi_node::{manifest_of, parse_introspection, type_name_of, Isolation, IsolationCell, NodeManifest};
@@ -66,26 +70,44 @@ payload.close()
 }
 
 /// What decides a probe's answer, hashed: goofi's version, the file's bytes, and each interpreter
-/// with its site-packages — the directory an install moves, so an installed dependency re-probes
-/// the file that lacked it. `None` only for a file that cannot be read.
+/// with what it has installed — the names of the distributions in its site-packages, so an
+/// installed dependency re-probes the file that lacked it, while an environment provisioned
+/// again from the same requirements answers from the memo. `None` only for a file that cannot
+/// be read.
 pub fn probe_key(path: &Path, pythons: &[&str]) -> Option<String> {
     let mut hash = Sha256::new();
     hash.update(env!("CARGO_PKG_VERSION").as_bytes());
     hash.update(std::fs::read(path).ok()?);
     for python in pythons {
         hash.update(python.as_bytes());
-        hash.update(mtime(Path::new(python)));
-        let site = Path::new(python).parent().and_then(Path::parent).and_then(goofi_supervisor::layout::site_packages);
-        hash.update(site.as_deref().map(mtime).unwrap_or_default());
+        hash.update(installed(Path::new(python)).as_bytes());
     }
     Some(format!("{:x}", hash.finalize())[..32].to_string())
 }
 
-fn mtime(p: &Path) -> [u8; 16] {
-    std::fs::metadata(p)
-        .ok()
-        .and_then(|m| m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or([0; 16], |t| t.as_nanos().to_le_bytes())
+/// What `python`'s environment holds, as one string: its `pyvenv.cfg` (the interpreter's version
+/// and base) and the sorted `.dist-info` names of its site-packages. Read once per interpreter
+/// per process: a scan asks it for every file.
+fn installed(python: &Path) -> String {
+    static READ: LazyLock<Mutex<HashMap<PathBuf, String>>> = LazyLock::new(Default::default);
+    if let Some(known) = READ.lock().get(python) {
+        return known.clone();
+    }
+    let venv = python.parent().and_then(Path::parent);
+    let config = venv.and_then(|v| std::fs::read_to_string(v.join("pyvenv.cfg")).ok()).unwrap_or_default();
+    let mut dists: Vec<String> = venv
+        .and_then(goofi_supervisor::layout::site_packages)
+        .and_then(|site| std::fs::read_dir(site).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".dist-info"))
+        .collect();
+    dists.sort();
+    let answer = format!("{config}\n{}", dists.join("\n"));
+    READ.lock().insert(python.to_path_buf(), answer.clone());
+    answer
 }
 
 /// The probe under `memo`, where its answer outlives the process: an import-heavy node costs

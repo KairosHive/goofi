@@ -1,39 +1,33 @@
-//! Per-output recording settings shared by the graph and encoders.
+//! What a recording is made of: the frames an armed output hands over, and the per-output
+//! settings the graph keeps.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-/// One recording's audio interval, in engine blocks. Only the audio clock opens
-/// and closes it; all tracks use these same inclusive/exclusive boundaries.
-pub struct FrameWindow {
-    first: AtomicU64,
-    end: AtomicU64,
+/// What an armed output hands the recorder: the frame as the node made it, or a texture the
+/// graphics engine read back at eight bits a channel, which is what a video takes and what a
+/// `Data` of floats would only cost four times the memory to say.
+#[derive(Clone)]
+pub enum Frame {
+    Data(crate::Data),
+    Texels(std::sync::Arc<Texels>),
 }
 
-impl Default for FrameWindow {
-    fn default() -> Self {
-        Self { first: AtomicU64::new(0), end: AtomicU64::new(u64::MAX) }
-    }
+/// One readback: `width * height` tight-packed RGBA texels, row 0 the top, and the stamps every
+/// frame carries — its instant, its number and the rate it was rendered at.
+pub struct Texels {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub meta: crate::Meta,
 }
 
-impl FrameWindow {
-    pub fn prepare(&self) {
-        self.first.store(u64::MAX, Ordering::Release);
-        self.end.store(0, Ordering::Release);
-    }
-
-    pub fn begin(&self, block: u64) {
-        self.end.store(u64::MAX, Ordering::Release);
-        self.first.store(block, Ordering::Release);
-    }
-
-    pub fn finish(&self, block: u64) {
-        self.end.store(block, Ordering::Release);
-    }
-
-    pub fn contains(&self, block: u64) -> bool {
-        block >= self.first.load(Ordering::Acquire) && block < self.end.load(Ordering::Acquire)
+impl Frame {
+    pub fn meta(&self) -> &crate::Meta {
+        match self {
+            Frame::Data(d) => d.meta(),
+            Frame::Texels(t) => &t.meta,
+        }
     }
 }
 

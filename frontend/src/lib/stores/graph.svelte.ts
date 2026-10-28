@@ -383,6 +383,9 @@ export class GraphStore {
 			case 'node_types':
 				this.nodeTypes = ev.payload.types;
 				break;
+			case 'history':
+				history().adopt(ev.payload);
+				break;
 		}
 	}
 

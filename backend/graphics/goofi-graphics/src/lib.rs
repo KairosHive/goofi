@@ -8,16 +8,17 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
 use goofi_core::SlotType;
 use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
-    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Touched, Uid,
+    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Uid,
 };
 
 mod gpu;
 mod half;
+mod montage;
 mod plan;
 mod runtime;
 mod scan;
@@ -28,13 +29,13 @@ mod resources;
 use gpu::Gpu;
 use half::GraphicsHalf;
 use runtime::{Runtime, Stats};
-use scan::{Class, Compiler};
+use scan::Class;
 
 /// What `graphics.fps`, the clock's pace, is held to. A tick the clock did not pace — the
 /// harness's `render` — is why every frame's instant is written beside the video.
 const FPS_RANGE: std::ops::RangeInclusive<u32> = 1..=240;
 
-pub use goofi_core::time::Clock;
+pub use goofi_supervisor::timing::Clock;
 
 /// The timing door: what the engine is doing, for `session status`.
 #[derive(serde::Serialize)]
@@ -60,13 +61,18 @@ pub(crate) struct Instance {
     control: Handle,
     pub(crate) source: Option<producer::Source>,
     program: Option<(Arc<str>, scan::Built)>,
+    /// The width and height the settled document holds as constants, per axis; `None` where an
+    /// expression drives the axis and the half's evaluation is the one value.
+    settled_size: (Option<u32>, Option<u32>),
 }
 
 impl Instance {
-    /// The size this node asks for, from the one writer of its param atomics — a constant and an
-    /// evaluated binding alike. 0 on an axis means follow what is wired behind it.
+    /// The size this node asks for: a constant as the last settle read it, so the plan decides
+    /// from settled state; an evaluated binding from the half's param atomics, its one writer.
+    /// 0 on an axis means follow what is wired behind it.
     pub(crate) fn asked(&self) -> (u32, u32) {
-        plan::asked(&self.cells.params, self.class.manifest.params.len())
+        let (w, h) = plan::asked(&self.cells.params, self.class.manifest.params.len());
+        (self.settled_size.0.unwrap_or(w), self.settled_size.1.unwrap_or(h))
     }
 }
 
@@ -79,14 +85,13 @@ pub(crate) struct Opened {
 }
 
 pub struct GraphicsEngine {
-    iox: Arc<goofi_transport::Iox>,
+    hub: Arc<goofi_transport::Hub>,
     instance: String,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
     clock: Clock,
     /// The pace the clock thread keeps, written at settle from `graphics.fps`.
     fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
-    pub(crate) compiler: Compiler,
     pub(crate) python: Option<goofi_python::catalog::Python>,
     /// The executable whose `host` mode runs a node built after boot, and whether boot is over.
     pub(crate) host: Option<std::path::PathBuf>,
@@ -105,13 +110,10 @@ pub struct GraphicsEngine {
     windows: HashMap<Uid, Opened>,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
-    /// What the render thread found an armed stage could not record; settled as a fault like any
-    /// other, so a missing encoder reaches the panel the way every node failure does.
+    /// What the render thread found a stage could not do; settled as a fault like any other.
     troubles: runtime::Troubles,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
-    /// Last: every bell onto a control half is built from it, and fields drop in order.
-    bells: goofi_transport::IoxNode,
 }
 
 fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> ParamDecl {
@@ -121,11 +123,11 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], face: Face::Plain },
         expression: Some(ExprDecl {
             source,
-            mode: if m.producer { ExprMode::On } else { ExprMode::Off },
+            mode: if m.inputs.iter().any(|s| s.kind == SlotType::Texture) { ExprMode::Off } else { ExprMode::On },
         }),
         doc: Some(
             "Texture size in pixels; 0 follows the first wired texture input, or the frame \
-             uploaded to the first array input. A node that makes its own frames follows the \
+             uploaded to the first array input. A node with no texture input follows the \
              patch's default instead.",
         ),
         section: 0,
@@ -149,12 +151,12 @@ fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
 impl GraphicsEngine {
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
-        iox: Arc<goofi_transport::Iox>,
+        hub: Arc<goofi_transport::Hub>,
         instance: String,
-        time: Arc<goofi_core::time::Time>,
+        time: Arc<goofi_supervisor::timing::Time>,
         waker: Arc<DrainWaker>,
         clock: Clock,
-        recorder: Arc<goofi_record::Recorder>,
+        recording: Arc<AtomicBool>,
     ) -> Result<GraphicsEngine, String> {
         let gpu = gpu::shared()?;
         let shared = Arc::new(Shared::new(waker));
@@ -167,7 +169,7 @@ impl GraphicsEngine {
             stats.clone(),
             troubles.clone(),
             shared.clone(),
-            recorder,
+            recording,
             fps.clone(),
         )));
         let inbox = runtime.lock().inbox.clone();
@@ -176,19 +178,16 @@ impl GraphicsEngine {
             let (rt, halt, pace) = (runtime.clone(), stop.clone(), fps.clone());
             let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
                 .spawn(move || {
-                    let mut next = Instant::now();
+                    let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
                     while !halt.load(Ordering::Relaxed) {
                         // A tick that panics ends no clock: the cause is logged and the next
                         // tick runs; the runtime's lock takes the poison over.
                         if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.lock().tick())) {
                             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
                         }
-                        next += Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed)));
-                        // A tick that overran does not try to catch up: the next one is now.
-                        match next.checked_duration_since(Instant::now()) {
-                            Some(left) => std::thread::sleep(left),
-                            None => next = Instant::now(),
-                        }
+                        grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
+                        // A tick that overran does not try to catch up: the grid restarts from now.
+                        goofi_supervisor::timing::sleep_until(grid.advance());
                     }
                 })
                 .expect("the render clock");
@@ -199,7 +198,6 @@ impl GraphicsEngine {
             time,
             clock,
             fps,
-            compiler: Compiler::start(gpu.clone(), shared.clone()),
             gpu,
             shared,
             classes: HashMap::new(),
@@ -218,9 +216,14 @@ impl GraphicsEngine {
             pending: Vec::new(),
             dirty: false,
             troubles,
-            bells: iox.node()?,
-            iox,
+            hub,
         })
+    }
+
+    /// Ask every node's half for one tick, acknowledged: what a recording's stop waits for, so a
+    /// readback the half still holds reaches the queue before the file closes.
+    pub fn flush_recording(&self) -> Vec<std::sync::mpsc::Receiver<Result<(), String>>> {
+        self.live.values().map(|inst| inst.control.flush()).collect()
     }
 
     /// The window thread, where a `Window` node's frames go. Without one there are no windows,
@@ -265,9 +268,10 @@ impl GraphicsEngine {
     }
 
     /// Everything one node's runtime holds, read off the settled view: a texture wire is a plan
-    /// edge, carried by the stage rather than subscribed, and a recording is the render thread's.
+    /// edge, carried by the stage rather than subscribed; an armed output's queue is the half's,
+    /// fed with what the render thread read back.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: false };
+        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
         goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
     }
 
@@ -284,7 +288,7 @@ impl GraphicsEngine {
         for uid in self.windows.keys().copied().collect::<Vec<_>>() {
             if !want.contains_key(&uid) {
                 let opened = self.windows.remove(&uid).expect("just listed");
-                gpu::give_back(opened.surface);
+                drop(opened.surface);
                 let id = opened.id;
                 ui.post(move |host| host.close_window(id));
             }
@@ -367,7 +371,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn remove_type(&mut self, type_name: &str) -> bool {
-        self.classes.remove(type_name).map(gpu::give_back).is_some()
+        self.classes.remove(type_name).is_some()
     }
 
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
@@ -390,6 +394,7 @@ impl Engine for GraphicsEngine {
             readers: AtomicBool::new(false),
             tap: Mutex::new(None),
             tap_box: AtomicU64::new(0),
+            record: Mutex::new(std::collections::VecDeque::new()),
         });
         let spawn = goofi_runtime::Spawn {
             engine: "graphics",
@@ -417,12 +422,12 @@ impl Engine for GraphicsEngine {
             });
             GraphicsHalf::new(shared, size, producer)
         };
-        let control = match goofi_runtime::spawn(&self.iox, spawn, self.shared.clone(), &self.bells, make) {
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, program: None });
+        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, program: None, settled_size: (None, None) });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -432,7 +437,7 @@ impl Engine for GraphicsEngine {
         if let Some(inst) = self.live.remove(&uid) {
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
-            gpu::give_back(inst);
+            drop(inst);
             self.faults.forget(uid);
             self.troubles.lock().remove(&uid);
             self.pending.retain(|(u, _)| *u != uid);
@@ -440,14 +445,23 @@ impl Engine for GraphicsEngine {
         }
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, changed: &[Uid]) {
         self.dirty = false;
         self.shared.replan.store(false, Ordering::Release);
         self.fps.store(fps_of(view.variables.get("graphics.fps")), Ordering::Relaxed);
-        for uid in self.live.keys().copied().collect::<Vec<_>>() {
+        for uid in changed.iter().copied().filter(|u| self.live.contains_key(u)).collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
-            self.live[&uid].control.send_if_changed(desired);
+            // The universal group ends the decls: width, then height. A constant is read here,
+            // settled; a bound axis is left to the half, which writes what it evaluates.
+            let n = desired.consts.len();
+            let settled = |i: usize| {
+                let bound = desired.subs.iter().any(|s| matches!(s, goofi_runtime::Sub::Bind { param, .. } if *param == i));
+                (!bound).then(|| goofi_runtime::scalar(&desired.consts[i]).clamp(0.0, plan::MAX_SIZE as f64) as u32)
+            };
+            let inst = self.live.get_mut(&uid).expect("listed above");
+            inst.settled_size = (settled(n - 2), settled(n - 1));
+            inst.control.send_if_changed(desired);
         }
         // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
         for inst in self.live.values_mut() {
@@ -459,14 +473,10 @@ impl Engine for GraphicsEngine {
             });
             if inst.program.as_ref().map(|(text, _)| text) == source.as_ref() { continue; }
             let next = source.map(|text| {
-                let built = self.compiler.shader(inst.class.manifest, &text, &[]).unwrap_or_else(|why| {
-                    let cell = Arc::new(std::sync::OnceLock::new());
-                    let _ = cell.set(Err(why));
-                    cell
-                });
+                let built = scan::shader(&self.gpu, &self.shared, inst.class.manifest, &text, &[]).unwrap_or_else(|why| goofi_supervisor::ready::Ready::done(Err(why)));
                 (text, built)
             });
-            gpu::give_back(std::mem::replace(&mut inst.program, next));
+            inst.program = next;
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         self.follow_windows(view, &plan::sizes(view, &self.live));
@@ -516,22 +526,19 @@ impl Engine for GraphicsEngine {
             stop.store(true, Ordering::Relaxed);
             let _ = thread.join();
         }
-        self.compiler.stop();
         goofi_runtime::stop_all(self.live.values().map(|i| &i.control));
         // The surfaces go before their windows: the runtime's chains first, then the engine's.
         self.runtime.lock().clear();
         let windows = std::mem::take(&mut self.windows);
         if let Some(ui) = self.ui.take() {
             for opened in windows.into_values() {
-                gpu::give_back(opened.surface);
+                drop(opened.surface);
                 let id = opened.id;
                 ui.post(move |host| host.close_window(id));
             }
         }
-        let gate = gpu::gate();
         self.live.clear();
         self.classes.clear();
-        drop(gate);
     }
 }
 

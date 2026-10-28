@@ -174,15 +174,18 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let gone: serde_json::Value =
         serde_json::from_str(&ok(&url, "names", "link remove osc/out win/input")).unwrap();
     assert_eq!(gone["removed"], true, "the named wire was there to remove");
-    // Another actor's undo takes back ITS work, never shell_a's; bare shells share `default`.
+    // One history for every shell: an undo takes back the last write whoever made it, and the
+    // batch is one step of it.
     let d: serde_json::Value = serde_json::from_str(&ok(&url, "default", "node add --type Buffer")).unwrap();
     ok(&url, "default", "undo");
-    assert!(g.doc()["nodes"][d["uid"].as_str().unwrap()].is_null(), "default undid its own");
+    assert!(g.doc()["nodes"][d["uid"].as_str().unwrap()].is_null(), "the undo took back the last add");
     assert_eq!(g.doc()["nodes"].as_object().unwrap().len(), 3, "shell_a's three still stand");
-    ok(&url, "shell_a", "undo");
+    ok(&url, "shell_a", "undo"); // the named wire's removal
+    ok(&url, "shell_a", "undo"); // the named wire
+    ok(&url, "shell_a", "undo"); // the batch, as one step
     assert_eq!(
         g.doc()["nodes"].as_object().unwrap().len(), 1,
-        "one undo took back the whole batch, in shell_a's stack"
+        "one undo took back the whole batch"
     );
 
     // `--raw` round-trips: the entry's rendered form IS the NPY bytes, ready for a pipe.

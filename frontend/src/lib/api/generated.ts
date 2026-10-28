@@ -43,7 +43,12 @@ envelopes?: Record<string, [number, number, number, number]>,
  * Seconds between decisions, from arrival; 0 decides once, on arrival; -1 never. With no
  * transition out, each interval lands the values again and plays the envelopes.
  */
-interval: number, mode: Decision, 
+interval: number, 
+/**
+ * Python over the machine's scope to the seconds instead, read for the playhead each time a
+ * beat is armed: on arrival and at each beat; a negative value is none. Empty, `interval` holds.
+ */
+interval_expression?: string, mode: Decision, 
 /**
  * The weight of a decision that waits one more interval, in `random`.
  */
@@ -54,17 +59,23 @@ noop: number,
  */
 weights: { [key in string]: number }, 
 /**
- * In `expression`: the index of the transition out to take; a negative one waits.
+ * In `expression`: Python over `variables.*`, `me`, `st()` and `t` to the index of the
+ * transition out to take; a negative one waits.
  */
 expression: string, };
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
-export type Policy = "fifo" | "lifo" | "all";
-export type Trigger = { "kind": "manual" } | { "kind": "when", expression: string, weight: number, } | { "kind": "meet", policy: Policy, } | { "kind": "alone" };
 export type Transition = { 
 /**
  * A state name, or `*` for any state.
  */
-from: string, to: string, triggers?: Array<Trigger>, 
+from: string, to: string, 
+/**
+ * Python over `variables.*`, `me`, `st()` and `t`, read for each playhead resting in `from`
+ * as it arrives and at every instant the machine settles after: the playhead takes the
+ * transition the instant the condition turns true. Empty, the state's decision and a fire
+ * alone take it.
+ */
+condition?: string, 
 /**
  * Seconds; 0 is instant.
  */

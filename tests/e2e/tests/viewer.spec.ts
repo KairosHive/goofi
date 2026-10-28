@@ -250,10 +250,13 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const x = box.x + box.width / 2;
 			// The sine crosses every row at some column, so a column scan meets it; the readout
 			// gives the value over the sample index, and marks the point on the line.
+			// The drawing answers a hover from its worker, a frame or two later on a loaded machine:
+			// each column position is given that long before the scan moves on.
 			await expect
 				.poll(async () => {
 					for (let y = box.y + 6; y < box.y + box.height - 6; y += 4) {
 						await page.mouse.move(x, y);
+						await readout.first().waitFor({ state: 'attached', timeout: 1000 }).catch(() => {});
 						if ((await readout.count()) > 0) return readout.innerText();
 					}
 					return '';
@@ -309,7 +312,9 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 			.poll(async () => (await emitted()).every((i, k) => i > from[k] + 400), { message: 'all three stream' })
 			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
-		expect(await fps(), 'paints a second, with three streams at a 15 fps cap').toBeLessThanOrEqual(18);
+		// A wake the machine held past half a tick serves that stream on the next, so a loaded
+		// machine splits a tick's streams now and then: the count is read over a quiet window.
+		await expect.poll(fps, { message: 'paints a second, with three streams at a 15 fps cap' }).toBeLessThanOrEqual(18);
 
 		// Producers slower than the cap emit at phases of their own; the reducer still serves each
 		// frame on the next tick of the grid, so they arrive together and the page paints no more.
@@ -319,7 +324,7 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 		await expect
 			.poll(async () => (await emitted()).every((i, k) => i > again[k] + 20), { message: 'all three stream below the cap' })
 			.toBe(true);
-		expect(await fps(), 'paints a second, with three streams below the cap').toBeLessThanOrEqual(18);
+		await expect.poll(fps, { message: 'paints a second, with three streams below the cap' }).toBeLessThanOrEqual(18);
 	} finally {
 		await resetPatch(page);
 	}

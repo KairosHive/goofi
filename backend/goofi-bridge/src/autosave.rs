@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use goofi_graph::archive;
 use notify::Watcher;
@@ -27,7 +27,9 @@ const SIDECAR: &str = "autosave.json";
 
 /// What the last autosave wrote: the manifest and the workspace, so a tick where nothing moved
 /// writes nothing.
-type Stamp = (String, archive::Fingerprint);
+/// What the last autosave wrote from: the graph's revision and the store's value version then, the
+/// workspace's fingerprint, and the manifest text — so a quiet patch costs a walk and no archive.
+type Stamp = (u64, u64, archive::Fingerprint, String);
 
 /// The directory an autosave lives in: the mount's nonce directory, `patch.yaml` beside `workspace/`.
 fn dir_of(mount: &Path) -> PathBuf {
@@ -43,13 +45,7 @@ pub(crate) fn spawn(state: AppState) {
         loop {
             state.changed.wait_timeout(if watch.at.is_some() { PARK } else { CAP });
             // Debounce: wait for a quiet window, but no longer than the cap since the first pulse.
-            let first = Instant::now();
-            loop {
-                let left = (first + CAP).saturating_duration_since(Instant::now());
-                if left.is_zero() || !state.changed.wait_timeout(QUIET.min(left)) {
-                    break;
-                }
-            }
+            state.changed.wait_quiet(QUIET, goofi_supervisor::timing::Deadline::within(CAP));
             if state.stopping.stopped() {
                 return;
             }
@@ -151,15 +147,22 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         return;
     }
     // Taken under the graph lock, encoded and written after it: the status drain waits on that lock.
-    let (archived, wide) = {
+    // Nothing moved since the last write — no settle, no value, no file — and there is nothing to
+    // archive.
+    let (revision, moves, archived, wide) = {
         let g = state.graph.lock();
-        (g.archive(), g.wide_variables())
+        let (revision, moves) = (g.revision(), g.variables().moves());
+        if last.as_ref().is_some_and(|(r, m, fp, _)| *r == revision && *m == moves && *fp == seen) {
+            return;
+        }
+        (revision, moves, g.archive(), g.wide_variables())
     };
     let manifest = archived.to_yaml();
     if let Err(e) = goofi_graph::write_variables(&dir.join(archive::WORKSPACE), &wide) {
         goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
     }
-    if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
+    if last.as_ref().is_some_and(|(_, _, fp, m)| *m == manifest && *fp == seen) {
+        *last = Some((revision, moves, seen, manifest));
         return;
     }
     let at = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
@@ -172,7 +175,7 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
         return;
     }
-    *last = Some((manifest, seen));
+    *last = Some((revision, moves, seen, manifest));
 }
 
 /// The sidecar beside an autosave, or `Null` where none was written.

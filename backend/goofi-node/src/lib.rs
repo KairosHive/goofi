@@ -20,7 +20,7 @@ pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
     Edit, Origin, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeView,
-    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Touched, Via,
+    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
 };
 pub use tags::Tag;
 pub use type_id::{bare, qualify, split as split_type_id};
@@ -295,6 +295,15 @@ pub struct Compiled {
 pub enum Local {
     Frame(Data),
     Value(Param),
+    /// A record read by attribute, as a machine's `me` and `st()` answer: `me.gain`, `st('A').residents`.
+    Record(Vec<(String, Field)>),
+}
+
+/// One field of a [`Local::Record`]: a frame, or a list of names.
+#[derive(Clone, Debug)]
+pub enum Field {
+    Frame(Data),
+    Names(Vec<String>),
 }
 
 /// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.

@@ -13,25 +13,8 @@ pub enum Op {
     Del { path: Vec<String> },
 }
 
-/// The ops that take `before` to `after`, as deep as the maps go: a map whose kept keys stay in
-/// order is descended, so a moved literal rides alone; any other value is re-sent whole. The roots
-/// are named, not ordered, so every op has a root in its path.
-pub fn diff_ops(before: &Value, after: &Value) -> Vec<Op> {
-    let empty = Map::new();
-    let (b, a) = (before.as_object().unwrap_or(&empty), after.as_object().unwrap_or(&empty));
-    let mut ops = Vec::new();
-    for (root, av) in a {
-        match b.get(root) {
-            Some(bv) => diff_into(&mut ops, vec![root.clone()], bv, av),
-            None => ops.push(Op::Put { path: vec![root.clone()], value: av.clone() }),
-        }
-    }
-    for root in b.keys().filter(|k| !a.contains_key(*k)) {
-        ops.push(Op::Del { path: vec![root.clone()] });
-    }
-    ops
-}
-
+/// The ops that take `before` to `after` under `path`, as deep as the maps go: a map whose kept keys
+/// stay in order is descended, so a moved literal rides alone; any other value is re-sent whole.
 fn diff_into(ops: &mut Vec<Op>, path: Vec<String>, before: &Value, after: &Value) {
     let at = |key: &str| path.iter().cloned().chain([key.to_string()]).collect::<Vec<_>>();
     match (before.as_object(), after.as_object()) {
@@ -107,8 +90,10 @@ pub struct GraphDoc {
 }
 
 impl GraphDoc {
+    /// Born with the `nodes` root alone: every other root arrives whole with the first
+    /// projection, and a node's record is put under this one by its uid.
     pub fn new() -> GraphDoc {
-        GraphDoc { state: Value::Object(Map::new()), version: 0 }
+        GraphDoc { state: serde_json::json!({ "nodes": {} }), version: 0 }
     }
 
     pub fn to_json(&self) -> Value {
@@ -119,14 +104,32 @@ impl GraphDoc {
         self.version
     }
 
-    /// Take the document to `target`, answering the ops that get a replica there, or `None`
-    /// when nothing changed; the version advances only on a real change.
-    pub fn reconcile_root(&mut self, target: Value) -> Option<Vec<Op>> {
-        let ops = diff_ops(&self.state, &target);
+    /// Take the document to what the graph projected since the last time, answering the ops that
+    /// get a replica there, or `None` when nothing changed; the version advances only on a real
+    /// change. A changed record is diffed against the one held, so a moved literal rides alone.
+    pub fn apply_projection(&mut self, projection: goofi_graph::Projection) -> Option<Vec<Op>> {
+        let mut ops = Vec::new();
+        for (hex, record) in &projection.nodes {
+            let path = vec!["nodes".to_string(), hex.clone()];
+            let held = self.state.get("nodes").and_then(|n| n.get(hex));
+            match (held, record) {
+                (Some(before), Some(after)) => diff_into(&mut ops, path, before, after),
+                (None, Some(after)) => ops.push(Op::Put { path, value: after.clone() }),
+                (Some(_), None) => ops.push(Op::Del { path }),
+                (None, None) => {}
+            }
+        }
+        for (root, after) in &projection.roots {
+            let path = vec![root.to_string()];
+            match self.state.get(*root) {
+                Some(before) => diff_into(&mut ops, path, before, after),
+                None => ops.push(Op::Put { path, value: after.clone() }),
+            }
+        }
         if ops.is_empty() {
             return None;
         }
-        self.state = target;
+        apply_ops(&mut self.state, &ops);
         self.version += 1;
         Some(ops)
     }

@@ -22,9 +22,16 @@ pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_
 }
 
 /// The fields the engine adds to `Params` for one ARRAY input: the range its last frame spanned,
-/// which a body cannot reduce for itself, and how many channels the frame had.
-fn range_fields(input: &str) -> [String; 3] {
-    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels")]
+/// which a body cannot reduce for itself, how many channels the frame had, and the power of two
+/// the texels and the range are both over, so a frame past the half floats still fits.
+fn range_fields(input: &str) -> [String; 4] {
+    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels"), format!("{input}_scale")]
+}
+
+/// The texture bound beside one ARRAY input: where each channel of the frame's first axis sits
+/// on the 10-20 head, `(x, y, known, 0)` per channel, or the blank texel for unnamed channels.
+fn layout_name(input: &str) -> String {
+    format!("{input}_layout")
 }
 
 /// The header's manifest, with the one output added. The file's WHOLE text stays the source that
@@ -63,6 +70,7 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     for input in &intro.inputs {
         if SlotType::from_name(&input.kind) != Some(SlotType::Texture) {
             taken.extend(range_fields(&input.name));
+            taken.push(layout_name(&input.name));
         }
     }
     let clash = intro
@@ -140,6 +148,9 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
     for (i, input) in manifest.inputs.iter().enumerate() {
         s.push_str(&format!("@group(1) @binding({i}) var {}: texture_2d<f32>;\n", input.name));
     }
+    for (k, input) in array_inputs(manifest).enumerate() {
+        s.push_str(&format!("@group(1) @binding({}) var {}: texture_2d<f32>;\n", manifest.inputs.len() + k, layout_name(input)));
+    }
     // A state buffer reads as the LAST tick left it and is written through its own function, so
     // the two never name one thing.
     for (i, buffer) in state.iter().enumerate() {
@@ -187,9 +198,9 @@ fn slots(decls: &[ParamDecl], section: &str, base: &str) -> usize {
 
 /// One stage's `Params` buffer in WGSL's storage layout: each declared param at its alignment,
 /// a vector's dimensions in a row, a list as an array of them where its first slot stands, then
-/// the range and channel count of each ARRAY input's last frame, padded to 16.
-pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 3]]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 3) * 4 + 16);
+/// the range, channel count and scale of each ARRAY input's last frame, padded to 16.
+pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 4) * 4 + 16);
     let mut arrays: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
     for (i, d) in decls.iter().enumerate() {
         let (size, align) = layout(&d.spec);

@@ -50,7 +50,7 @@ op!(AgentStart, "agent start", 1, AgentStartArgs {
 op!(AgentStop, "agent stop", 1, AgentStopArgs {
     pub instance: String,
 },
-    "Stop a running agent (SIGTERM, then SIGKILL), or dismiss one that already exited. The shell's undo stack dies with it; the exit code arrives on harness_changed.",
+    "Stop a running agent (SIGTERM, then SIGKILL), or dismiss one that already exited. A drag it left in flight ends with it; the exit code arrives on harness_changed.",
     "{ok: true}");
 
 impl ReadOp for PluginList {
@@ -115,7 +115,7 @@ impl EffectOp for AgentStart {
         let id = {
             let mount = state.mount.lock();
             let dir = mount.as_ref().map(crate::Mount::path).unwrap_or_default();
-            state.harnesses.spawn(&a.name, &dir, &state.instance_id, &term::parent_env(), state.events.clone(), state.history.clone())?
+            state.harnesses.spawn(&a.name, &dir, &state.instance_id, &term::parent_env(), state.events.clone(), state.clone())?
         };
         state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
         Ok(json!({ "instance_id": id }))
@@ -124,7 +124,7 @@ impl EffectOp for AgentStart {
 
 impl EffectOp for AgentStop {
     fn run(state: &AppState, a: AgentStopArgs, _: &Caller) -> Result<Value, String> {
-        // The stopped shell's undo stack is dropped by the REAPER, where the actor really dies.
+        // A drag the stopped shell left in flight is ended by the REAPER, where the actor really dies.
         state.harnesses.stop(&a.instance)?;
         state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
         Ok(json!({ "ok": true }))
