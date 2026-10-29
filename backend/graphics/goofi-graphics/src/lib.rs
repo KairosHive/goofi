@@ -62,7 +62,8 @@ pub(crate) struct Instance {
     pub(crate) source: Option<producer::Source>,
     program: Option<(Arc<str>, scan::Built)>,
     /// The width and height the settled document holds as constants, per axis; `None` where an
-    /// expression drives the axis and the half's evaluation is the one value.
+    /// expression drives the axis and the half's evaluation is the one value. A fullscreen
+    /// window node's is its monitor's size.
     settled_size: (Option<u32>, Option<u32>),
 }
 
@@ -76,11 +77,12 @@ impl Instance {
     }
 }
 
-/// A window node's window: the loop's name for it, the size it was last given, and the surface
-/// the GPU presents into it — none where the screen gives no handles, or the GPU refused one.
+/// A window node's window: the loop's name for it, the size and place it was last given, and the
+/// surface the GPU presents into it — none where the screen gives no handles, or the GPU refused one.
 pub(crate) struct Opened {
     pub(crate) id: goofi_window::Id,
     size: (u32, u32),
+    place: goofi_window::Place,
     pub(crate) surface: Option<Arc<wgpu::Surface<'static>>>,
 }
 
@@ -275,15 +277,30 @@ impl GraphicsEngine {
         goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
     }
 
-    /// The window each window node should have, opened, resized or closed to match settled state.
-    /// A window is the frame's own size, so nothing scales and no platform needs a scaler.
-    fn follow_windows(&mut self, view: &GraphView<'_>, sizes: &HashMap<Uid, (u32, u32)>) {
-        let Some(ui) = self.ui.clone() else { return };
-        let want: HashMap<Uid, (u32, u32)> = self
+    /// The size of the monitor a fullscreen window node covers; none for any other node, and none
+    /// where the machine has no such screen, which the window's opening then reports.
+    fn covered(&self, inst: &Instance, nv: &NodeView<'_>) -> Option<(u32, u32)> {
+        let place = place_of(nv);
+        if !inst.class.window || !place.fullscreen {
+            return None;
+        }
+        self.ui.as_ref()?.run(|host| host.monitors()).get(place.screen).map(|m| m.size)
+    }
+
+    /// The window each window node should have, opened, resized or closed to match settled state,
+    /// and the nodes whose window would not open. A window is the frame's own size, so nothing
+    /// scales and no platform needs a scaler; a new place opens it anew.
+    fn follow_windows(&mut self, view: &GraphView<'_>, sizes: &HashMap<Uid, (u32, u32)>) -> Vec<(Uid, String)> {
+        let mut refused = Vec::new();
+        let Some(ui) = self.ui.clone() else { return refused };
+        let want: HashMap<Uid, ((u32, u32), goofi_window::Place)> = self
             .live
             .iter()
             .filter(|(_, inst)| inst.class.window)
-            .map(|(uid, _)| (*uid, sizes.get(uid).copied().unwrap_or_else(|| plan::generator(view))))
+            .map(|(uid, _)| {
+                let size = sizes.get(uid).copied().unwrap_or_else(|| plan::generator(view));
+                (*uid, (size, view.nodes.get(uid).map(place_of).unwrap_or_default()))
+            })
             .collect();
         for uid in self.windows.keys().copied().collect::<Vec<_>>() {
             if !want.contains_key(&uid) {
@@ -293,7 +310,13 @@ impl GraphicsEngine {
                 ui.post(move |host| host.close_window(id));
             }
         }
-        for (uid, size) in want {
+        for (uid, (size, place)) in want {
+            if self.windows.get(&uid).is_some_and(|held| held.place != place) {
+                let opened = self.windows.remove(&uid).expect("just found");
+                drop(opened.surface);
+                let id = opened.id;
+                ui.post(move |host| host.close_window(id));
+            }
             match self.windows.get_mut(&uid) {
                 Some(held) if held.size == size => {}
                 Some(held) => {
@@ -307,7 +330,7 @@ impl GraphicsEngine {
                     let gpu = self.gpu.clone();
                     // The surface is made where the handles are valid: on the window thread.
                     let opened = ui.run(move |host| {
-                        let id = host.open_window(&title, size, Box::new(|_| {}))?.id();
+                        let id = host.open_window(&title, size, place, Box::new(|_| {}))?.id();
                         let surface = host.handles(id).map(|h| gpu.surface(h)).transpose().unwrap_or_else(|why| {
                             goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Warning, None, format!("graphics: `{title}` is presented through the CPU: {why}"));
                             None
@@ -316,21 +339,14 @@ impl GraphicsEngine {
                     });
                     match opened {
                         Ok((id, surface)) => {
-                            self.windows.insert(uid, Opened { id, size, surface });
+                            self.windows.insert(uid, Opened { id, size, place, surface });
                         }
-                        Err(why) => self.pending.push((
-                            uid,
-                            Status::Fault {
-                                fault: Some(goofi_node::NodeFault::Process {
-                                    msg: format!("no window: {why}"),
-                                    since: self.time.now(),
-                                }),
-                            },
-                        )),
+                        Err(why) => refused.push((uid, format!("no window: {why}"))),
                     }
                 }
             }
         }
+        refused
     }
 }
 
@@ -459,8 +475,12 @@ impl Engine for GraphicsEngine {
                 let bound = desired.subs.iter().any(|s| matches!(s, goofi_runtime::Sub::Bind { param, .. } if *param == i));
                 (!bound).then(|| goofi_runtime::scalar(&desired.consts[i]).clamp(0.0, plan::MAX_SIZE as f64) as u32)
             };
+            let covered = self.covered(&self.live[&uid], nv);
             let inst = self.live.get_mut(&uid).expect("listed above");
-            inst.settled_size = (settled(n - 2), settled(n - 1));
+            inst.settled_size = match covered {
+                Some((w, h)) => (Some(w), Some(h)),
+                None => (settled(n - 2), settled(n - 1)),
+            };
             inst.control.send_if_changed(desired);
         }
         // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
@@ -479,8 +499,9 @@ impl Engine for GraphicsEngine {
             inst.program = next;
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
-        self.follow_windows(view, &plan::sizes(view, &self.live));
+        let refused = self.follow_windows(view, &plan::sizes(view, &self.live));
         let (plan, mut faults) = plan::compile(view, &self.live, &self.windows);
+        faults.extend(refused);
         faults.extend(self.troubles.lock().iter().map(|(u, w)| (*u, w.clone())));
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
@@ -551,5 +572,14 @@ fn fps_of(held: Option<&goofi_core::Data>) -> u32 {
 impl Drop for GraphicsEngine {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+/// Where a window node's window opens, from its `window` params.
+fn place_of(nv: &NodeView<'_>) -> goofi_window::Place {
+    let param = |name: &str| nv.params.get("window").and_then(|g| g.get(name));
+    goofi_window::Place {
+        screen: param("screen").and_then(goofi_core::Param::as_f64).map_or(0, |s| s.max(0.0) as usize),
+        fullscreen: param("fullscreen").and_then(goofi_core::Param::as_bool).unwrap_or(false),
     }
 }

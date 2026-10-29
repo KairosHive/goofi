@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use goofi_supervisor::timing::Event;
 
-use super::{Id, Pumped, Screen, Wake};
+use super::{Id, Monitor, Pumped, Screen, Wake};
 
 #[derive(Default)]
 pub struct Platform {
@@ -31,7 +31,12 @@ impl Screen for Platform {
         self.wake.clone()
     }
 
-    fn create(&mut self, _title: &str, _size: (u32, u32)) -> Result<(Id, *mut c_void), String> {
+    /// One monitor, so a placement has a screen to name and a fullscreen window a size to take.
+    fn monitors(&self) -> Vec<Monitor> {
+        vec![Monitor { at: (0, 0), size: (1280, 720) }]
+    }
+
+    fn create(&mut self, _title: &str, _size: (u32, u32), _on: Option<Monitor>, _cover: bool) -> Result<(Id, *mut c_void), String> {
         self.next += 1;
         Ok((self.next, self.next as usize as *mut c_void))
     }

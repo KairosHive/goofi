@@ -7,15 +7,17 @@ use std::num::NonZeroIsize;
 use std::sync::Arc;
 use std::time::Instant;
 
+use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetDC, ReleaseDC, SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    EnumDisplayMonitors, GetDC, GetMonitorInfoW, ReleaseDC, SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFO,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, INFINITE};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use super::{rwh, Handles, Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Monitor, Pumped, Screen, Wake};
 
 pub struct Platform {
     class: Vec<u16>,
@@ -41,6 +43,8 @@ thread_local! {
 /// `WS_CLIPCHILDREN`: a plugin's editor is a CHILD window, and a parent paint without this
 /// flickers over it once a frame.
 const STYLE: u32 = (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN) & !WS_MAXIMIZEBOX & !WS_THICKFRAME;
+/// A window that covers its monitor: no frame to adjust for.
+const COVER: u32 = WS_POPUP | WS_CLIPCHILDREN;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -55,11 +59,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     DefWindowProcW(hwnd, msg, wp, lp)
 }
 
-/// The outer size for a client area the plugin asked for.
-fn framed((w, h): (u32, u32)) -> (i32, i32) {
+/// The outer size of a window of `style` for a client area the plugin asked for.
+fn framed((w, h): (u32, u32), style: u32) -> (i32, i32) {
     let mut r = RECT { left: 0, top: 0, right: w.min(i32::MAX as u32) as i32, bottom: h.min(i32::MAX as u32) as i32 };
-    unsafe { AdjustWindowRect(&mut r, STYLE, 0) };
+    unsafe { AdjustWindowRect(&mut r, style, 0) };
     (r.right - r.left, r.bottom - r.top)
+}
+
+/// One monitor's rectangle, and whether it is the primary, gathered into the list `lp` points to.
+unsafe extern "system" fn gather(monitor: HMONITOR, _dc: HDC, _rect: *mut RECT, lp: LPARAM) -> BOOL {
+    let mut info: MONITORINFO = std::mem::zeroed();
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(monitor, &mut info) != 0 {
+        let r = info.rcMonitor;
+        let found = &mut *(lp as *mut Vec<(bool, Monitor)>);
+        let size = ((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32);
+        found.push((info.dwFlags & MONITORINFOF_PRIMARY == 0, Monitor { at: (r.left, r.top), size }));
+    }
+    1
 }
 
 impl Platform {
@@ -87,17 +104,34 @@ impl Screen for Platform {
         Arc::new(Waker(self.event as isize))
     }
 
-    fn create(&mut self, title: &str, size: (u32, u32)) -> Result<(Id, *mut c_void), String> {
+    /// The desktop's monitors, the primary first and the rest left to right.
+    fn monitors(&self) -> Vec<Monitor> {
+        let mut found: Vec<(bool, Monitor)> = Vec::new();
+        unsafe { EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(gather), &mut found as *mut _ as LPARAM) };
+        found.sort_by_key(|(secondary, m)| (*secondary, m.at.0, m.at.1));
+        found.into_iter().map(|(_, m)| m).collect()
+    }
+
+    fn create(&mut self, title: &str, size: (u32, u32), on: Option<Monitor>, cover: bool) -> Result<(Id, *mut c_void), String> {
         let name = wide(title);
-        let (w, h) = framed(size);
+        let style = if cover { COVER } else { STYLE };
+        let (w, h) = match on {
+            Some(m) if cover => (m.size.0 as i32, m.size.1 as i32),
+            _ => framed(size, style),
+        };
+        let (x, y) = match on {
+            Some(m) if cover => m.at,
+            Some(m) => (m.at.0 + (m.size.0 as i32 - w).max(0) / 2, m.at.1 + (m.size.1 as i32 - h).max(0) / 2),
+            None => (CW_USEDEFAULT, CW_USEDEFAULT),
+        };
         let hwnd = unsafe {
             CreateWindowExW(
                 0,
                 self.class.as_ptr(),
                 name.as_ptr(),
-                STYLE,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                style,
+                x,
+                y,
                 w,
                 h,
                 std::ptr::null_mut(),
@@ -121,7 +155,8 @@ impl Screen for Platform {
     }
 
     fn resize(&mut self, id: Id, size: (u32, u32)) {
-        let (w, h) = framed(size);
+        let style = unsafe { GetWindowLongW(id as usize as HWND, GWL_STYLE) } as u32;
+        let (w, h) = framed(size, style);
         unsafe { SetWindowPos(id as usize as HWND, std::ptr::null_mut(), 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER) };
     }
 

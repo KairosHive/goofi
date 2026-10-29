@@ -807,6 +807,31 @@ fn shaders_render_on_the_gpu() {
     assert!(ui.run(move |host| host.presents(id)) > frames, "the window keeps being fed");
     // And what it shows is what it was wired: the node is a pass-through like any other.
     drawn(&g, win, "the window's own output", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
+
+    // Step: fullscreen reopens the window over its monitor, and the frame takes the monitor's
+    // size; the suite's screen has one monitor of 1280 by 720.
+    g.set_param(win, "window", "fullscreen", true);
+    let covering = g.until("the window reopens fullscreen", |g| {
+        render(g, 1);
+        opened(g).filter(|now| *now != id)
+    });
+    drawn(&g, win, "a frame of the monitor's size", |d| shape(d) == vec![720, 1280, 4]);
+    // A screen the machine does not have is refused by name, and no window stands.
+    g.set_param(win, "window", "screen", 1);
+    g.until("the missing screen is refused", |g| {
+        render(g, 1);
+        g.error(win).filter(|e| e.contains("no screen 1"))
+    });
+    assert!(opened(&g).is_none_or(|now| now != covering), "the fullscreen window closed");
+    // Back on the primary, windowed: the frame is the node's own size again.
+    g.set_param(win, "window", "screen", 0);
+    g.set_param(win, "window", "fullscreen", false);
+    let id = g.until("the window reopens windowed", |g| {
+        render(g, 1);
+        opened(g)
+    });
+    drawn(&g, win, "a frame of the node's own size", |d| shape(d) == vec![32, 64, 4]);
+    assert!(g.error(win).is_none(), "a window that opened clears the refusal: {:?}", g.error(win));
     g.call("node remove", j!({ "node": hex(win) }));
     render(&g, 2);
     assert_eq!(ui.run(move |host| host.presents(id)), 0, "a removed node takes its window with it");

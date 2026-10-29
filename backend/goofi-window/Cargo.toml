@@ -16,7 +16,7 @@ raw-window-handle = "0.6"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Over libxcb, loaded at run time: a Vulkan surface takes the `xcb_connection_t`, and a machine
 # with no X11 libraries must still serve.
-x11rb = { version = "0.13", default-features = false, features = ["dl-libxcb"] }
+x11rb = { version = "0.13", default-features = false, features = ["dl-libxcb", "randr"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

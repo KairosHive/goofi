@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use x11rb::connection::{Connection, RequestConnection};
-use x11rb::properties::WmSizeHints;
+use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
-use super::{rwh, Handles, Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Monitor, Pumped, Screen, Wake};
 
 pub struct Platform {
     conn: XCBConnection,
@@ -27,6 +27,8 @@ pub struct Platform {
     wm_protocols: Atom,
     wm_delete: Atom,
     net_wm_name: Atom,
+    net_wm_state: Atom,
+    net_wm_state_fullscreen: Atom,
     utf8_string: Atom,
     /// A pipe: any thread writes to wake the pump out of its `poll`.
     wake: [i32; 2],
@@ -57,6 +59,8 @@ impl Platform {
         let wm_protocols = atom(b"WM_PROTOCOLS")?;
         let wm_delete = atom(b"WM_DELETE_WINDOW")?;
         let net_wm_name = atom(b"_NET_WM_NAME")?;
+        let net_wm_state = atom(b"_NET_WM_STATE")?;
+        let net_wm_state_fullscreen = atom(b"_NET_WM_STATE_FULLSCREEN")?;
         let utf8_string = atom(b"UTF8_STRING")?;
         let mut wake = [0i32; 2];
         if unsafe { libc::pipe2(wake.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
@@ -72,6 +76,8 @@ impl Platform {
             wm_protocols,
             wm_delete,
             net_wm_name,
+            net_wm_state,
+            net_wm_state_fullscreen,
             utf8_string,
             wake,
             depth,
@@ -84,11 +90,13 @@ impl Platform {
         Ok(())
     }
 
-    /// The plugin draws at one size, so the window manager is told not to offer another.
-    fn fix_size(&self, id: Window, (w, h): (u16, u16)) -> Result<(), String> {
+    /// The plugin draws at one size, so the window manager is told not to offer another; `at`
+    /// is a position it is asked to keep, as a user's own choice.
+    fn fix_size(&self, id: Window, (w, h): (u16, u16), at: Option<(i32, i32)>) -> Result<(), String> {
         let mut hints = WmSizeHints::new();
         hints.min_size = Some((w as i32, h as i32));
         hints.max_size = Some((w as i32, h as i32));
+        hints.position = at.map(|(x, y)| (WmSizeHintsSpecification::UserSpecified, x, y));
         hints.set_normal_hints(&self.conn, id).map_err(err)?;
         Ok(())
     }
@@ -99,16 +107,48 @@ impl Screen for Platform {
         Arc::new(Waker(self.wake[1]))
     }
 
-    fn create(&mut self, title: &str, (w, h): (u32, u32)) -> Result<(Id, *mut c_void), String> {
+    /// RandR's monitors, the primary first and the rest left to right; without RandR, the root.
+    fn monitors(&self) -> Vec<Monitor> {
+        use x11rb::protocol::randr::ConnectionExt as _;
+        let root = &self.conn.setup().roots[self.screen];
+        let whole = Monitor { at: (0, 0), size: (root.width_in_pixels as u32, root.height_in_pixels as u32) };
+        let Ok(reply) = self.conn.randr_get_monitors(self.root, true).map_err(err).and_then(|c| c.reply().map_err(err)) else {
+            return vec![whole];
+        };
+        let mut found: Vec<(bool, Monitor)> = reply
+            .monitors
+            .iter()
+            .map(|m| (!m.primary, Monitor { at: (m.x as i32, m.y as i32), size: (m.width as u32, m.height as u32) }))
+            .collect();
+        found.sort_by_key(|(secondary, m)| (*secondary, m.at.0, m.at.1));
+        if found.is_empty() { vec![whole] } else { found.into_iter().map(|(_, m)| m).collect() }
+    }
+
+    fn create(&mut self, title: &str, size: (u32, u32), on: Option<Monitor>, cover: bool) -> Result<(Id, *mut c_void), String> {
         let id = self.conn.generate_id().map_err(err)?;
         let aux = CreateWindowAux::new().background_pixel(self.black).event_mask(EventMask::STRUCTURE_NOTIFY);
+        let (w, h) = match on {
+            Some(m) if cover => m.size,
+            _ => size,
+        };
         let (w, h) = (w.clamp(1, u16::MAX as u32) as u16, h.clamp(1, u16::MAX as u32) as u16);
+        let at = on.map(|m| {
+            let centre = |origin: i32, span: u32, own: u16| origin + (span as i32 - own as i32).max(0) / 2;
+            if cover { m.at } else { (centre(m.at.0, m.size.0, w), centre(m.at.1, m.size.1, h)) }
+        });
+        let (x, y) = at.map_or((0, 0), |(x, y)| (x.clamp(i16::MIN as i32, i16::MAX as i32) as i16, y.clamp(i16::MIN as i32, i16::MAX as i32) as i16));
         self.conn
-            .create_window(COPY_DEPTH_FROM_PARENT, id, self.root, 0, 0, w, h, 0, WindowClass::INPUT_OUTPUT, 0, &aux)
+            .create_window(COPY_DEPTH_FROM_PARENT, id, self.root, x, y, w, h, 0, WindowClass::INPUT_OUTPUT, 0, &aux)
             .map_err(err)?;
         self.set_title(id, title)?;
         self.conn.change_property32(PropMode::REPLACE, id, self.wm_protocols, AtomEnum::ATOM, &[self.wm_delete]).map_err(err)?;
-        self.fix_size(id, (w, h))?;
+        self.fix_size(id, (w, h), at)?;
+        // Before the map, which is when a window manager reads the state it opens a window in.
+        if cover {
+            self.conn
+                .change_property32(PropMode::REPLACE, id, self.net_wm_state, AtomEnum::ATOM, &[self.net_wm_state_fullscreen])
+                .map_err(err)?;
+        }
         // A plugin uses another X11 connection. Flushing only sends our requests; it does
         // not ensure the server created the parent before the plugin creates a child in it.
         self.conn.map_window(id).map_err(err)?.check().map_err(err)?;
@@ -123,7 +163,7 @@ impl Screen for Platform {
     fn resize(&mut self, id: Id, (w, h): (u32, u32)) {
         let id = id as Window;
         let (w, h) = (w.clamp(1, u16::MAX as u32) as u16, h.clamp(1, u16::MAX as u32) as u16);
-        let _ = self.fix_size(id, (w, h));
+        let _ = self.fix_size(id, (w, h), None);
         let _ = self.conn.configure_window(id, &ConfigureWindowAux::new().width(w as u32).height(h as u32));
         let _ = self.conn.flush();
     }

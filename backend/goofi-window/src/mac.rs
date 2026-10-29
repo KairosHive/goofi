@@ -11,7 +11,7 @@ use objc2::runtime::AnyObject;
 use objc2::{class, msg_send, MainThreadMarker};
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString};
 
-use super::{rwh, Handles, Id, Pumped, Screen, Wake};
+use super::{rwh, Handles, Id, Monitor, Pumped, Screen, Wake};
 
 // AppKit, linked by hand: `objc2-app-kit` is not in the offline registry, so nothing else in the
 // graph pulls the framework in — and `class!(NSApplication)` on a class the process never loaded
@@ -34,6 +34,9 @@ unsafe impl Sync for Waker {}
 
 const APPLICATION_DEFINED: usize = 15;
 const TITLED_CLOSABLE_MINIATURIZABLE: usize = 1 | 2 | 4;
+const BORDERLESS: usize = 0;
+/// One above `NSMainMenuWindowLevel`, so a window that covers its screen covers the menu bar too.
+const ABOVE_MENU: isize = 25;
 const BUFFERED: usize = 2;
 const REGULAR: isize = 0;
 
@@ -78,20 +81,54 @@ impl Screen for Platform {
         Arc::new(Waker(Retained::as_ptr(&self.app) as usize))
     }
 
-    fn create(&mut self, title: &str, (w, h): (u32, u32)) -> Result<(Id, *mut c_void), String> {
+    /// `NSScreen`'s screens in points, the one with the menu bar first and the rest left to right.
+    fn monitors(&self) -> Vec<Monitor> {
+        let mut found: Vec<Monitor> = unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return Vec::new();
+            }
+            let count: usize = msg_send![screens, count];
+            (0..count)
+                .map(|i| {
+                    let screen: *mut AnyObject = msg_send![screens, objectAtIndex: i];
+                    let f: NSRect = msg_send![screen, frame];
+                    Monitor { at: (f.origin.x as i32, f.origin.y as i32), size: (f.size.width as u32, f.size.height as u32) }
+                })
+                .collect()
+        };
+        if found.len() > 1 {
+            found[1..].sort_by_key(|m| (m.at.0, m.at.1));
+        }
+        found
+    }
+
+    fn create(&mut self, title: &str, (w, h): (u32, u32), on: Option<Monitor>, cover: bool) -> Result<(Id, *mut c_void), String> {
         unsafe {
-            let rect = NSRect::new(NSPoint::ZERO, NSSize::new(w as f64, h as f64));
+            // AppKit's origin is the bottom-left corner of the desktop, in points.
+            let rect = match on {
+                Some(m) if cover => NSRect::new(NSPoint::new(m.at.0 as f64, m.at.1 as f64), NSSize::new(m.size.0 as f64, m.size.1 as f64)),
+                Some(m) => {
+                    let centre = |origin: i32, span: u32, own: u32| origin as f64 + (span as f64 - own as f64).max(0.0) / 2.0;
+                    NSRect::new(NSPoint::new(centre(m.at.0, m.size.0, w), centre(m.at.1, m.size.1, h)), NSSize::new(w as f64, h as f64))
+                }
+                None => NSRect::new(NSPoint::ZERO, NSSize::new(w as f64, h as f64)),
+            };
             let window: Allocated<AnyObject> = msg_send![class!(NSWindow), alloc];
             let window: Retained<AnyObject> = msg_send![
                 window,
                 initWithContentRect: rect,
-                styleMask: TITLED_CLOSABLE_MINIATURIZABLE,
+                styleMask: if cover { BORDERLESS } else { TITLED_CLOSABLE_MINIATURIZABLE },
                 backing: BUFFERED,
                 defer: false
             ];
             let _: () = msg_send![&*window, setReleasedWhenClosed: false];
             let _: () = msg_send![&*window, setTitle: &*NSString::from_str(title)];
-            let _: () = msg_send![&*window, center];
+            if cover {
+                let _: () = msg_send![&*window, setLevel: ABOVE_MENU];
+            } else if on.is_none() {
+                let _: () = msg_send![&*window, center];
+            }
             let _: () = msg_send![&*window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
             let _: () = msg_send![&*self.app, activateIgnoringOtherApps: true];
             let view: *mut AnyObject = msg_send![&*window, contentView];

@@ -118,6 +118,7 @@ impl Editor {
         let window = host.open_window(
             title,
             size,
+            goofi_window::Place::default(),
             Box::new(move |host| {
                 if let Some(editor) = PLUGINS.with(|p| p.borrow_mut().get_mut(&uid).and_then(|r| r.editor.take())) {
                     editor.close(host);

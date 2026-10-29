@@ -55,10 +55,31 @@ thread_local! {
     static RESIZES: RefCell<Vec<(Id, (u32, u32))>> = const { RefCell::new(Vec::new()) };
 }
 
+/// One of the machine's monitors: where it sits on the desktop and its size, in the units a
+/// window's size is given in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Monitor {
+    pub at: (i32, i32),
+    pub size: (u32, u32),
+}
+
+/// Where a window opens: centred on the monitor `screen` counts to, the primary first, or covering it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Place {
+    pub screen: usize,
+    pub fullscreen: bool,
+}
+
 /// What a screen does for the loop: the platform's windows, or none where the suite runs.
 trait Screen {
     fn waker(&self) -> Arc<dyn Wake>;
-    fn create(&mut self, title: &str, size: (u32, u32)) -> Result<(Id, *mut c_void), String>;
+    /// The machine's monitors, the primary first. A screen with no desktop has none.
+    fn monitors(&self) -> Vec<Monitor> {
+        Vec::new()
+    }
+    /// A window of `size` on `on`, or where the desktop puts it with no monitor; `cover` takes the
+    /// whole monitor, without a frame.
+    fn create(&mut self, title: &str, size: (u32, u32), on: Option<Monitor>, cover: bool) -> Result<(Id, *mut c_void), String>;
     fn resize(&mut self, id: Id, size: (u32, u32));
     /// The window's name on the desktop, replaced. A screen with no desktop has nothing to say.
     fn retitle(&mut self, _id: Id, _title: &str) {}
@@ -260,13 +281,24 @@ impl Window {
 }
 
 impl Host {
-    /// A top-level window of `size`; `on_close` runs when the user closes it, and is what tears
-    /// down whatever was inside.
-    pub fn open_window(&mut self, title: &str, size: (u32, u32), on_close: OnClose) -> Result<Window, String> {
+    /// The machine's monitors, the primary first; `Place::screen` counts into this list.
+    pub fn monitors(&self) -> Vec<Monitor> {
+        if self.dead { Vec::new() } else { self.screen.monitors() }
+    }
+
+    /// A top-level window of `size` at `place`; `on_close` runs when the user closes it, and is
+    /// what tears down whatever was inside. A screen the machine does not have is refused.
+    pub fn open_window(&mut self, title: &str, size: (u32, u32), place: Place, on_close: OnClose) -> Result<Window, String> {
         if self.dead {
             return Err("the display is gone".into());
         }
-        let (id, parent) = self.screen.create(title, size)?;
+        let monitors = self.screen.monitors();
+        let on = match monitors.get(place.screen) {
+            Some(m) => Some(*m),
+            None if place.screen == 0 => None,
+            None => return Err(format!("no screen {}: this machine has {}", place.screen, monitors.len())),
+        };
+        let (id, parent) = self.screen.create(title, size, on, place.fullscreen && on.is_some())?;
         self.on_close.insert(id, on_close);
         self.titles.insert(id, Title { name: title.to_string(), drawn: 0, since: Instant::now() });
         Ok(Window { id, parent })
