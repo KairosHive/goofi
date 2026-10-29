@@ -423,10 +423,11 @@
 		position: relative;
 		pointer-events: auto;
 	}
-	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it. */
+	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it.
+	   It draws inside the box, which is the drop area, so the outlines of adjacent rows never overlap. */
 	.pf-param.armed {
 		outline: 1px dashed var(--border-strong);
-		outline-offset: var(--space-2);
+		outline-offset: -1px;
 	}
 	.pf-param.over {
 		outline: 1px solid var(--accent);
