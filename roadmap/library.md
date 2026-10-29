@@ -331,8 +331,8 @@ Do not add:
 
 - A simulation Fluid node: Feedback with Displace supplies advection and Feedback with Blur
   supplies diffusion. Pressure projection belongs to graphics Fluid above.
-- A second noise node: add Ornstein-Uhlenbeck, fractional Brownian motion and 1/f^beta as signal
-  Noise modes; it currently has `uniform`, `normal` and `pink`.
+- A second noise node: add Ornstein-Uhlenbeck and 1/f^beta as signal Noise modes beside its
+  sampled and octave-layered coherent ones.
 - A generic ODE node: param-source Python plus Function and state already provides it.
 - An active-inference agent while its input/output contract remains a research question.
 - A self-organizing map: it belongs with analysis nodes.
