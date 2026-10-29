@@ -15,6 +15,8 @@ fn reduce(mode: &str, v: &mut [f32]) -> f32 {
         "sum" => sum,
         "min" => v.iter().copied().fold(f32::INFINITY, f32::min),
         "max" => v.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        "argmin" => position(v, |x, best| x < best),
+        "argmax" => position(v, |x, best| x > best),
         "norm" => v.iter().map(|x| x * x).sum::<f32>().sqrt(),
         "std" => {
             let mean = sum / n;
@@ -31,6 +33,18 @@ fn reduce(mode: &str, v: &mut [f32]) -> f32 {
         }
         _ => sum / n,
     }
+}
+
+/// The flat index of the first value no other `beats`, NaN skipped as `min` and `max` skip it;
+/// NaN when every value is NaN.
+fn position(v: &[f32], beats: fn(f32, f32) -> bool) -> f32 {
+    let mut best: Option<usize> = None;
+    for (i, &x) in v.iter().enumerate() {
+        if !x.is_nan() && best.is_none_or(|b| beats(x, v[b])) {
+            best = Some(i);
+        }
+    }
+    best.map_or(f32::NAN, |b| b as f32)
 }
 
 /// Which of `ndim` axes `spec` names, as comma-separated numbers; empty names every axis.
@@ -103,11 +117,15 @@ static PARAMS: &[ParamDecl] = &[
         name: "mode",
         spec: ParamSpec::Str {
             default: "mean",
-            options: &["mean", "median", "min", "max", "std", "sum", "norm"],
+            options: &["mean", "median", "min", "max", "argmin", "argmax", "std", "sum", "norm"],
             refresh: false,
         },
         expression: None,
-        doc: Some("How the values along the axis become one: an average, a spread, an extreme or a total."),
+        doc: Some(
+            "How the values along the axis become one: an average, a spread, an extreme, where an \
+             extreme lies or a total. `argmin` and `argmax` count over the collapsed axes flattened \
+             in order, the first one on a tie.",
+        ),
         section: 0,
         show: &[],
         role: None,
@@ -138,7 +156,7 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
     doc: "Collapse a set of axes to a single value.\n\
-          One value per position on the other axes: a mean, a spread, an extreme or a total.",
+          One value per position on the other axes: a mean, a spread, an extreme, where an extreme lies or a total.",
     inputs: INPUTS,
     outputs: OUTPUTS,
     params: PARAMS,
