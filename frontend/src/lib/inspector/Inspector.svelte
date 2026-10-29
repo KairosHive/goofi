@@ -137,7 +137,7 @@
 	);
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
-	function modulate(group: string, name: string, kind: 'lfo' | 'noi'): void {
+	function modulate(group: string, name: string, kind: 'lfo' | 'nse'): void {
 		const freq = 0.01 + Math.random() * 0.19;
 		setSource(group, name, { expression: `${kind}(freq=${freq})` });
 	}
@@ -158,7 +158,7 @@
 		const items: MenuItem[] = isNumeric(descriptor)
 			? [
 					{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
-					{ label: 'Noise', action: () => modulate(group, name, 'noi') }
+					{ label: 'Noise', action: () => modulate(group, name, 'nse') }
 				]
 			: [];
 		const source = pickedSource(descriptor);
@@ -246,7 +246,7 @@
 			setValue(group, name, Array.isArray(d.value) ? d.value.map(draw) : draw());
 		} else {
 			event.preventDefault();
-			modulate(group, name, key === 'l' ? 'lfo' : 'noi');
+			modulate(group, name, key === 'l' ? 'lfo' : 'nse');
 		}
 	}
 

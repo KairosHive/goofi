@@ -19,18 +19,18 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     assert_eq!(evaluate("lfo(src=0.25, vmin=-3, vmax=9)", 0.75, 2.0, 6.0).unwrap(), 9.0);
     assert_eq!(evaluate("lfo(src=0.25)", 0.0, -10.0, 10.0).unwrap(), 10.0);
     for t in [-2.3, 0.0, 0.25, 1.0, 100.5] {
-        let value = evaluate("noi()", t, 2.0, 6.0).unwrap();
+        let value = evaluate("nse()", t, 2.0, 6.0).unwrap();
         assert!((2.0..=6.0).contains(&value));
-        assert_eq!(value, evaluate(&format!("noi(src={t})"), 999.0, 2.0, 6.0).unwrap());
-        let unit = evaluate("noi(vmin=0, vmax=1)", t, 2.0, 6.0).unwrap();
+        assert_eq!(value, evaluate(&format!("nse(src={t})"), 999.0, 2.0, 6.0).unwrap());
+        let unit = evaluate("nse(vmin=0, vmax=1)", t, 2.0, 6.0).unwrap();
         // The result crosses the f32 carrier, so the two readings agree to f32 precision.
         assert!((value - (2.0 + 4.0 * unit)).abs() < 1e-5);
     }
-    assert_ne!(evaluate("noi()", 0.0, 0.0, 1.0).unwrap(), evaluate("noi()", 1.0, 0.0, 1.0).unwrap());
-    let left = evaluate("noi()", 1.0 - 1e-6, 0.0, 1.0).unwrap();
-    let right = evaluate("noi()", 1.0 + 1e-6, 0.0, 1.0).unwrap();
+    assert_ne!(evaluate("nse()", 0.0, 0.0, 1.0).unwrap(), evaluate("nse()", 1.0, 0.0, 1.0).unwrap());
+    let left = evaluate("nse()", 1.0 - 1e-6, 0.0, 1.0).unwrap();
+    let right = evaluate("nse()", 1.0 + 1e-6, 0.0, 1.0).unwrap();
     assert!((left - right).abs() < 1e-9);
-    for kind in ["lfo", "noi"] {
+    for kind in ["lfo", "nse"] {
         for freq in [0.0, 0.05, 0.5, 2.0] {
             let actual = evaluate(&format!("{kind}(freq={freq})"), 0.37, 2.0, 6.0).unwrap();
             let expected = evaluate(&format!("{kind}()"), 0.37 * freq, 2.0, 6.0).unwrap();
@@ -48,7 +48,7 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
         assert!(matches!(&read, Param::Num { value, int: true, .. } if value[0] == hi as f64), "{read:?}");
     }
     evaluator.release(code.id);
-    for source in ["lfo(1)", "noi(1)", "lfo(rate=1)", "noi(rate=1)"] {
+    for source in ["lfo(1)", "nse(1)", "lfo(rate=1)", "nse(rate=1)"] {
         assert!(evaluate(source, 0.0, 0.0, 1.0).is_err(), "{source}");
     }
 

@@ -312,7 +312,7 @@ pub struct EvalCtx<'a> {
     pub locals: &'a [(String, Local)],
     /// Patch seconds (`NodeCtx::now`), off the one patch time — for time-based expressions.
     pub t: f64,
-    /// The driven param's declared range, which `lfo()` and `noi()` span by default.
+    /// The driven param's declared range, which `lfo()` and `nse()` span by default.
     pub range: (f64, f64),
 }
 

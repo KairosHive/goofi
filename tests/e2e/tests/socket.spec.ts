@@ -1139,7 +1139,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 		expect(freq).toBeGreaterThanOrEqual(0.01);
 		expect(freq).toBeLessThanOrEqual(0.2);
 	}
-	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'noi']]) {
+	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'nse']]) {
 		for (let i = 0; i < 2; i++) {
 			const previous = await source();
 			await row.click({ button: 'right' });
@@ -1150,7 +1150,7 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 	}
-	for (const [key, kind] of [['l', 'lfo'], ['n', 'noi']]) {
+	for (const [key, kind] of [['l', 'lfo'], ['n', 'nse']]) {
 		for (let i = 0; i < 2; i++) {
 			const previous = await source();
 			await row.hover();

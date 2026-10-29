@@ -266,7 +266,7 @@ describe('the machine scope', () => {
 		expect(got).toContain('st');
 		expect(got).toContain('me');
 		expect(got).not.toContain('nd');
-		for (const name of ['t', 'np', 'variables', 'lfo', 'noi', 'qtz', 'sin']) expect(got).toContain(name);
+		for (const name of ['t', 'np', 'variables', 'lfo', 'nse', 'qtz', 'sin']) expect(got).toContain(name);
 		expect(machine("nd('")).toEqual([]);
 	});
 
@@ -283,7 +283,7 @@ describe('the machine scope', () => {
 describe('the injected scope', () => {
 	it('offers the evaluator scope at a partially-typed name', () => {
 		const got = labels('n');
-		for (const name of ['nd', 'me', 't', 'np', 'variables', 'time', 'sin', 'pi', 'lfo', 'noi', 'qtz']) {
+		for (const name of ['nd', 'me', 't', 'np', 'variables', 'time', 'sin', 'pi', 'lfo', 'nse', 'qtz']) {
 			expect(got, `\`${name}\` is in the scope`).toContain(name);
 		}
 	});

@@ -16,7 +16,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 /// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
 /// generated variable, so an expression compiles ONCE into a function of `t` and those variables,
 /// over a module scope with `np`, `math`'s whole namespace and `time()` simply there. `lfo()` and
-/// `noi()` read the call's time and range off a thread local, so no namespace is rebuilt per call;
+/// `nse()` read the call's time and range off a thread local, so no namespace is rebuilt per call;
 /// `qtz()` snaps through [`qtz_core`], so its scales are `goofi_core::scale`'s.
 /// A result leaves as a string, or as the shape and bytes of an f32 array.
 const EVAL_SRC: &str = r#"
@@ -48,7 +48,7 @@ def lfo(*, freq=1, src=None, vmin=None, vmax=None):
     vmax = c.hi if vmax is None else vmax
     return vmin + (vmax - vmin) * (sin(tau * freq * src) + 1) / 2
 
-def noi(*, freq=1, src=None, vmin=None, vmax=None):
+def nse(*, freq=1, src=None, vmin=None, vmax=None):
     c = __goofi_call
     src = c.t if src is None else src
     vmin = c.lo if vmin is None else vmin

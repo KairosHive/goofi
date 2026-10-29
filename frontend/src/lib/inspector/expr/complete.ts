@@ -160,7 +160,7 @@ export function exprContext(state: EditorState, pos: number): ExprContext | null
  *  is authoritative. */
 const SHARED_SCOPE: Completion[] = [
 	{ label: 'lfo', type: 'function', detail: 'sine wave — lfo(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
-	{ label: 'noi', type: 'function', detail: 'smooth noise — noi(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
+	{ label: 'nse', type: 'function', detail: 'smooth noise — nse(freq=1, src=t, vmin=slider min, vmax=slider max)', boost: 1 },
 	{ label: 'qtz', type: 'function', detail: "volts per octave onto a scale — qtz(v, scale='major', root='C')", boost: 1 },
 	{ label: 't', type: 'variable', detail: 'seconds since start', boost: 1 },
 	{ label: 'np', type: 'namespace', detail: 'numpy', boost: 1 },
