@@ -258,8 +258,8 @@ pub const DEFAULT_SIZE: u32 = 1024;
 /// The rate the graphics clock starts at, in frames per second.
 pub const DEFAULT_FPS: i64 = 60;
 
-/// The frames an output device renders per callback unless `audio.buffer_size` says otherwise:
-/// 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
+/// The frames a device stream, output or input, takes per callback unless `audio.buffer_size`
+/// says otherwise: 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
 pub const DEFAULT_BUFFER: u32 = 256;
 
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
@@ -302,7 +302,7 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     VariableDef {
         name: "audio.buffer_size",
         value: || Data::number(f64::from(DEFAULT_BUFFER)),
-        doc: "The frames the output device is asked to render per callback: the buffer between goofi and the speakers. 0 leaves the choice to the host, which may hold seconds. The clock reopens when it moves.",
+        doc: "The frames every audio device stream is asked for per callback: the buffer between goofi and the speakers, and between a microphone and AudioIn. 0 leaves the choice to the host, which may hold seconds. The streams reopen when it moves.",
         ephemeral: false,
     },
     VariableDef {

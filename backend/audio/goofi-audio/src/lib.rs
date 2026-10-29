@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -419,8 +419,6 @@ pub struct AudioEngine {
     /// The name and buffer size last tried and what they answered: a pair that failed is not tried
     /// again until one moves.
     tried: Option<(String, u32, Option<String>)>,
-    /// `audio.buffer_size` as the last settle read it: what the next open asks for.
-    buffer: u32,
     stats: Arc<Stats>,
     shared: Arc<Shared>,
     /// What only an audio control half needs: the clock's rate, what drives it, and the edits a
@@ -480,11 +478,11 @@ impl AudioEngine {
             clock,
             device: None,
             tried: None,
-            buffer: goofi_core::variables::DEFAULT_BUFFER,
             stats: Arc::new(Stats::default()),
             shared: Arc::new(Shared::new(waker.clone())),
             audio: Arc::new(AudioShared {
                 rate: AtomicU64::new(RATE.to_bits()),
+                buffer: AtomicU32::new(goofi_core::variables::DEFAULT_BUFFER),
                 clock,
                 edits: Mutex::new(Vec::new()),
                 waker,
@@ -729,22 +727,22 @@ impl AudioEngine {
             return None;
         };
         if let Some((tried, buffer, error)) = &self.tried {
-            if tried == name && *buffer == self.buffer {
+            if tried == name && *buffer == self.audio.buffer() {
                 return error.clone();
             }
         }
-        if self.opening.as_ref().is_some_and(|o| o.name == name && o.buffer == self.buffer) {
+        if self.opening.as_ref().is_some_and(|o| o.name == name && o.buffer == self.audio.buffer()) {
             return None;
         }
         // The open runs on a thread of its own and the settle goes on: a device takes seconds to
         // answer, and the graph is not held for them. The clock lands at the settle after.
         let previous = self.close();
-        let (runtime, stats, waker, buffer) = (self.runtime.clone(), self.stats.clone(), self.shared.waker.clone(), self.buffer);
+        let (runtime, stats, waker, buffer) = (self.runtime.clone(), self.stats.clone(), self.shared.waker.clone(), self.audio.buffer());
         let device = name.to_string();
         let clock = goofi_supervisor::ready::prepare(format!("goofi-audio-open {name}"), move || DeviceClock::open(&device, buffer, runtime, stats, waker));
         let drain = self.shared.waker.clone();
         clock.on_ready(move || drain.notify());
-        self.opening = Some(Opening { name: name.to_string(), buffer: self.buffer, clock, previous });
+        self.opening = Some(Opening { name: name.to_string(), buffer, clock, previous });
         None
     }
 
@@ -1091,8 +1089,9 @@ impl Engine for AudioEngine {
             // A moved buffer size is a new open of the same name: the clock closes so `follow`
             // reopens it.
             let buffer = view.variables.get("audio.buffer_size").map_or(0.0, goofi_core::control::number_of);
-            self.buffer = if buffer.is_finite() && buffer >= 0.0 { buffer.round() as u32 } else { 0 };
-            if self.device.as_ref().is_some_and(|d| d.buffer != self.buffer) {
+            let buffer = if buffer.is_finite() && buffer >= 0.0 { buffer.round() as u32 } else { 0 };
+            self.audio.buffer.store(buffer, Ordering::Relaxed);
+            if self.device.as_ref().is_some_and(|d| d.buffer != buffer) {
                 self.close();
             }
             if let Some(why) = self.follow(clock.as_deref()) {

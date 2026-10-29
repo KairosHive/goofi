@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 
@@ -63,9 +63,9 @@ pub struct Ports {
 struct Io {
     stream: Option<goofi_supervisor::scope::Leased<cpal::Stream>>,
     midi: Option<goofi_supervisor::scope::Leased<midir::MidiInputConnection<()>>>,
-    /// The device name, the clock's rate and the channel selection — every input the open
-    /// depends on, so a move in any one of them reopens the stream.
-    device: Option<(String, f64, String)>,
+    /// The device name, the clock's rate, the channel selection and the frames per callback —
+    /// every input the open depends on, so a move in any one of them reopens the stream.
+    device: Option<(String, f64, String, u32)>,
     port: Option<String>,
     /// Raised by the input stream's error callback; the name is then tried once more.
     dead: Arc<AtomicBool>,
@@ -76,6 +76,9 @@ struct Io {
 pub struct AudioShared {
     /// The clock's rate, `f64` bits: what a crossing resamples to and a tap is stamped with.
     pub rate: AtomicU64,
+    /// `audio.buffer_size` as the last settle read it: the frames per callback every device stream
+    /// asks for, the clock's output and each input alike; 0 is the host's own.
+    pub buffer: AtomicU32,
     /// What drives the blocks: a live stream is opened only where the device does.
     pub clock: Clock,
     /// What a plugin reported of its own values — node, plugin param id, normalized value, and
@@ -106,6 +109,10 @@ pub struct Swap {
 impl AudioShared {
     pub fn rate(&self) -> f64 {
         f64::from_bits(self.rate.load(Ordering::Relaxed))
+    }
+
+    pub fn buffer(&self) -> u32 {
+        self.buffer.load(Ordering::Relaxed)
     }
 }
 
@@ -224,7 +231,7 @@ impl AudioHalf {
     /// a name that failed stands as an error on that param until it moves.
     fn open_io(&mut self, consts: &[Param], errors: &mut Vec<(ParamKey, Option<String>)>) -> bool {
         let manifest = self.manifest;
-        let (rate, clock) = (self.audio.rate(), self.audio.clock);
+        let (rate, clock, buffer) = (self.audio.rate(), self.audio.clock, self.audio.buffer());
         let (io, ports) = (&mut self.io, &self.ports);
         let mut replan = false;
         if io.dead.swap(false, Ordering::Acquire) {
@@ -232,13 +239,13 @@ impl AudioHalf {
             io.device = None;
         }
         if let Some((producer, chans)) = ports.audio_in.clone() {
-            let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS));
+            let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS), buffer);
             if io.device.as_ref() != Some(&wanted) {
                 io.stream = None;
                 // A selection that does not parse is the CHANNELS param's error, not the device's.
                 let (stream, error, sel_error) = match crate::chanmap::parse(&wanted.2) {
                     Err(why) => (None, None, Some(why)),
-                    Ok(sel) => match open_input(&wanted.0, wanted.1, sel.as_deref(), producer, io.dead.clone(), clock) {
+                    Ok(sel) => match open_input(&wanted.0, wanted.1, wanted.3, sel.as_deref(), producer, io.dead.clone(), clock) {
                         Ok(Some((stream, c))) => {
                             chans.store(c, Ordering::Relaxed);
                             (Some(stream), None, None)
@@ -775,11 +782,13 @@ fn source_path(name: &str) -> PathBuf {
     }
 }
 
-/// The device's input stream, opened AT the clock's rate, its callback entering frames into the
-/// node's inbox. Only the device clock opens it; an absent name is an error under any clock.
+/// The device's input stream, opened AT the clock's rate and with the output's frames per
+/// callback, its callback entering frames into the node's inbox. Only the device clock opens it;
+/// an absent name is an error under any clock.
 fn open_input(
     name: &str,
     rate: f64,
+    buffer: u32,
     sel: Option<&[u16]>,
     producer: Feed<f32>,
     dead: Arc<AtomicBool>,
@@ -793,6 +802,10 @@ fn open_input(
     let format = supported.sample_format();
     let mut config = supported.config();
     config.sample_rate = rate as u32;
+    // A host left to itself may hold seconds of input, as it does of output.
+    if buffer > 0 {
+        config.buffer_size = cpal::BufferSize::Fixed(buffer);
+    }
     // A selection opens the stream just wide enough to contain the highest channel it names, and
     // only the selection leaves the callback.
     let device_width = config.channels;
