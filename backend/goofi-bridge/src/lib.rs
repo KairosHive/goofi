@@ -24,7 +24,7 @@ pub mod presence;
 mod record;
 pub mod reducer;
 pub mod schemas;
-pub mod term;
+pub mod orientation;
 pub mod variables;
 pub mod vocab;
 
@@ -36,10 +36,6 @@ use std::time::{Duration, Instant};
 
 use goofi_node::{ScannedType, Stamp};
 use goofi_core::indexmap::IndexMap;
-
-/// How long a `/term` socket waits for the PTY's end-of-stream after the child is reaped: ConPTY
-/// keeps its pseudoconsole open past the child's death, so on Windows that end never comes.
-const EXIT_SETTLE: Duration = Duration::from_millis(250);
 
 /// How long a closing socket waits for the peer's own close before it drops the connection.
 const FAREWELL: Duration = Duration::from_millis(250);
@@ -170,8 +166,8 @@ pub struct AppState {
     /// The bound address — ONE owner for every local base url: the session file's `/exec`
     /// url derives from it.
     bound: Arc<Mutex<std::net::SocketAddr>>,
-    /// The spawned agent harnesses and their PTYs.
-    pub harnesses: Arc<term::Harnesses>,
+    /// The session's harness plane: the agents this process spawned, and every other's.
+    pub agents: Arc<goofi_agent::Agents>,
     /// The browsers in the patch right now, and where their pointers are.
     pub presence: Arc<Mutex<presence::Presence>>,
     /// The one recorder every engine's armed streams queue to. Whether it runs is RUNTIME —
@@ -218,7 +214,7 @@ impl AppState {
         // the seed itself.
         let mount = Mount::new(hub.id())?;
         let dir = mount.path();
-        term::seed_orientation(&dir);
+        orientation::seed(&dir);
         seed_skills(&dir);
         let workspace_baseline = goofi_graph::archive::fingerprint(&dir);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
@@ -267,7 +263,7 @@ impl AppState {
             changed: Arc::new(goofi_node::DrainWaker::default()),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
-            harnesses: Arc::new(term::Harnesses::default()),
+            agents: Arc::new(goofi_agent::Agents::of(hub.id())),
             presence: Arc::new(Mutex::new(presence::Presence::default())),
             recorder,
             stopping: Arc::new(goofi_transport::Halt::default()),
@@ -285,7 +281,7 @@ impl AppState {
     /// Release everything this manager holds, in the one safe order: agents, recording and
     /// plugins, the manager's workers, the engines, then the mount. The session is the process's.
     pub fn shutdown(&self) {
-        if let Some(insist) = self.harnesses.reap_all() {
+        if let Some(insist) = self.agents.reap_all() {
             insist();
         }
         self.stop_recording();
@@ -380,7 +376,7 @@ impl AppState {
     /// because a harness holds it as its cwd. `None` says nothing had to be waited for.
     #[must_use]
     pub(crate) fn reclaim(&self, mount: Mount) -> Option<impl FnOnce() + Send + 'static> {
-        let insist = self.harnesses.reap_all()?;
+        let insist = self.agents.reap_all()?;
         Some(move || {
             insist();
             drop(mount);
@@ -481,7 +477,7 @@ pub(crate) fn stage_load(
     if unpacked {
         adopt_custom(mount, custom);
     } else {
-        term::seed_orientation(mount);
+        orientation::seed(mount);
     }
     // BOTH ways, unlike the orientation: a skill goofi GAINED since the save is added, absent-only, so
     // nothing of the patch's is touched.
@@ -659,6 +655,7 @@ pub fn spawn_workers(state: &AppState) {
         let mut last: HashMap<String, NodeState> = HashMap::new();
         let mut broadcast = goofi_supervisor::timing::Pace::new(period);
         let mut live = goofi_supervisor::timing::Pace::new(LIVE_PERIOD);
+        let mut last_roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
         loop {
             // Parked until a report lands or a pace comes due — pacing, not polling.
             waker.wait_until(broadcast.next().min(live.next()));
@@ -737,6 +734,22 @@ pub fn spawn_workers(state: &AppState) {
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of
             // catch-up broadcasts.
             broadcast.reset();
+            // The harness plane is the session's, not this process's: an instance another process
+            // spawned, or one of its own that exited, shows up here. A drag of an agent that is not
+            // live ends BEFORE the broadcast, though its whole life fell between two beats.
+            let roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
+            let running: std::collections::HashSet<&str> = roster["instances"].as_array().into_iter().flatten()
+                .filter(|i| i["state"] != "exited").filter_map(|i| i["id"].as_str()).collect();
+            let ended: Vec<String> = state.history.lock().previewing()
+                .filter(|a| goofi_agent::instance_of(a).is_some_and(|id| !running.contains(id)))
+                .map(str::to_string).collect();
+            for actor in ended {
+                state.end_previews(&actor);
+            }
+            if roster != last_roster {
+                events.send(Event::HarnessChanged(roster.clone()));
+                last_roster = roster;
+            }
             for ev in refreshed {
                 events.send(ev);
             }
@@ -1195,7 +1208,7 @@ pub(crate) async fn blocking<T: Send + 'static>(state: &AppState, work: impl FnO
 async fn seed(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState) -> bool {
     let unsaved = state.is_dirty();
     let saved_at = state.save_path();
-    let roster = state.harnesses.roster(&goofi_supervisor::layout::agents());
+    let roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
     let hello = {
         let g = state.graph.lock();
         let mut snap = schemas::snapshot(&g, state, true, unsaved, saved_at.as_deref(), roster);
@@ -1693,82 +1706,60 @@ struct TermControl {
     rows: u16,
 }
 
-/// One `/term` socket: binary frames are PTY bytes, text frames JSON control. A resize is a
-/// PROPOSAL that [`term::Sizes`] arbitrates; a view that says `0` retracts.
+/// One `/term` socket: binary frames are PTY bytes, text frames JSON control, each carried as is
+/// between the browser and the instance's view — the owner replays the tail, arbitrates the size
+/// and sends `{exit_code}` last, whichever process it runs in.
 async fn handle_term(socket: WebSocket, state: AppState, instance: String) {
     let (mut tx, mut rx) = socket.split();
-    let Some(inst) = state.harnesses.get(&instance) else {
-        farewell(tx, rx, 4004, "unknown harness instance").await;
-        return;
+    let view = match state.agents.attach(&instance) {
+        Ok(view) => Arc::new(view),
+        Err(_) => {
+            farewell(tx, rx, 4004, "unknown harness instance").await;
+            return;
+        }
     };
-    // Attach snapshots the tail and subscribes as one step, so what the child wrote before this
-    // socket arrived replays first and the live stream follows with no byte lost or doubled.
-    let term::Attached { tail, mut output, mut exit, mut eof } = inst.attach();
-    let (seat, mut size) = inst.join();
-    if !tail.is_empty() && tx.send(Message::Binary(tail.into())).await.is_err() {
-        return;
-    }
-    // Sent up front: a view arriving on a settled size has no change event coming to tell it.
-    let settled = *size.borrow_and_update();
-    if let Some((cols, rows)) = settled {
-        let _ = tx.send(size_frame(cols, rows)).await;
-    }
-    let mut reaped_at: Option<tokio::time::Instant> = None;
+    // The view's frames come off a blocking read, on a thread of their own; the channel's bound
+    // is what lets a slow browser fall behind rather than stall the owner.
+    let (frames, mut inbound) = tokio::sync::mpsc::channel::<goofi_agent::Frame>(256);
+    let reading = view.clone();
+    let _pump = goofi_supervisor::worker::spawn("goofi-term-view", move || {
+        while let Ok(Some(frame)) = reading.read() {
+            if frames.blocking_send(frame).is_err() {
+                break;
+            }
+        }
+    });
     loop {
-        // The exit frame is the LAST thing this socket sends: `child.wait()` returns while a dying
-        // harness's final words are still in flight. Copied out of the guards, which are not `Send`.
-        let (ended, drained) = (*exit.borrow_and_update(), *eof.borrow_and_update());
-        if ended.is_some() && reaped_at.is_none() {
-            reaped_at = Some(tokio::time::Instant::now());
-        }
-        // The wait is BOUNDED because ConPTY keeps the pseudoconsole open after the child exits, so
-        // `drained` never turns true on Windows. Where EOF is real it wins and the settle never runs.
-        let may_announce = drained || reaped_at.is_some_and(|t| t.elapsed() >= EXIT_SETTLE);
-        if let (Some(code), true) = (ended, may_announce && output.is_empty()) {
-            let _ = tx.send(Message::Text(json!({ "exit_code": code }).to_string().into())).await;
-            break;
-        }
         tokio::select! {
             incoming = rx.next() => match incoming {
-                Some(Ok(Message::Binary(b))) => inst.write(&b),
+                Some(Ok(Message::Binary(b))) => { let _ = view.keys(&b); }
                 Some(Ok(Message::Text(t))) => {
                     if let Ok(c) = serde_json::from_str::<TermControl>(t.as_str()) {
                         if c.op == "resize" {
-                            let some = c.cols > 0 && c.rows > 0;
-                            inst.propose(seat, some.then_some((c.cols, c.rows)));
+                            let _ = view.resize(c.cols, c.rows);
                         }
                     }
                 }
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,
             },
-            bytes = output.recv() => match bytes {
-                Ok(b) => {
+            frame = inbound.recv() => match frame {
+                Some(goofi_agent::Frame::Bytes(b)) => {
                     if tx.send(Message::Binary(b.into())).await.is_err() {
                         break;
                     }
                 }
-                // A viewer that fell behind loses bytes rather than the CHILD stalling behind it.
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => break,
-            },
-            _ = size.changed() => {
-                // Copied out of the guard before the await: a `watch` borrow is not `Send`.
-                let now = *size.borrow_and_update();
-                if let Some((cols, rows)) = now {
-                    if tx.send(size_frame(cols, rows)).await.is_err() {
+                Some(goofi_agent::Frame::Control(c)) => {
+                    let last = c.get("exit_code").is_some();
+                    if tx.send(Message::Text(c.to_string().into())).await.is_err() || last {
                         break;
                     }
                 }
-            }
-            _ = exit.changed() => {}
-            _ = eof.changed() => {}
-            // Wake to re-check the settle above, armed only once the child has been reaped.
-            _ = tokio::time::sleep_until(reaped_at.unwrap_or_else(tokio::time::Instant::now) + EXIT_SETTLE),
-                if reaped_at.is_some() && !drained => {}
+                None => break,
+            },
         }
     }
-    inst.leave(seat);
+    view.close();
     farewell(tx, rx, 1000, "").await;
 }
 
@@ -1785,10 +1776,6 @@ async fn farewell(
     }
     // The peer's own close is what says it read everything; the bound is for one that never sends it.
     let _ = tokio::time::timeout(FAREWELL, async { while rx.next().await.is_some() {} }).await;
-}
-
-fn size_frame(cols: u16, rows: u16) -> Message {
-    Message::Text(json!({ "op": "size", "cols": cols, "rows": rows }).to_string().into())
 }
 
 /// The inband `{op:"view", specs:[…], fps}` a page sends to declare what it draws. Latest-wins.

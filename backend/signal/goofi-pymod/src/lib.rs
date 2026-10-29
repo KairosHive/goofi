@@ -4,6 +4,7 @@
 // An empty crate under no features, so the default python-free workspace build stays green.
 #![cfg(any(feature = "extension-module", feature = "host"))]
 
+mod agent;
 mod data;
 mod texture;
 pub mod exec;
@@ -25,6 +26,7 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let source = std::ffi::CString::new(include_str!("geometry.py"))?;
     let geometry = PyModule::from_code(m.py(), source.as_c_str(), c"goofi.geometry", c"goofi.geometry")?;
     m.add_submodule(&geometry)?;
+    m.add_submodule(&agent::module(m.py())?)?;
     m.add_class::<data::Data>()?;
     m.add_class::<data::Ndims>()?;
     m.add_class::<node::Node>()?;

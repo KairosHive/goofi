@@ -52,6 +52,64 @@ fn a_python_file_in_the_workspace_becomes_a_node_that_runs_and_takes_its_params(
     assert!(g.error(node).is_none(), "a healthy python node carries no error");
 }
 
+/// A node that launches an agent of its own and types into it: the harness plane from a node.
+const SPAWNER: &str = r#"
+import goofi
+class Spawner(goofi.Node):
+    OUTPUTS = {"out": goofi.DataType.STRING}
+    PRODUCER = True
+    def setup(self):
+        self.id = goofi.agent.spawn("_sh")
+        goofi.agent.send(self.id, "echo SPAWNED-BY-A''-NODE")
+    def process(self):
+        return {"out": self.id}
+"#;
+
+#[test]
+fn a_python_node_reaches_the_harness_plane_and_the_server_sees_what_it_spawned() {
+    // The harness plane is the SESSION's, whichever process spawned into it: what the node's own
+    // process launches, the server lists, attaches to and stops.
+    let _py = require_python();
+    let g = Goofi::new();
+    let at = goofi_supervisor::layout::config_file();
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    std::fs::write(&at, format!("{}\n[[agents]]\nname = \"_sh\"\ncommand = \"sh\"\n", goofi_supervisor::layout::DEFAULT_CONFIG)).unwrap();
+    install(&g, "spawner.py", SPAWNER);
+    let node = g.add("Spawner");
+    let probe = g.probe(node, "out");
+    let id = g.until("the node's instance id", |_| probe.latest().and_then(|d| text(&d).map(str::to_string)));
+    let roster = g.call("agent list", j!({}));
+    let row = roster["instances"].as_array().unwrap().iter().find(|i| i["id"] == id)
+        .unwrap_or_else(|| panic!("the server does not list the node's instance: {roster}")).clone();
+    assert_eq!(row["harness"], "_sh", "{row}");
+    assert_eq!(row["state"], "running", "{row}");
+
+    // The server attaches to a PTY another end owns, and the words the node typed replay.
+    let view = g.state.agents.attach(&id).expect("a view on the node's instance");
+    let mut seen = String::new();
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
+    while !seen.contains("SPAWNED-BY-A-NODE") {
+        assert!(std::time::Instant::now() < deadline, "the typed line never showed: {seen:?}");
+        match view.read().expect("the view reads") {
+            Some(goofi_agent::Frame::Bytes(b)) => seen.push_str(&String::from_utf8_lossy(&b)),
+            Some(goofi_agent::Frame::Control(_)) => {}
+            None => panic!("the view ended before the typed line showed: {seen:?}"),
+        }
+    }
+    view.close();
+
+    // The server stops it, the owner reaps it, and the roster is where both read the outcome.
+    g.call("agent stop", j!({ "instance": id }));
+    g.until("the instance exited", |g| {
+        g.call("agent list", j!({}))["instances"].as_array().unwrap().iter()
+            .find(|i| i["id"] == id).filter(|i| i["state"] == "exited").map(|_| ())
+    });
+    g.call("agent stop", j!({ "instance": id }));
+    g.until("the instance dismissed", |g| {
+        (!g.call("agent list", j!({}))["instances"].as_array().unwrap().iter().any(|i| i["id"] == id)).then_some(())
+    });
+}
+
 #[test]
 fn a_python_node_that_raises_reports_it_and_the_child_carries_on() {
     // A raise inside `process` is a per-run error: the SAME child answers the next run.

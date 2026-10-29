@@ -443,7 +443,7 @@ fn a_message_past_the_segment_moves_the_mailbox_and_the_reader_follows() {
 /// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_directory_workspace_and_cache_parts() {
-    use goofi_supervisor::session::{alive, sessions, sweep_runtime, system_dir, workspace_dir, Record, Session};
+    use goofi_supervisor::session::{alive, sessions, sweep_runtime, system_dir, workspace_dir, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
@@ -451,7 +451,7 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     let id = held.id().to_string();
     held.record_url("http://127.0.0.1:9999");
     assert!(alive(&id), "held from within the same process still reads alive");
-    assert!(sessions().contains(&Record { id: id.clone(), url: "http://127.0.0.1:9999".into() }));
+    assert!(sessions().iter().any(|r| r.id == id && r.url == "http://127.0.0.1:9999"), "{:?}", sessions());
     assert!(system_dir(&id).is_dir());
 
     // A dead session: its lock file exists beside its directory and nobody holds it. An orphan

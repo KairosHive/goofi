@@ -12,6 +12,7 @@ members = [
     "backend/goofi-codec",
     "backend/goofi-node",
     "backend/goofi-transport",
+    "backend/goofi-agent",
     "backend/goofi-runtime",
     "backend/goofi-window",
     "backend/goofi-build",

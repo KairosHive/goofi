@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use super::{op, EffectOp, NoArgs, ReadOp};
-use crate::{fsbrowse, term, AppState, Caller, Event, Txn};
+use crate::{fsbrowse, AppState, Caller, Event, Txn};
 
 op!(PluginList, "plugin list", 0, NoArgs,
     "List installed plugins and their status.",
@@ -39,12 +39,14 @@ op!(LogWrite, "log write", 1, LogWriteArgs {
 
 op!(AgentList, "agent list", 0, NoArgs,
     "The agents the config offers to launch, and the ones goofi has running.",
-    "{instances: [{id, harness, state, exit_code}], agents: [{name, command}], config_error: string | null}");
+    "{instances: [{id, harness, model, effort, state, exit_code, pid, owner, port, born}], agents: [{name, command, model, effort}], config_error: string | null} — an instance's `owner` is the goofi process whose PTY it runs on; an agent's `model` and `effort` are the flag templates its config entry gives, null where it takes no such option");
 
 op!(AgentStart, "agent start", 1, AgentStartArgs {
     pub name: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 },
-    "Launch a config-listed agent on a PTY with the patch workspace as its cwd, under a login shell — a command that cannot launch fails on the PTY itself. Read its terminal at /term/<instance_id>. An unknown name is refused with the config's list.",
+    "Launch a config-listed agent on a PTY with the patch workspace as its cwd, under a login shell — a command that cannot launch fails on the PTY itself. `--model` and `--effort` are appended as the flags the config entry names for them, and refused on an entry that names none. Read its terminal at /term/<instance_id>. An unknown name is refused with the config's list.",
     "{instance_id: string}");
 
 op!(AgentStop, "agent stop", 1, AgentStopArgs {
@@ -102,9 +104,16 @@ impl EffectOp for LogWrite {
 // The harness ops touch no graph state: they fork and signal children, and the roster converges
 // through `harness_changed` rather than by making a caller wait.
 
+/// The roster the snapshot seeds and `harness_changed` broadcasts: the session's instances and
+/// the config's launchable list. `offered` is read off the graph lock by the caller.
+pub fn roster(agents: &goofi_agent::Agents, offered: (Vec<goofi_supervisor::layout::Agent>, Option<String>)) -> Value {
+    let (listed, config_error) = offered;
+    json!({ "instances": agents.roster(), "agents": listed, "config_error": config_error })
+}
+
 impl ReadOp for AgentList {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
-        Ok(tx.state.harnesses.roster(&goofi_supervisor::layout::agents()))
+        Ok(roster(&tx.state.agents, goofi_agent::Agents::offered()))
     }
 }
 
@@ -115,18 +124,19 @@ impl EffectOp for AgentStart {
         let id = {
             let mount = state.mount.lock();
             let dir = mount.as_ref().map(crate::Mount::path).unwrap_or_default();
-            state.harnesses.spawn(&a.name, &dir, &state.instance_id, &term::parent_env(), state.events.clone(), state.clone())?
+            let launch = goofi_agent::Launch { model: a.model, effort: a.effort };
+            state.agents.spawn(&a.name, launch, &dir, &goofi_agent::parent_env())?
         };
-        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
+        state.events.send(Event::HarnessChanged(roster(&state.agents, goofi_agent::Agents::offered())));
         Ok(json!({ "instance_id": id }))
     }
 }
 
 impl EffectOp for AgentStop {
     fn run(state: &AppState, a: AgentStopArgs, _: &Caller) -> Result<Value, String> {
-        // A drag the stopped shell left in flight is ended by the REAPER, where the actor really dies.
-        state.harnesses.stop(&a.instance)?;
-        state.events.send(Event::HarnessChanged(state.harnesses.roster(&goofi_supervisor::layout::agents())));
+        // A drag the stopped shell left in flight is ended where its exit is SEEN, by the roster watch.
+        state.agents.stop(&a.instance)?;
+        state.events.send(Event::HarnessChanged(roster(&state.agents, goofi_agent::Agents::offered())));
         Ok(json!({ "ok": true }))
     }
 }

@@ -153,7 +153,7 @@ pub(crate) enum Source {
 /// sources.
 fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
     // Read OFF the graph lock, as the hello does: the roster's config half is a disk read.
-    let agents = goofi_supervisor::layout::agents();
+    let agents = goofi_agent::Agents::offered();
     // Every source mounts FRESH and swaps in only once the manifest parsed, so a refused load
     // leaves the open patch untouched. Staged off the lock: its Rust nodes may take seconds.
     let fresh = crate::Mount::new(state.hub.id())?;
@@ -205,7 +205,7 @@ fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
         crate::reconcile_and_broadcast(state, doc, projection, Vec::new());
         // Sent under the lock, not queued for the dispatcher: the status worker's next stage delta
         // needs this lock, so nothing it says can overtake the snapshot it is a delta over.
-        state.events.send(Event::HarnessChanged(state.harnesses.roster(&agents)));
+        state.events.send(Event::HarnessChanged(super::host::roster(&state.agents, agents.clone())));
         // `read_gfi` restores no mtimes, so without a baseline taken HERE a patch would be dirty
         // from the moment it finished loading.
         *state.workspace_baseline.lock() = goofi_graph::archive::fingerprint(&state.mount());
@@ -228,7 +228,7 @@ fn load_patch(state: &AppState, source: &Source) -> Result<Value, String> {
             false,
             recovered.is_some(),
             from_path.as_deref(),
-            state.harnesses.roster(&agents),
+            super::host::roster(&state.agents, agents),
         )));
         // The patch brought its own node types, which `graph_replaced` does not carry.
         state.events.send(Event::NodeTypes { types: schemas::catalog_types(&g, Detail::Full) });

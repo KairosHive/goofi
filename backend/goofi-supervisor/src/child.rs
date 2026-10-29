@@ -443,6 +443,34 @@ impl Drop for Tree {
     }
 }
 
+/// Whether a process by that pid is still running — any process, not only a child of this one.
+pub fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 delivers nothing; it only asks whether the pid may be signalled.
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            return true;
+        }
+        io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        // SAFETY: a handle opened on a pid, queried and closed here.
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return false;
+            }
+            let mut code = 0u32;
+            let asked = GetExitCodeProcess(process, &mut code) != 0;
+            CloseHandle(process);
+            asked && code == STILL_ACTIVE as u32
+        }
+    }
+}
+
 /// A process that has already left is what was being asked for, not a failure.
 #[cfg(unix)]
 fn signal(pid: u32, sig: i32) -> Result<(), String> {

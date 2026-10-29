@@ -52,11 +52,16 @@ pub fn config_file() -> PathBuf {
     home().join("config.toml")
 }
 
-/// One launchable agent: a display name and the bash command line that starts it.
-#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+/// One launchable agent: a display name, the bash command line that starts it, and the flag
+/// each launch option becomes — a template whose `{}` takes the value — when the harness has one.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Agent {
     pub name: String,
     pub command: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -67,10 +72,12 @@ struct Config {
 
 /// The compiled-in TEMPLATE — written once by the serve path when no config exists, so the FILE
 /// stays the one owner and a test process never writes into a real home.
-pub const DEFAULT_CONFIG: &str = "# goofi — the agents the app can launch, each a bash command line.\n\
-    [[agents]]\nname = \"claude\"\ncommand = \"claude\"\n\n\
-    [[agents]]\nname = \"codex\"\ncommand = \"codex\"\n\n\
-    [[agents]]\nname = \"opencode\"\ncommand = \"opencode\"\n";
+pub const DEFAULT_CONFIG: &str = "# goofi — the agents the app can launch, each a bash command line. `model` and `effort`\n\
+    # are the flags a launch option becomes, `{}` standing for the value; leave one out and\n\
+    # the agent takes no such option.\n\
+    [[agents]]\nname = \"claude\"\ncommand = \"claude\"\nmodel = \"--model {}\"\neffort = \"--effort {}\"\n\n\
+    [[agents]]\nname = \"codex\"\ncommand = \"codex\"\nmodel = \"-m {}\"\neffort = \"-c model_reasoning_effort={}\"\n\n\
+    [[agents]]\nname = \"opencode\"\ncommand = \"opencode\"\nmodel = \"-m {}\"\n";
 
 /// Seed the default config, absent-only — the serve path calls this once at start. The
 /// session-file idiom: whole or absent, so two first boots cannot tear it for a third reader.

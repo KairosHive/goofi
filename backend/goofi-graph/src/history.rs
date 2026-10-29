@@ -210,6 +210,11 @@ impl History {
         }
     }
 
+    /// The actors with a drag in flight.
+    pub fn previewing(&self) -> impl Iterator<Item = &str> {
+        self.previews.iter().map(|p| p.actor.as_str())
+    }
+
     /// Take back the actor's drags in flight — what its socket's close does, and what an undo or
     /// a redo does first. Answers whether anything moved.
     pub fn end_previews(&mut self, g: &mut Graph, actor: &str) -> bool {

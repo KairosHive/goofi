@@ -105,6 +105,11 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   `goofi_supervisor::{child, worker, scope}`, and listed by `session status`. A child's output
   goes to the process log unless its owner wires a pipe or a file. `AppState::shutdown` is the one
   release order.
+- `goofi_agent` is the harness plane, the session's rather than one process's: an instance's
+  record lives in the session directory and its views are connections to a loopback socket on the
+  process that owns its PTY, so any goofi process — the server for its panel and ops, a node on
+  either Python tier through `goofi.agent` — spawns, lists, attaches to, types into and stops the
+  same instances through one path. Launch options are the config entry's flag templates.
 - `goofi_transport` is the data layer: a `Hub` per session hands every end its slot, door or
   queue by a name derived from the graph. Between nodes a slot is one latest-wins cell of `Arc`
   payloads, never a buffer; a queue is bounded, drops its oldest, never blocks its sender, and

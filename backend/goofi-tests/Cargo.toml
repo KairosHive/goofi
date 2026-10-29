@@ -30,6 +30,7 @@ goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
+goofi-agent = { path = "../goofi-agent" }
 goofi-runtime = { path = "../goofi-runtime" }
 goofi-view = { path = "../goofi-view" }
 # The manager side of both Python tiers. `subproc` is unconditional — it only SPAWNS an

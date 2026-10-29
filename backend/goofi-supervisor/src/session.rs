@@ -20,6 +20,10 @@ pub struct Record {
     /// The HTTP base every route hangs off; empty until the server has bound.
     #[serde(default)]
     pub url: String,
+    /// The binary of the process that holds the session: what a child of any tier puts on a
+    /// shell's PATH as `goofi`, so that shell reaches THIS server.
+    #[serde(default)]
+    pub exe: String,
 }
 
 /// Where every session's ephemeral directory lives. A FIXED short path, not the user's temp dir:
@@ -66,6 +70,12 @@ static ID: OnceLock<String> = OnceLock::new();
 /// a child is told and what a part file is named by.
 pub fn id() -> Option<&'static str> {
     ID.get().map(String::as_str)
+}
+
+/// The session this process runs under, whether it holds it, joined it, or was merely spawned
+/// into it: what every per-session registry a library keeps is keyed by.
+pub fn current() -> Option<String> {
+    id().map(str::to_string).or_else(|| std::env::var(ENV).ok().filter(|v| !v.is_empty()))
 }
 
 /// What names a part file written beside a cache entry: `s<session id>`, so the boot pass can
@@ -192,7 +202,8 @@ impl Drop for Session {
 fn write_record(id: &str, url: &str) -> io::Result<()> {
     let dir = system_dir(id);
     let part = dir.join("session.json.part");
-    fs::write(&part, serde_json::to_vec_pretty(&Record { id: id.into(), url: url.into() })?)?;
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    fs::write(&part, serde_json::to_vec_pretty(&Record { id: id.into(), url: url.into(), exe })?)?;
     fs::rename(&part, dir.join("session.json"))
 }
 

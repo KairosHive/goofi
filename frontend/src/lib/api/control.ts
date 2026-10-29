@@ -171,14 +171,19 @@ export interface Recovery {
 export interface HarnessInstanceInfo {
 	id: string;
 	harness: string;
+	model?: string | null;
+	effort?: string | null;
 	state: 'running' | 'stopping' | 'exited';
 	exit_code?: number | null;
 }
 
-/** One launchable agent — a config entry: a display name and its bash command line. */
+/** One launchable agent; `model` and `effort` are the flag templates its config entry gives,
+ * `{}` standing for the value, absent where it takes no such option. */
 export interface AgentEntry {
 	name: string;
 	command: string;
+	model?: string | null;
+	effort?: string | null;
 }
 
 /** The shape the snapshot seeds and `harness_changed` broadcasts. */

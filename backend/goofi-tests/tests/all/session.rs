@@ -487,7 +487,7 @@ fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits
     for name in ["AGENTS.md", "CLAUDE.md", ignore] {
         std::fs::write(mount.join(name), "their own\n").unwrap();
     }
-    goofi_bridge::term::seed_orientation(&mount);
+    goofi_bridge::orientation::seed(&mount);
     for name in ["AGENTS.md", "CLAUDE.md", ignore] {
         assert_eq!(std::fs::read_to_string(mount.join(name)).unwrap(), "their own\n", "{name} was seeded over");
     }

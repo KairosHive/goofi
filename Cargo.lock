@@ -910,6 +910,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "goofi-agent"
+version = "3.0.0"
+dependencies = [
+ "goofi-supervisor",
+ "portable-pty",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goofi-audio"
 version = "3.0.0"
 dependencies = [
@@ -952,6 +962,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures-util",
+ "goofi-agent",
  "goofi-audio",
  "goofi-build",
  "goofi-codec",
@@ -968,10 +979,8 @@ dependencies = [
  "goofi-transport",
  "goofi-view",
  "goofi-window",
- "libc",
  "midir",
  "notify",
- "portable-pty",
  "schemars",
  "serde",
  "serde_json",
@@ -1151,6 +1160,7 @@ dependencies = [
 name = "goofi-pymod"
 version = "3.0.0"
 dependencies = [
+ "goofi-agent",
  "goofi-codec",
  "goofi-core",
  "goofi-supervisor",
@@ -1248,6 +1258,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "goofi-agent",
  "goofi-audio",
  "goofi-audio-sdk",
  "goofi-bridge",
