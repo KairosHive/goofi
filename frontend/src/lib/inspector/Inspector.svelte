@@ -1,5 +1,12 @@
 <!-- The node inspector of the editor side pane and the Inspector panel: identity, group tabs, one
      ParamField per shown param, metadata and the node's error. -->
+<script lang="ts" module>
+	import { SvelteMap } from 'svelte/reactivity';
+
+	/** Each node's front group while the page lives; never part of the patch. */
+	const frontGroups = new SvelteMap<string, string>();
+</script>
+
 <script lang="ts">
 	import { numValue, PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import { getControl, type NodeInstanceInfo } from '$lib/api/control';
@@ -263,15 +270,12 @@
 	const tabItems = $derived(groupNames.map((name) => ({ id: name, label: name })));
 
 	// DERIVED, so the right tab is in the first paint and there is no `.ui-tab` background transition to
-	// animate; the effect then ADOPTS the fallback, which keeps the front group sticky.
-	let frontGroup = $state<string | null>(null);
+	// animate. A node opens on the group last fronted on it, else on its first.
 	const activeGroup = $derived.by<string | null>(() => {
 		const valid = groupNames;
 		if (valid.length === 0) return null;
-		return frontGroup && valid.includes(frontGroup) ? frontGroup : valid[0];
-	});
-	$effect(() => {
-		if (activeGroup !== frontGroup) frontGroup = activeGroup;
+		const front = node ? frontGroups.get(node.uid) : undefined;
+		return front && valid.includes(front) ? front : valid[0];
 	});
 
 	// One search box over every family, because a plugin's parameters are spread across as many tabs
@@ -523,7 +527,7 @@
 					<Tabs
 						items={tabItems}
 						active={activeGroup ?? undefined}
-						onSelect={(id) => (frontGroup = id)}
+						onSelect={(id) => node && frontGroups.set(node.uid, id)}
 						data-testid="param-tabs"
 						style="overflow-x: auto; flex-shrink: 0"
 						tabProps={() => ({ style: 'min-width: 3rem; max-width: max-content' })}

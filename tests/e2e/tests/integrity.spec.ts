@@ -429,6 +429,41 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 	}
 });
 
+test('each node opens on the param group last fronted on it, else on its first', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const status = (await rawCall(page, 'session status')).result;
+		const source = path.join(status.workspace, 'nodes_signal', 'two_groups.py');
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		fs.writeFileSync(source, [
+			'import goofi',
+			'class TwoGroups(goofi.Node):',
+			'    PARAMS = {"shape": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}, "timing": {"rate": goofi.NumParam(1.0, 0.0, 10.0)}}',
+			''
+		].join('\n'));
+		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
+		const a = await addNode(page, 'TwoGroups', [0, 0]);
+		const b = await addNode(page, 'TwoGroups', [0, 120]);
+		await waitForNode(page, a);
+		await waitForNode(page, b);
+		const front = page.getByTestId('param-tabs').getByRole('tab', { selected: true });
+
+		await selectNode(page, a);
+		await expect(front).toHaveText('shape');
+		await page.getByTestId('param-tabs').getByRole('tab', { name: 'timing' }).click();
+		await expect(front).toHaveText('timing');
+
+		await selectNode(page, b);
+		await expect(front, 'a node never fronted opens on its first group').toHaveText('shape');
+
+		await selectNode(page, a);
+		await expect(front, 'a node opens on the group last fronted on it').toHaveText('timing');
+	} finally {
+		await tearDown(page);
+	}
+});
+
 test('a list section opens one slot per count, and its + button opens another', async ({ page, hasTouch }) => {
 	await page.goto('/');
 	await waitForApp(page);
