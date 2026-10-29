@@ -321,6 +321,7 @@ impl Agents {
             fanout: Mutex::default(),
             eof: goofi_supervisor::sync::Latch::default(),
             stopping: AtomicBool::new(false),
+            forgotten: AtomicBool::new(false),
             paste_mode: AtomicBool::new(false),
             sizes: Mutex::default(),
             size: Mutex::new(None),
@@ -428,7 +429,7 @@ impl Agents {
         }
         for inst in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
-            let _ = inst.publish();
+            inst.forget();
             let _ = inst.signal(child::Tree::ask);
         }
         Some(move || {
@@ -441,7 +442,6 @@ impl Agents {
             let deadline = timing::Deadline::within(SHUTDOWN_WAIT);
             for inst in &taken {
                 inst.close(deadline);
-                let _ = std::fs::remove_file(&inst.path);
             }
         })
     }
@@ -462,8 +462,9 @@ struct Fanout {
     tail: Vec<u8>,
     /// Set once the exit frame went out: a view arriving after it gets the tail, then the exit.
     exited: Option<u32>,
-    /// Each view's channel, and its socket, which a close shuts so its reader wakes.
-    views: Vec<(u64, SyncSender<Out>, TcpStream)>,
+    /// Each view's channel, its socket, which a close shuts so its reader wakes, and its writer's
+    /// end, which a close waits on first so the exit frame goes out.
+    views: Vec<(u64, SyncSender<Out>, TcpStream, Option<worker::Done>)>,
 }
 
 impl Fanout {
@@ -482,7 +483,7 @@ impl Fanout {
         // A view that fell behind loses bytes rather than the CHILD stalling behind it; one whose
         // reader left is dropped, and so is one too far behind for the exit, so its writer ends.
         let last = matches!(out, Out::Exit(_));
-        self.views.retain(|(_, view, _)| match view.try_send(out.clone()) {
+        self.views.retain(|(_, view, _, _)| match view.try_send(out.clone()) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => !last,
             Err(TrySendError::Disconnected(_)) => false,
@@ -511,6 +512,8 @@ struct Instance {
     eof: goofi_supervisor::sync::Latch,
     /// Set the moment a stop begins, ahead of the signal.
     stopping: AtomicBool,
+    /// Set when its owner forgot it: the record is gone, and no later publish writes it back.
+    forgotten: AtomicBool,
     /// Whether the child has asked for pastes to be bracketed, as a terminal emulator tracks it.
     paste_mode: AtomicBool,
     sizes: Mutex<Sizes>,
@@ -528,6 +531,9 @@ impl Instance {
     /// Write the record whole: the session-file idiom, so a reader sees all of it or none.
     fn publish(&self) -> Result<(), String> {
         let record = self.record.lock();
+        if self.forgotten.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         let mut record = record.clone();
         if record.state == "running" && self.stopping.load(Ordering::Relaxed) {
             record.state = "stopping".into();
@@ -540,6 +546,14 @@ impl Instance {
             .map_err(|e| format!("{}: {e}", self.path.display()))
     }
 
+    /// Take the record off the roster for good, under its lock so a publish in flight cannot
+    /// write it back.
+    fn forget(&self) {
+        let _record = self.record.lock();
+        self.forgotten.store(true, Ordering::Relaxed);
+        let _ = std::fs::remove_file(&self.path);
+    }
+
     /// Serve one connection as a view: a writer thread carries the tail, the live output, the size
     /// and the exit; the reader runs HERE and ends the view when the peer leaves.
     fn view(self: &Arc<Self>, stream: TcpStream) {
@@ -549,7 +563,7 @@ impl Instance {
         let (tx, rx) = sync_channel::<Out>(OUTPUT_BACKLOG);
         let (tail, exited) = {
             let mut fanout = self.fanout.lock();
-            fanout.views.push((seat, tx, held));
+            fanout.views.push((seat, tx, held, None));
             (fanout.tail.clone(), fanout.exited)
         };
         let settled = *self.size.lock();
@@ -584,6 +598,11 @@ impl Instance {
             }
             let _ = writing.shutdown(std::net::Shutdown::Write);
         });
+        if let Ok(writer) = &writer {
+            if let Some(view) = self.fanout.lock().views.iter_mut().find(|v| v.0 == seat) {
+                view.3 = Some(writer.done());
+            }
+        }
         let inst = self.clone();
         let reader = worker::spawn("goofi-agent-keys", move || {
             let mut reading = stream;
@@ -595,7 +614,7 @@ impl Instance {
                 }
             }
             inst.leave(seat);
-            inst.fanout.lock().views.retain(|(s, _, _)| *s != seat);
+            inst.fanout.lock().views.retain(|(s, _, _, _)| *s != seat);
             let _ = reading.shutdown(std::net::Shutdown::Both);
         });
         // Every request is a connection of its own, so the finished ones are let go here.
@@ -714,7 +733,7 @@ impl Instance {
         if let Some(registry) = self.registry.upgrade() {
             registry.lock().retain(|i| !std::ptr::eq(&**i, self));
         }
-        let _ = std::fs::remove_file(&self.path);
+        self.forget();
         self.close(timing::Deadline::within(SHUTDOWN_WAIT));
     }
 
@@ -722,7 +741,13 @@ impl Instance {
     fn close(&self, deadline: timing::Deadline) {
         self.closing.store(true, Ordering::Relaxed);
         let _ = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(100));
-        for (_, _, stream) in std::mem::take(&mut self.fanout.lock().views) {
+        // The senders go first: each writer delivers what it holds, the exit included, and ends.
+        let views = std::mem::take(&mut self.fanout.lock().views);
+        let (streams, writers): (Vec<_>, Vec<_>) = views.into_iter().map(|(_, _, s, w)| (s, w)).unzip();
+        for writer in writers.into_iter().flatten() {
+            writer.wait_within(deadline.left());
+        }
+        for stream in streams {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         for worker in std::mem::take(&mut *self.workers.lock()) {

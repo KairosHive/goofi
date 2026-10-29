@@ -690,9 +690,12 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     assert_eq!(g.call("session state", json!({}))["nodes"].as_object().map(|n| n.len()), Some(0));
     assert_eq!(g.call("redo", json!({}))["changed"], json!(true));
 
-    // Replacing the patch reaps the running agents, and the central /mcp stays open.
+    // Replacing the patch reaps the running agents, and the central /mcp stays open. One that
+    // will not leave is off the roster too, while its grace runs.
     let (mut ctl2, _, mut second) = harness(&addr, "_sh").await;
     attached(&mut second).await;
+    let (_ctl3, _, mut deaf) = harness(&addr, "_deaf").await;
+    read_until(&mut deaf, "armed").await;
     call(&mut ctl2, 4, "session new", json!({})).await;
     let roster = call(&mut ctl2, 5, "agent list", json!({})).await;
     assert_eq!(roster["instances"], json!([]), "the replaced patch's harnesses stayed: {roster}");
