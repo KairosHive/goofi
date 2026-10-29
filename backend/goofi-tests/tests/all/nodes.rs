@@ -246,14 +246,19 @@ fn a_load_keeps_the_libraries_the_boot_scan_opened_native() {
     let constant = g.add("signal:Constant");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     g.call("session load", j!({ "path": path.to_string_lossy() }));
-    for ty in ["signal:Constant", "signal:Math", "signal:Noise", "signal:Reshape"] {
-        let r = g.call("library get", j!({ "type": ty }));
+    let shipped = ["Constant", "Math", "Noise", "Reshape"];
+    for ty in shipped {
+        let r = g.call("library get", j!({ "type": format!("signal:{ty}") }));
         assert_eq!((&r["language"], &r["tier"]), (&j!("rust"), &j!("native")), "{r}");
     }
     g.call("node param request", j!({ "node": goofi_tests::hex(constant), "param": "common/trigger", "request": "pulse" }));
+    // The resource index is the process's, and other situations host nodes of their own beside this one.
     let hosts: Vec<String> = g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
         .filter(|e| e["kind"] == "child")
-        .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node")).map(str::to_string).collect();
+        .filter_map(|e| e["name"].as_str())
+        .filter(|n| shipped.iter().any(|ty| n.starts_with(&format!("native node {ty} "))))
+        .map(str::to_string)
+        .collect();
     assert!(hosts.is_empty(), "a shipped node runs in this process after a load, not in a child: {hosts:?}");
 }
 
