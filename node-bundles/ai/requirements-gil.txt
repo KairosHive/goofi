@@ -1,0 +1,7 @@
+# pydantic-ai is the one client for every language-model provider, hosted or local, and for the
+# speech-to-speech realtime models; its pydantic-core ships no free-threaded wheel, which is what
+# puts this bundle on the subprocess tier. The provider extras are the official SDKs it drives.
+pydantic-ai-slim[openai,anthropic,google,groq,mistral,openrouter,typesafe,openai-realtime,google-realtime,xai-realtime]
+# Text-to-speech and transcription have no pydantic-ai layer yet; the two provider SDKs are used as
+# they are, and any OpenAI-compatible server stands in through the openai one.
+elevenlabs

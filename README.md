@@ -91,8 +91,8 @@ machine the patch is open on, so goofi supports VST3 and ships none.
 The nodes goofi does ship live in `node-bundles/`, one directory per bundle: `signal` and `audio`
 (the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, preprocessing, band power, FOOOF, connectivity),
 `complexity` (the antropy measures), `biotuner` (harmonicity, microtonal keys, rhythm),
-`simulation` (attractors, Kuramoto, Hopfield, neural mass), `ml`, `image`, `image-generation`,
-`computer-vision`, `harmonic-geometry` and `inception`. Every bundle is built at
+`simulation` (attractors, Kuramoto, Hopfield, neural mass), `ai` (language, voice and coding-agent
+nodes), `ml`, `image`, `image-generation`, `computer-vision`, `harmonic-geometry` and `inception`. Every bundle is built at
 goofi's build time and embedded, so `cargo run` carries them all; `--extra-nodes` adds a root
 outside the repo the same way. A bundle with Python nodes names the packages they import in a
 `requirements.txt`; `goofi-init` installs every bundle's, and at startup goofi checks every scanned
@@ -168,16 +168,27 @@ only their identity, count, sequence, and last timestamp. Agent PTYs keep their 
 ## Agents
 
 goofi launches the coding harness you already use — `claude`, `codex` and `opencode` out of the
-box, any command you name in `config.toml`. It comes up on a PTY with the patch workspace as its
-working directory, reads that workspace's `AGENTS.md` to orient itself, and its terminal is a panel
-beside the canvas. The guides under `skills/` ride into every workspace that has none of its own:
-patching a biosignal chain, designing biofeedback, designing an emergent shader.
+box, any command you name in `config.toml`, with the flags its `model` and `effort` options become.
+It comes up on a PTY with the patch workspace as its working directory, reads that workspace's
+`AGENTS.md` to orient itself, and its terminal is a panel beside the canvas. The guides under
+`skills/` ride into every workspace that has none of its own: patching a biosignal chain, designing
+biofeedback, designing an emergent shader.
 
 ```bash
-goofi agent start --name claude
+goofi agent start --name claude --model opus --effort high
 goofi node add signal:Psd
 goofi link add lslin/out psd/input
 ```
+
+The harness plane is `goofi_agent`, a crate every goofi process of a session shares: an instance
+has a record in the session directory and a loopback socket on the process that owns its PTY, so
+the panel, the CLI and a node all list, attach to, type into and stop the same instances. The `ai`
+bundle builds on it: `Agent` is a node that starts an instance, or picks a running one, and types
+every text frame it receives into it as a steering prompt; `LLM` answers each prompt through
+pydantic-ai, from any provider or a local server, in a running conversation or one request at a
+time; `VoiceAgent` is a live call with a speech-to-speech model whose one tool hands commands to an
+`Agent` node; `Decision` picks one of the answers on its options input for each text, with the
+model's probability for each; `TextToSpeech` and `SpeechToText` cross between text and audio frames.
 
 Over `/mcp` an agent reaches the same ops the editor does, so there is nothing you can do that it
 cannot. Every edit it makes arrives as the delta every client gets, so you watch the patch build
