@@ -5,8 +5,9 @@
 //! measured at. Nothing else in goofi sleeps in a loop, sets a socket timeout, rounds a deadline
 //! to a tick or keeps a clock of its own.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Condvar, LazyLock};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::sync::Mutex;
@@ -190,10 +191,19 @@ impl Woken {
 
 /// A door: rung with an id by anyone holding it, parked on by the one thread it belongs to. A
 /// ring made while nobody waits is kept until the next wait; several rings of one id are one.
+///
+/// A ring takes no lock: it sets a bit and unparks the waiter, so a producer that wakes its
+/// reader is never held up by that reader, however long the reader is away. The waiter is the
+/// one thread that parks here; a second thread parking at the same time wakes only at its own
+/// deadline.
 #[derive(Default)]
 pub struct Event {
-    pending: Mutex<Woken>,
-    cv: Condvar,
+    pending: [AtomicU64; IDS / 64],
+    /// The thread parked here, registered by its own wait; what a ring unparks.
+    waiter: AtomicPtr<Thread>,
+    /// Every thread that ever parked here, each at a fixed address, kept for the event's life so
+    /// the handle above is never freed under a ringer reading it. Only a waiter writes this, once.
+    waiters: Mutex<Vec<Arc<Thread>>>,
 }
 
 impl Event {
@@ -203,37 +213,63 @@ impl Event {
 
     /// Set `id` and wake whoever waits.
     pub fn ring(&self, id: u8) {
-        self.pending.lock().set(id);
-        self.cv.notify_all();
+        self.pending[usize::from(id) / 64].fetch_or(1 << (u32::from(id) % 64), Ordering::Release);
+        let waiter = self.waiter.load(Ordering::Acquire);
+        if !waiter.is_null() {
+            // SAFETY: the handle lives in `waiters` for as long as this event does.
+            unsafe { (*waiter).unpark() };
+        }
     }
 
     /// Whatever is set right now, taken; empty when nothing rang.
     pub fn take(&self) -> Woken {
-        std::mem::take(&mut *self.pending.lock())
+        let mut woken = Woken::default();
+        for (word, bits) in self.pending.iter().enumerate() {
+            woken.0[word] = bits.swap(0, Ordering::AcqRel);
+        }
+        woken
+    }
+
+    /// Make the calling thread the one a ring unparks.
+    fn register(&self) {
+        let me = thread::current();
+        let held = self.waiter.load(Ordering::Acquire);
+        // SAFETY: as in `ring`.
+        if !held.is_null() && unsafe { (*held).id() } == me.id() {
+            return;
+        }
+        let held = Arc::new(me);
+        let raw = Arc::as_ptr(&held) as *mut Thread;
+        self.waiters.lock().push(held);
+        self.waiter.store(raw, Ordering::Release);
     }
 
     /// Park until something rings, and take it.
     pub fn wait(&self) -> Woken {
-        let mut pending = self.pending.lock();
-        while pending.is_empty() {
-            pending = self.cv.wait(pending).unwrap_or_else(|e| e.into_inner());
+        self.register();
+        loop {
+            let woken = self.take();
+            if !woken.is_empty() {
+                return woken;
+            }
+            thread::park();
         }
-        std::mem::take(&mut *pending)
     }
 
     /// Park until something rings or `deadline` passes, and take what is set; empty on the
     /// deadline. A deadline already past looks once and returns.
     pub fn wait_until(&self, deadline: Instant) -> Woken {
-        let mut pending = self.pending.lock();
+        self.register();
         loop {
-            if !pending.is_empty() {
-                return std::mem::take(&mut *pending);
+            let woken = self.take();
+            if !woken.is_empty() {
+                return woken;
             }
             let now = Instant::now();
             if now >= deadline {
                 return Woken::default();
             }
-            pending = self.cv.wait_timeout(pending, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
+            thread::park_timeout(deadline - now);
         }
     }
 

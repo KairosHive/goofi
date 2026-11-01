@@ -52,3 +52,23 @@ fn a_pace_that_fell_behind_restarts_from_now() {
     assert!(next > first + Duration::from_millis(10), "not a burst of catch-up ticks");
     assert!(next <= Instant::now() + Duration::from_millis(10));
 }
+
+#[test]
+fn a_ring_from_another_thread_wakes_the_parked_waiter() {
+    // The waiter parks; a ring from any other thread sets its id and wakes it, with no lock
+    // between the two — and a ring made before the wait is kept for it.
+    let event = std::sync::Arc::new(Event::new());
+    event.ring(7);
+    assert_eq!(event.wait().ids().collect::<Vec<_>>(), vec![7], "kept until the wait");
+    let ringer = {
+        let event = event.clone();
+        std::thread::spawn(move || {
+            Event::new().wait_for(Duration::from_millis(20));
+            event.ring(9);
+        })
+    };
+    let woken = event.wait_until(Instant::now() + goofi_tests::WAIT);
+    assert_eq!(woken.ids().collect::<Vec<_>>(), vec![9], "woken by the other thread's ring");
+    ringer.join().expect("the ringer ends");
+    assert!(event.take().is_empty(), "taken once");
+}

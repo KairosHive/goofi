@@ -1,7 +1,7 @@
 //! The audio engine behind the `Engine` seam: this file owns the library, the plan and the clock,
 //! the audio half (`runtime`) the instances and the arena, and a node's `control` half its thread.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -70,6 +70,11 @@ const OPEN_WAIT: Duration = Duration::from_secs(2);
 
 /// The same ceiling for an ASIO driver, which loads a vendor runtime before it answers.
 const ASIO_OPEN_WAIT: Duration = Duration::from_secs(10);
+
+/// A ceiling on the control half's wait for the audio thread's answer — a box handed back, a
+/// state saved — under a live clock, where the answer comes on the device's own block. A
+/// device whose period outruns this answers later, and what it answers is kept then.
+const RETURN_WAIT: Duration = Duration::from_millis(500);
 
 pub use goofi_supervisor::timing::Clock;
 
@@ -432,6 +437,12 @@ pub struct AudioEngine {
     runtime: Arc<Mutex<Runtime>>,
     inbox: rtrb::Producer<Msg>,
     outbox: rtrb::Consumer<Retired>,
+    /// Rung by the audio thread once something is on the outbox.
+    returned: Arc<goofi_supervisor::timing::Event>,
+    /// Nodes removed whose box the audio thread has not handed back yet, and nodes whose state
+    /// it has not yet answered: what a wait under a live clock is for.
+    returning: HashSet<Uid>,
+    saving: HashSet<Uid>,
     free: Vec<usize>,
     slab_len: usize,
     next_serial: u64,
@@ -472,6 +483,8 @@ impl AudioEngine {
         let (inbox, to_audio) = rtrb::RingBuffer::new(QUEUE);
         let (from_audio, outbox) = rtrb::RingBuffer::new(QUEUE);
         let anchor = Arc::new(runtime::Anchor::new(time.clone()));
+        let runtime = Runtime::new(SLAB, to_audio, from_audio, anchor.clone());
+        let returned = runtime.returned.clone();
         Ok(AudioEngine {
             instance,
             time,
@@ -493,9 +506,12 @@ impl AudioEngine {
             classes,
             vst3: None,
             ui: None,
-            runtime: Arc::new(Mutex::new(Runtime::new(SLAB, to_audio, from_audio, anchor))),
+            runtime: Arc::new(Mutex::new(runtime)),
             inbox,
             outbox,
+            returned,
+            returning: HashSet::new(),
+            saving: HashSet::new(),
             free: (0..SLAB).rev().collect(),
             slab_len: SLAB,
             next_serial: 0,
@@ -637,7 +653,14 @@ impl AudioEngine {
     fn discard_retired(&mut self) {
         while let Ok(retired) = self.outbox.pop() {
             match retired {
-                Retired::Slot(slot) => self.write_state(slot.uid, slot.type_name, slot.node.save()),
+                Retired::Slot(slot) => {
+                    self.returning.remove(&slot.uid);
+                    self.write_state(slot.uid, slot.type_name, slot.node.save());
+                }
+                Retired::Saved { uid, type_name, bytes } => {
+                    self.saving.remove(&uid);
+                    self.write_state(uid, type_name, bytes);
+                }
                 // The drop is the POINT: these come back so the audio thread never frees them.
                 Retired::Plan(plan, arena) => drop((plan, arena)),
                 Retired::Rings(rings) => drop(rings),
@@ -654,6 +677,20 @@ impl AudioEngine {
                     }
                 }
             }
+        }
+    }
+
+    /// Take what the audio thread hands back until `done`, or `within` passes. Under a live clock
+    /// the answer comes on the thread's own block: an op waits on the engine here, and the engine
+    /// never on an op. A stream that died answers nothing, and is not waited for.
+    fn await_retired(&mut self, within: Duration, done: impl Fn(&AudioEngine) -> bool) {
+        let deadline = goofi_supervisor::timing::Deadline::within(within);
+        loop {
+            self.discard_retired();
+            if done(self) || deadline.passed() || self.stats.dead.load(Ordering::Acquire) {
+                return;
+            }
+            self.returned.wait_until(deadline.instant());
         }
     }
 
@@ -903,18 +940,39 @@ impl Engine for AudioEngine {
         self.sweep = true;
     }
 
-    /// Every live node's state: an SDK node's under the runtime lock, where it is a copy, and a
-    /// plugin's through its saver after — measured at 4 to 6 contended callbacks per save before.
+    /// Every live node's state: a plugin's through its saver, readable from any thread; an SDK
+    /// node's off the box that processes, which lives on the audio thread. Under a live clock that
+    /// thread saves it on its own block and answers, waited for here — the lock is never taken
+    /// beside a callback. Without a clock the lock is nobody's, and the box is read in place.
     fn persist(&mut self) {
         let savers: HashMap<Uid, control::Saver> = self.audio.savers.lock().clone();
-        let states: Vec<(Uid, &'static str, Option<Vec<u8>>)> = {
-            let mut rt = self.runtime.lock();
-            rt.apply_pending();
-            rt.slab.iter().flatten().map(|s| (s.uid, s.type_name, (!savers.contains_key(&s.uid)).then(|| s.node.save()))).collect()
-        };
-        for (uid, type_name, bytes) in states {
-            let bytes = bytes.unwrap_or_else(|| savers[&uid]());
-            self.write_state(uid, type_name, bytes);
+        if self.device.is_none() {
+            let states: Vec<(Uid, &'static str, Vec<u8>)> = {
+                let mut rt = self.runtime.lock();
+                rt.apply_pending();
+                rt.slab.iter().flatten().filter(|s| !savers.contains_key(&s.uid)).map(|s| (s.uid, s.type_name, s.node.save())).collect()
+            };
+            for (uid, type_name, bytes) in states {
+                self.write_state(uid, type_name, bytes);
+            }
+        } else {
+            let asked: Vec<(Uid, usize, u64)> = self
+                .live
+                .iter()
+                .filter(|(uid, inst)| inst.making.is_none() && !savers.contains_key(uid))
+                .map(|(uid, inst)| (*uid, inst.idx, inst.serial))
+                .collect();
+            for (uid, idx, serial) in asked {
+                self.saving.insert(uid);
+                self.send(Msg::Save { idx, serial });
+            }
+            self.await_retired(RETURN_WAIT, |e| e.saving.is_empty());
+            self.saving.clear();
+        }
+        let plugins: Vec<(Uid, &'static str, control::Saver)> =
+            self.live.iter().filter_map(|(uid, inst)| savers.get(uid).map(|s| (*uid, inst.manifest.type_name, s.clone()))).collect();
+        for (uid, type_name, saver) in plugins {
+            self.write_state(uid, type_name, saver());
         }
     }
 
@@ -1032,9 +1090,17 @@ impl Engine for AudioEngine {
             // A swap the half never took would be adopted by the uid's next half, over fresh rings.
             self.audio.swaps.lock().remove(&uid);
             self.send(Msg::Remove(inst.idx));
-            // The box comes back NOW, its state kept, so a restart's birth finds it: one callback
-            // may find the runtime taken — a click at an authoring event, accepted.
-            self.runtime.lock().apply_pending();
+            // The box comes back with its state kept, so a restart's birth finds it. Under a live
+            // clock it comes back on the audio thread's own block, waited for here; without one the
+            // lock is nobody's and the backlog is applied in place. A box never sent — a node still
+            // being made — has nothing to come back.
+            if self.device.is_none() {
+                self.runtime.lock().apply_pending();
+            } else if inst.making.is_none() {
+                self.returning.insert(uid);
+                self.await_retired(RETURN_WAIT, |e| !e.returning.contains(&uid));
+                self.returning.remove(&uid);
+            }
             self.discard_retired();
             self.free.push(inst.idx);
             self.disabled.remove(&uid);

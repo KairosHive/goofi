@@ -39,7 +39,6 @@ Found by reading; each fix lands with a fixture that fails on the broken variant
   callback allocations: VST3 `Changes::moved`, `midi_in` voices, `Inbox::last`, the RTKit claim.
 - `Ui::run` turns a window-thread panic into a caller panic, also inside `Plugin::drop`; VST3 open
   and retune run on the window thread under the runtime lock and the graph lock.
-- A failed GPU readback map leaves the slot unready at the ring's front for ever; nothing is reported.
 - A computed param wider than `BLOCKS_RING` is dropped with no error on `/control`.
 
 ## Supervisor and tools

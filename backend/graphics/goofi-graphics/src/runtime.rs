@@ -1,18 +1,23 @@
 //! What the render thread owns: the plan, one GPU state per live node, and the tick that draws
 //! every demanded stage once and reads back the ones somebody is watching.
+//!
+//! Nothing the tick touches is held by another thread. What the graph asks arrives on a channel;
+//! what a node's half uploads, and what the tick reads back for it, cross in cells with no lock on
+//! either side; a readback travels to its reader as the mapped buffer it is, and the copy, the
+//! encode and the free are that reader's. A tick is a tick's own work and no more, however many
+//! viewers watch.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use goofi_supervisor::sync::Mutex;
+use goofi_supervisor::sync::{Mailbox, Mutex};
 use std::time::Instant;
 
-use goofi_core::{Data, Meta};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, Gpu, Want};
-use crate::half::Tapped;
-use crate::resources::{State, Slot, Spare, give_back, rows_into};
+use crate::resources::{Readback, Slot, State, FAILED, PENDING, READY};
 use crate::plan::{Input, Plan, Pass};
 use crate::shader;
 
@@ -31,6 +36,22 @@ pub struct Stats {
     pub tick_max_us: AtomicU64,
 }
 
+/// What each stage the render thread refused wears, for the engine that settles it: the WHOLE
+/// current set, put whenever it moves, so a settle reads one snapshot and the tick holds no lock.
+pub type Troubles = Arc<Mailbox<HashMap<Uid, String>>>;
+
+/// What the render thread and the engine read of each other: counters, flags and one cell each
+/// way, nothing either waits on.
+pub struct Links {
+    pub stats: Arc<Stats>,
+    pub troubles: Troubles,
+    pub shared: Arc<goofi_runtime::Shared>,
+    /// Whether a recording runs, as the recorder says: what puts an armed stage in demand.
+    pub recording: Arc<AtomicBool>,
+    /// The rate the clock paces, as `graphics.fps` last settled: what a recording is stamped with.
+    pub fps: Arc<AtomicU32>,
+}
+
 pub struct Runtime {
     plan: Plan,
     states: HashMap<Uid, State>,
@@ -46,26 +67,21 @@ pub struct Runtime {
     pub fps: Arc<AtomicU32>,
     /// Whether a recording runs, as the recorder says: what puts an armed stage in demand.
     recording: Arc<AtomicBool>,
-    /// What a stage could not do, worn until it can. The engine folds it into the faults it settles.
-    troubles: Troubles,
+    /// What a stage could not do, worn until it can: this thread's own copy, and the cell the
+    /// engine takes a snapshot of to fold into the faults it settles.
+    troubles: HashMap<Uid, String>,
+    troubles_out: Troubles,
     shared: Arc<goofi_runtime::Shared>,
-    /// What the graph asked for since the last tick. An op appends here and never waits on a
+    /// What the graph asked for since the last tick. An op sends here and never waits on a
     /// render: a tick is long, and a lock a render holds is a lock an op cannot have.
-    pub inbox: Arc<Mutex<Vec<Cmd>>>,
+    inbox: Receiver<Cmd>,
     /// Last, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
 }
 
 impl Runtime {
-    pub fn new(
-        gpu: Arc<Gpu>,
-        time: Arc<goofi_supervisor::timing::Time>,
-        stats: Arc<Stats>,
-        troubles: Troubles,
-        shared: Arc<goofi_runtime::Shared>,
-        recording: Arc<AtomicBool>,
-        fps: Arc<AtomicU32>,
-    ) -> Runtime {
+    pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_supervisor::timing::Time>, links: Links, inbox: Receiver<Cmd>) -> Runtime {
+        let Links { stats, troubles, shared, recording, fps } = links;
         Runtime {
             gpu,
             plan: Plan::default(),
@@ -77,9 +93,10 @@ impl Runtime {
             chains: HashMap::new(),
             fps,
             recording,
-            troubles,
+            troubles: HashMap::new(),
+            troubles_out: troubles,
             shared,
-            inbox: Arc::new(Mutex::new(Vec::new())),
+            inbox,
         }
     }
 
@@ -95,6 +112,7 @@ impl Runtime {
     fn remove(&mut self, uid: Uid) {
         self.states.remove(&uid);
         self.plan = Plan::default();
+        self.trouble(uid, None);
     }
 
     /// Every GPU object this engine holds, given back at once.
@@ -146,8 +164,7 @@ impl Runtime {
     /// Everything the graph asked for since the last tick, applied on this thread — every GPU
     /// object this engine owns is made and unmade here.
     fn drain_inbox(&mut self) {
-        let asked = std::mem::take(&mut *self.inbox.lock());
-        for cmd in asked {
+        while let Ok(cmd) = self.inbox.try_recv() {
             match cmd {
                 Cmd::Insert(uid, params) => self.insert(uid, params),
                 Cmd::Remove(uid) => self.remove(uid),
@@ -161,6 +178,23 @@ impl Runtime {
     /// external clock mean one drawn frame, where the timer clock lets the device run behind.
     pub fn finish(&mut self) {
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// The pass's pipeline: the one the stage keeps, else the one its build answered, kept from
+    /// here on. `None` while the build runs or once it refused — a stage that is not drawn.
+    fn pipeline(&mut self, i: usize) -> Option<Arc<wgpu::RenderPipeline>> {
+        let stage = &mut self.plan.stages[i];
+        if let Some(held) = &stage.pipeline {
+            return Some(held.clone());
+        }
+        let built = match &stage.pass {
+            Pass::Shader(built) => built,
+            Pass::Host { program: Some((_, built)), .. } => built,
+            Pass::Host { program: None, .. } => return None,
+        };
+        let Some(Ok(pipeline)) = built.peek() else { return None };
+        stage.pipeline = Some(pipeline.clone());
+        Some(pipeline)
     }
 
     /// One tick: upload what arrived, write the uniforms, draw every demanded stage, and read
@@ -181,46 +215,67 @@ impl Runtime {
         // What an earlier tick put on the device and the device has finished since.
         self.take();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        let mut started: Vec<(Uid, Want, Slot)> = Vec::new();
+        let mut started: Vec<(Uid, Want, Box<Slot>)> = Vec::new();
         let mut shown: Vec<(goofi_window::Id, wgpu::SurfaceTexture)> = Vec::new();
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
                 continue;
             }
-            let stage = &self.plan.stages[i];
-            let produced = match &stage.pass {
-                Pass::Host { source, program } => source.lock().clone().filter(|frame| {
-                    let matches = match (&frame.content, program) {
-                        (crate::producer::Content::Pixels(_), None) => true,
-                        (crate::producer::Content::Render(text), Some((compiled, _))) => text == compiled,
-                        _ => false,
-                    };
-                    matches && (!stage.natural.0 || frame.size.0 == stage.size.0)
-                        && (!stage.natural.1 || frame.size.1 == stage.size.1)
-                }),
+            let (uid, size, wants, buffers) = {
+                let stage = &self.plan.stages[i];
+                (stage.uid, stage.size, stage.wants(recording), stage.state)
+            };
+            let Some(state) = self.states.get_mut(&uid) else { continue };
+            // What the host producer made since, as its newest.
+            if let Pass::Host { source, .. } = &self.plan.stages[i].pass {
+                if let Some(made) = source.to_render.take() {
+                    state.produced = Some(*made);
+                }
+            }
+            let produced = match &self.plan.stages[i].pass {
+                Pass::Host { program, .. } => {
+                    let stage = &self.plan.stages[i];
+                    state.produced.clone().filter(|frame| {
+                        let matches = match (&frame.content, program) {
+                            (crate::producer::Content::Pixels(_), None) => true,
+                            (crate::producer::Content::Render(text), Some((compiled, _))) => text == compiled,
+                            _ => false,
+                        };
+                        matches && (!stage.natural.0 || frame.size.0 == stage.size.0)
+                            && (!stage.natural.1 || frame.size.1 == stage.size.1)
+                    })
+                }
                 Pass::Shader(_) => None,
             };
-            let built = match (&stage.pass, &produced) {
-                (Pass::Shader(built), _) => Some(built),
-                (Pass::Host { program: Some((_, built)), .. }, Some(crate::producer::Produced { content: crate::producer::Content::Render(_), .. })) => Some(built),
-                _ => None,
+            let draws = matches!(
+                (&self.plan.stages[i].pass, &produced),
+                (Pass::Shader(_), _) | (Pass::Host { program: Some(_), .. }, Some(crate::producer::Produced { content: crate::producer::Content::Render(_), .. }))
+            );
+            let pipeline = match draws {
+                true => match self.pipeline(i) {
+                    Some(pipeline) => Some(pipeline),
+                    None => continue,
+                },
+                false => None,
             };
-            let pipeline = match built {
-                Some(built) => match built.peek() { Some(Ok(p)) => Some(p), _ => continue },
-                None => None,
+            let readied = match self.states.get_mut(&uid) {
+                Some(state) => state.ensure_out(&self.gpu, size, wants, buffers),
+                None => continue,
             };
-            let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            if let Err(error) = state.ensure_out(&self.gpu, stage.size, stage.wants(recording), stage.state) {
-                self.trouble(stage.uid, Some(error));
+            if let Err(error) = readied {
+                self.trouble(uid, Some(error));
                 continue;
             }
-            let clear = self.troubles.lock()
-                .get(&stage.uid).is_some_and(|why| why.starts_with("readback:"));
-            if clear { self.trouble(stage.uid, None); }
+            if self.troubles.get(&uid).is_some_and(|why| why.starts_with("readback:")) {
+                self.trouble(uid, None);
+            }
+            let stage = &self.plan.stages[i];
             let Some(state) = self.states.get_mut(&stage.uid) else { continue };
             for (k, cell) in stage.cells.uploads.iter().enumerate() {
-                if let Some(up) = cell.lock().take() {
+                if let Some(up) = cell.take() {
                     state.upload(&self.gpu, k, &up);
+                    // Back to the half, which frees it or fills it again: not this thread's.
+                    stage.cells.spent.push(up);
                 }
             }
             self.gpu.queue.write_buffer(&state.time, 0, &(t as f32).to_le_bytes());
@@ -265,9 +320,9 @@ impl Runtime {
                     state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
                 }));
                 let group0 = state.group0(&self.gpu);
-                let group1 = self.gpu.texture_group(&views);
+                let group1 = self.gpu.bind_textures(&stage.layouts.0, &views);
                 let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
-                let group2 = self.gpu.texture_group(&held);
+                let group2 = self.gpu.bind_textures(&stage.layouts.1, &held);
                 // Cloned, so the readback below may take `states` mutably.
                 let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
                 // The output, then one target per state buffer — the order the prelude writes them in.
@@ -297,10 +352,10 @@ impl Runtime {
             for w in Want::ALL {
                 let state = self.states.get_mut(&stage.uid).expect("just borrowed");
                 let Some(ring) = state.reads[w as usize].as_mut() else { continue };
-                let out_size = ring.out_size.clone();
-                let Some(slot) = ring.free.pop() else { continue };
+                ring.reclaim();
+                let Some(slot) = ring.free.pop_back() else { continue };
                 let (width, height) = slot.texture.size;
-                self.gpu.blit(&mut encoder, w, &out_view, &slot.texture.view, &out_size);
+                self.gpu.blit(&mut encoder, w, &out_view, &slot.texture.view, &ring.out_size);
                 encoder.copy_texture_to_buffer(
                     slot.texture.texture.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
@@ -329,7 +384,7 @@ impl Runtime {
             slot.at = t;
             let ready = slot.ready.clone();
             slot.buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                ready.store(r.is_ok(), Ordering::Release);
+                ready.store(if r.is_ok() { READY } else { FAILED }, Ordering::Release);
             });
             if let Some(ring) = self.states.get_mut(&uid).and_then(|s| s.reads[w as usize].as_mut()) {
                 ring.flight.push_back(slot);
@@ -340,88 +395,72 @@ impl Runtime {
     }
 
     /// Raise or clear what an armed stage wears, and ask for the settle that publishes it.
-    fn trouble(&self, uid: Uid, why: Option<String>) {
-        let mut held = self.troubles.lock();
+    fn trouble(&mut self, uid: Uid, why: Option<String>) {
         let was = match why {
-            Some(why) => held.insert(uid, why),
-            None => held.remove(&uid),
+            Some(why) => self.troubles.insert(uid, why),
+            None => self.troubles.remove(&uid),
         };
-        if was != held.get(&uid).cloned() {
+        if was != self.troubles.get(&uid).cloned() {
+            self.troubles_out.put(Box::new(self.troubles.clone()));
             self.shared.replan.store(true, Ordering::Release);
             self.shared.waker.notify();
         }
     }
 
-    /// Every frame the device has finished, given to the reader that asked for it. The GPU wrote
-    /// that reader's own format, so this is a copy of rows and never a conversion.
+    /// Every frame the device has finished, handed to the reader that asked for it, mapped: the
+    /// reader copies it out on its own thread and gives the slot back. Nothing here reads a texel.
     fn take(&mut self) {
+        let sfreq = f64::from(self.fps.load(Ordering::Relaxed));
         for i in 0..self.plan.stages.len() {
+            let (uid, window) = {
+                let stage = &self.plan.stages[i];
+                (stage.uid, stage.window)
+            };
             for w in Want::ALL {
-                let uid = self.plan.stages[i].uid;
-                let Some(ring) = self.states.get_mut(&uid).and_then(|s| s.reads[w as usize].as_mut()) else {
-                    continue;
-                };
-                if !ring.flight.front().is_some_and(|slot| slot.ready.load(Ordering::Acquire)) {
-                    continue;
-                }
-                let slot = ring.flight.pop_front().expect("the front was ready");
-                slot.ready.store(false, Ordering::Relaxed);
-                let (size, at) = (slot.texture.size, slot.at);
-                let shrunk = ring.shrunk;
-                let mut rows = ring.spare.lock().pop().unwrap_or_default();
-                let filled = rows_into(&mut rows, &slot.buffer, size, w);
-                slot.buffer.unmap();
-                let spare = ring.spare.clone();
-                ring.free.push(slot);
-                if !filled {
-                    continue;
-                }
-                // Read off the stage and the borrow ended, so the recorder's own counters below
-                // may take `self` mutably.
-                let (window, cells) = {
-                    let stage = &self.plan.stages[i];
-                    (stage.window, stage.cells.clone())
-                };
-                match w {
-                    Want::Screen => {
-                        if let (Some(id), Some(ui)) = (window, &self.ui) {
-                            present(self.presenting.entry(id).or_default(), ui, id, size, rows, spare);
+                let Some(state) = self.states.get_mut(&uid) else { break };
+                let mut finished: Vec<Readback> = Vec::new();
+                let mut refused = false;
+                {
+                    let Some(ring) = state.reads[w as usize].as_mut() else { continue };
+                    ring.reclaim();
+                    while ring.flight.front().is_some_and(|slot| slot.ready.load(Ordering::Acquire) != PENDING) {
+                        let slot = ring.flight.pop_front().expect("the front was answered");
+                        match slot.ready.load(Ordering::Acquire) {
+                            READY => finished.push(ring.hand(slot, w, 0, sfreq)),
+                            // A map the device refused was never mapped: the slot is free again,
+                            // and the stage says so rather than holding its ring for ever.
+                            _ => {
+                                slot.ready.store(PENDING, Ordering::Relaxed);
+                                ring.free.push_back(slot);
+                                refused = true;
+                            }
                         }
                     }
-                    Want::Record => {
-                        // Numbered here, so a readback the half or the queue let go leaves a gap
-                        // the recorder counts; dated by the tick that drew it.
-                        let state = self.states.get_mut(&uid).expect("just borrowed");
-                        state.recorded += 1;
-                        let mut meta = Meta::new().with_sfreq(Some(f64::from(self.fps.load(Ordering::Relaxed)))).with_index(Some(state.recorded));
-                        meta.set_time(Some(at));
-                        let texels = Arc::new(goofi_core::record::Texels { width: size.0, height: size.1, rgba: rows, meta });
-                        let mut held = cells.record.lock();
-                        if held.len() >= crate::half::RECORD_HELD {
-                            held.pop_front();
+                }
+                if refused {
+                    self.trouble(uid, Some("readback: the device refused to map the frame".to_string()));
+                    continue;
+                }
+                let cells = &self.plan.stages[i].cells;
+                for mut readback in finished {
+                    match w {
+                        Want::Screen => {
+                            if let (Some(id), Some(ui)) = (window, &self.ui) {
+                                present(self.presenting.entry(id).or_default(), ui, id, readback);
+                            }
                         }
-                        held.push_back(texels);
-                    }
-                    Want::Tap | Want::TapU8 => {
-                        let shape = vec![size.1 as usize, size.0 as usize, 4];
-                        // A frame that was shrunk on the way out says so, in the words
-                        // `reduce_for_view` uses — otherwise it would understate its own origin
-                        // and a viewer could not map a texel back to the pixel it came from.
-                        let mut meta = Meta::new();
-                        if shrunk.from != shrunk.to {
-                            let axes = [(0, shrunk.from.1 as usize), (1, shrunk.from.0 as usize)];
-                            goofi_core::reduce::note_reduced(&mut meta, &axes);
+                        Want::Record => {
+                            // Numbered here, so a readback the half or the queue let go leaves a
+                            // gap the recorder counts; dated by the tick that drew it.
+                            state.recorded += 1;
+                            readback.index = state.recorded;
+                            cells.record.push(readback);
+                            cells.bell.ring(0);
                         }
-                        let held = if w == Want::TapU8 {
-                            // The window the GPU clamped to, said the way `quantize_u8` says it,
-                            // so a viewer maps a texel back through the one rule.
-                            goofi_core::reduce::note_depth(&mut meta, 0.0, 1.0);
-                            Some(Tapped::Texels { shape, bytes: rows, meta })
-                        } else {
-                            Data::array_f32(shape, rows, meta).ok().map(Tapped::Full)
-                        };
-                        if let Some(held) = held {
-                            *cells.tap.lock() = Some(held);
+                        Want::Tap | Want::TapU8 => {
+                            // Latest wins; what this displaces goes back to the ring on the way out.
+                            drop(cells.tap.put(Box::new(readback)));
+                            cells.bell.ring(0);
                         }
                     }
                 }
@@ -430,20 +469,16 @@ impl Runtime {
     }
 }
 
-/// What each stage the render thread refused wears, shared with the engine that settles it.
-pub type Troubles = Arc<Mutex<HashMap<Uid, String>>>;
-
-/// A frame as the screen takes it: its size, its texels in the screen's own byte order, and
-/// where the buffer goes back to once drawn.
-type Frame = ((u32, u32), Vec<u8>, Spare);
-
 /// One window's frame in flight, or the count of frames its surface showed since the window
 /// thread last heard.
 #[derive(Default)]
 struct Present {
-    pending: Mutex<Option<Frame>>,
+    /// The newest frame read back for the window, mapped, until the window thread takes it.
+    frame: Mailbox<Readback>,
     drawn: AtomicU64,
     posted: AtomicBool,
+    /// The window thread's own rows, kept between two frames; nothing else takes this.
+    rows: Mutex<Vec<u8>>,
 }
 
 /// One swap chain: a window's surface configured at one size, and the pass into its format.
@@ -499,33 +534,26 @@ impl Chain {
     }
 }
 
-/// Hand the screen the newest frame, latest-wins. The drawn buffer goes back to `spare` rather
-/// than being freed.
-fn present(
-    cell: &Arc<Present>,
-    ui: &goofi_window::Ui,
-    id: goofi_window::Id,
-    size: (u32, u32),
-    texels: Vec<u8>,
-    spare: Spare,
-) {
-    if let Some((_, dropped, spare)) = cell.pending.lock().replace((size, texels, spare)) {
-        give_back(&spare, dropped);
-    }
+/// Hand the screen the newest frame, latest-wins: what this displaces goes back to its ring.
+fn present(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id, frame: Readback) {
+    drop(cell.frame.put(Box::new(frame)));
     post(cell, ui, id);
 }
 
 /// Tell the window thread what the cell holds, with at most ONE job outstanding: a job per frame
-/// on an unbounded queue starved every other job the window thread had, an op among them.
+/// on an unbounded queue starved every other job the window thread had, an op among them. The
+/// rows are copied off the mapped buffer THERE, on the window's own thread.
 fn post(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id) {
     if cell.posted.swap(true, Ordering::AcqRel) {
         return;
     }
     let cell = cell.clone();
     ui.post(move |host| {
-        if let Some((size, texels, spare)) = cell.pending.lock().take() {
-            host.present(id, size, &texels);
-            give_back(&spare, texels);
+        if let Some(frame) = cell.frame.take() {
+            let mut rows = cell.rows.lock();
+            if frame.rows_into(&mut rows) {
+                host.present(id, frame.size(), &rows);
+            }
         }
         let drawn = cell.drawn.swap(0, Ordering::Relaxed);
         if drawn > 0 {

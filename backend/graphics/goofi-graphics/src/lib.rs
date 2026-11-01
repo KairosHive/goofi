@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use goofi_supervisor::sync::Mutex;
+use goofi_supervisor::sync::{Mailbox, Stack};
 use std::time::Duration;
 
 use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
@@ -60,6 +60,9 @@ pub(crate) struct Instance {
     pub(crate) cells: Arc<half::Cells>,
     control: Handle,
     pub(crate) source: Option<producer::Source>,
+    /// What the host producer last made, as the engine took it: the size a stage follows and
+    /// the render program it compiles.
+    pub(crate) produced: Option<producer::Produced>,
     program: Option<(Arc<str>, scan::Built)>,
     /// The width and height the settled document holds as constants, per axis; `None` where an
     /// expression drives the axis and the half's evaluation is the one value. A fullscreen
@@ -103,19 +106,30 @@ pub struct GraphicsEngine {
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
     pub(crate) stamps: HashMap<String, (std::path::PathBuf, goofi_node::Stamp)>,
     live: HashMap<Uid, Instance>,
-    runtime: Arc<Mutex<Runtime>>,
-    inbox: Arc<Mutex<Vec<runtime::Cmd>>>,
+    /// Whose thread ticks the runtime: the clock's own, or the harness's hand. The runtime is
+    /// that thread's alone; nothing else holds it.
+    ticker: Option<Ticker>,
+    inbox: std::sync::mpsc::Sender<runtime::Cmd>,
     stats: Arc<Stats>,
-    ticker: Option<(Arc<AtomicBool>, goofi_supervisor::worker::Worker)>,
     faults: goofi_runtime::Faults,
     ui: Option<goofi_window::Ui>,
     windows: HashMap<Uid, Opened>,
     pending: Vec<(Uid, Status)>,
     dirty: bool,
-    /// What the render thread found a stage could not do; settled as a fault like any other.
+    /// What the render thread found a stage could not do, as it last said it; taken at settle,
+    /// kept here, and settled as a fault like any other.
     troubles: runtime::Troubles,
+    troubled: HashMap<Uid, String>,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
+}
+
+/// The thread the runtime lives on. Under the internal clock it is the clock thread's, which
+/// ticks it at `graphics.fps` and gives every GPU object back before it ends; under the external
+/// clock it is here, ticked by [`GraphicsEngine::render`].
+enum Ticker {
+    Clock { stop: Arc<AtomicBool>, thread: goofi_supervisor::worker::Worker },
+    Hand(Box<Runtime>),
 }
 
 fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> ParamDecl {
@@ -165,36 +179,35 @@ impl GraphicsEngine {
         let stats = Arc::new(Stats::default());
         let troubles = runtime::Troubles::default();
         let fps = Arc::new(AtomicU32::new(fps_of(None)));
-        let runtime = Arc::new(Mutex::new(Runtime::new(
-            gpu.clone(),
-            time.clone(),
-            stats.clone(),
-            troubles.clone(),
-            shared.clone(),
-            recording,
-            fps.clone(),
-        )));
-        let inbox = runtime.lock().inbox.clone();
-        let ticker = (clock == Clock::Internal).then(|| {
-            let stop = Arc::new(AtomicBool::new(false));
-            let (rt, halt, pace) = (runtime.clone(), stop.clone(), fps.clone());
-            let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
-                .spawn(move || {
-                    let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
-                    while !halt.load(Ordering::Relaxed) {
-                        // A tick that panics ends no clock: the cause is logged and the next
-                        // tick runs; the runtime's lock takes the poison over.
-                        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rt.lock().tick())) {
-                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+        let (inbox, asked) = std::sync::mpsc::channel();
+        let links = runtime::Links { stats: stats.clone(), troubles: troubles.clone(), shared: shared.clone(), recording, fps: fps.clone() };
+        let mut runtime = Runtime::new(gpu.clone(), time.clone(), links, asked);
+        let ticker = match clock {
+            Clock::External => Ticker::Hand(Box::new(runtime)),
+            Clock::Internal => {
+                let stop = Arc::new(AtomicBool::new(false));
+                let (halt, pace) = (stop.clone(), fps.clone());
+                let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
+                    .spawn(move || {
+                        let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
+                        while !halt.load(Ordering::Relaxed) {
+                            // A tick that panics ends no clock: the cause is logged and the next
+                            // tick runs on what the runtime still holds.
+                            if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())) {
+                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                            }
+                            grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
+                            // A tick that overran does not try to catch up: the grid restarts from now.
+                            goofi_supervisor::timing::sleep_until(grid.advance());
                         }
-                        grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
-                        // A tick that overran does not try to catch up: the grid restarts from now.
-                        goofi_supervisor::timing::sleep_until(grid.advance());
-                    }
-                })
-                .expect("the render clock");
-            (stop, thread)
-        });
+                        // Every GPU object goes back on the thread that made it, before the
+                        // engine closes the windows the surfaces were made on.
+                        runtime.clear();
+                    })
+                    .expect("the render clock");
+                Ticker::Clock { stop, thread }
+            }
+        };
         Ok(GraphicsEngine {
             instance,
             time,
@@ -208,16 +221,16 @@ impl GraphicsEngine {
             host: None,
             booted: false,
             live: HashMap::new(),
-            runtime,
             inbox,
             stats,
-            ticker,
+            ticker: Some(ticker),
             faults: goofi_runtime::Faults::default(),
             ui: None,
             windows: HashMap::new(),
             pending: Vec::new(),
             dirty: false,
             troubles,
+            troubled: HashMap::new(),
             hub,
         })
     }
@@ -238,13 +251,14 @@ impl GraphicsEngine {
     /// Ask the render thread for something. Never blocks: a tick is long, and an op that waited
     /// on one would be an op that waits on a render.
     fn ask(&self, cmd: runtime::Cmd) {
-        self.inbox.lock().push(cmd);
+        let _ = self.inbox.send(cmd);
     }
 
-    /// The external clock: run `frames` ticks on the caller's thread. The harness's door.
+    /// The external clock: run `frames` ticks on the caller's thread. The harness's door; a no-op
+    /// under the internal clock, whose thread holds the runtime.
     pub fn render(&mut self, frames: usize) {
+        let Some(Ticker::Hand(runtime)) = &mut self.ticker else { return };
         for _ in 0..frames {
-            let mut runtime = self.runtime.lock();
             runtime.tick();
             runtime.finish();
         }
@@ -403,20 +417,24 @@ impl Engine for GraphicsEngine {
             return Some(format!("no graphics node type `{type_name}`"));
         };
         let manifest = class.manifest;
+        let base = goofi_transport::service_base(&self.instance, uid, generation);
         let cells = Arc::new(half::Cells {
             params: goofi_runtime::cells_of(params, &decls_of(manifest)).into(),
-            uploads: shader::array_inputs(manifest).map(|_| Mutex::new(None)).collect(),
+            uploads: shader::array_inputs(manifest).map(|_| Mailbox::new()).collect(),
+            spent: Stack::new(),
             uploaded: AtomicU64::new(0),
             readers: AtomicBool::new(false),
-            tap: Mutex::new(None),
+            tap: Mailbox::new(),
             tap_box: AtomicU64::new(0),
-            record: Mutex::new(std::collections::VecDeque::new()),
+            record: Stack::new(),
+            // The half's own door: the render thread rings it once a readback is in a cell.
+            bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
         });
         let spawn = goofi_runtime::Spawn {
             engine: "graphics",
             uid,
             instance: self.instance.clone(),
-            base: goofi_transport::service_base(&self.instance, uid, generation),
+            base,
             manifest,
             decls: decls_of(manifest),
             params: cells.params.clone(),
@@ -424,7 +442,7 @@ impl Engine for GraphicsEngine {
         };
         let shared = cells.clone();
         let size = manifest.params.len();
-        let source = matches!(class.kind, scan::Kind::Host(_)).then(producer::Source::default);
+        let source = matches!(class.kind, scan::Kind::Host(_)).then(|| Arc::new(producer::Cells::default()));
         let factory = match &class.kind {
             scan::Kind::Shader(_) => None,
             scan::Kind::Host(factory) => Some((factory.clone(), source.clone().expect("host source"), params.clone())),
@@ -443,7 +461,7 @@ impl Engine for GraphicsEngine {
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, program: None, settled_size: (None, None) });
+        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, produced: None, program: None, settled_size: (None, None) });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -455,7 +473,7 @@ impl Engine for GraphicsEngine {
             self.ask(runtime::Cmd::Remove(uid));
             drop(inst);
             self.faults.forget(uid);
-            self.troubles.lock().remove(&uid);
+            self.troubled.remove(&uid);
             self.pending.retain(|(u, _)| *u != uid);
             self.dirty = true;
         }
@@ -485,11 +503,12 @@ impl Engine for GraphicsEngine {
         }
         // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
         for inst in self.live.values_mut() {
-            let source = inst.source.as_ref().and_then(|s| {
-                s.lock().as_ref().and_then(|frame| match &frame.content {
-                    producer::Content::Render(text) => Some(text.clone()),
-                    producer::Content::Pixels(_) => None,
-                })
+            if let Some(made) = inst.source.as_ref().and_then(|s| s.to_engine.take()) {
+                inst.produced = Some(*made);
+            }
+            let source = inst.produced.as_ref().and_then(|frame| match &frame.content {
+                producer::Content::Render(text) => Some(text.clone()),
+                producer::Content::Pixels(_) => None,
             });
             if inst.program.as_ref().map(|(text, _)| text) == source.as_ref() { continue; }
             let next = source.map(|text| {
@@ -500,9 +519,13 @@ impl Engine for GraphicsEngine {
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         let refused = self.follow_windows(view, &plan::sizes(view, &self.live));
-        let (plan, mut faults) = plan::compile(view, &self.live, &self.windows);
+        let (plan, mut faults) = plan::compile(view, &self.live, &self.windows, &self.gpu);
         faults.extend(refused);
-        faults.extend(self.troubles.lock().iter().map(|(u, w)| (*u, w.clone())));
+        // The render thread's word, as it last said it; a node gone since is not in the plan.
+        if let Some(said) = self.troubles.take() {
+            self.troubled = *said;
+        }
+        faults.extend(self.troubled.iter().filter(|(u, _)| self.live.contains_key(u)).map(|(u, w)| (*u, w.clone())));
         let since = self.time.now();
         self.pending.extend(self.faults.settle(faults, since));
         self.ask(runtime::Cmd::Plan(plan));
@@ -543,13 +566,16 @@ impl Engine for GraphicsEngine {
     /// Stop the clock and the compiler, then every control half, and WAIT for each to release its
     /// shared memory.
     fn shutdown(&mut self) {
-        if let Some((stop, thread)) = self.ticker.take() {
-            stop.store(true, Ordering::Relaxed);
-            let _ = thread.join();
+        // The surfaces go before their windows: the runtime's chains first, then the engine's.
+        match self.ticker.take() {
+            Some(Ticker::Clock { stop, thread }) => {
+                stop.store(true, Ordering::Relaxed);
+                let _ = thread.join();
+            }
+            Some(Ticker::Hand(mut runtime)) => runtime.clear(),
+            None => {}
         }
         goofi_runtime::stop_all(self.live.values().map(|i| &i.control));
-        // The surfaces go before their windows: the runtime's chains first, then the engine's.
-        self.runtime.lock().clear();
         let windows = std::mem::take(&mut self.windows);
         if let Some(ui) = self.ui.take() {
             for opened in windows.into_values() {

@@ -9,6 +9,7 @@
 //! node) at its next tick or settle; [`Ready::on_ready`] rings whatever that owner parks on, so
 //! the swap costs no poll.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::sync::Mutex;
@@ -23,6 +24,9 @@ impl<T> Clone for Ready<T> {
 }
 
 struct Cell<T> {
+    /// Raised once the outcome is in. An owner that asks every tick reads this and never takes
+    /// the lock below while the work is still running on its thread.
+    done: AtomicBool,
     /// `None` until the work is done; a taken result leaves `Some(Taken)` behind.
     outcome: Mutex<Outcome<T>>,
     /// What to wake once the outcome is in; each once, in the order they asked.
@@ -37,7 +41,7 @@ enum Outcome<T> {
 
 impl<T> Ready<T> {
     fn new() -> Ready<T> {
-        Ready(Arc::new(Cell { outcome: Mutex::new(Outcome::Pending), wake: Mutex::new(Vec::new()) }))
+        Ready(Arc::new(Cell { done: AtomicBool::new(false), outcome: Mutex::new(Outcome::Pending), wake: Mutex::new(Vec::new()) }))
     }
 
     /// A result that is in from the start: a build refused before it began.
@@ -49,6 +53,7 @@ impl<T> Ready<T> {
 
     fn set(&self, outcome: Result<T, String>) {
         *self.0.outcome.lock() = Outcome::Done(outcome);
+        self.0.done.store(true, Ordering::Release);
         for wake in std::mem::take(&mut *self.0.wake.lock()) {
             wake();
         }
@@ -56,7 +61,7 @@ impl<T> Ready<T> {
 
     /// Whether the work is done, whichever way.
     pub fn is_ready(&self) -> bool {
-        !matches!(*self.0.outcome.lock(), Outcome::Pending)
+        self.0.done.load(Ordering::Acquire)
     }
 
     /// Ring `wake` once the outcome is in — at once if it already is.
@@ -72,6 +77,9 @@ impl<T> Ready<T> {
 
     /// The outcome, moved out once: `None` while pending, and again once taken.
     pub fn take(&self) -> Option<Result<T, String>> {
+        if !self.is_ready() {
+            return None;
+        }
         let mut outcome = self.0.outcome.lock();
         match std::mem::replace(&mut *outcome, Outcome::Taken) {
             Outcome::Done(result) => Some(result),
@@ -87,6 +95,9 @@ impl<T> Ready<T> {
 impl<T: Clone> Ready<T> {
     /// The outcome, read in place: `None` while pending.
     pub fn peek(&self) -> Option<Result<T, String>> {
+        if !self.is_ready() {
+            return None;
+        }
         match &*self.0.outcome.lock() {
             Outcome::Done(result) => Some(result.clone()),
             Outcome::Pending | Outcome::Taken => None,
@@ -95,6 +106,9 @@ impl<T: Clone> Ready<T> {
 
     /// The error, if the work failed.
     pub fn error(&self) -> Option<String> {
+        if !self.is_ready() {
+            return None;
+        }
         match &*self.0.outcome.lock() {
             Outcome::Done(Err(why)) => Some(why.clone()),
             _ => None,

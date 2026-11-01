@@ -5,9 +5,9 @@ use goofi_core::texture::Texture;
 use goofi_core::{Data, SlotType, Value};
 use goofi_host_sdk::Node;
 use goofi_node::{NodeManifest, ParamGroups};
+use goofi_supervisor::sync::Mailbox;
 use std::path::Path;
 use std::sync::Arc;
-use goofi_supervisor::sync::Mutex;
 
 pub(crate) type Factory = Arc<dyn Fn(&ParamGroups) -> Box<dyn Node> + Send + Sync>;
 #[derive(Clone)]
@@ -21,9 +21,21 @@ pub struct Produced {
     pub index: u64,
     pub content: Content,
 }
-pub type Source = Arc<Mutex<Option<Produced>>>;
+
+/// What a host producer made, on its way to its two readers: the render thread, which uploads
+/// or draws it, and the engine, which sizes the stage and compiles a render program off it. One
+/// cell each, latest wins, so neither reader waits on the producer and the producer waits on no
+/// reader; each keeps what it last took.
+#[derive(Default)]
+pub struct Cells {
+    pub(crate) to_render: Mailbox<Produced>,
+    pub(crate) to_engine: Mailbox<Produced>,
+}
+
+pub type Source = Arc<Cells>;
 
 impl crate::GraphicsEngine {
+
     pub fn set_python(&mut self, python: goofi_python::catalog::Python) {
         self.python = Some(python);
     }
@@ -91,22 +103,25 @@ impl crate::GraphicsEngine {
 }
 
 
-/// What a producer emitted, into the cell the engine compiles and uploads from. Answers whether
-/// the frame asks for a settle: a new size, or a render source that moved.
-pub fn produced(source: &Source, frame: &Data) -> bool {
+/// What a producer emitted, into the cells the engine compiles and the render thread uploads
+/// from. Answers whether the frame asks for a settle: a new size, or a render source that moved,
+/// judged against `last`, the producer's own memory of what it put out before.
+pub fn produced(source: &Source, last: &mut Option<Produced>, frame: &Data) -> bool {
     let Value::Texture(texture) = frame.value() else { return false };
     let content = match &**texture {
         Texture::Pixels(pixels) => Content::Pixels(Arc::new(crate::resources::Upload::pixels(pixels))),
         Texture::Render { source, .. } => Content::Render(Arc::from(source.as_str())),
     };
-    let mut latest = source.lock();
     let size = texture.size();
-    let changed = latest.as_ref().is_none_or(|old| old.size != size)
-        || match (&content, latest.as_ref().map(|old| &old.content)) {
+    let changed = last.as_ref().is_none_or(|old| old.size != size)
+        || match (&content, last.as_ref().map(|old| &old.content)) {
             (Content::Render(new), Some(Content::Render(old))) => new != old,
             (Content::Render(_), _) | (Content::Pixels(_), Some(Content::Render(_))) => true,
             _ => false,
         };
-    *latest = Some(Produced { size, index: frame.meta().index().unwrap_or(0), content });
+    let made = Produced { size, index: frame.meta().index().unwrap_or(0), content };
+    source.to_render.put(Box::new(made.clone()));
+    source.to_engine.put(Box::new(made.clone()));
+    *last = Some(made);
     changed
 }

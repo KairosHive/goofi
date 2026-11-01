@@ -571,3 +571,50 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     assert!(goofi_supervisor::session::sessions().iter().all(|s| s.id != id));
     let _ = std::fs::remove_dir_all(&foreign);
 }
+
+#[test]
+fn a_queue_drops_its_oldest_and_never_blocks_its_sender() {
+    // A recorder's queue is bounded: the sender is never held, a frame past the depth costs the
+    // OLDEST one, and what the reader takes is in order with the newest kept.
+    let numbered = |i: u64| {
+        let mut meta = goofi_core::Meta::new();
+        meta.set_index(Some(i));
+        goofi_core::record::Frame::Data(Data::array_f32(vec![1], 0f32.to_le_bytes().to_vec(), meta).expect("one sample"))
+    };
+    let hub = goofi_tests::hub();
+    let name = format!("{}-queue", base_of(Uid(7)));
+    let sender = hub.sender(&name, 4);
+    let mut receiver = hub.receiver(&name, 4);
+    assert!(receiver.receive().is_none());
+    for i in 1..=6 {
+        assert!(sender.send(numbered(i)));
+    }
+    assert_eq!(receiver.fill(), 1.0, "full at its depth");
+    let taken: Vec<u64> = std::iter::from_fn(|| receiver.receive()).map(|f| f.meta().index().expect("numbered")).collect();
+    assert_eq!(taken, vec![3, 4, 5, 6], "the two oldest went, the rest in order");
+    assert_eq!(receiver.fill(), 0.0);
+
+    // Step: a sender on another thread outruns the reader; nothing is reordered or doubled.
+    let producer = std::thread::spawn(move || {
+        for i in 1..=2000u64 {
+            sender.send(numbered(i));
+        }
+    });
+    let mut seen: Vec<u64> = Vec::new();
+    let deadline = Instant::now() + WAIT;
+    while Instant::now() < deadline {
+        match receiver.receive() {
+            Some(f) => seen.push(f.meta().index().expect("numbered")),
+            None if producer.is_finished() && receiver.fill() == 0.0 => break,
+            None => {
+                receiver.wait_until(Instant::now() + Duration::from_millis(1));
+            }
+        }
+    }
+    producer.join().expect("the sender ends");
+    while let Some(f) = receiver.receive() {
+        seen.push(f.meta().index().expect("numbered"));
+    }
+    assert!(seen.windows(2).all(|w| w[0] < w[1]), "ascending, each once: {seen:?}");
+    assert_eq!(seen.last(), Some(&2000), "the newest is never the one dropped");
+}
