@@ -3,37 +3,48 @@
 	import type { PanelProps } from 'panelty';
 	import type { Context, NodeDrag, NodeDrop, Panel } from '../../../../sdk/frontend';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { splitDrop, ui } from '$lib/stores/ui.svelte';
-	import NodeDropHint from '$lib/panels/NodeDropHint.svelte';
+	import { drag, dropTarget, DropHint, type DropTargetOptions, type Point } from '$lib/drag';
 
 	let { panelId, state: panelState, setState, panel, ctx }: PanelProps & { panel: Panel; ctx: Context } = $props();
 	let element: HTMLDivElement;
 	let error = $state('');
-	const uiStore = ui();
+	const engine = drag();
 	const accepts = $derived(panel.accepts_node === true);
-	const dragActive = $derived(accepts && uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragOver === panelId);
-	const under = $derived(uiStore.nodeDragOver === null ? null : splitDrop(uiStore.nodeDragOver));
-	// The zone under the pointer, as the plugin spelled it: what follows `<panelId>#`.
-	const zone = $derived(under?.owner === panelId ? under.zone : null);
-	const drag = $derived<NodeDrag | null>(
-		dragActive ? { node: uiStore.nodeDrag as string, over: over || zone !== null, zone } : null
-	);
 	const drops = new Set<(drop: NodeDrop) => void>();
 	const drags = new Set<(drag: NodeDrag | null) => void>();
+
+	/** The zone under `at`, as the plugin spelled it after `<panelId>#` on the element's
+	 * `data-node-drop`, found in the plugin's own tree, through a shadow root when it keeps one. */
+	function zoneAt(at: Point): string | null {
+		const root = element.shadowRoot ?? document;
+		const key = root.elementFromPoint(at.x, at.y)?.closest<HTMLElement>('[data-node-drop]')?.dataset.nodeDrop ?? '';
+		return key.startsWith(`${panelId}#`) ? key.slice(panelId.length + 1) : null;
+	}
+	const over = $derived(accepts && engine.isOver(panelId));
+	const zone = $derived(over && engine.point ? zoneAt(engine.point) : null);
+	const live = $derived.by((): NodeDrag | null => {
+		const s = engine.source;
+		return accepts && s?.tags.includes('node') ? { node: s.key, over, zone } : null;
+	});
+	const target = $derived<DropTargetOptions | null>(
+		accepts
+			? {
+					id: panelId,
+					tags: ['node'],
+					onDrop: ({ source, at }) => {
+						const zone = zoneAt(at) ?? '';
+						for (const handler of drops) fenced(() => handler({ node: source.key, zone, x: at.x, y: at.y }));
+					}
+				}
+			: null
+	);
 
 	// A plugin failing in its handler must not break the editor's drag, so each is fenced.
 	function fenced(run: () => void): void {
 		try { run(); } catch (cause) { notify().failure(`Plugin panel ${panel.title}`, cause); }
 	}
 	$effect(() => {
-		if (!accepts) return;
-		return uiStore.onNodeDrop(panelId, (node, zone, at) => {
-			for (const handler of drops) fenced(() => handler({ node, zone, x: at.x, y: at.y }));
-		});
-	});
-	$effect(() => {
-		const current = drag;
+		const current = live;
 		for (const handler of drags) fenced(() => handler(current));
 	});
 	onMount(() => {
@@ -64,10 +75,10 @@
 	});
 </script>
 
-<div class="plugin-panel">
+<div class="plugin-panel" use:dropTarget={target}>
 	<div class="plugin-root" data-plugin-panel bind:this={element}></div>
 	{#if error}<p role="alert">{error}</p>{/if}
-	{#if accepts}<NodeDropHint {panelId} />{/if}
+	{#if accepts}<DropHint id={panelId} />{/if}
 </div>
 
 <style>

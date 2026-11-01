@@ -3,11 +3,11 @@
 	import type { PanelProps } from 'panelty';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { linkedNodeName } from 'panelty';
+	import { linkedNodeName, workspace } from 'panelty';
 	import { Bar, StatusDot, EmptyState } from '$lib/ui';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
+	import { dropTarget, DropHint } from '$lib/drag';
 	import NodeSelect from './NodeSelect.svelte';
-	import NodeDropHint from './NodeDropHint.svelte';
 	import type { Snippet } from 'svelte';
 
 	let {
@@ -24,12 +24,18 @@
 	} = $props();
 
 	const g = graph();
+	const ws = workspace();
 
 	const linkedName = $derived(linkedNodeName(linkState));
 	const node = $derived(linkedName ? g.nodeById(linkedName) : null);
 </script>
 
-<div class="linked" role="group" data-testid="node-linked-panel">
+<div
+	class="linked"
+	role="group"
+	data-testid="node-linked-panel"
+	use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}
+>
 	<!-- Tight, as the node header's controls sit: every px of this row is the strip's, and it has
 	     nothing at its end to keep apart. -->
 	<Bar class="nlp-bar" style="--bar-gap: var(--space-3)">
@@ -66,7 +72,7 @@
 		</div>
 	{/if}
 
-	<NodeDropHint {panelId} />
+	<DropHint id={panelId} />
 </div>
 
 <style>

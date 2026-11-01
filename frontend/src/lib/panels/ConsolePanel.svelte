@@ -10,12 +10,14 @@
 	import { copyText } from '$lib/clipboard';
 	import { estimateRowHeight } from './consoleRowHeight';
 	import NodeSelect from './NodeSelect.svelte';
-	import NodeDropHint from './NodeDropHint.svelte';
+	import { workspace } from 'panelty';
+	import { dropTarget, DropHint } from '$lib/drag';
 	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
 	import { onDestroy, tick, untrack } from 'svelte';
 
 	let { panelId, state: linkState }: PanelProps = $props();
 	const sel = selection();
+	const ws = workspace();
 	const cs = consoleStore();
 
 	const filterName = $derived(linkedNodeName(linkState)); // the bound node's uid (identity)
@@ -210,7 +212,7 @@
 	});
 </script>
 
-<div class="wrap" data-testid="console-panel">
+<div class="wrap" data-testid="console-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}>
 	<Bar>
 		{#snippet start()}
 			{#each LEVELS as level}
@@ -308,7 +310,7 @@
 		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
 	</form>
 
-	<NodeDropHint {panelId} />
+	<DropHint id={panelId} />
 </div>
 
 <style>

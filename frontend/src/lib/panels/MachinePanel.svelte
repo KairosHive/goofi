@@ -19,12 +19,13 @@
 		type Node,
 		type Viewport
 	} from '@xyflow/svelte';
-	import { asStateObject, createLongPress, portal, workspace, type MenuItem, ContextMenu, type PanelProps } from 'panelty';
+	import { asStateObject, createLongPress, workspace, type MenuItem, ContextMenu, type PanelProps } from 'panelty';
 	import { tick, untrack } from 'svelte';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { on } from 'svelte/events';
 	import { camera } from '$lib/editor/camera';
 	import { eventPoint } from '$lib/editor/eventPoint';
+	import { drag, type DragSource, type DragTag } from '$lib/drag';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
@@ -39,7 +40,6 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
 	import { EmptyState, Icon, IconButton, isTextEditingTarget, NumberInput } from '$lib/ui';
 	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
@@ -51,8 +51,8 @@
 	let { panelId, state: panelState, setState }: PanelProps = $props();
 	const g = graph();
 	const sel = selection();
-	const uiStore = ui();
 	const ws = workspace();
+	const engine = drag();
 
 	const name = $derived((asStateObject(panelState) as MachineState).machine ?? '');
 	const machine = $derived(name ? g.machines[name] : undefined);
@@ -263,20 +263,56 @@
 	}
 
 	// ---- a box drag previews the state's place and lands it, on the grid, as one edit. A hold
-	// that never moves leaves the box where it was. Over a param row it is a mapping, not a move:
-	// the box snaps back, a chip follows the pointer, and the drop hands the row a playhead's
-	// variable for one of the state's attributes, picked from a menu when there are several.
+	// that never moves leaves the box where it was. Carried beyond the canvas, a lone box is a
+	// mapping, not a move: the box snaps back, a chip follows the pointer, and the target that
+	// takes it is handed a playhead's variable for one of the state's attributes, picked from a
+	// menu when there are several.
 	const dragOrigin = new Map<string, { x: number; y: number }>();
-	let lifted = $state<{ x: number; y: number; state: string } | null>(null);
-	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-	function onNodeDragStart(args: { nodes: Node[] }): void {
-		for (const n of args.nodes) dragOrigin.set(n.id, { x: n.position.x, y: n.position.y });
+	// The state the engine carries, while it does.
+	let lifted: string | null = null;
+	let picker = $state<{ x: number; y: number; items: MenuItem[]; close(): void } | null>(null);
+
+	/** The attributes `state` sets, or all of them: those a target of `tag` reads. */
+	function attrsFor(state: string, tag: DragTag): string[] {
+		const m = machine;
+		if (!m) return [];
+		const set = Object.keys(m.states[state]?.values ?? {});
+		return (set.length > 0 ? set : Object.keys(m.attributes)).filter((a) => (m.attributes[a]?.kind.type === 'string') === (tag === 'text'));
 	}
-	/** The param row under the pointer, where a lone box is being dragged. */
-	function rowUnder(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): { el: Element; x: number; y: number } | null {
-		const p = args.nodes.length === 1 ? eventPoint(args.event) : null;
-		const el = p && document.elementFromPoint(p.clientX, p.clientY)?.closest('[data-variable-drop]');
-		return p && el ? { el, x: p.clientX, y: p.clientY } : null;
+	function stateSource(state: string): DragSource {
+		const tags: DragTag[] = [];
+		if (attrsFor(state, 'number').length) tags.push('number');
+		if (attrsFor(state, 'text').length) tags.push('text');
+		return {
+			key: state,
+			tags,
+			label: `variables.⟨playhead⟩.${state}…`,
+			home: rootEl?.querySelector('.svelte-flow') ?? rootEl,
+			expression: (tag, at) => offer(state, tag, at)
+		};
+	}
+	/** A variable of `state`'s for a target that takes `tag`: the one attribute it sets on the one
+	 * playhead, or a pick. */
+	function offer(state: string, tag: DragTag, at: { x: number; y: number }): string | null | Promise<string | null> {
+		const m = machine;
+		if (!m) return null;
+		const playheads = Object.keys(m.playheads);
+		const attrs = attrsFor(state, tag);
+		if (playheads.length === 0) {
+			notify().failure('Map state', 'no playhead travels this machine; add one in the state inspector');
+			return null;
+		}
+		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
+		const name = (c: { ph: string; a: string }): string => `variables.${c.ph}.${c.a}`;
+		if (choices.length === 1) return name(choices[0]);
+		return new Promise((resolve) => {
+			picker = {
+				x: at.x,
+				y: at.y,
+				items: choices.map((c) => ({ label: playheads.length > 1 ? `${c.ph}.${c.a}` : c.a, action: () => resolve(name(c)) })),
+				close: () => resolve(null)
+			};
+		});
 	}
 	/** The box back where its drag began, the preview with it. */
 	function revert(n: Node): void {
@@ -286,36 +322,23 @@
 		flowNodes = flowNodes.map((f) => (f.id === n.id ? { ...f, position: o } : f));
 		g.previewState(name, n.id, { pos: [o.x, o.y] });
 	}
-	/** Hand `row` a variable of `state`'s: the one attribute it sets on the one playhead, or a pick. */
-	function offer(row: Element, state: string, at: { x: number; y: number }): void {
-		const m = machine;
-		if (!m) return;
-		const playheads = Object.keys(m.playheads);
-		const set = Object.keys(m.states[state]?.values ?? {});
-		const attrs = set.length > 0 ? set : Object.keys(m.attributes);
-		if (playheads.length === 0) return notify().failure('Map state', 'no playhead travels this machine; add one in the state inspector');
-		if (attrs.length === 0) return notify().failure('Map state', 'the machine has no attribute to read');
-		const send = (ph: string, a: string): void => void row.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${ph}.${a}` }));
-		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
-		if (choices.length === 1) return send(choices[0].ph, choices[0].a);
-		picker = { x: at.x, y: at.y, items: choices.map(({ ph, a }) => ({ label: playheads.length > 1 ? `${ph}.${a}` : a, action: () => send(ph, a) })) };
-	}
 	function snapped(n: Node): [number, number] {
 		const o = dragOrigin.get(n.id);
 		if (o && o.x === n.position.x && o.y === n.position.y) return [o.x, o.y];
 		return [Math.round(n.position.x / GRID) * GRID, Math.round(n.position.y / GRID) * GRID];
 	}
+	function onNodeDragStart(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
+		for (const n of args.nodes) dragOrigin.set(n.id, { x: n.position.x, y: n.position.y });
+		const p = eventPoint(args.event);
+		if (args.nodes.length !== 1 || !p) return;
+		lifted = args.nodes[0].id;
+		engine.begin(stateSource(lifted), { x: p.clientX, y: p.clientY });
+	}
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
-		const row = rowUnder(args);
-		if (row) {
-			revert(args.nodes[0]);
-			lifted = { x: row.x, y: row.y, state: args.nodes[0].id };
-			uiStore.variableDrag = { name: args.nodes[0].id, x: row.x, y: row.y, target: row.el };
-			return;
-		}
 		if (lifted) {
-			lifted = null;
-			uiStore.variableDrag = null;
+			const p = eventPoint(args.event);
+			const live = p ? engine.move({ x: p.clientX, y: p.clientY }) : null;
+			if (!live || !live.inHome) return revert(args.nodes[0]);
 		}
 		for (const n of args.nodes) {
 			const [x, y] = snapped(n);
@@ -328,13 +351,15 @@
 		});
 	}
 	function onNodeDragStop(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
-		const row = rowUnder(args);
-		lifted = null;
-		uiStore.variableDrag = null;
-		if (row) {
-			revert(args.nodes[0]);
-			pinned.delete(args.nodes[0].id);
-			return offer(row.el, args.nodes[0].id, row);
+		if (lifted) {
+			lifted = null;
+			const p = eventPoint(args.event);
+			const out = p ? engine.drop({ x: p.clientX, y: p.clientY }) : null;
+			if (!out?.inHome) {
+				revert(args.nodes[0]);
+				pinned.delete(args.nodes[0].id);
+				return;
+			}
 		}
 		for (const n of args.nodes) {
 			const pos = snapped(n);
@@ -354,10 +379,7 @@
 		const t = e.target as HTMLElement | null;
 		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(t) || t?.closest?.('dialog[open]')) return;
 		const selected = sel.nodes(panelId).size || sel.edges(panelId).size;
-		if (e.key === 'Escape' && lifted) {
-			lifted = null;
-			uiStore.variableDrag = null;
-		} else if (e.key === 'Escape' && selected) {
+		if (e.key === 'Escape' && selected) {
 			sel.clear(panelId);
 			e.preventDefault();
 		} else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
@@ -396,11 +418,8 @@
 	});
 </script>
 
-{#if lifted}
-	<div class="link-ghost" use:portal style="left: {lifted.x}px; top: {lifted.y}px" aria-hidden="true">variables.⟨playhead⟩.{lifted.state}…</div>
-{/if}
 {#if picker}
-	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => (picker = null)} />
+	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => { picker?.close(); picker = null; }} />
 {/if}
 
 <div class="wrap" data-testid="machine-panel" data-machine={name}>
@@ -535,20 +554,6 @@
 				bottom: calc(var(--space-6) + var(--hit));
 			}
 		}
-	}
-	/* The chip that follows a box lifted over a param row: what the drop maps. */
-	.link-ghost {
-		position: fixed;
-		z-index: var(--z-drag-ghost);
-		transform: translate(12px, 12px);
-		pointer-events: none;
-		padding: var(--space-2);
-		background: var(--surface-3);
-		color: var(--text);
-		border: 1px solid var(--accent);
-		border-radius: var(--radius-sm);
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
 	}
 	.empty-hint {
 		position: absolute;

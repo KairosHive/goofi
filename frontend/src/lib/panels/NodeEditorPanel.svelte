@@ -33,7 +33,7 @@
 	import { bareName } from '$lib/editor/typeId';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { workspace } from 'panelty';
-	import { getPanelType, type PanelProps } from 'panelty';
+	import type { PanelProps } from 'panelty';
 	import { portal } from 'panelty';
 	import {
 		linkKey,
@@ -55,6 +55,7 @@
 	import { createLongPress } from 'panelty';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import { eventPoint } from '$lib/editor/eventPoint';
+	import { drag, type DragSource, type DragTag } from '$lib/drag';
 	import { serializeClipboard, parseClipboard, fragmentCentre, centroid } from '$lib/editor/clipboard';
 	import { copyText } from '$lib/clipboard';
 	import { registerEditor, unregisterEditor } from './editorCommands';
@@ -70,6 +71,7 @@
 
 	const g = graph();
 	const uiStore = ui();
+	const engine = drag();
 	const sel = selection();
 	const ws = workspace();
 
@@ -476,60 +478,27 @@
 		);
 	}
 
-	// Positions at drag start, so a node snaps back when the drag turns into a panel-link.
+	// Positions at drag start, so a node snaps back when the drag turns into a reference.
 	let dragOrigin = new Map<string, { x: number; y: number }>();
 	// Where the gesture has each node, from drag start until the document holds the drop: the
 	// derivation reads this over the document, or a delta landing mid-drag snaps the node back.
 	let pinned = new Map<string, { x: number; y: number }>();
-	// The chip that follows the cursor while a drag is a reference; null = a reposition drag.
-	let linkGhost = $state<{ x: number; y: number; name: string } | null>(null);
+	// The source the engine carries for this canvas, while it does.
+	let carried: DragSource | null = null;
 
-	// Every panel's and drop zone's screen rect, measured once per drag and again on a scroll:
-	// nothing else moves them during a node drag, and measuring per pointer move forced a layout each.
-	let panelRects: { id: string; type: string; r: DOMRect }[] = [];
-	let zoneRects: { zone: string; r: DOMRect }[] = [];
-	function measureTargets(): void {
-		panelRects = [...document.querySelectorAll<HTMLElement>('[data-panel-id]')].map((el) => ({
-			id: el.dataset.panelId ?? '',
-			type: el.dataset.panelType ?? '',
-			r: el.getBoundingClientRect()
-		}));
-		zoneRects = [...dropZones()].map((el) => ({ zone: el.dataset.nodeDrop ?? '', r: el.getBoundingClientRect() }));
-	}
-	const hits = (r: DOMRect, x: number, y: number): boolean => x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-
-	/** The leaf panel under a screen point. Geometric, not `elementFromPoint`: the dragged node sits
-	 * under the cursor and would mask the panel beneath it. */
-	function panelUnder(x: number, y: number): { id: string; type: string } | null {
-		return panelRects.find((p) => hits(p.r, x, y)) ?? null;
-	}
-
-	/** Every marked drop zone — a control widget, a param row — including those a plugin panel
-	 * keeps behind its shadow root, which `document.querySelectorAll` does not enter. */
-	function* dropZones(): Iterable<HTMLElement> {
-		yield* document.querySelectorAll<HTMLElement>('[data-node-drop]');
-		for (const host of document.querySelectorAll<HTMLElement>('[data-plugin-panel]')) {
-			if (host.shadowRoot) yield* host.shadowRoot.querySelectorAll<HTMLElement>('[data-node-drop]');
-		}
-	}
-
-	/** The marked drop zone under a screen point. */
-	function dropZoneUnder(x: number, y: number): string | null {
-		return zoneRects.find((z) => hits(z.r, x, y))?.zone ?? null;
-	}
-
-	type LinkTarget = { panel: string } | { zone: string };
-
-	/** What a dragged node would link into under the cursor: a drop zone, or a node-accepting panel
-	 * other than this editor. */
-	function linkTargetAt(event: MouseEvent | TouchEvent): LinkTarget | null {
-		const p = eventPoint(event);
-		if (!p) return null;
-		if (panelRects.length === 0) measureTargets(); // a flick moves before the post-flush measure
-		const zone = dropZoneUnder(p.clientX, p.clientY);
-		if (zone) return { zone };
-		const t = panelUnder(p.clientX, p.clientY);
-		return t && t.id !== panelId && getPanelType(t.type)?.acceptsNode === true ? { panel: t.id } : null;
+	/** What a dragged node offers: itself to a panel, and an expression over its first output of
+	 * the form to a param or a widget. The canvas is its home, where the drag is a move. */
+	function nodeSource(uid: string): DragSource {
+		const tags: DragTag[] = ['node'];
+		if (g.readFor(uid, 'float')) tags.push('number');
+		if (g.readFor(uid, 'string')) tags.push('text');
+		return {
+			key: uid,
+			tags,
+			label: g.nodeById(uid)?.name ?? uid,
+			home: rootEl?.querySelector('.svelte-flow') ?? rootEl,
+			expression: (tag) => g.readFor(uid, tag === 'text' ? 'string' : 'float')
+		};
 	}
 
 	/** Put the dragged nodes back where the drag started. */
@@ -560,12 +529,10 @@
 		return at;
 	}
 
-	/** Release what a node drag holds: its scroll listener, the shared drag fields and the ghost. */
+	/** Let the engine go, if it carries this canvas's node: a torn-down canvas leaves no drag lit. */
 	function endNodeDrag(): void {
-		document.removeEventListener('scroll', measureTargets, { capture: true });
-		uiStore.nodeDrag = null;
-		uiStore.nodeDragOver = null;
-		linkGhost = null;
+		if (carried && engine.source === carried) engine.cancel();
+		carried = null;
 	}
 
 	function onNodeDragStart(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -574,47 +541,32 @@
 			dragOrigin.set(n.id, { x: n.position.x, y: n.position.y });
 			pinned.set(n.id, { x: n.position.x, y: n.position.y });
 		}
-		uiStore.nodeDrag = args.nodes[0]?.id ?? null;
-		// The param rows that take this node render on `nodeDrag`, so the rects are read after that flush.
-		panelRects = [];
-		zoneRects = [];
-		void tick().then(measureTargets);
-		document.addEventListener('scroll', measureTargets, { capture: true, passive: true });
+		const uid = args.nodes[0]?.id;
+		const p = eventPoint(args.event);
+		if (!uid || !p) return;
+		carried = nodeSource(uid);
+		engine.begin(carried, { x: p.clientX, y: p.clientY });
+	}
+
+	/** Whether the gesture is a move: at home, with nothing carried beyond it. A drag the engine let
+	 * go (Escape) is a move no more. */
+	function moving(point: ReturnType<typeof eventPoint>, step: 'move' | 'drop'): boolean {
+		if (!carried) return true;
+		// `eventPoint`, because a TouchEvent carries no `clientX` of its own.
+		const live = point ? engine[step]({ x: point.clientX, y: point.clientY }) : null;
+		return live !== null && live.inHome;
 	}
 
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
-		const target = linkTargetAt(args.event);
-		if (target) {
-			// A reference drag, not a coordinate move: the node snaps back and a ghost follows.
-			uiStore.nodeDragOver = 'zone' in target ? target.zone : target.panel;
-			// `eventPoint`, because a TouchEvent carries no `clientX` of its own.
-			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
-			linkGhost = { x: p.clientX, y: p.clientY, name: g.nodeById(args.nodes[0]?.id ?? '')?.name ?? '' };
-			revertDragged(args.nodes);
-			return;
-		}
-		uiStore.nodeDragOver = null;
-		linkGhost = null;
-		snapDragged(args.nodes);
+		// Beyond the canvas it is a reference, not a move: the node snaps back and the ghost follows.
+		if (moving(eventPoint(args.event), 'move')) snapDragged(args.nodes);
+		else revertDragged(args.nodes);
 	}
 
-	function onNodeDragStop(args: {
-		targetNode: Node | null;
-		nodes: Node[];
-		event: MouseEvent | TouchEvent;
-	}): void {
-		const target = linkTargetAt(args.event);
-		if (target) {
-			revertDragged(args.nodes);
-			for (const n of args.nodes) pinned.delete(n.id);
-			const uid = args.nodes[0]?.id ?? '';
-			const p = eventPoint(args.event) ?? { clientX: 0, clientY: 0 };
-			const where = 'zone' in target ? target.zone : target.panel;
-			// The workspace's own meaning is the fallback, and only a panel has one: bind it to the node.
-			if (!uiStore.dropNode(where, uid, { x: p.clientX, y: p.clientY }) && 'panel' in target) {
-				ws.linkNodeToPanel(target.panel, uid);
-			}
-		} else {
+	function onNodeDragStop(args: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }): void {
+		const moved = moving(eventPoint(args.event), 'drop');
+		carried = null;
+		if (moved) {
 			const at = snapDragged(args.nodes);
 			const moves = args.nodes.map((n) => {
 				const p = at.get(n.id) ?? n.position;
@@ -623,8 +575,10 @@
 			void g.setNodePositions(moves).finally(() => {
 				for (const [id] of moves) pinned.delete(id);
 			});
+		} else {
+			revertDragged(args.nodes);
+			for (const n of args.nodes) pinned.delete(n.id);
 		}
-		endNodeDrag();
 	}
 
 	const DOUBLE_CLICK_MS = 350;
@@ -1031,7 +985,7 @@
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.
-			endNodeDrag(); // a drag in flight must not leave drop outlines lit on the other panels
+			endNodeDrag();
 		};
 	});
 </script>
@@ -1157,11 +1111,6 @@
 	</div>
 </SvelteFlowProvider>
 
-{#if linkGhost}
-	<div class="link-ghost" use:portal style="left: {linkGhost.x}px; top: {linkGhost.y}px">
-		<span class="lg-icon">🔗</span>{linkGhost.name}
-	</div>
-{/if}
 
 <style>
 	/* The canvas and the inspector pane side by side: the pane takes its width from the canvas, so
@@ -1231,31 +1180,6 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		background: var(--surface-1);
-	}
-	.link-ghost {
-		position: fixed;
-		/* Offset off the cursor so it reads as carried, not pinned. */
-		transform: translate(14px, 12px);
-		z-index: var(--z-tab-drag);
-		pointer-events: none;
-		display: flex;
-		align-items: center;
-		gap: var(--space-3);
-		padding: var(--space-2) var(--space-5);
-		max-width: 220px;
-		background: var(--surface-2);
-		border: 1px solid var(--accent);
-		border-radius: var(--radius-sm);
-		box-shadow: var(--shadow-2);
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		color: var(--text);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.lg-icon {
-		font-size: var(--fs-small);
 	}
 	.menu-overlay {
 		position: fixed;

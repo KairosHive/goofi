@@ -46,7 +46,7 @@ export function activatePlugin(id: string): { plugin: Plugin; ctx: Context; comm
 			if (committed) throw new Error('Panels must register during activation');
 			// The adapter supplies the framework's existing panel props to arbitrary DOM content.
 			const component: Component<PanelProps> = (internals, props) => PluginPanel(internals, { get panelId() { return props.panelId; }, get state() { return props.state; }, get setState() { return props.setState; }, panel, ctx });
-			panels.push({ id: key, title: panel.title, icon: 'square-dashed', component, acceptsNode: panel.accepts_node === true });
+			panels.push({ id: key, title: panel.title, icon: 'square-dashed', component });
 		},
 		register_header(entry) {
 			validateHeader(entry);

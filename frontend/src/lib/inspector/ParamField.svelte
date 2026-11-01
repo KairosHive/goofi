@@ -17,6 +17,7 @@
 		Segmented
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
+	import { drag, dropTarget, takes, type DragSource, type DragTag, type DropTargetOptions } from '$lib/drag';
 	import { stepOf } from '$lib/ui/knob';
 	import { elementName as nameOf, isNumeric, rowPlan } from './controlKind';
 	import { numValue, numValues } from '$lib/api/types';
@@ -38,7 +39,7 @@
 		refreshing = false,
 		selfName,
 		machine,
-		dropZone = null,
+		accept,
 		viewKey = '',
 		literal = false,
 		...rest
@@ -62,8 +63,8 @@
 		selfName?: string;
 		/** The machine whose setting this row is: its expression reads the machine's own scope. */
 		machine?: string;
-		/** This row's key as a node-drop target; null while it is not one. */
-		dropZone?: string | null;
+		/** An exception to what the row takes by its type, such as the node it belongs to. */
+		accept?: (source: DragSource) => boolean;
 		/** `uid/group/name`, under which a colour's view (picker or vector) is remembered. */
 		viewKey?: string;
 		/** A value alone — a machine attribute's — with no source to pick, trigger or learn. */
@@ -73,16 +74,23 @@
 	const learnId = $props.id();
 	const uiStore = ui();
 	let row = $state<HTMLDivElement>();
-	const over = $derived(
-		(dropZone !== null && uiStore.nodeDragOver === dropZone) ||
-		(uiStore.variableDrag !== null && uiStore.variableDrag.target === row)
+	const engine = drag();
+	/** The form the row takes a dropped value in: text for a string, a number for the rest. */
+	const tag = $derived<DragTag>(descriptor.type === 'string' ? 'text' : 'number');
+	const target = $derived<DropTargetOptions | null>(
+		literal
+			? null
+			: {
+					tags: [tag],
+					accept,
+					onDrop: async ({ source, tag, at }) => {
+						const expression = await source.expression?.(tag, at);
+						if (expression) onSetSource?.({ expression });
+					}
+				}
 	);
-
-	function acceptVariable(el: HTMLDivElement): { destroy(): void } {
-		const drop = (event: Event): void => onSetSource?.({ expression: (event as CustomEvent<string>).detail });
-		el.addEventListener('variable-expression-drop', drop);
-		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
-	}
+	const armed = $derived(target !== null && engine.source !== null && takes(target, engine.source) !== null);
+	const over = $derived(row !== undefined && engine.isOver(row));
 
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
 	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }));
@@ -129,17 +137,7 @@
 	}
 </script>
 
-<div
-	class="pf-param"
-	bind:this={row}
-	use:acceptVariable
-	data-variable-drop={literal ? undefined : ''}
-	class:armed={dropZone !== null || (!literal && uiStore.variableDrag !== null)}
-	class:over
-	class:open
-	data-node-drop={dropZone}
-	{...rest}
->
+<div class="pf-param" bind:this={row} use:dropTarget={target} class:armed class:over class:open {...rest}>
 	<!-- Which face a vector wears, L or I: one list with one source (a colour's picker over it), or
 	     one row per entry with a source each. It sits at the row's end in both, so it stays put. -->
 	{#snippet viewSwitch()}
