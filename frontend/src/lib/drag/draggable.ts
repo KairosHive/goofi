@@ -38,7 +38,10 @@ export function draggable(el: HTMLElement, opts: DraggableOptions | null): Actio
 		if (!o || e.button !== 0 || press) return;
 		if (o.allow && !o.allow(e.target as Element)) return;
 		press = { id: e.pointerId, x: e.clientX, y: e.clientY, source: null, begun: false, dead: false };
-		el.setPointerCapture(e.pointerId);
+		// Captured on the pressed element, not on `el`: a capture retargets the release, and with
+		// it the click, so a double-click on a label inside `el` must still land on the label.
+		const grip = e.target instanceof Element && el.contains(e.target) ? e.target : el;
+		grip.setPointerCapture(e.pointerId);
 		if (e.pointerType !== 'mouse' && o.onHold) hold.start(e);
 		o.onPress?.(e);
 	}
