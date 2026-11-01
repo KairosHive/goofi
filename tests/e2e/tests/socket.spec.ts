@@ -1095,6 +1095,57 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	}
 });
 
+test('a variables row drags its variable onto a parameter of its own form', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5);
+			await g.commands.addVariable('desk.title', 'hi');
+			await g.commands.setPanelType(g.query.panels()[1].panelId, 'variables');
+		});
+		const desk = page.getByTestId('variables-panel').locator('[data-group="desk"]');
+		await desk.getByTestId('variable-group-toggle').click();
+		// The form a row offers is the one its stream shows, so the text row is a text row first.
+		await expect(desk.locator('[data-name="desk.title"]').getByTestId('variable-type').locator('select')).toHaveValue('text');
+		const row = page.getByTestId('param-field-frequency');
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const original = await source();
+		async function dragGrip(name: string): Promise<void> {
+			const grip = (await desk.locator(`[data-name="${name}"]`).getByTestId('variable-grip').boundingBox())!;
+			const target = (await row.boundingBox())!;
+			await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
+		}
+		// A text variable is no source for a number: the row never arms, and the drop writes nothing.
+		await dragGrip('desk.title');
+		await expect(page.getByTestId('drag-ghost')).toHaveText('variables.desk.title');
+		await expect(row).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		expect(await source()).toEqual(original);
+		await dragGrip('desk.level');
+		await expect(row).toHaveClass(/over/);
+		await page.mouse.up();
+		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	} finally {
+		await handBack(
+			() => clearGraph(page),
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level')),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.title'))
+		);
+	}
+});
+
 test('parameter modulation menu and hover keys use expressions with undo', async ({ page }) => {
 	await page.goto('/');
 	await waitForApp(page);
