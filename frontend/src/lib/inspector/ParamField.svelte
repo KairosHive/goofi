@@ -1,6 +1,8 @@
 <!-- One param row, every part of it named by `rowPlan`: the face control, disabled when a source
-     drives it, and the open region with the list or the entries, the source editor and the foot. -->
+     drives it, and the open region with the list or the entries, the source editor and the foot.
+     A row with no descriptor has no face: its label and `more` alone, as a transition's row is. -->
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import {
@@ -19,7 +21,7 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { drag, dropTarget, takes, type DragSource, type DragTag, type DropTargetOptions } from '$lib/drag';
 	import { stepOf } from '$lib/ui/knob';
-	import { elementName as nameOf, isNumeric, rowPlan } from './controlKind';
+	import { elementName as nameOf, isNumeric, rowPlan, type RowPlan } from './controlKind';
 	import { numValue, numValues } from '$lib/api/types';
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
@@ -29,6 +31,10 @@
 		paramName,
 		label = paramName,
 		descriptor,
+		note,
+		more,
+		open: opened,
+		onToggle,
 		onCommit,
 		onPreview,
 		onSetSource,
@@ -47,7 +53,15 @@
 		paramName: string;
 		/** What the row is called; a slot of a list wears its name inside the section. */
 		label?: string;
-		descriptor: ParamDescriptor;
+		/** The value the row shows and edits; absent, the row has no face. */
+		descriptor?: ParamDescriptor;
+		/** A muted note after the face: what the row sums up. */
+		note?: string;
+		/** What the open row shows besides the descriptor's own parts. */
+		more?: Snippet;
+		/** Whether the row is open, where the parent owns that with `onToggle`; else the row does. */
+		open?: boolean;
+		onToggle?: () => void;
 		onCommit: (value: unknown) => unknown;
 		/** A step of a drag on the value, ahead of its commit. */
 		onPreview?: (value: number | number[]) => unknown;
@@ -76,9 +90,9 @@
 	let row = $state<HTMLDivElement>();
 	const engine = drag();
 	/** The form the row takes a dropped value in: text for a string, a number for the rest. */
-	const tag = $derived<DragTag>(descriptor.type === 'string' ? 'text' : 'number');
+	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : 'number');
 	const target = $derived<DropTargetOptions | null>(
-		literal
+		literal || !descriptor
 			? null
 			: {
 					tags: [tag],
@@ -92,16 +106,25 @@
 	const armed = $derived(target !== null && engine.source !== null && takes(target, engine.source) !== null);
 	const over = $derived(row !== undefined && engine.isOver(row));
 
+	let ownOpen = $state(false);
+	const open = $derived(onToggle ? opened === true : ownOpen);
+	function toggle(): void {
+		if (onToggle) onToggle();
+		else ownOpen = !ownOpen;
+	}
+
+	/** A row with nothing of its own to show. */
+	const NONE: Omit<RowPlan, 'face'> & { face: null } = { face: null, viewSwitch: false, disabled: false, list: false, elements: false, source: false, foot: false };
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
-	const plan = $derived(rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }));
-	/** Whether the caret has anything to open. */
-	const openable = $derived(plan.list || plan.elements || plan.source || plan.foot);
-	const dims = $derived(isNumeric(descriptor) ? numValues(descriptor).length : 1);
+	const plan = $derived(descriptor ? rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }) : NONE);
+	/** Whether the label has anything to open. */
+	const openable = $derived(plan.list || plan.elements || plan.source || plan.foot || more !== undefined);
+	const dims = $derived(descriptor && isNumeric(descriptor) ? numValues(descriptor).length : 1);
 	/** Each element's own source, which an entry row shows beside its number. */
-	const elements = $derived(descriptor.elements ?? []);
+	const elements = $derived(descriptor?.elements ?? []);
 	const elementDisabled = (i: number): boolean => driven || (elements[i]?.mode ?? 'constant') !== 'constant';
 
-	const elementName = (i: number): string => nameOf(descriptor, i);
+	const elementName = (i: number): string => (descriptor ? nameOf(descriptor, i) : String(i));
 	function chooseElement(i: number, mode: ParamMode): void {
 		const el = elements[i];
 		if (!el || mode === el.mode) return;
@@ -115,17 +138,15 @@
 		return Array.from({ length: dims }, (_, i) => parts[i] ?? 0);
 	}
 
-	let open = $state(false);
-
 	// `step` uses the declared bounds, so the arrow keys move in rungs that fit the range.
-	const num = $derived(isNumeric(descriptor) ? descriptor : null);
+	const num = $derived(descriptor && isNumeric(descriptor) ? descriptor : null);
 	const step = $derived(num ? (num.int ? 1 : stepOf(num.vmin, num.vmax)) : 1);
 	/** The vector with one dimension replaced, which is what a dimension's control commits. */
 	const withDim = (i: number, v: number): number[] => numValues(num!).map((held, k) => (k === i ? v : held));
 
-	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
+	const options = $derived(descriptor?.type === 'string' ? (descriptor.options ?? []) : []);
 
-	const driven = $derived(descriptor.mode !== 'constant');
+	const driven = $derived(descriptor !== undefined && descriptor.mode !== 'constant');
 
 	const MODE_TITLE: Record<ParamMode, string> = {
 		constant: 'a value set here by hand, unchanging until you edit it',
@@ -133,7 +154,7 @@
 	};
 
 	function choose(mode: ParamMode): void {
-		if (mode !== descriptor.mode) onSetSource?.(sourceForMode(descriptor, mode));
+		if (descriptor && mode !== descriptor.mode) onSetSource?.(sourceForMode(descriptor, mode));
 	}
 </script>
 
@@ -159,15 +180,17 @@
 
 	<Field
 		{label}
-		doc={descriptor.doc ?? undefined}
+		doc={descriptor?.doc ?? undefined}
 		expanded={open}
 		stretchSummary
-		onExpand={openable ? () => (open = !open) : undefined}
+		onExpand={openable ? toggle : undefined}
 	>
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if num && plan.face === 'color'}
+			{#if !descriptor}
+				<!-- No face: the note alone, where a value would sit. -->
+			{:else if num && plan.face === 'color'}
 				<ColorPicker
 					value={numValues(num)}
 					onChange={onCommit}
@@ -277,11 +300,15 @@
 			{:else if plan.face === 'unknown'}
 				<code class="unknown" data-testid="param-unknown">{JSON.stringify(descriptor.value)}</code>
 			{/if}
+			{#if note}<span class="pf-note" data-testid="param-note">{note}</span>{/if}
 		</div>
 	</Field>
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
+			{#if more}
+				<div class="pf-extra">{@render more()}</div>
+			{/if}
 			{#if num && plan.elements}
 				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
 				<div class="pf-elements" data-testid="param-elements">
@@ -356,7 +383,7 @@
 					data-testid="param-list"
 				/>
 			{/if}
-			{#if plan.source}
+			{#if plan.source && descriptor}
 				<div class="src-region">
 					<ExprEditor
 						{selfName}
@@ -370,7 +397,7 @@
 					/>
 				</div>
 			{/if}
-			{#if plan.foot}
+			{#if plan.foot && descriptor}
 			<Segmented
 				value={descriptor.mode}
 				bad={!!descriptor.error}
@@ -393,7 +420,7 @@
 	{/if}
 	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,
 	     and a failure is not a readout. -->
-	{#if driven && descriptor.error}
+	{#if driven && descriptor?.error}
 		<div class="src-error" title={descriptor.error} data-testid="param-source-error">
 			<span class="prefix"><Icon name="triangle-alert" /></span>
 			<span class="msg">{descriptor.error}</span>
@@ -449,6 +476,21 @@
 	}
 	/* The switches sit at the row's end, under the widget they act on; the reading they explain
 	   leads the row. */
+	/* The note sits after the face, muted, and takes the slack where there is no face. */
+	.pf-note {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+	}
+	/* What a parent opens in the row: its own form, on the row's full width. */
+	.pf-extra {
+		flex: 1 1 100%;
+		min-width: 0;
+	}
 	.pf-more {
 		pointer-events: none;
 		display: flex;

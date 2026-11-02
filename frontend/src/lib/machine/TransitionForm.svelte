@@ -22,9 +22,6 @@
 
 	const call = (op: MachineOp, patch: Record<string, unknown>): void => void g.machine(op, { machine: name, id, ...patch }).catch((e) => notify().failure(op, e));
 	const edit = (patch: Record<string, unknown>): void => call('machine transition edit', patch);
-	/** The state a condition's example reads: the one it leaves, or the one it enters for `*`. */
-	const example = $derived(t?.from === '*' ? t.to : t?.from);
-
 	// ---- firing by hand: the playheads resting in `from` (anywhere, for `*`); one goes at once, several ask.
 	const candidates = $derived(playheads.filter((p) => t && (t.from === '*' || String(variableValue(`${p}.state`) ?? m.playheads[p].start) === t.from)));
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -50,9 +47,7 @@
 			<Button variant="danger" size="sm" title="Delete the transition" data-testid="transition-remove" onclick={() => call('machine transition remove', {})}>delete</Button>
 		</div>
 		<Field label="condition" doc="Taken the instant this turns true, for each playhead resting here; empty, the decision and the fire button alone take it">
-			<ExprEditor machine={name} label="condition" value={t.condition ?? ''} testid="transition-condition"
-				placeholder="st('{example}').residents >= 2 and me.name == st('{example}').playheads[0]"
-				onCommit={(condition) => edit({ condition })} />
+			<ExprEditor machine={name} label="condition" value={t.condition ?? ''} testid="transition-condition" onCommit={(condition) => edit({ condition })} />
 		</Field>
 		<ParamField paramName="duration" descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}
 			data-testid="transition-duration" onCommit={(v) => edit({ duration: Math.max(0, Number(v)) })} />
