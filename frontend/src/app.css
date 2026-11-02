@@ -473,6 +473,11 @@ textarea:disabled {
 	transform: rotate(90deg);
 }
 
+/* While something is dragged, a disabled control is no surface: the browser dispatches no mouse
+   event to one, so a release over it would never reach the drag that let go. */
+html[data-drag] :disabled {
+	pointer-events: none;
+}
 /* A ChoiceGrid launcher that fills its panel. `--bg`, not `--surface-1`: a tile is
    `--surface-1` and carries its separation by that step. */
 .launcher {

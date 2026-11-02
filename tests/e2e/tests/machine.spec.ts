@@ -416,9 +416,13 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
 		await expect(row).toHaveClass(/over/);
 		await page.mouse.up();
-		const item = page.locator('.context-menu .item', { hasText: 'rate' });
-		await expect(item).toBeVisible();
-		await item.click();
+		// The drop asks which attribute, in a list the keyboard walks: the second row is `rate`.
+		const pick = page.getByTestId('quick-pick');
+		await expect(pick.getByRole('option', { name: 'rate' })).toBeVisible();
+		await page.keyboard.press('ArrowDown');
+		await expect(pick.getByRole('option', { name: 'rate' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Enter');
+		await expect(pick).toHaveCount(0);
 		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('variables.beat.rate');
 		expect(await placed()).toEqual(before);
 

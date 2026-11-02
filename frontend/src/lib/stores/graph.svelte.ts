@@ -613,11 +613,17 @@ export class GraphStore {
 	 * output, everything else an ARRAY one — or null where no output fits. With `slot`, only that
 	 * slot may answer. */
 	readFor(uid: string, type: string, slot?: string): string | null {
+		return this.readOptions(uid, type).find((o) => slot === undefined || o.slot === slot)?.expression ?? null;
+	}
+
+	/** Every output of node `uid` a param of `type` may read, each with the expression that reads it. */
+	readOptions(uid: string, type: string): { slot: string; label: string; expression: string }[] {
 		const node = this.nodeById(uid);
-		if (!node) return null;
+		if (!node) return [];
 		const want: SlotDtype = type === 'string' ? 'STRING' : 'ARRAY';
-		const key = Object.entries(node.output_slots).find(([k, d]) => (slot === undefined || k === slot) && feeds(d as SlotDtype, want))?.[0];
-		return key ? readExpression(node, key) : null;
+		return Object.entries(node.output_slots)
+			.filter(([, d]) => feeds(d as SlotDtype, want))
+			.map(([slot]) => ({ slot, label: node.slot_labels?.[slot] ?? slot, expression: readExpression(node, slot) }));
 	}
 
 	async removeControl(group: string, element: string): Promise<void> {

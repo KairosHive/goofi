@@ -55,7 +55,8 @@
 	import { createLongPress } from 'panelty';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import { eventPoint } from '$lib/editor/eventPoint';
-	import { drag, type DragSource, type DragTag } from '$lib/drag';
+	import { drag, type DragSource, type DragTag, type Point } from '$lib/drag';
+	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { serializeClipboard, parseClipboard, fragmentCentre, centroid } from '$lib/editor/clipboard';
 	import { copyText } from '$lib/clipboard';
 	import { registerEditor, unregisterEditor } from './editorCommands';
@@ -497,8 +498,17 @@
 			tags,
 			label: g.nodeById(uid)?.name ?? uid,
 			home: rootEl?.querySelector('.svelte-flow') ?? rootEl,
-			expression: (tag) => g.readFor(uid, tag === 'text' ? 'string' : 'float')
+			expression: (tag, at) => readBy(uid, tag, at)
 		};
+	}
+
+	/** The expression a target of `tag` reads node `uid` by: its one output of the form, or the
+	 * one the user picks from a list at `at`. */
+	async function readBy(uid: string, tag: DragTag, at: Point): Promise<string | null> {
+		const options = g.readOptions(uid, tag === 'text' ? 'string' : 'float');
+		if (options.length <= 1) return options[0]?.expression ?? null;
+		const slot = await quickPick().ask(at, options.map((o) => ({ id: o.slot, label: o.label })), `Output of ${g.nodeById(uid)?.name ?? uid}`);
+		return options.find((o) => o.slot === slot)?.expression ?? null;
 	}
 
 	/** Put the dragged nodes back where the drag started. */

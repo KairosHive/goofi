@@ -113,6 +113,9 @@ export class DragEngine {
 		this.source = source;
 		this.start = at;
 		window.addEventListener('keydown', this.#onKey, true);
+		// Read by the stylesheet: while something is carried, a disabled control is no surface, or
+		// the browser drops the release over it and the drag never ends.
+		document.documentElement.setAttribute('data-drag', '');
 		this.#place(source, at);
 	}
 
@@ -160,6 +163,7 @@ export class DragEngine {
 
 	#clear(): void {
 		window.removeEventListener('keydown', this.#onKey, true);
+		document.documentElement.removeAttribute('data-drag');
 		this.source = null;
 		this.start = null;
 		this.point = null;

@@ -11,7 +11,7 @@
 	import { ui, type SlotClickSeed } from '$lib/stores/ui.svelte';
 	import { seedSlot } from './seedSlot';
 	import { onMount, tick, untrack } from 'svelte';
-	import { EmptyState, Icon, IconButton, MODE_ATTRS, Tabs } from '$lib/ui';
+	import { EmptyState, Icon, IconButton, MODE_ATTRS, Tabs, reveal, stepWrapped } from '$lib/ui';
 
 	type Props = {
 		onPick: (type: NodeTypeInfo) => void;
@@ -111,12 +111,9 @@
 			e.preventDefault();
 			const t = filtered[highlighted];
 			if (t) pick(t);
-		} else if (e.key === 'ArrowDown') {
+		} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
-			highlighted = Math.min(filtered.length - 1, highlighted + 1);
-		} else if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			highlighted = Math.max(0, highlighted - 1);
+			highlighted = stepWrapped(highlighted, e.key === 'ArrowDown' ? 1 : -1, filtered.length);
 		} else if (e.key === 'Tab') {
 			// The field keeps the focus throughout — Escape is the way out, never Tab.
 			e.preventDefault();
@@ -192,9 +189,10 @@
 				type="button"
 				class="item"
 				class:hl={idx === highlighted}
+				use:reveal={idx === highlighted}
 				class:unavailable={!t.available}
 				title={nodeTypeTitle(t)}
-				onmouseenter={() => (highlighted = idx)}
+				onpointermove={() => (highlighted = idx)}
 				onclick={() => pick(t)}
 			>
 				<span class="engine-dot" style="--engine: {familyColor(tabOf(t))};"></span>

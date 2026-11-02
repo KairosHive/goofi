@@ -19,13 +19,14 @@
 		type Node,
 		type Viewport
 	} from '@xyflow/svelte';
-	import { asStateObject, createLongPress, workspace, type MenuItem, ContextMenu, type PanelProps } from 'panelty';
+	import { asStateObject, createLongPress, workspace, type PanelProps } from 'panelty';
 	import { tick, untrack } from 'svelte';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { on } from 'svelte/events';
 	import { camera } from '$lib/editor/camera';
 	import { eventPoint } from '$lib/editor/eventPoint';
 	import { drag, type DragSource, type DragTag } from '$lib/drag';
+	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
@@ -270,7 +271,6 @@
 	const dragOrigin = new Map<string, { x: number; y: number }>();
 	// The state the engine carries, while it does.
 	let lifted: string | null = null;
-	let picker = $state<{ x: number; y: number; items: MenuItem[]; close(): void } | null>(null);
 
 	/** The attributes `state` sets, or all of them: those a target of `tag` reads. */
 	function attrsFor(state: string, tag: DragTag): string[] {
@@ -305,14 +305,7 @@
 		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
 		const name = (c: { ph: string; a: string }): string => `variables.${c.ph}.${c.a}`;
 		if (choices.length === 1) return name(choices[0]);
-		return new Promise((resolve) => {
-			picker = {
-				x: at.x,
-				y: at.y,
-				items: choices.map((c) => ({ label: playheads.length > 1 ? `${c.ph}.${c.a}` : c.a, action: () => resolve(name(c)) })),
-				close: () => resolve(null)
-			};
-		});
+		return quickPick().ask(at, choices.map((c) => ({ id: name(c), label: playheads.length > 1 ? `${c.ph}.${c.a}` : c.a })), `Attribute of ${state}`);
 	}
 	/** The box back where its drag began, the preview with it. */
 	function revert(n: Node): void {
@@ -418,9 +411,6 @@
 	});
 </script>
 
-{#if picker}
-	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => { picker?.close(); picker = null; }} />
-{/if}
 
 <div class="wrap" data-testid="machine-panel" data-machine={name}>
 	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}

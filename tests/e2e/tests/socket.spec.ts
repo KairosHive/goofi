@@ -1137,6 +1137,84 @@ test('a widget moves through its own settings, which stand down for the drag', a
 	}
 });
 
+test('a node with several outputs dropped on a param asks which, in a list the keyboard walks', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO', [40, 40]);
+	const quant = await addNode(page, 'signal:Quantize', [40, 300]);
+	await waitForNode(page, osc);
+	await waitForNode(page, quant);
+	await selectNode(page, osc);
+	try {
+		const row = page.getByTestId('param-field-frequency');
+		await row.scrollIntoViewIfNeeded();
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const name = (await backendDoc(page)).nodes[quant].name;
+		const header = page.locator(`.svelte-flow__node[data-id="${quant}"] .header`);
+		const pick = page.getByTestId('quick-pick');
+		async function dropOnRow(): Promise<void> {
+			const [a, b] = await Promise.all([header.boundingBox(), row.boundingBox()]);
+			await page.mouse.move(a!.x + a!.width / 2, a!.y + a!.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(a!.x + a!.width / 2 + 30, a!.y + a!.height / 2 + 30, { steps: 4 });
+			await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
+			await expect(row).toHaveClass(/over/);
+			await page.mouse.up();
+		}
+		// Two outputs feed a number, so the drop asks; up from the first wraps to the last.
+		await dropOnRow();
+		await expect(pick.getByRole('option')).toHaveCount(2);
+		await expect(pick.getByRole('option', { name: 'out' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('ArrowUp');
+		await expect(pick.getByRole('option', { name: 'index' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Enter');
+		await expect(pick).toHaveCount(0);
+		await expect.poll(async () => (await source()).expression).toBe(`nd('${name}').out.index`);
+		// The row is driven now, its controls disabled: a release over one must still end the drag.
+		// Escape lets the list go, and the param keeps what it had.
+		await dropOnRow();
+		await expect(pick).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(pick).toHaveCount(0);
+		await expect(page.locator('.svelte-flow__node.dragging')).toHaveCount(0);
+		expect((await source()).expression).toBe(`nd('${name}').out.index`);
+	} finally {
+		await handBack(() => clearGraph(page));
+	}
+});
+
+test('the add-node list wraps its arrow keys and keeps the lit row in view', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await page.setViewportSize({ width: 1280, height: 500 });
+	await page.locator('.svelte-flow__pane').first().dblclick();
+	const search = page.getByTestId('add-menu-search');
+	await expect(search).toBeFocused();
+	const list = page.getByTestId('add-menu-list');
+	const rows = list.locator('.item');
+	const lit = list.locator('.item.hl');
+	const inView = async (): Promise<boolean> =>
+		lit.evaluate((el) => {
+			const r = el.getBoundingClientRect();
+			const box = el.closest('[data-testid="add-menu-list"]')!.getBoundingClientRect();
+			return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+		});
+	/** Which row is lit, by its place in the list. */
+	const litIndex = (): Promise<number> => rows.evaluateAll((els) => els.findIndex((el) => el.classList.contains('hl')));
+	const count = await rows.count();
+	expect(count).toBeGreaterThan(3);
+	await expect.poll(litIndex).toBe(0);
+	await search.press('ArrowUp');
+	await expect.poll(litIndex, 'up from the first lands on the last').toBe(count - 1);
+	expect(await inView(), 'and the last is scrolled into view').toBe(true);
+	await search.press('ArrowDown');
+	await expect.poll(litIndex, 'down from the last lands on the first').toBe(0);
+	expect(await inView()).toBe(true);
+	await search.press('Escape');
+});
+
 test('a variables row drags its variable onto a parameter of its own form', async ({ page }) => {
 	await page.goto('/');
 	await waitForApp(page);
