@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "move, turn and scale the input\nOutside the frame it is transparent black, or the frame repeats when tile is on.",
+{ "doc": "move, turn and scale the input\nOutside the frame, tiling decides what shows: none leaves transparent black, repeat tiles the frame, mirror tiles it flipped at every edge, clamp extends the edge pixels.",
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
@@ -7,7 +7,7 @@
     {"group": "transform", "name": "y", "kind": "num", "default": 0.0, "min": -2.0, "max": 2.0},
     {"group": "transform", "name": "rotate", "kind": "num", "default": 0.0, "min": -360.0, "max": 360.0},
     {"group": "transform", "name": "scale", "kind": "num", "default": 1.0, "min": 0.01, "max": 10.0},
-    {"group": "transform", "name": "tile", "kind": "bool", "default": false} ] }
+    {"group": "transform", "name": "tiling", "kind": "str", "default": "none", "options": ["none", "repeat", "mirror", "clamp"]} ] }
 */
 fn shade(uv: vec2f) -> vec4f {
     let a = radians(-p.rotate);
@@ -15,8 +15,13 @@ fn shade(uv: vec2f) -> vec4f {
     let k = cos(a);
     let e = (uv - vec2f(0.5) - vec2f(p.x, p.y)) / p.scale;
     let turned = vec2f(e.x * k - e.y * s, e.x * s + e.y * k) + vec2f(0.5);
-    let inside = f32(all(turned >= vec2f(0.0)) && all(turned <= vec2f(1.0)));
-    let tiling = p.tile != 0u;
-    let q = select(clamp(turned, vec2f(0.0), vec2f(1.0)), fract(turned), tiling);
-    return textureSample(input, samp, q) * select(inside, 1.0, tiling);
+    var q = clamp(turned, vec2f(0.0), vec2f(1.0));
+    var cover = 1.0;
+    switch p.tiling {
+        case 1u: { q = fract(turned); }
+        case 2u: { q = 1.0 - abs(fract(turned * 0.5) * 2.0 - 1.0); }
+        case 3u: {}
+        default: { cover = f32(all(turned >= vec2f(0.0)) && all(turned <= vec2f(1.0))); }
+    }
+    return textureSample(input, samp, q) * cover;
 }
