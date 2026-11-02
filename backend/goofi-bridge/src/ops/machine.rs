@@ -15,7 +15,7 @@ const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list 
 const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: on a playhead's arrival the attribute plays the envelope times the value — up from 0 over `attack` seconds, down over `decay` seconds to `sustain` (0..1), then down to 0 over `release` seconds; a release of -1 holds the sustain. A transition out eases the attribute from wherever the envelope stands to the next state's value, or to 0 where that state's own envelope plays on it";
 
 op!(List, "machine list", 0, NoArgs,
-    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state`, `.prev` and `.progress`, read through `variable list` like its attributes.",
+    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `variables.<playhead>.state` and `.progress`, read through `variable list` like its attributes.",
     "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
@@ -51,7 +51,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state`, `prev` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `variables.<playhead>.<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -163,7 +163,7 @@ op!(PlayheadAdd, "machine playhead add", 2, PlayheadAddArgs {
     pub color: Option<String>,
     pub start: String,
 },
-    "Add a playhead, starting in state `start`. Its name is its variable group: `variables.<name>.<attribute>` for every attribute, and the machine's own `variables.<name>.state` (the state it is in, or is moving to), `.prev` (the state it left, empty at rest) and `.progress` (0..1 along the transition, 1 at rest). The group is the machine's: locked whole, written by the machine alone, removed with the playhead. Without a name, use the first free playhead0/playhead1/... name. `color` is what the canvas draws it as.",
+    "Add a playhead, starting in state `start`. Its name is its variable group: `variables.<name>.<attribute>` for every attribute, and the machine's own `variables.<name>.state` (the state it is in, or is moving to) and `.progress` (0..1 along the transition, 1 at rest); the state a flight left and the second it arrived ride those frames as metadata, for the canvas, not as variables. The group is the machine's: locked whole, written by the machine alone, removed with the playhead. Without a name, use the first free playhead0/playhead1/... name. `color` is what the canvas draws it as.",
     "{name} — the playhead as stored");
 
 op!(PlayheadEdit, "machine playhead edit", 2, PlayheadEditArgs {

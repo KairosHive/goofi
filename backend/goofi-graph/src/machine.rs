@@ -7,7 +7,7 @@ use std::sync::Arc;
 use goofi_core::control;
 use goofi_core::ease::Curve;
 use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
-use goofi_core::{Data, Face, Meta, Param, Value};
+use goofi_core::{Data, Face, Meta, MetaValue, Param, Value};
 use goofi_node::{EvalCtx, ExprEvaluator, Field, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -15,8 +15,14 @@ use ts_rs::TS;
 
 use crate::expr_rewrite::{self, Target, VarRef};
 
-/// The elements of a playhead's group that are the machine's own, and no attribute's name.
-pub const OWN: [&str; 4] = ["state", "prev", "progress", "arrived"];
+/// The elements of a playhead's group that are the machine's own, and no attribute's name: where
+/// it is, and how far along its transition. Where it came from and when it arrived are no
+/// variables: they ride both frames as metadata, for the canvas to draw by.
+pub const OWN: [&str; 2] = ["state", "progress"];
+/// The metadata keys on a playhead's `state` and `progress` frames: the state its flight left
+/// (empty at rest), and the patch second it arrived where it rests or is heading.
+pub const META_PREV: &str = "prev";
+pub const META_ARRIVED: &str = "arrived";
 
 /// What `st('name')` answers an expression: how many playheads rest in the state, their names
 /// from the longest resident to the newest, and how many arrived in it and left it at this instant.
@@ -645,27 +651,30 @@ impl Machines {
         self.settle(now, read);
         let mut out = Vec::new();
         let mut used = HashMap::new();
-        let mut functional = |source: String| {
+        let mut functional = |source: String, meta: Meta| {
             let code = match self.functionals.remove(&source).or_else(|| used.get(&source).cloned()) {
                 Some(code) => code,
                 None => functional_code(&self.evaluator, &source),
             };
             used.insert(source, code.clone());
-            Data::functional(code, Meta::default())
+            Data::functional(code, meta)
         };
         for run in self.runs.values() {
             for (ph, head) in &run.heads {
-                out.push((format!("{ph}.state"), Data::text(head.state.as_str())));
-                out.push((format!("{ph}.prev"), Data::text(head.flight.as_ref().map_or("", |f| f.from.as_str()))));
-                out.push((format!("{ph}.arrived"), Data::number(head.arrived)));
+                // On both frames: a store write equal in value wakes nobody, and a jump moves the
+                // state alone, a landing the progress alone.
+                let mut meta = Meta::default();
+                meta.set(META_PREV, MetaValue::Str(head.flight.as_ref().map_or(String::new(), |f| f.from.clone())));
+                meta.set(META_ARRIVED, MetaValue::Float(head.arrived));
+                out.push((format!("{ph}.state"), Data::string(head.state.as_str(), meta.clone())));
                 let progress = match &head.flight {
-                    None => Data::number(1.0),
-                    Some(f) => functional(progress_source(f)),
+                    None => Data::array_f32(vec![1], 1.0f32.to_le_bytes().to_vec(), meta).expect("a flat array"),
+                    Some(f) => functional(progress_source(f), meta),
                 };
                 out.push((format!("{ph}.progress"), progress));
                 for (a, m) in &head.attrs {
                     let value = match m.source() {
-                        Some(source) => functional(source),
+                        Some(source) => functional(source, Meta::default()),
                         None => m.at(now),
                     };
                     out.push((format!("{ph}.{a}"), value));

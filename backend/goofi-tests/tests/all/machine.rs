@@ -20,12 +20,28 @@ fn number(g: &Goofi, name: &str) -> f64 {
     g.variable(name).as_f64().unwrap_or(f64::NAN)
 }
 
-/// Poll until the playhead is at rest in `state`: `prev` is cleared by the arrival itself, where
-/// `progress` reads 1 the instant the flight ends, before the machine has landed it.
+/// Poll until the playhead is at rest in `state`: `progress` is the plain 1 only once the machine
+/// has landed it; in flight it is a functional, which reads as no number.
 fn at_rest_in(g: &Goofi, playhead: &str, state: &str) {
     g.until(&format!("{playhead} to rest in {state}"), |g| {
-        (text(g, &format!("{playhead}.state")) == state && text(g, &format!("{playhead}.prev")).is_empty()).then_some(())
+        (text(g, &format!("{playhead}.state")) == state && number(g, &format!("{playhead}.progress")) == 1.0).then_some(())
     });
+}
+
+/// The state a frame's flight left, off its metadata: empty at rest.
+fn prev_of(d: &Data) -> String {
+    match d.meta().get(goofi_graph::machine::META_PREV) {
+        Some(goofi_core::MetaValue::Str(s)) => s.clone(),
+        other => panic!("no prev on the frame: {other:?}"),
+    }
+}
+
+/// The patch second a frame's playhead arrived, off its metadata.
+fn arrived_of(d: &Data) -> f64 {
+    match d.meta().get(goofi_graph::machine::META_ARRIVED) {
+        Some(goofi_core::MetaValue::Float(t)) => *t,
+        other => panic!("no arrived on the frame: {other:?}"),
+    }
 }
 
 #[test]
@@ -109,8 +125,8 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     at_rest_in(&g, "head", "A");
     assert_eq!(number(&g, "head.gain"), 0.2);
     assert_eq!(g.variable("head.label"), j!("a"));
-    assert_eq!(g.variable("head.prev"), j!(""));
-    assert!(number(&g, "head.arrived") >= 0.0, "born at a patch second");
+    // Where it came from and when it arrived are the canvas's, on the frames: no variable says them.
+    assert_eq!((g.variable("head.prev"), g.variable("head.arrived")), (Value::Null, Value::Null));
     let listed = g.call("variable list", j!({}));
     assert_eq!(listed["groups"]["head"]["machine"], j!("seq"), "{}", listed["groups"]);
     assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "a number attribute's variable wears a knob");
@@ -163,7 +179,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
             samples.push((progress, number(g, "head.gain")));
             heard.extend(probe.latest().map(|d| f32s(&d)[0]));
         }
-        (state == "C" && text(g, "head.prev").is_empty()).then_some(())
+        (state == "C" && number(g, "head.progress") == 1.0).then_some(())
     });
     assert!(samples.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 >= w[1].1), "progress rises and gain falls: {samples:?}");
     assert!(samples.iter().any(|(p, _)| *p > 0.0 && *p < 1.0), "the move was seen in flight: {samples:?}");
@@ -349,7 +365,7 @@ fn a_load_starts_every_machine_over_and_replays_no_flight() {
     }
     at_rest_in(&g, "h", "low");
     g.call("machine fire", j!({ "machine": "amp", "playhead": "h", "transition": "t1" }));
-    g.until("the flight to be under way", |g| (text(g, "h.prev") == "low").then_some(()));
+    g.until("the flight to be under way", |g| (number(g, "h.progress") != 1.0).then_some(()));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("flight.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
@@ -404,7 +420,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     // of the grid it was looked at on. The write rides the f32 carrier.
     let chained = (0..1000).fold(0.0f64, |t, _| t + period);
     let last = d.last().unwrap();
-    assert_eq!(written(last, "p.arrived"), &Data::number(chained));
+    assert_eq!(arrived_of(written(last, "p.state")), chained);
     assert_eq!(written(last, "p.state").as_str().unwrap(), "A");
     // Mid-flight the attribute is a functional: the origin at departure, the target at the end,
     // the linear blend between, and clamped past either end. The write is one frame, not samples.
@@ -427,9 +443,9 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     m.advance(0.0, &none);
     m.jump(0.4 * period, "pp", "p", "B");
     let w = m.advance(1.3 * period, &none);
-    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.arrived")), ("B", &Data::number(0.4 * period)));
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), arrived_of(written(&w, "p.state"))), ("B", 0.4 * period));
     let w = m.advance(1.9 * period, &none);
-    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("A", "B"), "left B at 1.4 periods");
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), prev_of(written(&w, "p.progress")).as_str()), ("A", "B"), "left B at 1.4 periods");
     assert!((value_at(&ev, written(&w, "p.progress"), 1.9 * period) - 0.5).abs() < 1e-9, "halfway through a one-period flight begun at 1.4");
 }
 
@@ -497,7 +513,7 @@ fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_e
     // value over its own duration; one the next state leaves out goes on untouched.
     m.fire(4.0, "m", "p", "let");
     let w = m.advance(4.0, &none);
-    assert_eq!((written(&w, "p.state").as_str().unwrap(), written(&w, "p.prev").as_str().unwrap()), ("off", "held"));
+    assert_eq!((written(&w, "p.state").as_str().unwrap(), prev_of(written(&w, "p.progress")).as_str()), ("off", "held"));
     near(written(&w, "p.progress"), 4.15, 0.5);
     let gain = written(&w, "p.gain");
     for (t, want) in [(4.0, 0.4), (4.15, 0.2), (4.3, 0.0), (5.0, 0.0)] {
@@ -505,7 +521,7 @@ fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_e
     }
     assert_eq!(written(&w, "p.tint"), &Data::numbers([1.0, 0.0, 0.0, 1.0]));
     let w = m.advance(4.5, &none);
-    assert_eq!(written(&w, "p.prev").as_str().unwrap(), "", "landed");
+    assert_eq!(prev_of(written(&w, "p.progress")), "", "landed");
     assert_eq!(written(&w, "p.gain"), &Data::number(0.0));
 
     // Leaving mid-attack, the transition's ease carries it on from where it stands.
