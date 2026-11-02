@@ -1095,6 +1095,48 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	}
 });
 
+test('a widget moves through its own settings, which stand down for the drag', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5, { kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3 });
+			const panel = g.query.panels()[1];
+			await g.commands.setPanelType(panel.panelId, 'control');
+			await g.commands.setPanelState(panel.panelId, { group: 'desk' });
+		});
+		const widget = page.getByTestId('control-desk-level');
+		const props = page.getByTestId('control-props');
+		await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+		const cell = async (): Promise<{ y: number }> => {
+			const c = (await backendDoc(page)).variables['desk.level'].control;
+			return { y: c.y };
+		};
+		// A press picks the widget, and its settings open under it.
+		const before = (await widget.boundingBox())!;
+		await page.mouse.move(before.x + before.width / 2, before.y + 8);
+		await page.mouse.down();
+		await expect(props).toBeVisible();
+		const settings = (await props.boundingBox())!;
+		// Carried down through where the settings were: they stand down, and the widget follows.
+		await page.mouse.move(before.x + before.width / 2, before.y + 40, { steps: 4 });
+		await expect(props).toHaveCount(0);
+		await page.mouse.move(settings.x + settings.width / 2, settings.y + settings.height / 2, { steps: 12 });
+		await expect(page.getByTestId('drag-ghost'), 'inside the panel the drag is a move').toHaveCount(0);
+		await page.mouse.up();
+		await expect.poll(async () => (await cell()).y, 'the widget landed lower').toBeGreaterThan(0);
+		await expect(props, 'the settings return once the drag lands').toBeVisible();
+	} finally {
+		await handBack(
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'))
+		);
+	}
+});
+
 test('a variables row drags its variable onto a parameter of its own form', async ({ page }) => {
 	await page.goto('/');
 	await waitForApp(page);

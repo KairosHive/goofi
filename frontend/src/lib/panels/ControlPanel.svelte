@@ -496,7 +496,9 @@
 		</div>
 	</ScrollArea>
 
-	{#if edit && pickedView}
+	<!-- The settings stand down while a widget is moved or resized: they sit outside the panel, so
+	     a pointer over them would read as carried beyond it, and they hide the board it lands on. -->
+	{#if edit && pickedView && !moving && !resizing}
 		{@const pv = pickedView}
 		{@const pc = pv.control as ControlView}
 		{@const pheld = effectiveLock(pv, groupLock)}
