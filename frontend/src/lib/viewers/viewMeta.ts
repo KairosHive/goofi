@@ -11,7 +11,7 @@ export interface ViewSummary {
 
 /** The shape the frame CAME from: a pre-shrinking producer or a reduction records each axis's
  * original length, and a panel names the node's shape, not the preview's. */
-function originShape(shape: number[], meta?: Record<string, unknown>): number[] {
+export function originShape(shape: number[], meta?: Record<string, unknown>): number[] {
 	const reduced = meta?.reduced;
 	if (!reduced || typeof reduced !== 'object') return shape;
 	const axes = reduced as Record<string, { orig_len?: number } | undefined>;

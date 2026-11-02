@@ -346,20 +346,21 @@ pub const META_SFREQ: &str = "sfreq";
 pub const META_UFREQ: &str = "ufreq";
 pub const META_TIME: &str = "time";
 pub const META_INDEX: &str = "index";
-/// Patch seconds when the frame left its node: the tick's `time` plus what the run took.
-pub const META_EMIT: &str = "emit";
-/// The frames this frame was made from, as one flat list: entry 0 is the frame itself, and an
-/// entry's `inputs` maps a slot to the positions of the entries the node held there as it ran.
-/// Each entry says `node`, `slot`, `index`, `time` and `emit`. A frame two branches both hold is
-/// one entry, and a chain is cut where it would reach a node's own earlier run.
+/// The node that made the frame, as its uid's hex, and the output it left by: what a consumer
+/// copies into its own `source`, and what a recording or a viewer has of where a frame came from.
+pub const META_NODE: &str = "node";
+pub const META_SLOT: &str = "slot";
+/// The frames this frame was made from: per input slot, the frame the node held there as it ran,
+/// each as `node`, `slot`, `index` and `time` — the immediate inputs, and nothing behind them.
+/// Unset for a frame made from no input.
 pub const META_SOURCE: &str = "source";
 pub const META_CHANNELS: &str = "channels";
 /// How far a DERIVED timeline stands ahead of patch time, in seconds, as the engine last measured
 /// it. Only an engine that counts rather than reads sets it.
 pub const META_DRIFT: &str = "drift";
 pub const META_REDUCED: &str = "reduced";
-const BUILTIN_KEYS: [&str; 8] =
-    [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_EMIT, META_SOURCE, META_CHANNELS, META_REDUCED];
+const BUILTIN_KEYS: [&str; 9] =
+    [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_NODE, META_SLOT, META_SOURCE, META_CHANNELS, META_REDUCED];
 
 static EMPTY_AXES: Axes = Axes(Vec::new());
 
@@ -381,7 +382,8 @@ impl Meta {
         m.insert(META_UFREQ.to_string(), MetaValue::Null);
         m.insert(META_TIME.to_string(), MetaValue::Null);
         m.insert(META_INDEX.to_string(), MetaValue::Null);
-        m.insert(META_EMIT.to_string(), MetaValue::Null);
+        m.insert(META_NODE.to_string(), MetaValue::Null);
+        m.insert(META_SLOT.to_string(), MetaValue::Null);
         m.insert(META_SOURCE.to_string(), MetaValue::Null);
         m.insert(META_CHANNELS.to_string(), MetaValue::Axes(Axes::new()));
         m.insert(META_REDUCED.to_string(), MetaValue::Null);
@@ -429,14 +431,17 @@ impl Meta {
             _ => None,
         }
     }
-    /// Patch seconds when the frame left its node.
-    pub fn emit(&self) -> Option<f64> {
-        as_f64(self.0.get(META_EMIT))
+    /// The node and the output this frame left by, once an engine stamped it.
+    pub fn origin(&self) -> Option<(&str, &str)> {
+        match (self.0.get(META_NODE), self.0.get(META_SLOT)) {
+            (Some(MetaValue::Str(node)), Some(MetaValue::Str(slot))) => Some((node, slot)),
+            _ => None,
+        }
     }
-    /// The frames this frame was made from; see [`META_SOURCE`].
-    pub fn source(&self) -> Option<&[MetaValue]> {
+    /// The frames this frame was made from, by input slot; see [`META_SOURCE`].
+    pub fn source(&self) -> Option<&BTreeMap<String, MetaValue>> {
         match self.0.get(META_SOURCE) {
-            Some(MetaValue::List(l)) => Some(l),
+            Some(MetaValue::Map(m)) => Some(m),
             _ => None,
         }
     }
@@ -620,14 +625,16 @@ impl Data {
     }
 
     /// A copy with the engine-owned stamps on — overwritten, never inherited: the tick's `time`,
-    /// the node's `index` and `ufreq`, the instant it left as `emit`, and its `source`.
-    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>, emit: f64, source: Vec<MetaValue>) -> Data {
+    /// the node's `index` and `ufreq`, where it came from, and its `source`, `Null` for a frame
+    /// made from no input.
+    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>, node: &str, slot: &str, source: MetaValue) -> Data {
         let mut meta = self.0.meta.clone();
         meta.set_time(Some(time));
         meta.set_index(Some(index));
         meta.set_ufreq(ufreq);
-        meta.set(META_EMIT, MetaValue::Float(emit));
-        meta.set(META_SOURCE, MetaValue::List(source));
+        meta.set(META_NODE, MetaValue::Str(node.to_string()));
+        meta.set(META_SLOT, MetaValue::Str(slot.to_string()));
+        meta.set(META_SOURCE, source);
         Data(Arc::new(DataInner {
             value: self.0.value.clone(),
             meta,

@@ -99,44 +99,38 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let want = (std::f64::consts::TAU * 2.0 * t).sin();
     assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
 
-    // A frame also says when it LEFT and which input frames it was made from, so a latency sums
-    // hop by hop: a chain run in one sweep shares its `time` and still tells its hops apart.
+    // A frame also says where it left from and which input frames it was made from — the
+    // immediate ones, each by node, output, index and tick time — so a latency is read hop by hop
+    // from the frames themselves, and nothing behind an input rides along.
     let smooth = g.add("Smoothing");
     g.link(late, "out", smooth, "input");
     let sp = g.probe(smooth, "out");
     let (d, up) = g.until("a smoothed frame", |_| Some((sp.latest()?, lp.latest()?)));
     let m = d.meta();
-    assert!(m.emit().unwrap() >= m.time().unwrap(), "a frame leaves after its tick: {m:?}");
-    let source = m.source().expect("a source list");
+    assert_eq!(m.origin(), Some((hex(smooth).as_str(), "out")), "a frame names the node and output it left by: {m:?}");
+    let source = m.source().expect("the input frames");
     let field = |e: &goofi_core::MetaValue, k: &str| match e {
         goofi_core::MetaValue::Map(e) => e.get(k).cloned(),
         _ => None,
     };
-    use goofi_core::MetaValue::{Int, List, Str, Uint};
+    use goofi_core::MetaValue::{Float, Int, List, Str, Uint};
     // A count comes back off the wire signed; the engine stamps it unsigned.
     let count = |v: Option<goofi_core::MetaValue>| match v {
         Some(Uint(u)) => Some(u),
         Some(Int(i)) if i >= 0 => Some(i as u64),
         _ => None,
     };
-    assert_eq!(field(&source[0], "node"), Some(Str(hex(smooth))), "entry 0 is the frame itself: {source:?}");
-    assert_eq!(field(&source[0], "slot"), Some(Str("out".into())));
-    assert_eq!(count(field(&source[0], "index")), m.index());
-    let Some(goofi_core::MetaValue::Map(inputs)) = field(&source[0], "inputs") else { panic!("inputs: {source:?}") };
-    let Some(List(held)) = inputs.get("input") else { panic!("the input slot's frame: {inputs:?}") };
-    let [at] = &held[..] else { panic!("one frame on a single slot: {held:?}") };
-    let from = &source[count(Some(at.clone())).unwrap() as usize];
+    assert_eq!(source.keys().collect::<Vec<_>>(), vec!["input"], "one entry per input slot that held a frame: {source:?}");
+    let Some(List(held)) = source.get("input") else { panic!("the input slot's frame: {source:?}") };
+    let [from] = &held[..] else { panic!("one frame on a single slot: {held:?}") };
     assert_eq!(field(from, "node"), Some(Str(hex(late))), "made from the oscillator's frame: {from:?}");
+    assert_eq!(field(from, "slot"), Some(Str("out".into())));
     let upstream = up.meta().index().unwrap();
     assert!(count(field(from, "index")).is_some_and(|i| i <= upstream), "{from:?} against {upstream}");
-    let (Some(goofi_core::MetaValue::Float(left)), Some(goofi_core::MetaValue::Float(arrived))) =
-        (field(from, "emit"), field(&source[0], "emit"))
-    else {
-        panic!("both instants: {source:?}")
-    };
-    assert!(left < arrived, "the oscillator's frame left before the smoothed one did: {left} < {arrived}");
-    let own = up.meta().source().expect("a source's own list");
-    assert_eq!(own.len(), 1, "a source holds no input frame: {own:?}");
+    let Some(Float(made)) = field(from, "time") else { panic!("the input's tick time: {from:?}") };
+    assert!(made <= m.time().unwrap(), "the oscillator's frame was made before the smoothed one: {made} <= {:?}", m.time());
+    assert!(field(from, "source").is_none(), "an input is named, not its history: {from:?}");
+    assert!(up.meta().source().is_none(), "a frame made from no input has no source: {:?}", up.meta());
 
     let mut ev = g.events();
     let stats = g.until("a node_stats broadcast", |_| ev.next("node_stats")["stats"].get(hex(osc)).cloned());

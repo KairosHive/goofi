@@ -1,7 +1,9 @@
 <script lang="ts">
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { bindViewer, dropRate, latestFrame } from '$lib/api/frames';
-	import type { DataFrame } from '$lib/codec/decode';
+	import { isArrayFrame, type DataFrame } from '$lib/codec/decode';
+	import { reportedDtype } from '$lib/viewers/depth';
+	import { originShape } from '$lib/viewers/viewMeta';
 	import { metaEntries, formatMetaValue, formatMetaInline } from './metaFormat';
 	import MetadataField from './MetadataField.svelte';
 	import { nodeStatsRows } from './nodeStats';
@@ -30,14 +32,22 @@
 		return bindViewer(node.uid, slot, token, null, () => {});
 	});
 
-	// Format once per polled frame, not per render.
-	const fields = $derived(
-		metaEntries(lastFrame?.meta).map(([key, value]) => ({
+	// Format once per polled frame, not per render. An array says its shape and dtype in its
+	// body, not its meta: shown first, in the node's own terms rather than the viewer hop's.
+	const fields = $derived.by(() => {
+		const own: [string, unknown][] =
+			lastFrame && isArrayFrame(lastFrame)
+				? [
+						['shape', originShape(lastFrame.data.shape, lastFrame.meta)],
+						['dtype', reportedDtype(lastFrame.data.dtype)]
+					]
+				: [];
+		return [...own, ...metaEntries(lastFrame?.meta)].map(([key, value]) => ({
 			key,
 			body: formatMetaValue(value),
 			inline: formatMetaInline(value)
-		}))
-	);
+		}));
+	});
 
 	// Polled, not derived: a rate must keep falling when frames stop, and the panel re-renders at
 	// the poll rate rather than the data rate.

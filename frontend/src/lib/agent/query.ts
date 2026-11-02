@@ -8,7 +8,7 @@ import { arrivalRate, latestHead } from '$lib/api/frames';
 import type { FrameHead } from '$lib/api/dataProtocol';
 import { collectPanels } from 'panelty';
 import { asStateObject, linkedNodeName } from 'panelty';
-import { reconstructMeta } from '$lib/editor/metaFormat';
+import { originShape } from '$lib/viewers/viewMeta';
 
 import type { LinkInfo, NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
 import type { VariableView } from '$lib/crdt/graphDoc';
@@ -35,8 +35,7 @@ function summarize(head: FrameHead | null): FrameSummary | null {
 	const index = typeof head.meta.index === 'number' ? head.meta.index : undefined;
 	if (head.array) {
 		const a = head.array;
-		const recon = reconstructMeta(head.meta);
-		const shape = Array.isArray(recon.shape) ? (recon.shape as number[]) : a.wireShape;
+		const shape = originShape(a.wireShape, head.meta);
 		// An AXIS reduction, so a frame whose only `reduced` entry is the depth is not one.
 		const reduced = !shapesEqual(shape, a.wireShape);
 		return {

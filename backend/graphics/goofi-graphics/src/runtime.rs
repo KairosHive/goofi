@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use goofi_supervisor::sync::{Mailbox, Mutex};
-use goofi_supervisor::timing::Grid;
+use goofi_supervisor::timing::Pace;
 use std::time::{Duration, Instant};
 
 use goofi_node::Uid;
@@ -70,9 +70,9 @@ pub struct Runtime {
     /// The rate the clock paces, as `graphics.fps` last settled: what a recording is stamped with.
     pub fps: Arc<AtomicU32>,
     viewer_fps: Arc<AtomicU32>,
-    /// The grid every tap is read back on, at the viewers' rate: one grid, so every watched
-    /// stage's frame lands on the same tick and a page paints them once.
-    taps: Grid,
+    /// The pace every tap is read back at, the viewers' rate: one pace, so every watched stage's
+    /// frame lands on the same tick and a page paints them once.
+    taps: Pace,
     /// Whether a recording runs, as the recorder says: what puts an armed stage in demand.
     recording: Arc<AtomicBool>,
     /// What a stage could not do, worn until it can: this thread's own copy, and the cell the
@@ -101,7 +101,7 @@ impl Runtime {
             chains: HashMap::new(),
             fps,
             viewer_fps,
-            taps: Grid::new(),
+            taps: Pace::new(Duration::ZERO),
             recording,
             troubles: HashMap::new(),
             troubles_out: troubles,
@@ -229,9 +229,8 @@ impl Runtime {
         let mut shown: Vec<(goofi_window::Id, wgpu::SurfaceTexture)> = Vec::new();
         // A tap is read back on the viewers' grid, not the clock's: a window and a recording take
         // every frame, a viewer only as many as it is served.
-        let now = Instant::now();
-        let interval = Duration::from_secs_f64(1.0 / f64::from(self.viewer_fps.load(Ordering::Relaxed).max(1)));
-        let taps_due = self.taps.due(interval, now) <= now;
+        self.taps.set_period(Duration::from_secs_f64(1.0 / f64::from(self.viewer_fps.load(Ordering::Relaxed).max(1))));
+        let taps_due = self.taps.due();
         let mut tapped = false;
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
@@ -394,7 +393,8 @@ impl Runtime {
         }
         self.gpu.queue.submit([encoder.finish()]);
         if tapped {
-            self.taps.take(interval, now);
+            // The next readback is a period on; a clock that fell behind starts the pace again.
+            self.taps.advance();
         }
         for (id, frame) in shown {
             self.gpu.queue.present(frame);

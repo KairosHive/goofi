@@ -1,12 +1,12 @@
 """The latency from one node to another, summed hop by hop along the wires between them, one
 line per tick of the target.
 
-Every frame carries its `source`: the frames it was made from, each with its node, index, tick
-time and the instant it left, and each with its own sources behind it. So a target frame alone
-names the chain back to the source node, and the hops along the path between the two sum to that
-one tick's latency, whatever else ran in between. The recorder is the one path that keeps every
-frame, so a run arms the target's output, records it under the plugin's data folder, and tails
-its sidecar as it is written. A tick whose chain does not reach the source is unpaired.
+Every frame carries its `source`: per input slot, the frame it was made from, named by its node,
+output, index and tick time — the immediate inputs, nothing behind them. So a hop's latency is read
+off the hop's own frame, and a path is followed by index from one hop's recording into the one
+before it. The recorder is the one path that keeps every frame, so a run arms the output of every
+node after the source on the path, records them under the plugin's data folder, and tails each
+sidecar as it is written. A tick whose chain does not reach the source is unpaired.
 """
 from __future__ import annotations
 
@@ -38,12 +38,21 @@ class Start:
 
 @dataclass
 class Hop:
-    """A node after the source on the path: its uid, and the slot the path enters it on."""
+    """A node after the source on the path: its uid, the slot the path enters it on, the output
+    it leaves by, and its recorded frames so far, by index, read off its sidecar."""
     uid: str
     name: str
     slot_in: str
+    slot_out: str
     total_ms: float = 0.0
     count: int = 0
+    armed: bool = False
+    path: Path | None = None
+    offset: int = 0
+    carried: dict = field(default_factory=dict)
+    frames: int = 0
+    lines: dict[int, dict] = field(default_factory=dict)
+    newest: int = -1
 
 
 @dataclass
@@ -57,11 +66,9 @@ class Run:
     hops: list[Hop]
     folder: Path
     csv: Path
-    armed: bool = False
-    path: Path | None = None
-    offset: int = 0
-    carried: dict = field(default_factory=dict)
-    frames: int = 0
+    pending: deque = field(default_factory=deque)
+    # The newest target index taken into `pending`, so a frame is judged once.
+    taken: int = -1
     task: asyncio.Task | None = None
     paired: int = 0
     unpaired: int = 0
@@ -76,7 +83,7 @@ class Run:
         return {
             "running": running,
             "source": {"uid": self.source, "name": self.source_name, "slot": self.source_slot},
-            "target": {"uid": self.target, "name": self.target_name, "slot": self.target_slot, "frames": self.frames},
+            "target": {"uid": self.target, "name": self.target_name, "slot": self.target_slot, "frames": self.hops[-1].frames},
             "path": [self.source_name] + [h.name for h in self.hops],
             "hops": [
                 {"node": h.name, "slot": h.slot_in, "mean_ms": h.total_ms / h.count if h.count else None}
@@ -146,7 +153,11 @@ async def plan(ctx, args: Start) -> Run:
     target_slot = args.target_slot or outputs[0]
     if target_slot not in outputs:
         raise ValueError(f"`{nodes[target]['name']}` has no output `{target_slot}`")
-    hops = [Hop(uid=l["node_in"], name=nodes[l["node_in"]]["name"], slot_in=l["slot_in"]) for l in links]
+    # Each hop leaves by the wire to the next; the target leaves by the output being timed.
+    hops = [
+        Hop(uid=l["node_in"], name=nodes[l["node_in"]]["name"], slot_in=l["slot_in"], slot_out=nxt["slot_out"] if nxt else target_slot)
+        for l, nxt in zip(links, links[1:] + [None])
+    ]
     return Run(
         source=source,
         source_name=nodes[source]["name"],
@@ -160,18 +171,18 @@ async def plan(ctx, args: Start) -> Run:
     )
 
 
-def read_lines(r: Run) -> list[dict]:
-    """The sidecar lines written since the last read, each with its meta carried forward; a partial
-    last line waits."""
-    if r.path is None or not r.path.exists():
+def read_lines(h: Hop) -> list[dict]:
+    """The sidecar lines a hop's recording gained since the last read, each with its meta carried
+    forward and kept by its index; a partial last line waits."""
+    if h.path is None or not h.path.exists():
         return []
-    with r.path.open("rb") as f:
-        f.seek(r.offset)
+    with h.path.open("rb") as f:
+        f.seek(h.offset)
         chunk = f.read()
     cut = chunk.rfind(b"\n")
     if cut < 0:
         return []
-    r.offset += cut + 1
+    h.offset += cut + 1
     lines = []
     for raw in chunk[:cut].split(b"\n"):
         if not raw:
@@ -179,45 +190,73 @@ def read_lines(r: Run) -> list[dict]:
         line = json.loads(raw)
         for key, value in line.get("meta", {}).items():
             if value is None:
-                r.carried.pop(key, None)
+                h.carried.pop(key, None)
             else:
-                r.carried[key] = value
-        r.frames += 1
-        lines.append({"t": float(line["t"]), **r.carried})
+                h.carried[key] = value
+        h.frames += 1
+        held = {"t": float(line["t"]), **h.carried}
+        index = held.get("index")
+        if isinstance(index, int):
+            h.lines[index] = held
+            h.newest = max(h.newest, index)
+        lines.append(held)
     return lines
 
 
-def trace(r: Run, source: list) -> tuple[list[float], dict] | None:
-    """The hop latencies of a target frame, source to target, and the source frame's entry; None
-    where its chain does not reach the source node along the path."""
-    entry = source[0]
+def entry_from(line: dict, slot_in: str, upstream: str) -> dict | None:
+    """The frame `line` was made from on `slot_in`, where it came from `upstream`."""
+    held = line.get("source")
+    if not isinstance(held, dict):
+        return None
+    return next((e for e in held.get(slot_in, []) if isinstance(e, dict) and e.get("node") == upstream), None)
+
+
+def trace(r: Run, line: dict) -> tuple[list[float], dict] | None | bool:
+    """The hop latencies of a target frame, source to target, and the source frame's entry. None
+    where its chain does not reach the source node along the path; False while a hop's recording
+    has not yet reached the frame the chain names."""
     hops: list[float] = []
     upstream = [r.source] + [h.uid for h in r.hops[:-1]]
-    for hop, up in zip(reversed(r.hops), reversed(upstream)):
-        held = entry.get("inputs", {}).get(hop.slot_in, [])
-        nxt = next((source[p] for p in held if p < len(source) and source[p].get("node") == up), None)
-        if nxt is None:
+    for k in range(len(r.hops) - 1, -1, -1):
+        hop = r.hops[k]
+        entry = entry_from(line, hop.slot_in, upstream[k])
+        if entry is None:
             return None
-        hops.append((entry["emit"] - nxt["emit"]) * 1000.0)
-        entry = nxt
-    hops.reverse()
-    return hops, entry
+        # A line's own `t` is its frame's tick time; the sidecar carries the stamp nowhere else.
+        hops.append((line["t"] - entry["time"]) * 1000.0)
+        if k == 0:
+            hops.reverse()
+            return hops, entry
+        before = r.hops[k - 1]
+        nxt = before.lines.get(entry["index"])
+        if nxt is None:
+            # Not recorded yet, or never: its stream is past the index without it.
+            return None if before.newest > entry["index"] else False
+        line = nxt
 
 
 def settle(r: Run, out) -> None:
-    for line in read_lines(r):
-        source = line.get("source")
-        index = line.get("index")
-        if not isinstance(source, list) or not source or index is None:
+    for h in r.hops:
+        read_lines(h)
+    target = r.hops[-1]
+    r.pending.extend(line for line in target.lines.values() if line.get("index", -1) > r.taken)
+    r.taken = target.newest
+    held = deque()
+    while r.pending:
+        line = r.pending.popleft()
+        if "index" not in line or "t" not in line:
             r.unpaired += 1
             continue
-        traced = trace(r, source)
+        traced = trace(r, line)
+        if traced is False:
+            held.append(line)
+            continue
         if traced is None:
             r.unpaired += 1
             continue
         hops, origin = traced
         total = sum(hops)
-        cells = [repr(line["t"]), str(index), repr(origin["time"]), str(origin["index"]), f"{total:.6f}"]
+        cells = [repr(line["t"]), str(line["index"]), repr(origin["time"]), str(origin["index"]), f"{total:.6f}"]
         cells += [f"{ms:.6f}" for ms in hops]
         out.write(",".join(cells) + "\n")
         for hop, ms in zip(r.hops, hops):
@@ -228,17 +267,25 @@ def settle(r: Run, out) -> None:
         r.total_ms += total
         r.min_ms = min(r.min_ms, total)
         r.max_ms = max(r.max_ms, total)
+    r.pending = held
+    # A frame paired or given up is not looked up again: each hop keeps only what a pending
+    # target frame may still name.
+    for h in r.hops:
+        oldest = min((line["index"] for line in r.pending if "index" in line), default=h.newest)
+        for index in [i for i in h.lines if i < oldest - 1024]:
+            del h.lines[index]
     out.flush()
 
 
 async def locate(ctx, r: Run) -> None:
-    """Where the recorder writes the target's stream, from its status: the sidecar is the file's
+    """Where the recorder writes each hop's stream, from its status: the sidecar is the file's
     `.jsonl`."""
     status = await ctx.call("record status")
     r.folder = Path(status["folder"])
-    for s in status["streams"]:
-        if s["node"] == r.target_name and s["slot"] == r.target_slot and s["file"]:
-            r.path = r.folder / Path(s["file"]).with_suffix(".jsonl")
+    for h in r.hops:
+        for s in status["streams"]:
+            if s["node"] == h.name and s["slot"] == h.slot_out and s["file"]:
+                h.path = r.folder / Path(s["file"]).with_suffix(".jsonl")
     r.csv = r.folder / "latency.csv"
 
 
@@ -249,7 +296,7 @@ async def tail(ctx, r: Run) -> None:
             out.flush()
             while not r.stopping:
                 await asyncio.sleep(TAIL_EVERY)
-                if r.path is None:
+                if any(h.path is None for h in r.hops):
                     await locate(ctx, r)
                 settle(r, out)
             settle(r, out)
@@ -259,23 +306,25 @@ async def tail(ctx, r: Run) -> None:
 
 
 async def disarm(ctx, r: Run) -> None:
-    if r.armed:
-        await ctx.call("record disarm", {"output": f"{r.target}/{r.target_slot}"})
-        r.armed = False
+    for h in r.hops:
+        if h.armed:
+            await ctx.call("record disarm", {"output": f"{h.uid}/{h.slot_out}"})
+            h.armed = False
 
 
 @plugin.op("start", kind="effect")
 async def start(ctx, args: Start) -> dict:
     """Record the latency from `source` to `target`, each a node uid or name, summed hop by hop
-    along the fewest wires between them: a recording of the target's output, with `latency.csv`
-    beside it. The target's first output is timed unless a slot is named."""
+    along the fewest wires between them: a recording of every node's output after the source, with
+    `latency.csv` beside them. The target's first output is timed unless a slot is named."""
     global run
     if run is not None:
         raise RuntimeError("a latency run is in progress; stop it first")
     r = await plan(ctx, args)
     try:
-        armed = await ctx.call("record arm", {"output": f"{r.target}/{r.target_slot}"})
-        r.armed = bool(armed.get("changed"))
+        for h in r.hops:
+            armed = await ctx.call("record arm", {"output": f"{h.uid}/{h.slot_out}"})
+            h.armed = bool(armed.get("changed"))
         root = ctx.data_dir / "recordings"
         root.mkdir(parents=True, exist_ok=True)
         # The recorder dates the folder itself.

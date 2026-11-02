@@ -1268,7 +1268,7 @@ fn taken(file: &std::path::Path) -> (Vec<String>, Vec<String>) {
                     v => meta.insert(k.clone(), v.clone()),
                 };
             }
-            meta.retain(|k, _| !["index", "emit", "source", "ufreq", "drift"].contains(&k.as_str()));
+            meta.retain(|k, _| !["index", "node", "slot", "source", "ufreq", "drift"].contains(&k.as_str()));
             format!("{shape} {} {}", line["n"], serde_json::Value::Object(meta.clone()))
         })
         .collect();

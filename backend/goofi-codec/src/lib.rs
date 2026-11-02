@@ -1,23 +1,36 @@
-//! The GOOF v2 binary frame codec: the browser data plane. The child boundary is [`rpc`].
+//! The GOOF binary frame codec: the browser data plane. The child boundary is [`rpc`].
 //!
-//! Frame: `magic "GOOF" | u8 version | u8 dtype tag | u32 meta_len | u32 body_len | meta | body`,
-//! little-endian, with the meta dict projected from the typed `Meta` plus derived shape/dtype.
+//! Frame: `magic "GOOF" | u8 dtype tag | u32 meta_len | u32 body_len | meta | pad | body`,
+//! little-endian. The meta is the typed `Meta` as a msgpack map, its `channels` axes projected
+//! beside its keys; what the body says of itself — an array's shape and dtype — is said there
+//! alone. The body starts on a four-byte boundary, and an array's head ends on one, so its
+//! samples are read where they lie, in every language that reads the frame.
 
 
 use std::borrow::Cow;
 
 pub mod rpc;
-use std::hash::{DefaultHasher, Hasher};
+use std::hash::Hasher;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::sync::Arc;
 
-use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_EMIT, META_INDEX, META_SOURCE, META_TIME, META_UFREQ};
+use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_INDEX, META_SOURCE, META_TIME, META_UFREQ};
 use rmpv::Value as Mp;
+use xxhash_rust::xxh3::Xxh3;
 
 pub const MAGIC: &[u8; 4] = b"GOOF";
-pub const VERSION: u8 = 2;
-pub const HEADER_SIZE: usize = 14;
+pub const HEADER_SIZE: usize = 13;
+
+/// The boundary the body and an array's samples start on.
+pub const ALIGN: usize = 4;
+
+/// `n` rounded up to the boundary.
+pub const fn aligned(n: usize) -> usize {
+    n.div_ceil(ALIGN) * ALIGN
+}
+
+const PAD: [u8; ALIGN] = [0; ALIGN];
 
 /// Why a value cannot cross as a frame: a count or a length the format has no field wide enough
 /// for, or a part serde refused. Every encoder checks its lengths before it puts a byte.
@@ -142,7 +155,7 @@ impl<'a> Out<'a> for Segments<'a> {
     }
 }
 
-/// Encode a `Data` into a fresh GOOF v2 frame.
+/// Encode a `Data` into a fresh GOOF frame.
 pub fn encode(d: &Data) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::with_capacity(encoded_len(d)?);
     encode_into(d, &mut out)?;
@@ -165,21 +178,28 @@ pub fn encode_into<'a>(d: &'a Data, out: &mut impl Out<'a>) -> Result<(), Encode
     body.write(out)
 }
 
-/// The header every frame carries, and its packed meta; the lengths are checked before a byte is put.
+/// The header every frame carries, its packed meta and the pad that brings the body onto the
+/// boundary; the lengths are checked before a byte is put.
 fn put_header<'a>(out: &mut impl Out<'a>, dtype_tag: u8, meta: &[u8], body_len: usize) -> Result<(), EncodeError> {
     let meta_len = u32_of("meta", meta.len())?;
     let body_len = u32_of("body", body_len)?;
     out.put(MAGIC);
-    out.put(&[VERSION, dtype_tag]);
+    out.put(&[dtype_tag]);
     out.put(&meta_len);
     out.put(&body_len);
     out.put(meta);
+    out.put(&PAD[..aligned(HEADER_SIZE + meta.len()) - (HEADER_SIZE + meta.len())]);
     Ok(())
+}
+
+/// Where the body of a frame with a meta of `meta_len` starts.
+fn body_at(meta_len: usize) -> usize {
+    aligned(HEADER_SIZE + meta_len)
 }
 
 /// A frame's body, its every length checked before a byte of it is written.
 enum Body<'a> {
-    /// `[u8 ndim][u8 dtype_str_len][dtype_str][ndim × u32 shape]`, then the samples themselves.
+    /// [`array_head_bytes`], then the samples themselves.
     Array { head: Vec<u8>, samples: &'a [u8] },
     Str(&'a [u8]),
     Texture(Vec<u8>),
@@ -249,9 +269,9 @@ pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Res
 pub fn encode_u8_with(shape: &[usize], meta: &goofi_core::Meta, fill: impl FnOnce(&mut Vec<u8>)) -> Result<Vec<u8>, EncodeError> {
     let texels = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d)).ok_or(EncodeError::Invalid("array element count overflows usize".into()))?;
     let head = array_head_bytes(b"|u1", shape)?;
-    let meta = pack_array_meta(meta, shape, "uint8")?;
+    let meta = pack_array_meta(meta)?;
     let body_len = head.len() + texels;
-    let mut out = Vec::with_capacity(HEADER_SIZE + meta.len() + body_len);
+    let mut out = Vec::with_capacity(body_at(meta.len()) + body_len);
     put_header(&mut out, 0, &meta, body_len)?;
     out.extend_from_slice(&head);
     let at = out.len();
@@ -275,26 +295,27 @@ pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
     }
     let mut body = array_head_bytes(b"<f2", store.shape())?;
     body.extend_from_slice(&halves);
-    frame(0, pack_array_meta(d.meta(), store.shape(), "float16")?, body).map(Some)
+    frame(0, pack_array_meta(d.meta())?, body).map(Some)
 }
 
 /// The tag of a frame that carries the engine's per-emit stamps alone, with no body: sent when
 /// the frame they belong to already reached the viewers, and merged into it there.
 pub const STAMPS_TAG: u8 = 0xff;
 /// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
-const STAMP_KEYS: [&str; 5] = [META_TIME, META_INDEX, META_UFREQ, META_EMIT, META_SOURCE];
+const STAMP_KEYS: [&str; 4] = [META_TIME, META_INDEX, META_UFREQ, META_SOURCE];
 
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
-/// per-emit stamps. A table's child stamps are part of its body and stay in the hash.
+/// per-emit stamps. A table's child stamps are part of its body and stay in the hash. xxh3: a
+/// frame's samples are megabytes, and this runs once per serve.
 pub fn content_hash(d: &Data) -> Result<u64, EncodeError> {
-    let mut h = DefaultHasher::new();
+    let mut h = Xxh3::new();
     hash_into(d, &mut h, true)?;
     Ok(h.finish())
 }
 
 /// A 64-bit hash of the stamps alone, the other half of [`content_hash`].
 pub fn stamp_hash(d: &Data) -> Result<u64, EncodeError> {
-    let mut h = DefaultHasher::new();
+    let mut h = Xxh3::new();
     h.write(&pack(stamps(d.meta()))?);
     Ok(h.finish())
 }
@@ -313,7 +334,7 @@ fn stamps(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
     carried(meta).into_iter().filter(|(k, _)| k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect()
 }
 
-fn hash_into(d: &Data, h: &mut DefaultHasher, root: bool) -> Result<(), EncodeError> {
+fn hash_into(d: &Data, h: &mut Xxh3, root: bool) -> Result<(), EncodeError> {
     h.write_u8(d.dtype_tag());
     let mut said: Vec<(Mp, Mp)> = carried(d.meta())
         .into_iter()
@@ -347,64 +368,49 @@ fn hash_into(d: &Data, h: &mut DefaultHasher, root: bool) -> Result<(), EncodeEr
 
 /// A whole frame around a packed meta and a body.
 fn frame(dtype_tag: u8, meta: Vec<u8>, body: Vec<u8>) -> Result<Vec<u8>, EncodeError> {
-    let mut out = Vec::with_capacity(HEADER_SIZE + meta.len() + body.len());
+    let mut out = Vec::with_capacity(body_at(meta.len()) + body.len());
     put_header(&mut out, dtype_tag, &meta, body.len())?;
     out.extend_from_slice(&body);
     Ok(out)
 }
 
-/// `[u8 ndim][u8 dtype_str_len][dtype_str][ndim × u32 shape]`: what stands before an array's samples.
+/// `[u8 ndim][u8 dtype_str_len][dtype_str][pad][ndim × u32 shape]`: what stands before an array's
+/// samples. The pad brings the shape onto the boundary, so the samples after it start on one too.
 fn array_head_bytes(dtype_str: &[u8], shape: &[usize]) -> Result<Vec<u8>, EncodeError> {
-    let mut out = Vec::with_capacity(2 + dtype_str.len() + 4 * shape.len());
+    let text = 2 + dtype_str.len();
+    let mut out = Vec::with_capacity(aligned(text) + 4 * shape.len());
     out.extend_from_slice(&u8_of("array rank", shape.len())?);
     out.extend_from_slice(&u8_of("dtype string", dtype_str.len())?);
     out.extend_from_slice(dtype_str);
+    out.extend_from_slice(&PAD[..aligned(text) - text]);
     for &dim in shape {
         out.extend_from_slice(&u32_of("array dim", dim)?);
     }
     Ok(out)
 }
 
-/// Meta names the wire derives from the `Data` itself, so they are never taken from `Meta`.
-const DERIVED_KEYS: [&str; 2] = ["shape", "dtype"];
-
-/// Serialize a `Data`'s `Meta` to the msgpack map used in a GOOF frame.
+/// Serialize a `Data`'s `Meta` to the msgpack map used in a GOOF frame: the keys it carries, and
+/// its axes as `channels` beside them, where it has an array for them to label.
 fn pack_meta(d: &Data) -> Result<Vec<u8>, EncodeError> {
-    let meta = d.meta();
     match d.value() {
-        Value::Texture(_) => pack(carried(meta)),
-        Value::Array(store) => pack_array_meta(meta, store.shape(), "float32"),
-        Value::Str(_) | Value::Table(_) | Value::Functional(_) => {
-            let mut entries = carried(meta);
-            let dtype = match d.value() {
-                Value::Str(_) => "str",
-                Value::Functional(_) => "functional",
-                _ => "table",
-            };
-            entries.push((Mp::from("dtype"), Mp::from(dtype)));
-            pack(entries)
-        }
+        Value::Array(_) => pack_array_meta(d.meta()),
+        _ => pack(carried(d.meta())),
     }
 }
 
-/// An array frame's meta: what the `Meta` carries, plus the shape, dtype and axes the wire
-/// derives. Shared with [`encode_u8`], whose frame has no `Data` to read them off.
-fn pack_array_meta(meta: &goofi_core::Meta, shape: &[usize], dtype: &str) -> Result<Vec<u8>, EncodeError> {
+/// An array frame's meta: what the `Meta` carries, and the axes the wire projects as `channels`.
+/// Shared with [`encode_u8`], whose frame has no `Data` to read them off.
+fn pack_array_meta(meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
     let mut entries = carried(meta);
-    let dims: Vec<Mp> = shape.iter().map(|&d| Mp::from(d as u64)).collect();
-    entries.push((Mp::from("shape"), Mp::Array(dims)));
-    entries.push((Mp::from("dtype"), Mp::from(dtype)));
     entries.push((Mp::from("channels"), channels_to_mp(meta.channels())));
     pack(entries)
 }
 
-/// Every key the `Meta` itself carries. `channels` and the derived names are projected beside
-/// them; dropping them here is what keeps the map from carrying one key twice.
+/// Every key the `Meta` itself carries, unset builtins left out. `channels` is projected beside
+/// them; dropping it here is what keeps the map from carrying one key twice.
 fn carried(meta: &goofi_core::Meta) -> Vec<(Mp, Mp)> {
     meta.iter()
-        .filter(|(k, v)| {
-            *k != goofi_core::META_CHANNELS && !DERIVED_KEYS.contains(&k.as_str()) && !matches!(v, MetaValue::Null)
-        })
+        .filter(|(k, v)| *k != goofi_core::META_CHANNELS && !matches!(v, MetaValue::Null))
         .map(|(k, v)| (Mp::from(k.as_str()), mv_to_mp(v)))
         .collect()
 }
@@ -463,21 +469,19 @@ fn split_at(frame: &[u8]) -> std::result::Result<(u8, Range<usize>, Range<usize>
     if &frame[0..4] != MAGIC {
         return Err(format!("bad magic {:?}", &frame[0..4]));
     }
-    if frame[4] != VERSION {
-        return Err(format!("bad version {}", frame[4]));
-    }
-    let tag = frame[5];
-    let meta_len = u32::from_le_bytes([frame[6], frame[7], frame[8], frame[9]]) as usize;
-    let body_len = u32::from_le_bytes([frame[10], frame[11], frame[12], frame[13]]) as usize;
+    let tag = frame[4];
+    let meta_len = u32::from_le_bytes([frame[5], frame[6], frame[7], frame[8]]) as usize;
+    let body_len = u32::from_le_bytes([frame[9], frame[10], frame[11], frame[12]]) as usize;
     let meta_end = HEADER_SIZE.checked_add(meta_len).ok_or("metadata length overflow")?;
-    let body_end = meta_end.checked_add(body_len).ok_or("body length overflow")?;
+    let body_start = body_at(meta_len);
+    let body_end = body_start.checked_add(body_len).ok_or("body length overflow")?;
     if frame.len() < body_end {
         return Err(format!(
             "frame truncated: need {body_end}, have {}",
             frame.len()
         ));
     }
-    Ok((tag, HEADER_SIZE..meta_end, meta_end..body_end))
+    Ok((tag, HEADER_SIZE..meta_end, body_start..body_end))
 }
 
 /// A frame's META alone — what a recorder reads to name a file and to count a gap, without
@@ -496,11 +500,12 @@ pub fn array_head(body: &[u8]) -> Option<(&[u8], Vec<usize>, &[u8])> {
     Some((dtype, shape, cur.rest().ok()?))
 }
 
-/// `[u8 ndim][u8 dtype_len][dtype][ndim × u32 shape]`, read off the front of an array body.
+/// The head [`array_head_bytes`] writes, read off the front of an array body.
 fn read_array_head<'a>(cur: &mut Cursor<'_, 'a>) -> std::result::Result<(&'a [u8], Vec<usize>), String> {
     let ndim = cur.u8("array ndim")?;
     let dslen = cur.u8("array dtype len")?;
     let dtype = cur.take(dslen, "array dtype string")?;
+    cur.take(aligned(2 + dslen) - (2 + dslen), "array head pad")?;
     let shape = (0..ndim).map(|_| cur.u32("array shape")).collect::<std::result::Result<_, _>>()?;
     Ok((dtype, shape))
 }
@@ -516,7 +521,7 @@ pub fn array_view(body: &[u8]) -> Option<(Vec<usize>, &[u8])> {
     (samples.len() == bytes).then_some((shape, samples))
 }
 
-/// Decode a GOOF v2 frame into a `Data`. The inverse of [`encode`].
+/// Decode a GOOF frame into a `Data`. The inverse of [`encode`].
 pub fn decode(frame: &[u8]) -> std::result::Result<Data, String> {
     decode_owned(frame.to_vec())
 }
@@ -673,8 +678,6 @@ fn parse_meta(bytes: &[u8]) -> std::result::Result<goofi_core::Meta, String> {
     for (k, val) in entries {
         let Some(key) = k.as_str() else { continue };
         match key {
-            // shape/dtype are derived from the body — ignore the redundant keys.
-            "shape" | "dtype" => {}
             "channels" => meta.set_channels(parse_channels(&val)?),
             other => meta.set(other, mp_to_mv(&val)),
         }
@@ -746,10 +749,11 @@ pub fn typescript() -> String {
     let union = names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(" | ");
     format!(
         "// GENERATED from backend/goofi-codec/src/lib.rs — do not edit by hand. The GOOF header's\n\
-         // version, size and tags are declared once, in the codec. Regenerate by running\n\
+         // size, its boundary and its tags are declared once, in the codec. Regenerate by running\n\
          // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\
-         export const VERSION = {VERSION};\n\
          export const HEADER_SIZE = {HEADER_SIZE};\n\
+         /** The boundary the body and an array's samples start on. */\n\
+         export const ALIGN = {ALIGN};\n\
          /** The tag of a frame that carries a held frame's per-emit stamps and no body. */\n\
          export const STAMPS_TAG = {STAMPS_TAG};\n\
          export type DataType = {union};\n\

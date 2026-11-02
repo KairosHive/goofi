@@ -1,6 +1,6 @@
 /** Decode side of the GOOF wire format, whose source of truth is backend/goofi-codec/src/lib.rs. */
 import { decode as msgpackDecode } from '@msgpack/msgpack';
-import { DTYPE_TAG, HEADER_SIZE, STAMPS_TAG, VERSION, type DataType } from './frame';
+import { ALIGN, DTYPE_TAG, HEADER_SIZE, STAMPS_TAG, type DataType } from './frame';
 
 export type { DataType } from './frame';
 
@@ -21,6 +21,9 @@ export interface ArrayData {
 
 const decoder = new TextDecoder('utf-8');
 
+/** `n` rounded up to the boundary the body and an array's samples start on. */
+const aligned = (n: number): number => Math.ceil(n / ALIGN) * ALIGN;
+
 function checkMagic(view: DataView, off: number): void {
 	if (view.getUint32(off) !== 0x474f4f46) throw new Error('Invalid Data frame: bad magic'); // 'GOOF'
 }
@@ -35,8 +38,8 @@ function readMeta(view: DataView, at: number, len: number): Record<string, unkno
 export function decodeStamps(buf: ArrayBuffer): Record<string, unknown> | null {
 	const view = new DataView(buf);
 	checkMagic(view, 0);
-	if (view.getUint8(5) !== STAMPS_TAG) return null;
-	return readMeta(view, HEADER_SIZE, view.getUint32(6, true));
+	if (view.getUint8(4) !== STAMPS_TAG) return null;
+	return readMeta(view, HEADER_SIZE, view.getUint32(5, true));
 }
 
 export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
@@ -47,26 +50,21 @@ export function decodeData(buf: ArrayBuffer | Uint8Array): DataFrame {
 
 function decodeInto(view: DataView, off: number): DataFrame {
 	checkMagic(view, off);
-	const version = view.getUint8(off + 4);
-	if (version !== VERSION) throw new Error(`Unsupported GOOF version ${version}`);
-	const dtypeTag = view.getUint8(off + 5);
+	const dtypeTag = view.getUint8(off + 4);
 	const dtype = DTYPE_TAG[dtypeTag];
 	if (!dtype) throw new Error(`Unknown dtype tag ${dtypeTag}`);
-	const metaLen = view.getUint32(off + 6, true);
-	const bodyLen = view.getUint32(off + 10, true);
+	const metaLen = view.getUint32(off + 5, true);
+	const bodyLen = view.getUint32(off + 9, true);
 	const headerEnd = off + HEADER_SIZE;
 	const meta = readMeta(view, headerEnd, metaLen);
-	const bodyStart = headerEnd + metaLen;
+	// The body starts on the boundary after the meta, counted from the frame's own start.
+	const bodyStart = off + aligned(HEADER_SIZE + metaLen);
 	const bodyEnd = bodyStart + bodyLen;
 	let data: ArrayData | string | Record<string, DataFrame>;
 	if (dtype === 'ARRAY') {
 		const arr = decodeArray(view, bodyStart, bodyEnd);
-		// A half-float hop leaves here as f32, body and meta, so nothing downstream learns a
-		// second float width.
-		if (arr.dtype === '<f2') {
-			arr.dtype = '<f4';
-			meta['dtype'] = 'float32';
-		}
+		// A half-float hop leaves here as f32, so nothing downstream learns a second float width.
+		if (arr.dtype === '<f2') arr.dtype = '<f4';
 		data = arr;
 	} else if (dtype === 'STRING') {
 		data = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + bodyStart, bodyLen));
@@ -85,7 +83,8 @@ function decodeArray(view: DataView, start: number, end: number): ArrayData {
 	const dtypeStrLen = view.getUint8(off);
 	off += 1;
 	const dtypeStr = decoder.decode(new Uint8Array(view.buffer, view.byteOffset + off, dtypeStrLen));
-	off += dtypeStrLen;
+	// The head's text is padded to the boundary, so the shape and the samples after it sit on one.
+	off = start + aligned(2 + dtypeStrLen);
 	const shape: number[] = [];
 	for (let i = 0; i < ndim; i++) {
 		shape.push(view.getUint32(off, true));
@@ -131,7 +130,9 @@ function readTypedArray(
 	// The reducer's 8-bit hop for an image viewer: bytes need no alignment, so the view sits on the
 	// message buffer itself.
 	if (kind + itemsize === 'u1') return new Uint8Array(buffer, byteOffset, count);
-	// Slice into a fresh buffer: an f32 view must be 4-byte aligned, which the body offset is not.
+	// A frame's samples start on the boundary, so an f32 view sits on the message buffer too; a
+	// frame nested in a table may not, and is sliced into a buffer of its own.
+	if (kind + itemsize === 'f4' && byteOffset % ALIGN === 0) return new Float32Array(buffer, byteOffset, count);
 	const slice = buffer.slice(byteOffset, byteOffset + nBytes);
 	if (kind + itemsize === 'f4') return new Float32Array(slice, 0, count);
 	// The reducer's half-float hop for a line viewer, widened here so nothing downstream changes.
