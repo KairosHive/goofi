@@ -1,5 +1,6 @@
 //! Smoothing — across ticks, one value at a time (`sample`), or along one axis of each frame
-//! (`buffer`), as an exponential or a simple moving average, or as a kernel convolution.
+//! (`buffer`), as an exponential or a simple moving average, an attack/decay follower, or a
+//! kernel convolution.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType};
 use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
@@ -10,6 +11,7 @@ const G: &str = "smoothing";
 const SAMPLE: Show = Show { param: "mode", any_of: &["sample"] };
 const BUFFER: Show = Show { param: "mode", any_of: &["buffer"] };
 const EXPONENTIAL: Show = Show { param: "method", any_of: &["exponential"] };
+const FOLLOW: Show = Show { param: "method", any_of: &["attack/decay"] };
 const SPAN: Show = Show { param: "method", any_of: &["simple", "convolution"] };
 const AVERAGE: Show = Show { param: "method", any_of: &["exponential", "simple"] };
 const CONVOLUTION: Show = Show { param: "method", any_of: &["convolution"] };
@@ -31,12 +33,28 @@ fn bytes(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
+/// The pull per step towards a value above the level and towards one below: one `alpha` for
+/// `exponential`, `attack` and `decay` apart for the follower.
+fn rates(p: &Params<'_>, method: &str) -> (f32, f32) {
+    let read = |name: &str, fallback: f64| p.f64(G, name).unwrap_or(fallback).clamp(0.0, 1.0) as f32;
+    if method == "attack/decay" {
+        return (read("attack", 0.5), read("decay", 0.05));
+    }
+    let alpha = read("alpha", 0.1);
+    (alpha, alpha)
+}
+
+/// One step of a one-pole average: `y` moves towards `v` by the rate the direction takes.
+fn pull(y: &mut f32, v: f32, (up, down): (f32, f32)) {
+    *y += if v > *y { up } else { down } * (v - *y);
+}
+
 /// A one-pole average run forward over a lane, starting from its first sample.
-fn exponential(lane: &[f32], alpha: f32) -> Vec<f32> {
+fn exponential(lane: &[f32], rate: (f32, f32)) -> Vec<f32> {
     let mut y = lane.first().copied().unwrap_or(0.0);
     lane.iter()
         .map(|v| {
-            y += alpha * (v - y);
+            pull(&mut y, *v, rate);
             y
         })
         .collect()
@@ -138,13 +156,13 @@ impl Smoothing {
                 let n = self.frames.len() as f32;
                 Ok((0..self.frames[0].len()).map(|i| self.frames.iter().map(|f| f[i]).sum::<f32>() / n).collect())
             }
-            "exponential" => {
-                let alpha = p.f64(G, "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
+            method @ ("exponential" | "attack/decay") => {
+                let rate = rates(p, method);
                 if self.level.is_empty() {
                     self.level = x.clone();
                 }
                 for (y, v) in self.level.iter_mut().zip(&x) {
-                    *y += alpha * (v - *y);
+                    pull(y, *v, rate);
                 }
                 Ok(self.level.clone())
             }
@@ -162,10 +180,7 @@ fn along_axis(lane: &[f32], p: &Params<'_>) -> Result<Vec<f32>, String> {
     let both = p.bool(G, "bidirectional").unwrap_or(false);
     let size = p.i64(G, "size").unwrap_or(5).max(1) as usize;
     match p.str(G, "method").unwrap_or("exponential") {
-        "exponential" => {
-            let alpha = p.f64(G, "alpha").unwrap_or(0.1).clamp(0.0, 1.0) as f32;
-            Ok(average(lane, both, |l| exponential(l, alpha)))
-        }
+        method @ ("exponential" | "attack/decay") => Ok(average(lane, both, |l| exponential(l, rates(p, method)))),
         "simple" => Ok(average(lane, both, |l| simple(l, size))),
         "convolution" => {
             let sigma = p.f64(G, "sigma").unwrap_or(1.0).max(1e-3) as f32;
@@ -226,13 +241,14 @@ static PARAMS: &[ParamDecl] = &[
         name: "method",
         spec: ParamSpec::Str {
             default: "exponential",
-            options: &["exponential", "simple", "convolution"],
+            options: &["exponential", "attack/decay", "simple", "convolution"],
             refresh: false,
         },
         expression: None,
         doc: Some(
-            "`exponential` lets an old value fade away, by `alpha` a step. `simple` is the mean of \
-             the last `size` steps. `convolution`, in `buffer` mode only, weighs the `size` samples \
+            "`exponential` lets an old value fade away, by `alpha` a step. `attack/decay` is the \
+             same with one rate for a rise and another for a fall. `simple` is the mean of the \
+             last `size` steps. `convolution`, in `buffer` mode only, weighs the `size` samples \
              around each one by a `kernel`, centred, so it shifts nothing in time.",
         ),
         section: 1,
@@ -260,6 +276,26 @@ static PARAMS: &[ParamDecl] = &[
         ),
         section: 1,
         show: &[EXPONENTIAL],
+        role: None,
+    },
+    ParamDecl {
+        group: G,
+        name: "attack",
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: Some("How far a value above the level pulls it up, a step: 1 jumps to it at once."),
+        section: 1,
+        show: &[FOLLOW],
+        role: None,
+    },
+    ParamDecl {
+        group: G,
+        name: "decay",
+        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: Some("How far a value below the level pulls it down, a step: small, and a peak lingers."),
+        section: 1,
+        show: &[FOLLOW],
         role: None,
     },
     ParamDecl {
