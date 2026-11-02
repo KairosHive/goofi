@@ -56,8 +56,6 @@ pub struct GraphicsHalf {
     last: ((u32, u32), u64),
     /// Why the last frame taken could not cross, until one does.
     refused: Option<String>,
-    /// The 8-bit tap's rows, kept between two frames: the encoder copies them once more.
-    scratch: Vec<u8>,
     /// Texel buffers the render thread gave back, for the next arrival to fill.
     spare: Vec<Vec<u8>>,
 }
@@ -73,7 +71,7 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 
 impl GraphicsHalf {
     pub fn new(cells: Arc<Cells>, size: usize, producer: Option<(HostExecutor, crate::producer::Source)>) -> GraphicsHalf {
-        GraphicsHalf { producer, produced: None, cells, size, last: ((u32::MAX, u32::MAX), 0), refused: None, scratch: Vec::new(), spare: Vec::new() }
+        GraphicsHalf { producer, produced: None, cells, size, last: ((u32::MAX, u32::MAX), 0), refused: None, spare: Vec::new() }
     }
 
     /// Whether the render thread left something for this thread to take.
@@ -99,7 +97,8 @@ impl GraphicsHalf {
     }
 
     /// The viewers' readback, as the frame their width asks for: a full frame goes as it is; the
-    /// 8-bit texels go as the GOOF frame they are, which their readers forward.
+    /// 8-bit texels go as the GOOF frame they are, which their readers forward. Either way the
+    /// rows are copied off the mapped buffer once, into the frame itself.
     fn tap(&mut self, publish: &mut dyn FnMut(usize, Out<'_>)) {
         let Some(readback) = self.cells.tap.take() else { return };
         let (w, h) = readback.size();
@@ -118,10 +117,9 @@ impl GraphicsHalf {
                 // The window the GPU clamped to, said the way `quantize_u8` says it, so a viewer
                 // maps a texel back through the one rule.
                 goofi_core::reduce::note_depth(&mut meta, 0.0, 1.0);
-                if !readback.rows_into(&mut self.scratch) {
-                    return;
-                }
-                match goofi_codec::encode_u8(&shape, &self.scratch, &meta) {
+                match goofi_codec::encode_u8_with(&shape, &meta, |frame| {
+                    readback.rows_into(frame);
+                }) {
                     Ok(encoded) => {
                         self.refused = None;
                         publish(0, Out::Bytes(bytes::Bytes::from(encoded)));

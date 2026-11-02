@@ -44,9 +44,10 @@ rate or a latency.
 
 ## Graphics
 
-- The viewer's serve is a pace grid: serve on the frame's arrival with the cap as a floor
-  between serves. The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it
-  two.
+- The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it two. Every tap
+  lands in its own mapped buffer; one staging buffer per tick would be one map for all.
+- A tap is read back at `system.viewer_fps`, not at the display rate a page declares below it:
+  a 24 Hz display under the 30 fps cap downloads six frames a second it never paints.
 - Only audio asks for a real-time grant and a seat on the performance cores: the render clock
   and the signal workers compete with the bridge's encoders at ordinary priority. Move the grant
   to the supervisor and give the render clock one below audio's.

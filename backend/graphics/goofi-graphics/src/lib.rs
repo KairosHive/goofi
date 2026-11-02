@@ -96,6 +96,8 @@ pub struct GraphicsEngine {
     clock: Clock,
     /// The pace the clock thread keeps, written at settle from `graphics.fps`.
     fps: Arc<AtomicU32>,
+    /// The pace a tap is read back at, written at settle from `system.viewer_fps`.
+    viewer_fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
     pub(crate) python: Option<goofi_python::catalog::Python>,
     /// The executable whose `host` mode runs a node built after boot, and whether boot is over.
@@ -179,8 +181,9 @@ impl GraphicsEngine {
         let stats = Arc::new(Stats::default());
         let troubles = runtime::Troubles::default();
         let fps = Arc::new(AtomicU32::new(fps_of(None)));
+        let viewer_fps = Arc::new(AtomicU32::new(viewer_fps_of(None)));
         let (inbox, asked) = std::sync::mpsc::channel();
-        let links = runtime::Links { stats: stats.clone(), troubles: troubles.clone(), shared: shared.clone(), recording, fps: fps.clone() };
+        let links = runtime::Links { stats: stats.clone(), troubles: troubles.clone(), shared: shared.clone(), recording, fps: fps.clone(), viewer_fps: viewer_fps.clone() };
         let mut runtime = Runtime::new(gpu.clone(), time.clone(), links, asked);
         let ticker = match clock {
             Clock::External => Ticker::Hand(Box::new(runtime)),
@@ -213,6 +216,7 @@ impl GraphicsEngine {
             time,
             clock,
             fps,
+            viewer_fps,
             gpu,
             shared,
             classes: HashMap::new(),
@@ -483,6 +487,7 @@ impl Engine for GraphicsEngine {
         self.dirty = false;
         self.shared.replan.store(false, Ordering::Release);
         self.fps.store(fps_of(view.variables.get("graphics.fps")), Ordering::Relaxed);
+        self.viewer_fps.store(viewer_fps_of(view.variables.get("system.viewer_fps")), Ordering::Relaxed);
         for uid in changed.iter().copied().filter(|u| self.live.contains_key(u)).collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
             let desired = self.desired_of(view, uid, nv);
@@ -592,6 +597,14 @@ impl Engine for GraphicsEngine {
 /// `graphics.fps` as the clock reads it: the variable held to [`FPS_RANGE`], or its default.
 fn fps_of(held: Option<&goofi_core::Data>) -> u32 {
     let asked = held.map_or(goofi_core::variables::DEFAULT_FPS, |d| goofi_core::control::number_of(d) as i64);
+    asked.clamp(i64::from(*FPS_RANGE.start()), i64::from(*FPS_RANGE.end())) as u32
+}
+
+/// `system.viewer_fps` as the tap grid reads it: the cap the reducer serves at, held to
+/// [`FPS_RANGE`] as the reducer holds it to at least one, or its default.
+fn viewer_fps_of(held: Option<&goofi_core::Data>) -> u32 {
+    let asked = held.map_or(goofi_core::variables::DEFAULT_VIEWER_FPS, goofi_core::control::number_of);
+    let asked = if asked.is_finite() { asked.round() as i64 } else { 1 };
     asked.clamp(i64::from(*FPS_RANGE.start()), i64::from(*FPS_RANGE.end())) as u32
 }
 

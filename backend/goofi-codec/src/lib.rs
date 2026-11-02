@@ -25,12 +25,15 @@ pub const HEADER_SIZE: usize = 14;
 pub enum EncodeError {
     TooLong { what: &'static str, len: usize, max: usize },
     Serialize(String),
+    /// A frame whose body does not hold what its shape says.
+    Invalid(String),
 }
 
 impl std::fmt::Display for EncodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EncodeError::TooLong { what, len, max } => write!(f, "{what} of {len} exceeds the wire's {max}"),
+            EncodeError::Invalid(why) => write!(f, "{why}"),
             EncodeError::Serialize(why) => write!(f, "does not serialize: {why}"),
         }
     }
@@ -237,9 +240,26 @@ impl<'a> Body<'a> {
 /// An 8-bit array frame for the browser hop, where `Data` itself stays f32: the same header and
 /// the same meta, with a `|u1` body.
 pub fn encode_u8(shape: &[usize], texels: &[u8], meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
-    let mut body = array_head_bytes(b"|u1", shape)?;
-    body.extend_from_slice(texels);
-    frame(0, pack_array_meta(meta, shape, "uint8")?, body)
+    encode_u8_with(shape, meta, |out| out.extend_from_slice(texels))
+}
+
+/// [`encode_u8`] with the texels written by `fill` straight into the frame, one byte each, after
+/// the header: what a reader copying rows off a mapped GPU buffer uses, so the frame is the one
+/// copy it makes. A `fill` that writes any other number of bytes than the shape holds is refused.
+pub fn encode_u8_with(shape: &[usize], meta: &goofi_core::Meta, fill: impl FnOnce(&mut Vec<u8>)) -> Result<Vec<u8>, EncodeError> {
+    let texels = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d)).ok_or(EncodeError::Invalid("array element count overflows usize".into()))?;
+    let head = array_head_bytes(b"|u1", shape)?;
+    let meta = pack_array_meta(meta, shape, "uint8")?;
+    let body_len = head.len() + texels;
+    let mut out = Vec::with_capacity(HEADER_SIZE + meta.len() + body_len);
+    put_header(&mut out, 0, &meta, body_len)?;
+    out.extend_from_slice(&head);
+    let at = out.len();
+    fill(&mut out);
+    if out.len() - at != texels {
+        return Err(EncodeError::Invalid(format!("the frame holds {} texels and {} were written", texels, out.len() - at)));
+    }
+    Ok(out)
 }
 
 /// A half-float array frame for a line viewer's hop, where `Data` itself stays f32: the same

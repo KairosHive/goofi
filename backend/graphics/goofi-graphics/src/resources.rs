@@ -83,7 +83,7 @@ impl Readback {
         self.shrunk.to
     }
 
-    /// The frame's rows into `bytes`, tight, and whether it holds one.
+    /// The frame's rows appended to `bytes`, tight, and whether it holds one.
     pub(crate) fn rows_into(&self, bytes: &mut Vec<u8>) -> bool {
         let Some(slot) = &self.slot else { return false };
         rows_into(bytes, &slot.buffer, slot.texture.size, self.want)
@@ -193,14 +193,13 @@ impl State {
         }
     }
 }
-/// The mapped rows into `bytes` as one tight frame, the 256-byte padding each row carries
-/// dropped, and whether it holds one.
+/// The mapped rows appended to `bytes` as one tight frame, the 256-byte padding each row carries
+/// dropped, and whether it holds one. Appended, so a reader writes them where its frame wants
+/// them — after a header, into a buffer it keeps — and copies them once.
 fn rows_into(bytes: &mut Vec<u8>, buffer: &wgpu::Buffer, (w, h): (u32, u32), want: Want) -> bool {
     let Ok(mapped) = buffer.slice(..).get_mapped_range() else { return false };
     let row = (w * want.texel()) as usize;
     let pitch = padded_row(w, want.texel()) as usize;
-    // Appended, never zero-filled first: a tap's buffer is fresh every frame.
-    bytes.clear();
     bytes.reserve(row * h as usize);
     for y in 0..h as usize {
         match mapped.get(y * pitch..y * pitch + row) {

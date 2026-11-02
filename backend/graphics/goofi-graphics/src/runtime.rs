@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use goofi_supervisor::sync::{Mailbox, Mutex};
-use std::time::Instant;
+use goofi_supervisor::timing::Grid;
+use std::time::{Duration, Instant};
 
 use goofi_node::Uid;
 
@@ -50,6 +51,9 @@ pub struct Links {
     pub recording: Arc<AtomicBool>,
     /// The rate the clock paces, as `graphics.fps` last settled: what a recording is stamped with.
     pub fps: Arc<AtomicU32>,
+    /// The fastest a viewer is served, as `system.viewer_fps` last settled: the pace a tap is
+    /// read back at. A frame downloaded between two serves is one the reducer drops.
+    pub viewer_fps: Arc<AtomicU32>,
 }
 
 pub struct Runtime {
@@ -65,6 +69,10 @@ pub struct Runtime {
     chains: HashMap<goofi_window::Id, Chain>,
     /// The rate the clock paces, as `graphics.fps` last settled: what a recording is stamped with.
     pub fps: Arc<AtomicU32>,
+    viewer_fps: Arc<AtomicU32>,
+    /// The grid every tap is read back on, at the viewers' rate: one grid, so every watched
+    /// stage's frame lands on the same tick and a page paints them once.
+    taps: Grid,
     /// Whether a recording runs, as the recorder says: what puts an armed stage in demand.
     recording: Arc<AtomicBool>,
     /// What a stage could not do, worn until it can: this thread's own copy, and the cell the
@@ -81,7 +89,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_supervisor::timing::Time>, links: Links, inbox: Receiver<Cmd>) -> Runtime {
-        let Links { stats, troubles, shared, recording, fps } = links;
+        let Links { stats, troubles, shared, recording, fps, viewer_fps } = links;
         Runtime {
             gpu,
             plan: Plan::default(),
@@ -92,6 +100,8 @@ impl Runtime {
             presenting: HashMap::new(),
             chains: HashMap::new(),
             fps,
+            viewer_fps,
+            taps: Grid::new(),
             recording,
             troubles: HashMap::new(),
             troubles_out: troubles,
@@ -217,6 +227,12 @@ impl Runtime {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut started: Vec<(Uid, Want, Box<Slot>)> = Vec::new();
         let mut shown: Vec<(goofi_window::Id, wgpu::SurfaceTexture)> = Vec::new();
+        // A tap is read back on the viewers' grid, not the clock's: a window and a recording take
+        // every frame, a viewer only as many as it is served.
+        let now = Instant::now();
+        let interval = Duration::from_secs_f64(1.0 / f64::from(self.viewer_fps.load(Ordering::Relaxed).max(1)));
+        let taps_due = self.taps.due(interval, now) <= now;
+        let mut tapped = false;
         for (i, drawn) in want.iter().enumerate() {
             if !drawn {
                 continue;
@@ -350,10 +366,15 @@ impl Runtime {
             }
             let stage = &self.plan.stages[i];
             for w in Want::ALL {
+                let tap = matches!(w, Want::Tap | Want::TapU8);
+                if tap && !taps_due {
+                    continue;
+                }
                 let state = self.states.get_mut(&stage.uid).expect("just borrowed");
                 let Some(ring) = state.reads[w as usize].as_mut() else { continue };
                 ring.reclaim();
                 let Some(slot) = ring.free.pop_back() else { continue };
+                tapped |= tap;
                 let (width, height) = slot.texture.size;
                 self.gpu.blit(&mut encoder, w, &out_view, &slot.texture.view, &ring.out_size);
                 encoder.copy_texture_to_buffer(
@@ -372,6 +393,9 @@ impl Runtime {
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
+        if tapped {
+            self.taps.take(interval, now);
+        }
         for (id, frame) in shown {
             self.gpu.queue.present(frame);
             if let Some(ui) = &self.ui {
@@ -551,6 +575,7 @@ fn post(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id) {
     ui.post(move |host| {
         if let Some(frame) = cell.frame.take() {
             let mut rows = cell.rows.lock();
+            rows.clear();
             if frame.rows_into(&mut rows) {
                 host.present(id, frame.size(), &rows);
             }
