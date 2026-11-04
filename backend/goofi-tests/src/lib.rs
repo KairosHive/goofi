@@ -891,7 +891,7 @@ impl Viewer {
         }
     }
 
-    /// The next stamps frame's meta — how a held frame's `time`, `index` and `ufreq` keep moving.
+    /// The next stamps frame's meta — how a held frame's `procstart`, `index` and `ufreq` keep moving.
     pub async fn stamps(&mut self) -> goofi_core::Meta {
         let deadline = Instant::now() + WAIT;
         loop {
@@ -975,7 +975,7 @@ pub fn until_faster_than(g: &Goofi, probe: &OutputProbe, secs: f64) {
     let mut last: Option<(u64, f64)> = None;
     g.until(&format!("two successive emits under {secs} s apart"), |_| {
         let d = probe.latest()?;
-        let now = (d.meta().index()?, d.meta().time()?);
+        let now = (d.meta().index()?, d.meta().procstart()?);
         let near = last.is_some_and(|(i, t)| now.0 == i + 1 && now.1 - t < secs);
         last = Some(now);
         near.then_some(())

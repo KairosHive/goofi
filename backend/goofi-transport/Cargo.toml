@@ -11,6 +11,9 @@ goofi-node = { path = "../goofi-node" }
 
 # A `Wire` payload: one buffer, shared by every reader and forwarded to a socket uncopied.
 bytes = "1"
+# A slot's cell: the newest payload, swapped in by its one writer and read by any number of
+# subscribers with no lock on either side, so a producer is never held by a reader.
+arc-swap = "1"
 # The exchange's shared memory and its doorbell socket's readiness.
 libc = "0.2"
 

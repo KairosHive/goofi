@@ -623,6 +623,10 @@ pub enum Msg {
     Rings { idx: usize, serial: u64, rings: Rings },
     Plan { plan: Plan, arena: Vec<f32> },
     Grow(Vec<Option<Slot>>),
+    /// The occupant's state, saved on this thread and answered as [`Retired::Saved`]: the
+    /// control half never takes this thread's lock under a live clock, so the box it cannot
+    /// reach is read where it lives.
+    Save { idx: usize, serial: u64 },
 }
 
 /// Why a node left the plan.
@@ -647,6 +651,7 @@ pub enum Retired {
     Plan(Plan, Vec<f32>),
     Slab(Vec<Option<Slot>>),
     Faulted { uid: Uid, serial: u64, fault: Fault },
+    Saved { uid: Uid, type_name: &'static str, bytes: Vec<u8> },
 }
 
 pub struct Runtime {
@@ -665,6 +670,9 @@ pub struct Runtime {
     pub anchor: Arc<Anchor>,
     /// The helpers a level's stages run on beside the audio thread.
     pub pool: crate::pool::Pool,
+    /// Rung once something is on the outbox: what the control half parks on for an answer, so it
+    /// waits on this thread's block and never holds its lock.
+    pub returned: Arc<goofi_supervisor::timing::Event>,
 }
 
 impl Runtime {
@@ -680,6 +688,7 @@ impl Runtime {
             budget: Duration::from_secs_f64(BLOCK as f64 / crate::RATE) * BUDGET,
             anchor,
             pool: crate::pool::Pool::new(),
+            returned: Arc::new(goofi_supervisor::timing::Event::new()),
         }
     }
 
@@ -703,7 +712,8 @@ impl Runtime {
         self.fifo.drain(..out.len());
     }
 
-    fn apply(&mut self, msg: Msg) {
+    /// One message, and whether it put anything on the outbox.
+    fn apply(&mut self, msg: Msg) -> bool {
         let retired = match msg {
             Msg::Insert { idx, slot } => self.slab[idx].replace(slot).map(Retired::Slot),
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
@@ -765,16 +775,26 @@ impl Runtime {
                 }
                 Some(Retired::Slab(std::mem::replace(&mut self.slab, bigger)))
             }
+            Msg::Save { idx, serial } => self.slab[idx]
+                .as_ref()
+                .filter(|s| s.serial == serial)
+                .map(|s| Retired::Saved { uid: s.uid, type_name: s.type_name, bytes: s.node.save() }),
         };
-        if let Some(r) = retired {
-            let _ = self.outbox.push(r);
+        match retired {
+            Some(r) => self.outbox.push(r).is_ok(),
+            None => false,
         }
     }
 
-    /// Take every message the control half sent; a pointer move each.
+    /// Take every message the control half sent; a pointer move each. What came back is
+    /// announced once, after the last.
     pub fn apply_pending(&mut self) {
+        let mut answered = false;
         while let Ok(msg) = self.inbox.pop() {
-            self.apply(msg);
+            answered |= self.apply(msg);
+        }
+        if answered {
+            self.returned.ring(0);
         }
     }
 

@@ -25,33 +25,26 @@ export function formatMetaInline(v: unknown): string {
 }
 
 /** Undo a viewer reduction's `meta.reduced` artifacts, so the inspector shows what the node
- * produced. Meta with no `reduced` block comes back as-is. */
+ * produced: the axis labels as they were before the reduction. The shape is the frame's own,
+ * never the meta's; `originShape` in the viewers undoes the reduction there. Meta with no
+ * `reduced` block comes back as-is. */
 export function reconstructMeta(meta: Record<string, unknown>): Record<string, unknown> {
 	const reduced = meta['reduced'];
 	if (!isPlainObject(reduced)) return meta;
 	const out: Record<string, unknown> = { ...meta };
 	delete out['reduced'];
-	// The 8-bit hop is the viewer's, never the node's: inside the graph a frame is f32.
-	if (isPlainObject(reduced['depth'])) out['dtype'] = 'float32';
-	const shape = Array.isArray(meta['shape']) ? [...(meta['shape'] as number[])] : null;
 	const channels = isPlainObject(meta['channels'])
 		? { ...(meta['channels'] as Record<string, unknown>) }
 		: null;
-	for (const [axisStr, info] of Object.entries(reduced)) {
-		if (!isPlainObject(info)) continue;
-		const axis = Number(axisStr);
-		const origLen = typeof info['orig_len'] === 'number' ? (info['orig_len'] as number) : null;
-		if (shape && origLen !== null && Number.isInteger(axis) && axis >= 0 && axis < shape.length) {
-			shape[axis] = origLen;
-		}
-		if (channels) {
+	if (channels) {
+		for (const [axisStr, info] of Object.entries(reduced)) {
+			if (!isPlainObject(info)) continue;
 			const key = 'dim' + axisStr;
 			if (Array.isArray(info['orig_coord'])) channels[key] = info['orig_coord'];
 			else delete channels[key];
 		}
+		out['channels'] = channels;
 	}
-	if (shape) out['shape'] = shape;
-	if (channels) out['channels'] = channels;
 	return out;
 }
 

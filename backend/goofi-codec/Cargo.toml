@@ -14,3 +14,4 @@ half = "2"
 # (Param derives Serialize/Deserialize) — no per-variant juggling, lossless by construction.
 rmp-serde = "1"
 serde = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

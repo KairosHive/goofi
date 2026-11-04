@@ -187,8 +187,11 @@ fn shaders_render_on_the_gpu() {
     g.link(ramp, "out", up, "input");
     g.set_param(up, "common", "width", 64);
     g.set_param(up, "common", "height", 32);
-    let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4] && px(d, 0, 0)[3] == 1.0);
-    assert!(close(px(&frame, 0, 0), [0.267, 0.004, 0.329, 1.0]), "a one-channel frame reads through the colormap, its floor at viridis's: {:?}", px(&frame, 0, 0));
+    // Waited to the ramp's own colour: the resized stage draws the upload it still holds until the
+    // ramp's frame lands, and that frame is opaque too.
+    let frame = drawn(&g, up, "the raw [1, 64] frame reading through the colormap, its floor at viridis's", |d| {
+        shape(d) == vec![32, 64, 4] && close(px(d, 0, 0), [0.267, 0.004, 0.329, 1.0])
+    });
     assert!(close(px(&frame, 0, 63), [0.992, 0.906, 0.145, 1.0]), "and its ceiling at the top: {:?}", px(&frame, 0, 63));
     g.set_param(up, "signal", "colormap", "gray");
     let frame = drawn(&g, up, "the gray frame", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
@@ -624,11 +627,13 @@ fn shaders_render_on_the_gpu() {
     }
     drawn(&g, inked, "an escaped quote and comma in one list element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("[{dial_name}.out, 0.25, (1, 2)[0], 'a,b']") }));
-    let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
-    for line in ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'"] {
-        assert!(text.contains(line), "{line} in {text}");
-    }
-    assert!(text.contains("look.ink = [0.5, 0.25, 1, 1]"), "the whole param is back on its literal: {text}");
+    // The elements' values reach the state on the status drain's pace, as above: the whole param
+    // is back on its literal once the element the earlier source drove has been let go there too.
+    let lines = ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'", "look.ink = [0.5, 0.25, 1, 1]"];
+    g.until("the state to show each list element and the whole param on its literal", |g| {
+        let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+        lines.iter().all(|line| text.contains(line)).then_some(())
+    });
     for node in [dial, full] {
         g.call("node remove", j!({ "node": hex(node) }));
     }

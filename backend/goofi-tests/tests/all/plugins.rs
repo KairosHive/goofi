@@ -286,23 +286,26 @@ fn the_latency_plugin_times_every_tick_from_one_node_to_the_next() {
     assert!(ticks >= 5, "{stopped}");
     let csv = std::fs::read_to_string(stopped["csv"].as_str().unwrap()).unwrap();
     let lines: Vec<&str> = csv.lines().collect();
-    // One hop on this path, so the total is that hop's own column.
+    // One hop on this path, so the total is that hop's wait and run: from the instant the source's
+    // frame left to the instant the echo's did.
     let echo_name = goofi.doc()["nodes"][&echo]["name"].as_str().unwrap().to_string();
-    assert_eq!(lines[0], format!("target_time,target_index,source_time,source_index,latency_ms,{echo_name}_ms"));
+    assert_eq!(lines[0], format!("target_procend,target_index,source_procend,source_index,latency_ms,{echo_name}_wait_ms,{echo_name}_run_ms"));
     assert_eq!(lines.len() as u64 - 1, ticks);
     assert_eq!(stopped["unpaired"], 0, "{stopped}");
     assert_eq!(stopped["path"], j!([goofi.doc()["nodes"][&number]["name"], echo_name]));
     let mut last_index = -1i64;
     for line in &lines[1..] {
         let cols: Vec<&str> = line.split(',').collect();
-        assert_eq!(cols.len(), 6, "{line}");
+        assert_eq!(cols.len(), 7, "{line}");
         let target: f64 = cols[0].parse().unwrap();
         let index: i64 = cols[1].parse().unwrap();
         let source: f64 = cols[2].parse().unwrap();
         let ms: f64 = cols[4].parse().unwrap();
-        let hop: f64 = cols[5].parse().unwrap();
-        assert!(source <= target && ms > 0.0, "a target tick follows its source tick, and it took time: {line}");
-        assert!((ms - hop).abs() < 1e-9, "the total is the sum of its hops: {line}");
+        let wait: f64 = cols[5].parse().unwrap();
+        let run: f64 = cols[6].parse().unwrap();
+        assert!(source < target && ms > 0.0, "the echo's frame left after the source's, and it took time: {line}");
+        assert!(wait > 0.0 && run >= 0.0, "the echo waited for the frame, then ran: {line}");
+        assert!((ms - (wait + run)).abs() < 1e-9, "the total is the sum of its hops' waits and runs: {line}");
         assert!(index > last_index, "target ticks in order: {line}");
         last_index = index;
     }

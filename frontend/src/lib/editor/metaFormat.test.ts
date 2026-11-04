@@ -70,36 +70,32 @@ describe('formatMetaValue', () => {
 
 import { reconstructMeta } from './metaFormat';
 
-describe('reconstructMeta (Option C reduction-aware inspector)', () => {
-	it('restores original shape + drops the co-reduced coord + hides reduced', () => {
+describe('reconstructMeta (reduction-aware inspector)', () => {
+	it('drops the co-reduced coord and hides reduced; the shape is the frame body\'s, not the meta\'s', () => {
 		const reducedMeta = {
-			shape: [2000],
-			dtype: '<f4',
 			channels: { dim0: new Array(2000).fill(0) }, // co-reduced artifact
 			reduced: { '0': { orig_len: 10000 } },
 			sfreq: 250
 		};
 		const out = reconstructMeta(reducedMeta);
-		expect(out.shape).toEqual([10000]); // true original length
 		expect('reduced' in out).toBe(false); // artifact hidden
 		expect((out.channels as Record<string, unknown>).dim0).toBeUndefined(); // dropped
 		expect(out.sfreq).toBe(250); // untouched
+		expect('shape' in out).toBe(false);
 	});
 
 	it('restores carried orig_coord for a subsampled axis', () => {
 		const out = reconstructMeta({
-			shape: [3, 100],
 			channels: { dim0: ['a', 'c', 'f'], dim1: [] },
 			reduced: {
 				'0': { orig_len: 6, orig_coord: ['a', 'b', 'c', 'd', 'e', 'f'] }
 			}
 		});
-		expect(out.shape).toEqual([6, 100]);
 		expect((out.channels as Record<string, unknown>).dim0).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
 	});
 
 	it('returns meta unchanged when there is no reduction', () => {
-		const m = { shape: [128], sfreq: 250, channels: {} };
+		const m = { sfreq: 250, channels: {} };
 		expect(reconstructMeta(m)).toBe(m);
 	});
 });

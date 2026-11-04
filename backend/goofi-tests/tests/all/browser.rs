@@ -42,7 +42,7 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
 
     let mut v = Viewer::open(&base, &uid, "out").await;
     let frame = v.frame().await;
-    assert_eq!((&frame[0..4], frame[4], frame[5]), (&b"GOOF"[..], 2, 0), "magic, version, ARRAY tag");
+    assert_eq!((&frame[0..4], frame[4]), (&b"GOOF"[..], 0), "magic, ARRAY tag");
     let mut bad = Viewer::open(&base, &uid, "nope").await;
     assert_eq!(bad.close_code().await, Some(4004));
 
@@ -127,7 +127,7 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert!(held.silent_for(Duration::from_millis(700)).await, "a held value was sent again");
     let (first, next) = (held.stamps().await, held.stamps().await);
     assert!(next.index() > first.index(), "the held frame's stamps keep moving: {first:?} then {next:?}");
-    assert!(next.time() > first.time(), "in time as well as in count");
+    assert!(next.procstart() > first.procstart(), "in time as well as in count");
     let mut joiner = Viewer::open(&base, &hex(konst), "out").await;
     assert_eq!(f32s(&joiner.until(|d| f32s(d) == [3.0]).await), [3.0], "a joiner gets the held frame");
     g.set_param(konst, "constant", "value", 4.0);
@@ -152,20 +152,10 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert_eq!(f32s(&goofi_codec::decode(&wide).unwrap()), [1e6], "beyond a half's range, unchanged");
 }
 
-/// A GOOF array body: `[u8 ndim][u8 len][dtype][ndim x u32 shape][samples]`.
+/// A GOOF array body's dtype, shape and samples, read by the codec's own head parser.
 fn array_body(body: &[u8]) -> (String, Vec<usize>, Vec<u8>) {
-    let ndim = body[0] as usize;
-    let len = body[1] as usize;
-    let dtype = String::from_utf8(body[2..2 + len].to_vec()).unwrap();
-    let mut at = 2 + len;
-    let shape: Vec<usize> = (0..ndim)
-        .map(|_| {
-            let d = u32::from_le_bytes(body[at..at + 4].try_into().unwrap()) as usize;
-            at += 4;
-            d
-        })
-        .collect();
-    (dtype, shape, body[at..].to_vec())
+    let (dtype, shape, samples) = goofi_codec::array_head(body).expect("an array body");
+    (String::from_utf8(dtype.to_vec()).unwrap(), shape, samples.to_vec())
 }
 
 fn at(v: &rmpv::Value, key: &str) -> Option<rmpv::Value> {

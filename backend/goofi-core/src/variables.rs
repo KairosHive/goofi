@@ -262,11 +262,15 @@ pub const DEFAULT_FPS: i64 = 60;
 /// says otherwise: 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
 pub const DEFAULT_BUFFER: u32 = 256;
 
+/// The fastest a viewer is served, and the pace the graphics engine reads a watched texture back
+/// from the GPU for its viewers.
+pub const DEFAULT_VIEWER_FPS: f64 = 30.0;
+
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     VariableDef {
         name: "system.viewer_fps",
-        value: || Data::number(30.0),
-        doc: "The fastest a viewer is served (frames a second), whatever rate its display declares.",
+        value: || Data::number(DEFAULT_VIEWER_FPS),
+        doc: "The fastest a viewer is served (frames a second), whatever rate its display declares; the graphics engine reads a watched texture back from the GPU at this pace too.",
         ephemeral: false,
     },
     VariableDef {

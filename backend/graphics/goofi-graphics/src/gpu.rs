@@ -386,18 +386,15 @@ impl Gpu {
             .clone()
     }
 
-    /// One group of sampled textures, bound: a stage's inputs, or the state its last tick left.
-    pub fn texture_group(&self, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
+    /// One group of sampled textures, bound through `layout`: a stage's inputs, or the state its
+    /// last tick left. The layout is the stage's own, so this touches no cache.
+    pub fn bind_textures(&self, layout: &wgpu::BindGroupLayout, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry> = views
             .iter()
             .enumerate()
             .map(|(i, v)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(v) })
             .collect();
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.textures(views.len()),
-            entries: &entries,
-        })
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries })
     }
 
     pub fn layout(&self, params: bool, inputs: usize, state: usize) -> Arc<wgpu::PipelineLayout> {

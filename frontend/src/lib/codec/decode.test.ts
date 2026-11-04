@@ -4,15 +4,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeData, type ArrayData, type DataFrame } from './decode';
 
 /**
- * Cross-language codec parity. The fixture (tests/codec_golden.json) is a static golden of the
- * STABLE GOOF wire format — hex-encoded frames + their expected decodings. Decoding it here proves
- * the hand-mirrored TS port stays in lock-step with the canonical encoder (`goofi-codec`, the Rust
- * source of truth); any drift in tag/header/body fails this test. (The golden originated from the
- * now-removed Python encoder; the wire format is fixed, so the bytes remain canonical.)
+ * Cross-language codec parity. The fixture (tests/codec_golden.json) is written by the canonical
+ * encoder (`goofi-codec`, the Rust source of truth, through `cargo test -p goofi-tests
+ * codec_golden::`): hex-encoded frames and their expected decodings. Decoding it here proves the
+ * hand-mirrored TS port stays in lock-step; any drift in tag, header or body fails this test.
  */
 const GOLDEN = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../../../../tests/codec_golden.json', import.meta.url)), 'utf-8')
-) as { version: number; entries: { name: string; hex: string; decoded: Decoded }[] };
+) as { entries: { name: string; hex: string; decoded: Decoded }[] };
 
 interface Decoded {
 	dtype: 'ARRAY' | 'STRING' | 'TABLE';
@@ -49,13 +48,9 @@ function checkDecoded(frame: DataFrame, exp: Decoded): void {
 	}
 }
 
-describe('codec golden parity (py encode → ts decode)', () => {
-	it('fixture targets wire version 2', () => {
-		expect(GOLDEN.version).toBe(2);
-	});
-
+describe('codec golden parity (rust encode → ts decode)', () => {
 	for (const entry of GOLDEN.entries) {
-		it(`decodes ${entry.name} identically to the Python encoder`, () => {
+		it(`decodes ${entry.name} as the encoder meant it`, () => {
 			checkDecoded(decodeData(hexToBytes(entry.hex)), entry.decoded);
 		});
 	}

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
 
-use crate::gpu::Want;
+use crate::gpu::{Gpu, Want};
 use crate::half::Cells;
 use crate::scan::Built;
 use crate::Instance;
@@ -84,6 +84,11 @@ pub struct Stage {
     /// Whether this stage's texture output is armed, as the last settle left it; the recorder
     /// names and files the stream, and whether a recording runs is its word too.
     pub record: bool,
+    /// The layouts the tick binds the inputs and the state buffers through, resolved here once so
+    /// the tick asks the device's cache — a lock the compiler shares — for nothing.
+    pub layouts: (Arc<wgpu::BindGroupLayout>, Arc<wgpu::BindGroupLayout>),
+    /// The pass's pipeline, kept once the tick has read it off its `Ready`: read once, bound every tick.
+    pub pipeline: Option<Arc<wgpu::RenderPipeline>>,
 }
 
 impl Stage {
@@ -146,6 +151,7 @@ pub fn compile(
     view: &GraphView<'_>,
     live: &HashMap<Uid, Instance>,
     windows: &HashMap<Uid, crate::Opened>,
+    gpu: &Gpu,
 ) -> (Plan, Vec<(Uid, String)>) {
     let wires = texture_wires(view, live);
     let feeds = |consumer: Uid| -> Vec<Uid> {
@@ -209,6 +215,9 @@ pub fn compile(
             window: windows.get(uid).map(|o| o.id),
             surface: windows.get(uid).and_then(|o| o.surface.clone()),
             record: recorded(view, *uid, inst),
+            // The inputs, then one head layout per ARRAY input, as the prelude binds them.
+            layouts: (gpu.textures(manifest.inputs.len() + crate::shader::array_inputs(manifest).count()), gpu.textures(inst.class.state.len())),
+            pipeline: None,
         });
     }
     (Plan { stages }, faults)
@@ -279,7 +288,7 @@ fn size_of(
         let (fw, fh) = match behind {
             Some(p) => size_of(p, live, wires, fallback, sizes, visiting),
             None => live.get(&uid).and_then(|i| {
-                i.source.as_ref().and_then(|s| s.lock().as_ref().map(|f| f.size))
+                i.produced.as_ref().map(|f| f.size)
                     .or_else(|| crate::half::unpack(i.cells.uploaded.load(Ordering::Relaxed)))
             }).unwrap_or(fallback),
         };

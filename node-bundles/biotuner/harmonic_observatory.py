@@ -136,7 +136,7 @@ class HarmonicObservatory(goofi.Node):
             self.ceiling = 0.0
             self.last_grid = grid
         now = time.monotonic()
-        stamp = spectrum.meta.get("index", spectrum.meta.get("time"))
+        stamp = spectrum.meta.get("index", spectrum.meta.get("procstart"))
         if stamp != self.last_frame or stamp is None:
             if self.history and len(self.history[-1][1]) != len(s):
                 self.history.clear()

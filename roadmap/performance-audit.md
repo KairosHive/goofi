@@ -30,9 +30,6 @@ rate or a latency.
 
 ## Audio
 
-- `remove` and `persist` take the runtime lock the device callback renders under; the callback
-  plays silence for the period (`contended`). Let the callback drop a removed box through the
-  outbox; read states for a save through savers, or copy the slab's states on the callback.
 - Growth on the callback: `render_block` grows the fifo, `Inbox::fill` resizes on a channel
   count that grew, `output_stream` resizes scratch when the device buffer grows, and `apply`
   discards a failed `outbox.push`. Reserve off the callback; verify a reachable full outbox
@@ -41,17 +38,19 @@ rate or a latency.
   returns: the clock cannot finish a block while a helper is descheduled. Measure the pool's
   crossover for cheap nodes, deep chains and wide graphs before adding helpers.
 - Measure `contended`, `late` and the pool waits on a real device, with and without the
-  real-time grant; only audio asks for one, so the equal-protection rule is not yet met for
-  signal workers and the render clock.
+  real-time grant. `contended` now counts only a device open, a retune and a full message ring.
 - The device open and a node's birth run through `ready::prepare` and land at a settle; verify
   on a real device that the stream keeps playing through a device switch and a VST3 birth.
 
 ## Graphics
 
-- The viewer's serve is a pace grid: serve on the frame's arrival with the cap as a floor
-  between serves. The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it
-  two. Let the half's wake be the readback's own (a bell from the render thread when a slot is
-  ready), not a tick.
+- The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it two. Every tap
+  lands in its own mapped buffer; one staging buffer per tick would be one map for all.
+- A tap is read back at `system.viewer_fps`, not at the display rate a page declares below it:
+  a 24 Hz display under the 30 fps cap downloads six frames a second it never paints.
+- Only audio asks for a real-time grant and a seat on the performance cores: the render clock
+  and the signal workers compete with the bridge's encoders at ordinary priority. Move the grant
+  to the supervisor and give the render clock one below audio's.
 - `library refresh` validates every shader with naga on the op thread: 170 to 370 ms per refresh
   with one 1 600-line shader (`compile_stall` probe). Validate through `ready::prepare` and
   report the refusal at the settle after.

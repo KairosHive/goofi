@@ -84,9 +84,11 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
 - Params have one active source: constant or expression. Values use `/params/<node>`; errors use
   `/control`. Viewer demand must not change engine scheduling.
-- Every frame carries engine stamps: the tick's `time`, the node's `index` and `ufreq`, its `emit`
-  instant, and its `source` frames, cut where a chain meets a node's earlier run. Stamps are never
-  inherited. Each frame counts in full, including a Buffer window; never infer sample overlap.
+- Every frame carries engine stamps: the run's `procstart` and `procend`, the node's `index` and
+  `ufreq`, the `node` and `slot` it left by, and its `source`: per input slot, the frame held
+  there, named by those same five. The immediate inputs only, never the history behind them.
+  Stamps are never inherited. Each frame counts in full, including a Buffer window; never infer
+  sample overlap.
   Input clearing takes effect after a successful process call and before the next input drain.
 - Pitch is Hz on the signal plane and volts per octave on the audio plane (0 V is C4). Scales
   come from `goofi_core::scale`.

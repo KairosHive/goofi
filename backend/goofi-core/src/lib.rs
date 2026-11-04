@@ -344,22 +344,34 @@ pub enum MetaValue {
 /// Reserved builtin meta keys — always present in a [`Meta`], `Null`/empty when unset.
 pub const META_SFREQ: &str = "sfreq";
 pub const META_UFREQ: &str = "ufreq";
-pub const META_TIME: &str = "time";
+/// Patch seconds when the run that made the frame began, and when the frame left the node.
+pub const META_PROCSTART: &str = "procstart";
+pub const META_PROCEND: &str = "procend";
 pub const META_INDEX: &str = "index";
-/// Patch seconds when the frame left its node: the tick's `time` plus what the run took.
-pub const META_EMIT: &str = "emit";
-/// The frames this frame was made from, as one flat list: entry 0 is the frame itself, and an
-/// entry's `inputs` maps a slot to the positions of the entries the node held there as it ran.
-/// Each entry says `node`, `slot`, `index`, `time` and `emit`. A frame two branches both hold is
-/// one entry, and a chain is cut where it would reach a node's own earlier run.
+/// The node that made the frame, as its uid's hex, and the output it left by: what a consumer
+/// copies into its own `source`, and what a recording or a viewer has of where a frame came from.
+pub const META_NODE: &str = "node";
+pub const META_SLOT: &str = "slot";
+/// The frames this frame was made from: per input slot, the frame the node held there as it ran,
+/// each as `node`, `slot`, `index`, `procstart` and `procend` — the immediate inputs, and nothing
+/// behind them. Unset for a frame made from no input.
 pub const META_SOURCE: &str = "source";
+
+/// One run's stamps, the same on every frame it emits: the patch seconds it began and ended at,
+/// the node's count of emits (a gap means a frame was LOST) and its measured rate.
+pub struct Run {
+    pub procstart: f64,
+    pub procend: f64,
+    pub index: u64,
+    pub ufreq: Option<f64>,
+}
 pub const META_CHANNELS: &str = "channels";
 /// How far a DERIVED timeline stands ahead of patch time, in seconds, as the engine last measured
 /// it. Only an engine that counts rather than reads sets it.
 pub const META_DRIFT: &str = "drift";
 pub const META_REDUCED: &str = "reduced";
-const BUILTIN_KEYS: [&str; 8] =
-    [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_EMIT, META_SOURCE, META_CHANNELS, META_REDUCED];
+const BUILTIN_KEYS: [&str; 10] =
+    [META_SFREQ, META_UFREQ, META_PROCSTART, META_PROCEND, META_INDEX, META_NODE, META_SLOT, META_SOURCE, META_CHANNELS, META_REDUCED];
 
 static EMPTY_AXES: Axes = Axes(Vec::new());
 
@@ -379,9 +391,11 @@ impl Meta {
         let mut m = IndexMap::with_capacity(BUILTIN_KEYS.len());
         m.insert(META_SFREQ.to_string(), MetaValue::Null);
         m.insert(META_UFREQ.to_string(), MetaValue::Null);
-        m.insert(META_TIME.to_string(), MetaValue::Null);
+        m.insert(META_PROCSTART.to_string(), MetaValue::Null);
+        m.insert(META_PROCEND.to_string(), MetaValue::Null);
         m.insert(META_INDEX.to_string(), MetaValue::Null);
-        m.insert(META_EMIT.to_string(), MetaValue::Null);
+        m.insert(META_NODE.to_string(), MetaValue::Null);
+        m.insert(META_SLOT.to_string(), MetaValue::Null);
         m.insert(META_SOURCE.to_string(), MetaValue::Null);
         m.insert(META_CHANNELS.to_string(), MetaValue::Axes(Axes::new()));
         m.insert(META_REDUCED.to_string(), MetaValue::Null);
@@ -415,12 +429,19 @@ impl Meta {
     pub fn set_ufreq(&mut self, v: Option<f64>) {
         self.set(META_UFREQ, v.map_or(MetaValue::Null, MetaValue::Float));
     }
-    /// Patch seconds at the process tick that produced this frame.
-    pub fn time(&self) -> Option<f64> {
-        as_f64(self.0.get(META_TIME))
+    /// Patch seconds when the run that made this frame began.
+    pub fn procstart(&self) -> Option<f64> {
+        as_f64(self.0.get(META_PROCSTART))
     }
-    pub fn set_time(&mut self, v: Option<f64>) {
-        self.set(META_TIME, v.map_or(MetaValue::Null, MetaValue::Float));
+    pub fn set_procstart(&mut self, v: Option<f64>) {
+        self.set(META_PROCSTART, v.map_or(MetaValue::Null, MetaValue::Float));
+    }
+    /// Patch seconds when this frame left its node.
+    pub fn procend(&self) -> Option<f64> {
+        as_f64(self.0.get(META_PROCEND))
+    }
+    pub fn set_procend(&mut self, v: Option<f64>) {
+        self.set(META_PROCEND, v.map_or(MetaValue::Null, MetaValue::Float));
     }
     pub fn index(&self) -> Option<u64> {
         match self.0.get(META_INDEX) {
@@ -429,14 +450,17 @@ impl Meta {
             _ => None,
         }
     }
-    /// Patch seconds when the frame left its node.
-    pub fn emit(&self) -> Option<f64> {
-        as_f64(self.0.get(META_EMIT))
+    /// The node and the output this frame left by, once an engine stamped it.
+    pub fn origin(&self) -> Option<(&str, &str)> {
+        match (self.0.get(META_NODE), self.0.get(META_SLOT)) {
+            (Some(MetaValue::Str(node)), Some(MetaValue::Str(slot))) => Some((node, slot)),
+            _ => None,
+        }
     }
-    /// The frames this frame was made from; see [`META_SOURCE`].
-    pub fn source(&self) -> Option<&[MetaValue]> {
+    /// The frames this frame was made from, by input slot; see [`META_SOURCE`].
+    pub fn source(&self) -> Option<&BTreeMap<String, MetaValue>> {
         match self.0.get(META_SOURCE) {
-            Some(MetaValue::List(l)) => Some(l),
+            Some(MetaValue::Map(m)) => Some(m),
             _ => None,
         }
     }
@@ -619,15 +643,19 @@ impl Data {
         }))
     }
 
-    /// A copy with the engine-owned stamps on — overwritten, never inherited: the tick's `time`,
-    /// the node's `index` and `ufreq`, the instant it left as `emit`, and its `source`.
-    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>, emit: f64, source: Vec<MetaValue>) -> Data {
+    /// A copy with the engine-owned stamps on — overwritten, never inherited: the run's, where
+    /// the frame left by, its `source` (`Null` for a frame made from no input) and no `drift`,
+    /// which only a counting engine's record carries.
+    pub fn with_stamps(&self, run: &Run, node: &str, slot: &str, source: MetaValue) -> Data {
         let mut meta = self.0.meta.clone();
-        meta.set_time(Some(time));
-        meta.set_index(Some(index));
-        meta.set_ufreq(ufreq);
-        meta.set(META_EMIT, MetaValue::Float(emit));
-        meta.set(META_SOURCE, MetaValue::List(source));
+        meta.set_procstart(Some(run.procstart));
+        meta.set_procend(Some(run.procend));
+        meta.set_index(Some(run.index));
+        meta.set_ufreq(run.ufreq);
+        meta.0.shift_remove(META_DRIFT);
+        meta.set(META_NODE, MetaValue::Str(node.to_string()));
+        meta.set(META_SLOT, MetaValue::Str(slot.to_string()));
+        meta.set(META_SOURCE, source);
         Data(Arc::new(DataInner {
             value: self.0.value.clone(),
             meta,
@@ -980,7 +1008,7 @@ impl Param {
 pub type Said = BTreeMap<String, Vec<u8>>;
 
 /// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them: the
-/// reader carries a key forward until a `null` UNSETS it. The instant stays out; `t` owns it.
+/// reader carries a key forward until a `null` UNSETS it. `procstart` stays out; `t` owns it.
 pub fn write_meta_delta(
     out: &mut impl std::io::Write,
     meta: &Meta,
@@ -989,7 +1017,7 @@ pub fn write_meta_delta(
 ) -> std::io::Result<bool> {
     let mut opened = false;
     for (key, value) in meta.iter() {
-        if key == META_TIME || matches!(value, MetaValue::Null) || !in_json(value) {
+        if key == META_PROCSTART || matches!(value, MetaValue::Null) || !in_json(value) {
             continue;
         }
         scratch.clear();
