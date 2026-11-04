@@ -34,7 +34,6 @@ export interface PanelTypeInfo {
 	readonly id: PanelTypeId;
 	readonly title: string;
 	readonly icon: IconName;
-	/** Whether a node dragged onto this panel binds to it (`state.node`). */
 	readonly doc: string;
 }
 
