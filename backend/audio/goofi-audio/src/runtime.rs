@@ -292,19 +292,41 @@ fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool
 #[derive(Clone, Copy, Default)]
 pub struct Playback {
     mode: Option<usize>,
-    smoothing: Option<usize>,
     mix: Option<usize>,
     low: Option<usize>,
     high: Option<usize>,
     pitch: Option<usize>,
+    speed: Option<usize>,
+    resample: Option<usize>,
+    morph: Option<usize>,
+    seam: Option<usize>,
+    sigma: Option<usize>,
+}
+
+/// How the samples between a frame's own are made: the nearest one, a line, or a Catmull-Rom
+/// cubic through four, in the order of [`cross::RESAMPLE`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Resample {
+    Linear,
+    Nearest,
+    Cubic,
 }
 
 /// How a frame enters the crossing: as pitches for sines, in Hz or in volts per octave, or as a
-/// waveform with its rows mixed to one channel or not, and `range` the values that are full scale.
+/// waveform with its rows mixed to one channel or not, `range` the values that are full scale,
+/// read `step` frame samples per audio sample.
 #[derive(Clone, Copy)]
 pub enum Entry {
     Pitches { volts: bool },
-    Waveform { mix: bool, range: Option<(f32, f32)> },
+    Waveform { mix: bool, range: Option<(f32, f32)>, step: f64, resample: Resample },
+}
+
+/// How the loop in hand plays: glided from the frame before it, and blended across its seam.
+#[derive(Clone, Copy)]
+struct Shape {
+    morph: bool,
+    seam: usize,
+    sigma: f32,
 }
 
 impl Playback {
@@ -314,11 +336,15 @@ impl Playback {
         let beside = |name: &str| mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == name));
         Playback {
             mode,
-            smoothing: beside("smoothing"),
             mix: beside("mix"),
             low: beside("low"),
             high: beside("high"),
             pitch: beside("pitch"),
+            speed: beside("speed"),
+            resample: beside("resample"),
+            morph: beside("morph"),
+            seam: beside("seam"),
+            sigma: beside("sigma"),
         }
     }
 
@@ -339,11 +365,26 @@ impl Playback {
             return Entry::Pitches { volts: Self::read(params, self.pitch, 0.0) >= 0.5 };
         }
         let range = (Self::read(params, self.low, -1.0) as f32, Self::read(params, self.high, 1.0) as f32);
-        Entry::Waveform { mix: Self::read(params, self.mix, 0.0) >= 0.5, range: Some(range) }
+        let speed = Self::read(params, self.speed, 1.0);
+        let resample = match Self::read(params, self.resample, 0.0).round() as i64 {
+            1 => Resample::Nearest,
+            2 => Resample::Cubic,
+            _ => Resample::Linear,
+        };
+        Entry::Waveform {
+            mix: Self::read(params, self.mix, 0.0) >= 0.5,
+            range: Some(range),
+            step: if speed.is_finite() && speed > 0.0 { speed } else { 1.0 },
+            resample,
+        }
     }
 
-    fn smoothing(&self, params: &[AtomicU64]) -> f64 {
-        Self::read(params, self.smoothing, 0.0).max(0.0)
+    fn shape(&self, params: &[AtomicU64]) -> Shape {
+        Shape {
+            morph: Self::read(params, self.morph, 0.0) >= 0.5,
+            seam: Self::read(params, self.seam, 0.0).max(0.0) as usize,
+            sigma: Self::read(params, self.sigma, 1.0).max(f64::MIN_POSITIVE) as f32,
+        }
     }
 }
 
@@ -361,11 +402,12 @@ impl Voice {
         Voice { buf: Vec::with_capacity(capacity), chans: 0, len: 0, pos: 0 }
     }
 
-    fn sample(&self, c: usize) -> f32 {
+    /// Channel `c` at sample `i`; one channel serves every channel, a missing one is silence.
+    fn at(&self, c: usize, i: usize) -> f32 {
         match (self.chans, c) {
             (0, _) => 0.0,
-            (1, _) => self.buf[self.pos],
-            (n, c) if c < n => self.buf[self.pos * n + c],
+            (1, _) => self.buf[i],
+            (n, c) if c < n => self.buf[i * n + c],
             _ => 0.0,
         }
     }
@@ -402,8 +444,12 @@ pub struct Frames {
     pub rate: f64,
     now: Voice,
     next: Voice,
-    /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
-    fade: (usize, usize),
+    /// What played when `now` arrived, which a morph glides away from; empty when none runs.
+    prev: Voice,
+    spare: Voice,
+    /// Audio samples since `now` arrived, and between its arrival and the one before.
+    since: usize,
+    interval: usize,
     oscillating: bool,
     /// Per sine, one for every value a frame can hold: its phasor.
     re: Vec<f32>,
@@ -420,7 +466,10 @@ impl Frames {
             rate,
             now: Voice::new(capacity),
             next: Voice::new(capacity),
-            fade: (0, 0),
+            prev: Voice::new(capacity),
+            spare: Voice::new(capacity),
+            since: 0,
+            interval: 0,
             oscillating: false,
             re: Vec::with_capacity(capacity),
             im: Vec::with_capacity(capacity),
@@ -436,7 +485,8 @@ impl Frames {
     }
 
     fn forget(&mut self) {
-        (self.now.len, self.now.chans, self.now.pos, self.fade) = (0, 0, 0, (0, 0));
+        (self.now.len, self.now.chans, self.now.pos) = (0, 0, 0);
+        (self.prev.len, self.interval) = (0, 0);
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
@@ -448,40 +498,86 @@ impl Frames {
         }
         match oscillator {
             true => self.oscillate(out),
-            false => self.loop_frames(out, self.playback.smoothing(params) as usize),
+            false => self.loop_frames(out, self.playback.shape(params)),
         }
     }
 
-    /// A new frame takes over at the loop's end, so frames on time play back to back; with
-    /// smoothing it is crossfaded in as it arrives, the old one looping underneath.
-    fn loop_frames(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
-        keep_newest(&mut self.ring, 0, if smoothing > 0 { 1 } else { QUEUED });
+    /// How far the morph has come from `prev` to `now`: the share of one arrival interval.
+    fn progress(&self) -> f32 {
+        match self.prev.len > 0 && self.interval > 0 {
+            true => (self.since as f32 / self.interval as f32).min(1.0),
+            false => 1.0,
+        }
+    }
+
+    /// Channel `c` of the morph at sample `i` of `now`; `prev` is read at the same place in its loop.
+    fn morphed(&self, c: usize, i: usize, a: f32) -> f32 {
+        let v = self.now.at(c, i);
+        match a < 1.0 {
+            true => v * a + self.prev.at(c, i * self.prev.len / self.now.len) * (1.0 - a),
+            false => v,
+        }
+    }
+
+    /// A new frame takes over at the loop's end, so frames on time play back to back. With
+    /// `morph` it takes over as it arrives and is glided into from what played, over the time
+    /// between the last two arrivals. Then the loop's two ends meet across its seam.
+    fn loop_frames(&mut self, out: &mut PortMut<'_>, shape: Shape) {
+        keep_newest(&mut self.ring, 0, if shape.morph { 1 } else { QUEUED });
+        if !shape.morph {
+            self.prev.len = 0;
+        }
         let channels = out.channels() as usize;
         for i in 0..BLOCK {
-            if self.fade.1 == 0 && (self.now.pos == 0 || smoothing > 0) && self.next.take(&mut self.ring) {
-                match self.now.len == 0 || smoothing == 0 || self.next.chans != self.now.chans {
-                    true => std::mem::swap(&mut self.now, &mut self.next),
-                    false => self.fade = (0, smoothing),
-                }
+            if (self.now.pos == 0 || shape.morph) && self.next.take(&mut self.ring) {
+                self.arrive(shape.morph);
             }
-            let a = if self.fade.1 > 0 { self.fade.0 as f32 / self.fade.1 as f32 } else { 0.0 };
+            let (len, at) = (self.now.len, self.now.pos);
+            let a = self.progress();
+            // The seam: at the loop point both ends are their mean, and the far end's share falls
+            // off as a gaussian over `seam` samples on either side.
+            let d = if len > 0 { at.min(len - 1 - at) } else { 0 };
+            let k = match d < shape.seam.min(len / 2) {
+                true => 0.5 * (-(d as f32 * d as f32) / (2.0 * shape.sigma * shape.sigma)).exp(),
+                false => 0.0,
+            };
             for c in 0..channels {
-                let mixed = match self.fade.1 {
-                    0 => self.now.sample(c),
-                    _ => self.now.sample(c) * (1.0 - a) + self.next.sample(c) * a,
+                out.chan_mut(c)[i] = match (len, k > 0.0) {
+                    (0, _) => 0.0,
+                    (_, false) => self.morphed(c, at, a),
+                    (_, true) => self.morphed(c, at, a) * (1.0 - k) + self.morphed(c, len - 1 - at, a) * k,
                 };
-                out.chan_mut(c)[i] = mixed;
             }
             self.now.advance();
-            if self.fade.1 > 0 {
-                self.next.advance();
-                self.fade.0 += 1;
-                if self.fade.0 >= self.fade.1 {
-                    std::mem::swap(&mut self.now, &mut self.next);
-                    self.fade = (0, 0);
-                }
+            self.since = self.since.saturating_add(1);
+            if self.prev.len > 0 && a >= 1.0 {
+                self.prev.len = 0;
             }
         }
+    }
+
+    /// `next` becomes the frame in hand. A morph keeps what was heard as it arrived, the glide in
+    /// progress included, and carries the loop's place over as the same share of the new length.
+    fn arrive(&mut self, morph: bool) {
+        let glide = morph && self.now.len > 0 && self.next.chans == self.now.chans;
+        if glide {
+            let a = self.progress();
+            let (chans, len) = (self.now.chans, self.now.len);
+            self.spare.buf.clear();
+            for i in 0..len {
+                for c in 0..chans {
+                    self.spare.buf.push(self.morphed(c, i, a));
+                }
+            }
+            (self.spare.chans, self.spare.len) = (chans, len);
+            std::mem::swap(&mut self.prev, &mut self.spare);
+            self.next.pos = self.now.pos * self.next.len / len;
+            self.interval = self.since;
+        } else {
+            (self.prev.len, self.interval) = (0, 0);
+        }
+        self.since = 0;
+        std::mem::swap(&mut self.now, &mut self.next);
     }
 
     /// One sine per column of the newest frame, `[n]` pitches in Hz or `[2, n]` pitches over
@@ -719,7 +815,7 @@ impl Runtime {
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
             Msg::Rings { idx, serial, mut rings } => {
                 // Swapped in place, the old ends going back; rings for a slot that left go back whole.
-                // An inbox swaps its ring alone: the frame in hand and its crossfade play on.
+                // An inbox swaps its ring alone: the frame in hand and its morph play on.
                 if let Some(slot) = self.slab[idx].as_mut().filter(|s| s.serial == serial) {
                     for (i, frames) in &mut rings.inboxes {
                         std::mem::swap(&mut slot.inboxes[*i].ring, &mut frames.ring);

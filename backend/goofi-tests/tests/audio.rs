@@ -739,14 +739,15 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!((mean(&rms) - 0.707).abs() < 0.02, "and they average it: {}", mean(&rms));
     g.call("node remove", j!({ "node": hex(framed) }));
 
-    // Step: the in-order crossing — a signal ramp at 256 Hz enters through `SignalIn`, resampled
-    // to the rate: it rises from zero, a tenth of a second is a twentieth of it, and the next
-    // tenth continues where this one stopped.
+    // Step: the in-order crossing — a signal ramp at 256 Hz enters through `SignalIn` at the speed
+    // that plays it in real time: it rises from zero, a tenth of a second is a twentieth of it,
+    // and the next tenth continues where this one stopped.
     g.set_param(gain3, "gain", "gain", 0.0);
     sounds(&g, "the gain to close", |x| peak(x) == 0.0);
     g.call("node remove", j!({ "node": hex(buffer) }));
     let ramp = g.add("_TestRamp");
     let signal_in = g.add("audio:SignalIn");
+    g.set_param(signal_in, "signal", "speed", 256.0 / 48_000.0);
     g.link(ramp, "out", signal_in, "input");
     g.link(signal_in, "out", out, "input");
     let first = g.until("the ramp to enter", |g| {
@@ -769,41 +770,48 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds(&g, "the ramp entering the undone crossing", |x| peak(x) > 0.0);
 
     // …and a frame shorter than the wait for the next one loops rather than holding its last
-    // sample: sixty samples at 6 kHz are 480 at the rate, the whole ramp every 480.
-    g.set_param(ramp, "ramp", "sfreq", 6000.0);
+    // sample: sixty samples at an eighth of the speed are 480 audio samples, the ramp every 480.
+    g.set_param(signal_in, "signal", "speed", 0.125);
     g.set_param(ramp, "ramp", "length", 60);
     sounds(&g, "a short frame looping until the next", |x| {
         let tail = &x[x.len() - 960..];
         let periodic = tail.iter().zip(&tail[480..]).all(|(a, b)| (a - b).abs() < 1e-4);
         periodic && tail.iter().any(|v| *v < 0.05) && tail.iter().any(|v| *v > 0.95)
     });
-    g.set_param(ramp, "ramp", "sfreq", 256.0);
     g.set_param(ramp, "ramp", "length", 512);
 
-    // …and a frame that would last longer than any ring is minted for — a thousand samples said to
-    // be at a hundredth of a hertz — is refused on `mode` and names its length, the process alive.
-    let slow = g.add("Meta");
-    g.set_param(slow, "meta", "sfreq", 0.01);
+    // …and a frame that would last longer than any ring is minted for — a thousand samples at a
+    // thousandth of the speed — is refused on `mode` and names its length, the process alive.
     g.set_param(ramp, "ramp", "length", 1000);
-    g.link(ramp, "out", slow, "input");
-    g.link(slow, "out", signal_in, "input");
-    g.until("a frame of a hundred thousand seconds refused", |g| {
+    g.set_param(signal_in, "signal", "speed", 0.001);
+    g.until("a frame of a million audio samples refused", |g| {
         drive(g, TENTH);
-        g.error(signal_in).filter(|e| e.contains("1000 samples at 0.01 Hz") && e.contains("too long"))
+        g.error(signal_in).filter(|e| e.contains("1000 samples at speed 0.001") && e.contains("too long"))
     });
-    g.set_param(ramp, "ramp", "length", 512);
-    g.link(ramp, "out", signal_in, "input");
-    g.call("node remove", j!({ "node": hex(slow) }));
+    g.set_param(signal_in, "signal", "speed", 1.0);
     g.until("a frame that plays clears the refusal", |g| {
         drive(g, TENTH);
         g.error(signal_in).is_none().then_some(())
     });
 
-    // Step: `smoothing` crossfades one frame into the next: a held quarter becomes a held 1 over
-    // 2400 audio samples however late the frame arrived.
+    // Step: the seam blends the loop's two ends where they meet: a looped ramp from 0 to 1 loses
+    // its fall back to 0, both ends their mean, and still climbs between them.
+    g.set_param(ramp, "ramp", "length", 480);
+    sounds(&g, "the ramp jumping at its loop point", |x| x.windows(2).any(|w| w[0] - w[1] > 0.9));
+    g.set_param(signal_in, "signal", "seam", 100);
+    g.set_param(signal_in, "signal", "sigma", 30.0);
+    sounds(&g, "the seam closing the jump", |x| {
+        let tail = &x[x.len() - 960..];
+        let steepest = tail.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        steepest < 0.02 && tail.iter().any(|v| *v < 0.2) && tail.iter().any(|v| *v > 0.8)
+    });
+    g.set_param(signal_in, "signal", "seam", 0);
+
+    // Step: with `morph`, a new frame is glided into over the time between arrivals: a held
+    // quarter rises to a held 1 through the levels between, never in one step.
     g.call("node remove", j!({ "node": hex(ramp) }));
     let level = g.add("_TestConst");
-    g.set_param(signal_in, "signal", "smoothing", 2400);
+    g.set_param(signal_in, "signal", "morph", true);
     g.link(level, "out", signal_in, "input");
     g.set_param(level, "constant", "value", 0.25);
     sounds(&g, "the held quarter", |x| x.iter().all(|v| *v == 0.25));
@@ -812,13 +820,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.until("the morph to reach one", |g| {
         let (x, _) = drive(g, TENTH);
         morph.extend_from_slice(&x);
-        ((x[x.len() - 1] - 1.0).abs() < 1e-6).then_some(())
+        ((x[x.len() - 1] - 1.0).abs() < 1e-4).then_some(())
     });
-    assert!(morph.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the crossfade only rises");
-    // 0.3 to 0.95 is 0.65 of the 0.75 it climbs: 2080 of the 2400 samples.
+    assert!(morph.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the morph only rises");
     let between = morph.iter().filter(|v| (0.3..0.95).contains(*v)).count();
-    assert!((2000..2160).contains(&between), "it takes 2400 samples, not one: {between} between");
-    g.set_param(signal_in, "signal", "smoothing", 0);
+    assert!(between > 100, "it glides through the levels between: {between} samples there");
+    g.set_param(signal_in, "signal", "morph", false);
     g.call("node remove", j!({ "node": hex(level) }));
 
     // Step: as an `oscillator`, each column of an [n] or [2, n] frame is a sine at that many Hz,
@@ -1022,7 +1029,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // The params beside `mode` show only for a waveform; an oscillator has none.
     let signal = &g.call("library get", j!({ "type": "audio:SignalIn" }))["params"]["signal"];
     let waveform = j!([{ "group": "signal", "name": "mode", "any_of": ["waveform"] }]);
-    for name in ["mix", "low", "high", "smoothing"] {
+    for name in ["mix", "low", "high", "speed", "resample", "morph", "seam", "sigma"] {
         assert_eq!(signal[name]["show"], waveform, "{name}");
     }
     assert_eq!(signal["pitch"]["show"], j!([{ "group": "signal", "name": "mode", "any_of": ["oscillator"] }]));

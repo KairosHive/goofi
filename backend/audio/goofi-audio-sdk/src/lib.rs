@@ -221,8 +221,13 @@ pub mod cross {
     /// The options of a `mode` that sets how the engine PLAYS the frames a node takes in: each
     /// looped until the next, or each value a sine at that many Hz. A waveform reads the params
     /// beside it: a bool `mix` plays the rows as one channel, `low..high` are the values that are
-    /// full scale, and an integer `smoothing` in audio samples crossfades one frame into the next.
+    /// full scale, `speed` is frame samples per audio sample, made between by a `resample` of
+    /// [`RESAMPLE`], a bool `morph` glides from the frame before over the time between arrivals,
+    /// and `seam` audio samples on each side of the loop point blend across it, a gaussian of `sigma`.
     pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
+
+    /// The options of a waveform's `resample`, in the order the engine reads their index.
+    pub const RESAMPLE: &[&str] = &["linear", "nearest", "cubic"];
 
     /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale
     /// bipolar or unipolar signal. `min`..`max` is a declaration, so what falls outside it is

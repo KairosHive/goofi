@@ -16,7 +16,7 @@ use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
-use crate::runtime::{Entry, REC_HEADER};
+use crate::runtime::{Entry, Resample, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// An inbox is born this many floats wide and follows the frames that arrive: four of the
@@ -407,8 +407,8 @@ impl Executor for AudioHalf {
         if self.born.load(Ordering::Acquire) { goofi_node::NodeStage::Ready } else { goofi_node::NodeStage::Setup }
     }
 
-    /// One frame into the crossing that resamples it to the clock's rate, or that enters its
-    /// values as they are for an oscillator to sound.
+    /// One frame into the crossing that resamples it by its `speed`, or that enters its values as
+    /// they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
         let entry = self.playback.entry(&self.params);
@@ -424,15 +424,15 @@ impl Executor for AudioHalf {
                     self.refused = Some(format!("a waveform plays at most {most} channels, not {:?}: mix them", a.shape()));
                     return false;
                 }
-                Entry::Waveform { .. } if lasts(a.shape(), frame.meta().sfreq(), rate) > LONGEST_FRAME => {
-                    let (t, sf) = (layout(a.shape()).map_or(0, |l| l.1), frame.meta().sfreq().unwrap_or(rate));
-                    self.refused = Some(format!("a frame of {t} samples at {sf} Hz lasts too long to play: at most {LONGEST_FRAME} s"));
+                Entry::Waveform { step, .. } if lasts(a.shape(), step, rate) > LONGEST_FRAME => {
+                    let t = layout(a.shape()).map_or(0, |l| l.1);
+                    self.refused = Some(format!("a frame of {t} samples at speed {step} lasts too long to play: at most {LONGEST_FRAME} s"));
                     return false;
                 }
                 _ => {}
             }
         }
-        self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
+        self.inboxes[inbox].enter(frame, entry).unwrap_or(false)
     }
 
     /// A computed result, `[t]` or `[c, t]`, to the audio thread as one chunk; a moved channel
@@ -510,7 +510,7 @@ impl Executor for AudioHalf {
                 self.inboxes[i].ring = ring;
                 // The frame the old ring could not take enters the one minted for it.
                 if let Some(frame) = self.inboxes[i].pending.take() {
-                    ticked.replan |= self.inboxes[i].enter(&frame, rate, entry).unwrap_or(false);
+                    ticked.replan |= self.inboxes[i].enter(&frame, entry).unwrap_or(false);
                 }
             }
             for (i, ring) in swap.taps {
@@ -561,12 +561,12 @@ impl Inbox {
         (fits, wanted.is_some())
     }
 
-    /// Resample one frame linearly from its `sfreq` to the rate and enter it as one chunk headed by
-    /// its channel count and length. Answers whether the channel count moved or the ring must grow.
-    fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
+    /// Resample one frame at `step` frame samples per audio sample and enter it as one chunk headed
+    /// by its channel count and length. Answers whether the channel count moved or the ring must grow.
+    fn enter(&mut self, frame: &Data, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
-        let (mix, range) = match entry {
-            Entry::Waveform { mix, range } => (mix, range),
+        let (mix, range, step, resample) = match entry {
+            Entry::Waveform { mix, range, step, resample } => (mix, range, step, resample),
             Entry::Pitches { volts } => {
                 let width = pitch_width(a.shape())?;
                 let n = a.as_bytes().len() / 4;
@@ -602,7 +602,6 @@ impl Inbox {
             false if c > crate::plan::CEILING as usize => return None,
             false => (c, lane, stride),
         };
-        let step = frame.meta().sfreq().filter(|sf| *sf > 0.0).map_or(1.0, |sf| sf / rate);
         let moved = self.chans.swap(c as u16, Ordering::Relaxed) != c as u16;
         if moved {
             self.pos = 0.0;
@@ -615,8 +614,8 @@ impl Inbox {
             return Some(true);
         }
         if let Ok(chunk) = self.ring.write_chunk_uninit(need) {
-            let at = |ch: usize, i: usize| {
-                let v = x[ch * lane + i.min(t - 1) * stride];
+            let at = |ch: usize, i: isize| {
+                let v = x[ch * lane + (i.clamp(0, t as isize - 1) as usize) * stride];
                 // A linear map, not a clamp: a pitch in volts past the range is still a pitch.
                 match range {
                     _ if !v.is_finite() => 0.0,
@@ -628,8 +627,16 @@ impl Inbox {
                 let p = pos + k as f64 * step;
                 let i = p.floor();
                 let f = (p - i) as f32;
-                let i = i as usize;
-                (0..c).map(move |ch| at(ch, i) + (at(ch, i + 1) - at(ch, i)) * f)
+                let i = i as isize;
+                (0..c).map(move |ch| match resample {
+                    Resample::Nearest => at(ch, if f < 0.5 { i } else { i + 1 }),
+                    Resample::Linear => at(ch, i) + (at(ch, i + 1) - at(ch, i)) * f,
+                    Resample::Cubic => {
+                        let (p0, p1, p2, p3) = (at(ch, i - 1), at(ch, i), at(ch, i + 1), at(ch, i + 2));
+                        let (b, c2, d) = (p2 - p0, 2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3, 3.0 * (p1 - p2) + p3 - p0);
+                        p1 + 0.5 * f * (b + f * (c2 + f * d))
+                    }
+                })
             });
             chunk.fill_from_iter([c as f32, n as f32].into_iter().chain(samples));
         }
@@ -652,9 +659,9 @@ fn layout(shape: &[usize]) -> Option<(usize, usize, usize, usize)> {
     }
 }
 
-/// How long a frame plays at `sfreq`, in seconds; one without a rate plays a sample per sample.
-fn lasts(shape: &[usize], sfreq: Option<f64>, rate: f64) -> f64 {
-    layout(shape).map_or(0, |l| l.1) as f64 / sfreq.filter(|sf| *sf > 0.0).unwrap_or(rate)
+/// How long a frame plays at `step` frame samples per audio sample, in seconds.
+fn lasts(shape: &[usize], step: f64, rate: f64) -> f64 {
+    layout(shape).map_or(0, |l| l.1) as f64 / step / rate
 }
 
 /// How many rows an oscillator's frame has: pitches, or pitches over phases.
@@ -759,7 +766,10 @@ impl Play {
 fn enter_planar(inbox: &mut Inbox, channels: u16, frames: usize, planar: &[f32], from: f64, rate: f64) -> bool {
     let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
     match Data::array_f32(vec![channels as usize, frames], bytes, Meta::new().with_sfreq(Some(from))) {
-        Ok(frame) => inbox.enter(&frame, rate, Entry::Waveform { mix: false, range: None }).unwrap_or(false),
+        Ok(frame) => {
+            let entry = Entry::Waveform { mix: false, range: None, step: from / rate, resample: Resample::Linear };
+            inbox.enter(&frame, entry).unwrap_or(false)
+        }
         Err(_) => false,
     }
 }
