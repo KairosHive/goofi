@@ -145,6 +145,17 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 - After a Python API change, rebuild both installed wheels. Do not canonicalize venv interpreter
   paths.
 
+## Node authoring
+
+- Write a node in Rust against the engine SDK. Use Python only when the algorithm is too complex
+  to port and an efficient Python package already implements it.
+- The main param group holds every primary configuration option of the node; auxiliary params go
+  in other groups. Part a group into sections by meaning (the Python list-of-dicts form, the Rust
+  `section` index), so every primary param fits in the main group.
+- Give every param the range its values can take, and a short, clear doc.
+- Set `show` so a param appears only when the configuration makes it relevant: a mode's own
+  params show under that mode and nowhere else.
+
 ## Tests
 
 - Test observable behavior through the public interface. All Rust tests live in `goofi-tests` as
