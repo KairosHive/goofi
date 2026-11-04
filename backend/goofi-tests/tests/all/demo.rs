@@ -36,7 +36,7 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     let why = g.refuse("agent list", j!({}));
     assert!(why.contains("unknown op"), "{why}");
     let words = vec!["agent".to_string(), "list".to_string()];
-    let Err(why) = phrase::resolve(&g.state.ops(), &words) else { panic!("resolved on a demo") };
+    let Err(why) = phrase::resolve(&g.state.ops(), &words).map_err(|r| r.to_string()) else { panic!("resolved on a demo") };
     assert!(why.contains("does not serve the `agent` ops"), "{why}");
 
     // Completion follows the served set, so nothing offers a door that is not there.

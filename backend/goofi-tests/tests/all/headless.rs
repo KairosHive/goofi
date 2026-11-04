@@ -27,12 +27,12 @@ fn a_headless_server_serves_no_layout_op_and_carries_an_arrangement_through() {
     assert!(why.contains("unknown op"), "{why}");
     // …and the phrase resolver adds the one teachable line for the group's first word.
     let words = vec!["layout".to_string(), "inspect".to_string()];
-    let Err(why) = phrase::resolve(&g.state.ops(), &words) else { panic!("resolved on headless") };
+    let Err(why) = phrase::resolve(&g.state.ops(), &words).map_err(|r| r.to_string()) else { panic!("resolved on headless") };
     assert!(why.contains("does not serve the `layout` ops"), "the refusal names what is missing: {why}");
 
     // The same line on a FULL server is an ordinary suggestion list instead.
     let bad = vec!["layout".to_string(), "frobnicate".to_string()];
-    let Err(why) = phrase::resolve(&full.state.ops(), &bad) else { panic!("frobnicate resolved") };
+    let Err(why) = phrase::resolve(&full.state.ops(), &bad).map_err(|r| r.to_string()) else { panic!("frobnicate resolved") };
     assert!(why.contains("layout inspect") && !why.contains("does not serve"), "{why}");
 
     // Completion agrees: the group word is offered on the full server and absent headless.

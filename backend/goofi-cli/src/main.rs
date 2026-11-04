@@ -167,21 +167,30 @@ fn notice_newer_release() {
     });
 }
 
-/// How this shell reads: human — parted and aligned to the terminal's width — when stdout is a
-/// terminal, compact when it is a pipe an agent or a script reads. `GOOFI_STYLE=human|compact`
-/// decides instead; the width is the terminal's, else `COLUMNS`, else 80.
+/// How this shell reads: human — parted and aligned to the terminal's width, in color — when
+/// stdout is a terminal, compact when it is a pipe an agent or a script reads. `GOOFI_STYLE=
+/// human|compact` decides the layout instead; the width is the terminal's, else `COLUMNS`, else
+/// 80. Color follows the terminal too, off under `NO_COLOR` or `TERM=dumb`; `GOOFI_COLOR=
+/// always|never` decides it instead.
 fn style() -> goofi_bridge::text::Style {
     use std::io::IsTerminal;
+    let terminal = std::io::stdout().is_terminal();
     let human = match std::env::var("GOOFI_STYLE").ok().as_deref() {
         Some("human") => true,
         Some("compact") => false,
-        _ => std::io::stdout().is_terminal(),
+        _ => terminal,
     };
+    let color = human
+        && match std::env::var("GOOFI_COLOR").ok().as_deref() {
+            Some("always") => true,
+            Some("never") => false,
+            _ => terminal && std::env::var_os("NO_COLOR").is_none() && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true),
+        };
     let width = terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
         .unwrap_or(80);
-    goofi_bridge::text::Style { human, width: if human { width } else { 0 } }
+    goofi_bridge::text::Style { human, width: if human { width } else { 0 }, color }
 }
 
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
@@ -195,7 +204,7 @@ fn forward(lines: &[String], json: bool) -> i32 {
         }
     };
     let style = style();
-    match goofi_client::exec_styled(&target.url, lines, None, style.human, style.width) {
+    match goofi_client::exec_styled(&target.url, lines, None, style.human, style.width, style.color) {
         Ok(entries) => {
             use std::io::Write;
             let mut out = std::io::stdout().lock();
@@ -355,7 +364,7 @@ fn print_sessions(json: bool) -> i32 {
         .map(|s| vec![s.id.clone(), s.url.clone(), if current(s) { "← GOOFI_SESSION".to_string() } else { String::new() }])
         .collect();
     match style.human {
-        true => println!("{}", goofi_bridge::text::table(&table, 0, style.width)),
+        true => println!("{}", goofi_bridge::text::table(&table, 0, &style, |_, j| (j == 0).then_some(goofi_bridge::text::Role::Name))),
         false => table.iter().for_each(|r| println!("{}", r.iter().filter(|c| !c.is_empty()).cloned().collect::<Vec<_>>().join("  "))),
     }
     0
@@ -386,7 +395,7 @@ fn help_main(rest: &[String]) -> i32 {
     };
     let words: Vec<&str> =
         std::iter::once("help").chain(rest.iter().map(String::as_str)).collect();
-    match goofi_client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width) {
+    match goofi_client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width, style.color) {
         Ok(entries) => {
             for e in &entries {
                 println!("{}", e["text"].as_str().unwrap_or_default());

@@ -99,7 +99,7 @@ fn call_tool(state: &AppState, params: &Value) -> Value {
                 .collect();
             tool_result(phrase::pretty(&Value::Array(results)), false)
         }
-        Err(e) => tool_result(e, true),
+        Err(e) => tool_result(e.render(&crate::text::Style::COMPACT), true),
     }
 }
 

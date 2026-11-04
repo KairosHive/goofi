@@ -1,23 +1,66 @@
 //! Text for a reader: the STYLE a door asks for — compact, every byte to the point, for an agent
-//! or a pipe; human, parted and aligned to a terminal's width — and the wrap and table under it.
+//! or a pipe; human, parted and aligned to a terminal's width, painted where the terminal shows
+//! color — and the wrap, table and paint under it.
 
 use serde_json::Value;
 
-/// How a result reads. `width` is the column to wrap at; 0 wraps nothing.
+/// How a result reads. `width` is the column to wrap at; 0 wraps nothing. `color` paints the
+/// human layout's roles in ANSI — for a terminal, never for a pipe, a panel or an agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Style {
     pub human: bool,
     pub width: usize,
+    pub color: bool,
 }
 
 impl Style {
-    pub const COMPACT: Style = Style { human: false, width: 0 };
+    pub const COMPACT: Style = Style { human: false, width: 0, color: false };
 
-    /// The style an `/exec` body asks for: `style: "human"` and `width`; absent is compact.
+    /// The style an `/exec` body asks for: `style: "human"`, `width` and `color`; absent is compact.
     pub fn from_request(body: &Value) -> Style {
+        let human = body["style"].as_str() == Some("human");
         Style {
-            human: body["style"].as_str() == Some("human"),
+            human,
             width: body["width"].as_u64().unwrap_or(0) as usize,
+            color: human && body["color"].as_bool().unwrap_or(false),
+        }
+    }
+
+    /// `s` in its role's color when this style paints; verbatim otherwise.
+    pub fn paint(&self, role: Role, s: &str) -> String {
+        if !self.color || s.is_empty() {
+            return s.to_string();
+        }
+        let ansi = role.ansi();
+        format!("{}{s}{}", ansi.render(), ansi.render_reset())
+    }
+}
+
+/// What a span of the human layout IS, so attention lands in order: an alert before everything,
+/// a title over the names under it, a name over its arguments, prose last and unpainted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Why something was refused.
+    Alert,
+    /// A section, a group, a label.
+    Title,
+    /// An op, a key, the first column of a table.
+    Name,
+    /// Arguments and their types.
+    Arg,
+    /// A table's header row.
+    Header,
+}
+
+impl Role {
+    fn ansi(self) -> anstyle::Style {
+        use anstyle::{AnsiColor, Style};
+        match self {
+            Role::Alert => Style::new().bold().fg_color(Some(AnsiColor::Red.into())),
+            Role::Title => Style::new().bold(),
+            Role::Name => Style::new().fg_color(Some(AnsiColor::Cyan.into())),
+            Role::Arg => Style::new().dimmed(),
+            Role::Header => Style::new().dimmed().underline(),
         }
     }
 }
@@ -79,10 +122,15 @@ pub fn reflow(text: &str, width: usize) -> String {
     out.join("\n")
 }
 
-/// Rows of cells in aligned columns, two spaces apart, `indent` columns in. The last column
-/// takes what the width leaves and wraps there; when that is too narrow, it goes on its own
-/// lines under the row, four columns further in.
-pub fn table(rows: &[Vec<String>], indent: usize, width: usize) -> String {
+/// Prose reflowed and painted whole in one role, line by line, so the wrap never sees an escape.
+pub fn painted(text: &str, role: Role, style: &Style) -> String {
+    reflow(text, style.width).lines().map(|l| style.paint(role, l)).collect::<Vec<_>>().join("\n")
+}
+
+/// Rows of cells in aligned columns, two spaces apart, `indent` columns in, each cell painted in
+/// the role `role(row, column)` names. The last column takes what the width leaves and wraps
+/// there; when that is too narrow, it goes on its own lines under the row, four columns further in.
+pub fn table(rows: &[Vec<String>], indent: usize, style: &Style, role: impl Fn(usize, usize) -> Option<Role>) -> String {
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
     if cols == 0 {
         return String::new();
@@ -90,6 +138,11 @@ pub fn table(rows: &[Vec<String>], indent: usize, width: usize) -> String {
     fn cell(row: &[String], j: usize) -> &str {
         row.get(j).map(String::as_str).unwrap_or("")
     }
+    let paint = |i: usize, j: usize, s: &str| match role(i, j) {
+        Some(r) => style.paint(r, s),
+        None => s.to_string(),
+    };
+    let width = style.width;
     let widths: Vec<usize> = (0..cols).map(|j| rows.iter().map(|r| cell(r, j).chars().count()).max().unwrap_or(0)).collect();
     let lead: usize = widths[..cols - 1].iter().sum::<usize>() + 2 * (cols - 1);
     let last = match width {
@@ -101,30 +154,35 @@ pub fn table(rows: &[Vec<String>], indent: usize, width: usize) -> String {
     let stacked = width != 0 && last != 0 && width.saturating_sub(indent + lead) < NARROW;
     let pad = " ".repeat(indent);
     let mut out = Vec::new();
-    for row in rows {
+    for (i, row) in rows.iter().enumerate() {
         let mut head = pad.clone();
         for (j, w) in widths[..cols - 1].iter().enumerate() {
-            head.push_str(&format!("{:<w$}  ", cell(row, j)));
+            let text = cell(row, j);
+            head.push_str(&paint(i, j, text));
+            head.push_str(&" ".repeat(w - text.chars().count() + 2));
         }
-        let tail = wrap(cell(row, cols - 1), last);
+        let tail: Vec<String> = wrap(cell(row, cols - 1), last).iter().map(|l| paint(i, cols - 1, l)).collect();
         if stacked {
             out.push(head.trim_end().to_string());
             out.extend(tail.iter().filter(|l| !l.is_empty()).map(|l| format!("{pad}    {l}")));
             continue;
         }
-        for (i, l) in tail.iter().enumerate() {
-            let line = if i == 0 { format!("{head}{l}") } else { format!("{pad}{}{l}", " ".repeat(lead)) };
+        for (k, l) in tail.iter().enumerate() {
+            let line = if k == 0 { format!("{head}{l}") } else { format!("{pad}{}{l}", " ".repeat(lead)) };
             out.push(line.trim_end().to_string());
         }
     }
     out.join("\n")
 }
 
-/// A scalar as a table cell: a string bare, null empty, the rest as JSON spells it.
+/// A value as a table cell: a string bare, null empty, a list joined by commas, a record as
+/// `key=value` pairs, the rest as JSON spells it.
 pub fn cell(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
+        Value::Array(a) => a.iter().map(cell).collect::<Vec<_>>().join(", "),
+        Value::Object(m) => m.iter().map(|(k, x)| format!("{k}={}", cell(x))).collect::<Vec<_>>().join(", "),
         other => other.to_string(),
     }
 }

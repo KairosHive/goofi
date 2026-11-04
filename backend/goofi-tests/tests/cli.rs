@@ -125,6 +125,36 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let err = client::exec(&url, &lines(&["frobnicate"]), None).unwrap_err();
     assert!(err.contains("unknown op"), "{err}");
 
+    // A refusal teaches in the reader's style: compact is one line, why then what answers it;
+    // human parts them and lays the answer out as help does — the op's usage row, or the group's
+    // table under the words that matched. Only a batch names the command index.
+    let compact = client::exec(&url, &lines(&["node edit"]), None).unwrap_err();
+    assert_eq!(compact.lines().count(), 1, "{compact}");
+    assert!(compact.starts_with("node edit: `--node` is required — `node edit` takes: <node>") && !compact.contains("command 0"), "{compact}");
+    let human = client::exec_styled(&url, &lines(&["node edit"]), None, true, 100, false).unwrap_err();
+    assert!(human.starts_with("node edit: `--node` is required\n\n  node edit  <node> --name <string>"), "{human}");
+    let human = client::exec_styled(&url, &lines(&["node"]), None, true, 100, false).unwrap_err();
+    assert!(human.starts_with("unknown op `node`\n\nnode — one node instance") && human.lines().any(|l| l.starts_with("  node param edit  ")),
+            "the group under the word, as a table: {human}");
+    // Color is the terminal's alone, asked for by the shell: the why is painted first of all, the
+    // op's name and its arguments each in their role, and nothing is painted unless asked.
+    let painted = client::exec_styled(&url, &lines(&["node edit"]), None, true, 100, true).unwrap_err();
+    assert!(painted.starts_with("\x1b[1m\x1b[31mnode edit: `--node` is required\x1b[0m\n\n  \x1b[36mnode edit\x1b[0m  \x1b[2m<node>"), "{painted:?}");
+    assert!(!human.contains('\x1b'), "{human:?}");
+    let batch = client::exec(&url, &lines(&["node add --type LFO", "node edit"]), None).unwrap_err();
+    assert!(batch.starts_with("command 1: node edit:"), "{batch}");
+    // …and a catalog answers a table for a person, a status its values then its lists as tables,
+    // where a pipe gets the JSON it parses; a nested shape (`op list`'s typed args) stays JSON.
+    let human = |cmd: &str| client::exec_styled(&url, &lines(&[cmd]), None, true, 120, false).unwrap()[0]["text"].as_str().unwrap().to_string();
+    let types = human("library list");
+    let mut rows = types.lines();
+    assert_eq!(rows.next(), Some("types"), "{types}");
+    assert!(rows.next().is_some_and(|h| h.starts_with("type") && h.ends_with("doc")), "a header row: {types}");
+    assert!(types.lines().any(|l| l.starts_with("signal:LFO ")), "{types}");
+    let status = human("session status");
+    assert!(status.lines().any(|l| l.starts_with("dirty  ")) && status.lines().any(|l| l.starts_with("instance_id  ")), "{status}");
+    assert!(human("op list").starts_with("ops\n  ["), "typed args nest too deep for a table");
+
     // Completion is a vocabulary read: every candidate is `word<TAB>doc`, and the walk follows
     // the phrase tree — groups with their own doc line, then an op's flags.
     let complete = |line: &str| ok(&url, "default", &format!("op complete --line '{line}'"));

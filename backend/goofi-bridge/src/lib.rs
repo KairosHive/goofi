@@ -1177,18 +1177,20 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
     let lines = phrase::command_lines(&req);
     let actor = req["actor"].as_str().unwrap_or(DEFAULT_ACTOR).to_string();
     let style = text::Style::from_request(&req);
-    let ran = blocking(&state, move |state| phrase::exec_lines(state, &lines, &actor)).await;
+    let ran = blocking(&state, move |state| Ok(phrase::exec_lines(state, &lines, &actor))).await;
     match ran {
-        Ok(results) => {
+        Ok(Ok(results)) => {
             let entries: Vec<Value> = results
                 .iter()
                 .map(|r| json!({ "result": r, "text": phrase::render(r, &style) }))
                 .collect();
             axum::Json(json!({ "results": entries })).into_response()
         }
-        Err(e) => {
-            (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": e }))).into_response()
+        // A refusal is laid out for the reader's style too; a task that died is the one bare line.
+        Ok(Err(refusal)) => {
+            (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": refusal.render(&style) }))).into_response()
         }
+        Err(e) => (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": e }))).into_response(),
     }
 }
 

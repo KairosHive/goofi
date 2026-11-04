@@ -47,12 +47,12 @@ pub fn resolve_target() -> Result<Record, String> {
 /// absent, the server's own `"default"` stands. One line executes directly, several are one
 /// batch; a refusal is the server's own message. Each entry is the wire's own `{result, text}`.
 pub fn exec(url: &str, lines: &[String], actor: Option<&str>) -> Result<Vec<Value>, String> {
-    exec_styled(url, lines, actor, false, 0)
+    exec_styled(url, lines, actor, false, 0, false)
 }
 
 /// [`exec`] with the text of each entry laid out for a reader: `human` parts and aligns it to
-/// `width` columns (0 wraps nothing); compact otherwise.
-pub fn exec_styled(url: &str, lines: &[String], actor: Option<&str>, human: bool, width: usize) -> Result<Vec<Value>, String> {
+/// `width` columns (0 wraps nothing), and `color` paints it in ANSI; compact otherwise.
+pub fn exec_styled(url: &str, lines: &[String], actor: Option<&str>, human: bool, width: usize, color: bool) -> Result<Vec<Value>, String> {
     let mut body = json!({ "commands": lines });
     if let Some(actor) = actor {
         body["actor"] = json!(actor);
@@ -60,6 +60,7 @@ pub fn exec_styled(url: &str, lines: &[String], actor: Option<&str>, human: bool
     if human {
         body["style"] = json!("human");
         body["width"] = json!(width);
+        body["color"] = json!(color);
     }
     let (status, reply) = http_post(url, &body.to_string()).map_err(|e| format!("{url} did not answer: {e}"))?;
     let mut reply: Value =

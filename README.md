@@ -157,6 +157,14 @@ Use the severity buttons, node selector, and text filter to inspect the retained
 The prompt runs the same commands as the CLI, without the leading `goofi`. Press Up or Down for
 command history, and Tab for completion. Commands use the browser tab's undo history.
 
+The CLI answers in the reader's style. On a pipe every answer is compact: one line for a refusal,
+JSON for data, what an agent or a script parses. On a terminal it is laid out for a person — a
+catalog as a table, a status as its values and then its lists, a refusal as why and then the help
+that answers it — and painted so attention lands in order: the alert, then a title, then the
+names under it, then their arguments, prose last. `GOOFI_STYLE=human|compact` decides the layout,
+`GOOFI_COLOR=always|never` the color, which `NO_COLOR` and `TERM=dumb` also turn off; `--json`
+prints the raw result either way.
+
 `goofi log list` reads the groups, `goofi log write "message" --level warning --component my-tool`
 adds a message. Log history cannot be cleared from the app or command interface. Host Rust components can
 write through `goofi_supervisor::log::record`. Python node text keeps its node identity; native writes
