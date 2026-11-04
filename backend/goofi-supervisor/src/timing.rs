@@ -211,9 +211,10 @@ impl Event {
         Event::default()
     }
 
-    /// Set `id` and wake whoever waits.
+    /// Set `id` and wake whoever waits. The bits are the rendezvous: both ends modify them, so
+    /// the later of this and a `take` sees what the other end stored first, the handle included.
     pub fn ring(&self, id: u8) {
-        self.pending[usize::from(id) / 64].fetch_or(1 << (u32::from(id) % 64), Ordering::Release);
+        self.pending[usize::from(id) / 64].fetch_or(1 << (u32::from(id) % 64), Ordering::AcqRel);
         let waiter = self.waiter.load(Ordering::Acquire);
         if !waiter.is_null() {
             // SAFETY: the handle lives in `waiters` for as long as this event does.
