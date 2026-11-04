@@ -594,27 +594,35 @@ fn a_queue_drops_its_oldest_and_never_blocks_its_sender() {
     assert_eq!(taken, vec![3, 4, 5, 6], "the two oldest went, the rest in order");
     assert_eq!(receiver.fill(), 0.0);
 
-    // Step: a sender on another thread outruns the reader; nothing is reordered or doubled.
+    // Step: a sender on another thread outruns a reader that never waits, so the two meet on a
+    // full ring millions of times: neither end is ever held, nothing is reordered or doubled,
+    // and the newest frame is the one that is kept. Both ends run on threads of their own, so an
+    // end that spins for ever is a failure this test reports, not a hang.
+    const FRAMES: u64 = 2_000_000;
     let producer = std::thread::spawn(move || {
-        for i in 1..=2000u64 {
+        for i in 1..=FRAMES {
             sender.send(numbered(i));
         }
     });
-    let mut seen: Vec<u64> = Vec::new();
-    let deadline = Instant::now() + WAIT;
-    while Instant::now() < deadline {
-        match receiver.receive() {
-            Some(f) => seen.push(f.meta().index().expect("numbered")),
-            None if producer.is_finished() && receiver.fill() == 0.0 => break,
-            None => {
-                receiver.wait_until(Instant::now() + Duration::from_millis(1));
+    let consumer = std::thread::spawn(move || {
+        let mut seen: Vec<u64> = Vec::new();
+        loop {
+            match receiver.receive() {
+                Some(f) => seen.push(f.meta().index().expect("numbered")),
+                None if seen.last() == Some(&FRAMES) => return seen,
+                None => std::hint::spin_loop(),
             }
         }
+    });
+    let deadline = Instant::now() + WAIT;
+    while !(producer.is_finished() && consumer.is_finished()) {
+        assert!(Instant::now() < deadline, "an end was held: sender done {}, reader done {}", producer.is_finished(), consumer.is_finished());
+        std::thread::yield_now();
     }
     producer.join().expect("the sender ends");
-    while let Some(f) = receiver.receive() {
-        seen.push(f.meta().index().expect("numbered"));
+    let seen = consumer.join().expect("the reader ends");
+    if let Some(w) = seen.windows(2).find(|w| w[0] >= w[1]) {
+        panic!("out of order or doubled: {} then {}", w[0], w[1]);
     }
-    assert!(seen.windows(2).all(|w| w[0] < w[1]), "ascending, each once: {seen:?}");
-    assert_eq!(seen.last(), Some(&2000), "the newest is never the one dropped");
+    assert_eq!(seen.last(), Some(&FRAMES), "the newest is never the one dropped");
 }

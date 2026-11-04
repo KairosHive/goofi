@@ -70,23 +70,25 @@ impl Queue {
     }
 
     /// The frame at the head, taken; `None` while empty. Whoever calls this competes fairly with
-    /// a sender dropping the oldest, and the state word decides.
+    /// a sender dropping the oldest: the exchange on `head` decides who owns that position, and
+    /// the winner alone waits for the cell's frame, which the send that counted it is writing.
     fn pop(&self) -> Option<Frame> {
         loop {
             let head = self.head.load(Ordering::Acquire);
             if head == self.tail.load(Ordering::Acquire) {
                 return None;
             }
-            let Some(cell) = self.claim(head, FULL) else {
-                // Taken from under us by the other end, or not yet written: look again.
-                if self.head.load(Ordering::Acquire) == head && self.cells[head % self.depth].state.load(Ordering::Acquire) != FULL {
-                    std::hint::spin_loop();
-                }
+            if self.head.compare_exchange(head, head + 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
                 continue;
+            }
+            let cell = loop {
+                if let Some(cell) = self.claim(head, FULL) {
+                    break cell;
+                }
+                std::hint::spin_loop();
             };
             // SAFETY: the claim above made this cell ours.
             let frame = unsafe { (*cell.frame.get()).take() };
-            self.head.store(head + 1, Ordering::Release);
             cell.state.store(EMPTY, Ordering::Release);
             return frame;
         }
