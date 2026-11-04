@@ -59,7 +59,7 @@ noop: number,
  */
 weights: { [key in string]: number }, 
 /**
- * In `expression`: Python over `variables.*`, `me`, `st()` and `t` to the index of the
+ * In `expression`: Python over `vars.*`, `nd()`, `me`, `sm()` and `t` to the index of the
  * transition out to take; a negative one waits.
  */
 expression: string, };
@@ -70,7 +70,7 @@ export type Transition = {
  */
 from: string, to: string, 
 /**
- * Python over `variables.*`, `me`, `st()` and `t`, read for each playhead resting in `from`
+ * Python over `vars.*`, `nd()`, `me`, `sm()` and `t`, read for each playhead resting in `from`
  * as it arrives and at every instant the machine settles after: the playhead takes the
  * transition the instant the condition turns true. Empty, the state's decision and a fire
  * alone take it.

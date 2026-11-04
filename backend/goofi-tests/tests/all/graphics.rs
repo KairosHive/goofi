@@ -860,7 +860,7 @@ fn shaders_render_on_the_gpu() {
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
-    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.graphics.default_width"), &j!("expression")),
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
     drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
     g.call("variable entry edit", j!({ "name": "graphics.default_width", "value": 96 }));
@@ -870,7 +870,7 @@ fn shaders_render_on_the_gpu() {
     let door = g.add("graphics:SignalIn");
     g.ready(door);
     let bound = g.doc()["nodes"][hex(door)]["params"]["common"]["height"].clone();
-    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.graphics.default_height"), &j!("expression")),
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_height"), &j!("expression")),
                "a door for frames is seeded live too: {bound}");
     drawn(&g, door, "the door at the patch's default", |d| shape(d) == vec![48, 96, 4]);
     g.call("node remove", j!({ "node": hex(door) }));

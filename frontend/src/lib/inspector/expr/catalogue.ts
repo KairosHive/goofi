@@ -1,5 +1,6 @@
-/** What the expression completion source knows about the patch: node names, output slots, variables. */
-import { ME_FIELDS } from '$lib/api/vocab';
+/** What the expression completion source knows about the patch: node names, output slots,
+ *  variables, and the state machines' playheads and states. */
+import { ME_FIELDS, PLAYHEAD_FIELDS } from '$lib/api/vocab';
 import { graph, type GraphStore } from '$lib/stores/graph.svelte';
 import type { VariableView } from '$lib/crdt/graphDoc';
 import { engineOf } from '$lib/editor/typeId';
@@ -29,26 +30,40 @@ export interface CatalogueNode {
 /** A variable, with the form its live value holds when a watcher has it; the document says nothing. */
 export type CatalogueVariable = Pick<VariableView, 'name' | 'group' | 'element'> & { form?: Form };
 
-/** A machine's own scope: what `st('…')` may name, and what `me`, the playhead, answers. */
+/** A playhead as a param's `sm('name')` reads it: its machine, and the elements its group holds. */
+export interface CataloguePlayhead {
+	name: string;
+	machine: string;
+	/** The machine's own four, then one per attribute. */
+	fields: string[];
+}
+
+/** A machine's own scope: what `sm('…')` may name, and what `me`, the playhead, answers. */
 export interface CatalogueMachine {
 	states: string[];
-	/** `me`'s fields: the playhead's own, then one per attribute. */
+	playheads: string[];
+	/** `me`'s fields, and a playhead's under `sm()`: the playhead's own, then one per attribute. */
 	fields: string[];
 }
 
 export interface ExprCatalogue {
 	nodes: CatalogueNode[];
 	variables: CatalogueVariable[];
+	playheads: CataloguePlayhead[];
 	/** The editing node's own display name — what `me` reads. */
 	self?: string;
-	/** Set for a machine's expression, where `me` is the playhead, `st()` a state, and no node is readable. */
+	/** Set for a machine's expression, where `me` is the playhead and `sm()` a state or a playhead. */
 	machine?: CatalogueMachine;
 }
 
 /** The scope of `machine`'s expressions, read at the moment a completion is asked for. */
 export function machineCatalogue(machine: string, g: GraphStore = graph()): CatalogueMachine {
 	const m = g.machines[machine];
-	return { states: Object.keys(m?.states ?? {}), fields: [...ME_FIELDS, ...Object.keys(m?.attributes ?? {})] };
+	return {
+		states: Object.keys(m?.states ?? {}),
+		playheads: Object.keys(m?.playheads ?? {}),
+		fields: [...ME_FIELDS, ...Object.keys(m?.attributes ?? {})]
+	};
 }
 
 /** The live patch, read at the moment a completion is asked for. `g` is the store to read, so a
@@ -72,6 +87,11 @@ export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 		variables: g.variables.map((v) => {
 			const frame = variableFrame(v.name);
 			return { name: v.name, group: v.group, element: v.element, ...(frame ? { form: formOf(frame) } : {}) };
-		})
+		}),
+		playheads: Object.entries(g.machineGroups).map(([name, machine]) => ({
+			name,
+			machine,
+			fields: [...PLAYHEAD_FIELDS, ...Object.keys(g.machines[machine]?.attributes ?? {})]
+		}))
 	};
 }

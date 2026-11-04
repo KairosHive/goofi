@@ -164,3 +164,62 @@ fn qtz_snaps_volts_per_octave_onto_a_scale() {
     let why = format!("{:?}", evaluate("qtz(0, root='H')").unwrap_err());
     assert!(why.contains("F#"), "{why}");
 }
+
+/// The harness's functions as the editor documents them: `goofi_node::expr::BUILTINS` is what the
+/// completion offers, and the Python in `goofi_python::inproc::expr` is what runs, so the two are
+/// held together here — names, keyword-only arguments, every option, and the math names.
+#[test]
+fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_run() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let evaluate = |source: &str| {
+        let code = evaluator.compile(source).unwrap();
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (0.0, 1.0) });
+        evaluator.release(code.id);
+        result
+    };
+    let number = |source: &str| evaluate(source).map(|d| control::number_of(&d));
+    let text = |source: &str| evaluate(source).map(|d| control::text(&d));
+
+    for b in goofi_node::expr::BUILTINS.iter().filter(|b| b.kind == "function" && b.pick.is_none()) {
+        let signature = text(&format!("str(__import__('inspect').signature({}))", b.name)).unwrap();
+        let documented: Vec<&str> = b.args.iter().map(|a| a.name).collect();
+        let python: Vec<&str> = signature.trim_matches(|c| c == '(' || c == ')').split(", ").filter(|p| *p != "*").map(|p| p.split('=').next().unwrap()).collect();
+        assert_eq!(documented, python, "{}'s arguments as documented and as defined", b.name);
+        for a in b.args {
+            let keyword_only = signature.find("*, ").is_some_and(|star| signature[star..].contains(&format!(" {}=", a.name)) || signature[star..].starts_with(&format!("*, {}=", a.name)));
+            assert_eq!(a.keyword, keyword_only, "{}'s `{}` keyword-only as documented", b.name, a.name);
+            for option in a.options {
+                let call = format!("{}({}{}='{option}')", b.name, if b.name == "qtz" { "0.5, " } else { "" }, a.name);
+                assert!(evaluate(&call).is_ok(), "{call} is an option the harness takes");
+            }
+            if !a.options.is_empty() {
+                let call = format!("{}({}{}='nope')", b.name, if b.name == "qtz" { "0.5, " } else { "" }, a.name);
+                let why = evaluate(&call).unwrap_err().0;
+                assert!(why.contains(a.options[0]), "{call} is refused naming the options: {why}");
+            }
+        }
+    }
+    let names = goofi_node::expr::MATH.iter().chain(goofi_node::expr::MATH_CONSTANTS).copied().collect::<Vec<_>>().join(", ");
+    assert_eq!(number(&format!("len([{names}])")).unwrap() as usize, goofi_node::expr::MATH.len() + goofi_node::expr::MATH_CONSTANTS.len());
+    assert!(evaluate("time()").is_err(), "the wall clock is not in scope; `t` is the patch's");
+
+    // Every waveform spans the range over one cycle of `freq * src`; `sin` is the old default.
+    let wave = |fn_: &str, src: f64| number(&format!("lfo(fn='{fn_}', src={src}, vmin=0, vmax=1)")).unwrap();
+    for (fn_, src, expected) in [
+        ("sin", 0.0, 0.5), ("sin", 0.25, 1.0), ("cos", 0.0, 1.0), ("cos", 0.5, 0.0),
+        ("tri", 0.0, 0.0), ("tri", 0.25, 0.5), ("tri", 0.5, 1.0), ("tri", 1.75, 0.5),
+        ("sqr", 0.25, 1.0), ("sqr", 0.75, 0.0), ("saw", 0.25, 0.25), ("saw", 1.75, 0.75),
+    ] {
+        assert!((wave(fn_, src) - expected).abs() < 1e-6, "lfo(fn='{fn_}') at {src}: {} != {expected}", wave(fn_, src));
+    }
+    assert_eq!(number("lfo(src=0.25, vmin=0, vmax=1)").unwrap(), number("lfo(fn='sin', src=0.25, vmin=0, vmax=1)").unwrap());
+
+    // `qtz` snaps in the unit it is given: volts per octave with C4 at 0 V, or hertz.
+    assert!((number("qtz(0.6)").unwrap() - 7.0 / 12.0).abs() < 1e-6, "7.2 semitones up snaps to G, the fifth");
+    assert!((number("qtz(440, mode='hz')").unwrap() - 440.0).abs() < 1e-3, "A4 is in C major");
+    assert!((number("qtz(450, mode='hz')").unwrap() - 440.0).abs() < 1e-3, "450 Hz snaps down to A4");
+    assert!((number("qtz(261.6255653, mode='hz')").unwrap() - 261.6255653).abs() < 1e-3, "C4 is 0 V");
+    let frames = evaluate("qtz(np.array([440.0, 450.0]), mode='hz')").unwrap();
+    let got: Vec<f64> = control::numbers(&frames).collect();
+    assert!(got.iter().all(|v| (v - 440.0).abs() < 1e-2), "{got:?}");
+}

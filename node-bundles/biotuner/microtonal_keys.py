@@ -34,7 +34,7 @@ class MicrotonalKeys(goofi.Node):
 
     Inputs:
       input  a tuning: ratios inside an octave, as `Tuning` emits them
-      notes  a grabbed device's `variables.<device>.notes` — 128 slots, the note number is the INDEX and the velocity the value
+      notes  a grabbed device's `vars.<device>.notes` — 128 slots, the note number is the INDEX and the velocity the value
 
     Outputs:
       voices     the whole keyboard in one wire: pitches then velocities, the layout a plugin's

@@ -60,7 +60,7 @@ export function createVariableLift(onHold?: (x: number, y: number, name: string)
 		const dropped = uiStore.variableDrag;
 		cancel();
 		if (dropped && allowed(dropped.name)) {
-			dropped.target?.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${dropped.name}` }));
+			dropped.target?.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `vars.${dropped.name}` }));
 		}
 	}
 

@@ -34,7 +34,7 @@ op!(Start, "record start", 1, StartArgs {
     pub root: Option<String>,
     pub annotations: Option<Value>,
 },
-    "Begin a recording. `name` names the folder, which otherwise carries the UTC of this moment; `root` overrides the recordings folder for this one recording. Either one absent is read from `variables.record.name` and `variables.record.root`. Refused when nothing is armed, and refused when one already runs.",
+    "Begin a recording. `name` names the folder, which otherwise carries the UTC of this moment; `root` overrides the recordings folder for this one recording. Either one absent is read from `vars.record.name` and `vars.record.root`. Refused when nothing is armed, and refused when one already runs.",
     "{folder: string}");
 
 op!(Stop, "record stop", 0, NoArgs,
@@ -120,7 +120,7 @@ impl WriteOp for Quality {
     }
 }
 
-/// A `record start` argument, given or otherwise read from `variables.record.<key>`.
+/// A `record start` argument, given or otherwise read from `vars.record.<key>`.
 fn record_arg(g: &Graph, given: Option<&str>, key: &str) -> Option<String> {
     given.filter(|s| !s.is_empty()).map(str::to_string).or_else(|| match g.variables().get(&format!("record.{key}"))?.value() {
         goofi_core::Value::Str(s) if !s.is_empty() => Some(s.to_string()),

@@ -353,7 +353,7 @@ pub type Entries = Vec<(String, Data, Option<Control>)>;
 /// A legal name in the ONE expression namespace: `[A-Za-z_][A-Za-z0-9_]*` and not reserved.
 ///
 /// Every name an expression can spell is held to this, because an expression reads one as an
-/// ATTRIBUTE — `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
+/// ATTRIBUTE — `vars.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
 /// parse there breaks every reference to it and takes the rewrite with it: the next rename has no
 /// `nd('<old>')` left to follow, so the damage cannot be undone by renaming back.
 pub fn is_valid_identifier(name: &str) -> bool {

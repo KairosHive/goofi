@@ -83,7 +83,7 @@ type Factory = Box<dyn Fn(&ParamGroups) -> Box<dyn Node> + Send + Sync>;
 fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, window: Duration) -> (f64, bool) {
     let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::hub(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
-    // Every producer's rate cap is `variables.signal.default_ufreq`; the patch default measures 30 Hz.
+    // Every producer's rate cap is `vars.signal.default_ufreq`; the patch default measures 30 Hz.
     g.apply_variable_change("signal.default_ufreq", Some(goofi_core::Data::number(1e6)), None, None).unwrap();
     goofi_bridge::register_dyn_type(&mut g, manifest, factory, &BENCH_TIER);
     let src = g.add_node("_TestConst", None).unwrap();

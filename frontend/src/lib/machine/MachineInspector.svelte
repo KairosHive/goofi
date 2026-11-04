@@ -190,7 +190,7 @@
 					{#if s?.mode === 'expression'}
 						<Field label="index" doc={DECISION_HINT.expression}>
 							<ExprEditor machine={name} label="index" value={s.expression} testid="state-expression"
-								placeholder="0 if variables.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
+								placeholder="0 if vars.desk.pick > 0.5 else -1" onCommit={(expression) => editStates({ expression })} />
 						</Field>
 					{/if}
 					<!-- Below 0 the interval is off: -1 on the wire, so the slider's low end lands there. An

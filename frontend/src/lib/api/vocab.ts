@@ -117,11 +117,83 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 /** How many columns a control panel's grid is, whatever its pixel width. */
 export const CONTROL_COLUMNS = 16;
 
-/** What `st('state')` answers a machine's expression: the residents, their names from the
+/** What `sm('state')` answers a machine's expression: the residents, their names from the
 * longest resident to the newest, and the arrivals and departures of this instant. */
 export const STATE_FIELDS = ['residents', 'playheads', 'arrivals', 'departures'] as const;
 /** What `me` answers a machine's expression before the playhead's attributes. */
 export const ME_FIELDS = ['name', 'state', 'arrived'] as const;
+/** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */
+export const PLAYHEAD_FIELDS = ['state', 'prev', 'progress', 'arrived'] as const;
+
+export interface ExprArgInfo {
+	readonly name: string;
+	/** What it takes, in a word. */
+	readonly kind: string;
+	/** The default as the user would spell it; null is required. */
+	readonly default: string | null;
+	/** The closed set of strings it takes, where there is one. */
+	readonly options: readonly string[];
+	/** Keyword-only: spelled `name=value`. */
+	readonly keyword: boolean;
+	readonly doc: string;
+}
+
+export interface ExprBuiltinInfo {
+	readonly name: string;
+	readonly kind: 'function' | 'value' | 'namespace';
+	/** Where it reads: every expression, a param's, or a machine's. */
+	readonly scope: 'all' | 'node' | 'machine';
+	readonly signature: string;
+	readonly doc: string;
+	/** What its one name argument picks from the live patch. */
+	readonly pick: 'node' | 'machine' | null;
+	readonly args: readonly ExprArgInfo[];
+}
+
+/** Every name an expression may use beyond Python's own, numpy and math: what the editor completes and documents. */
+export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [
+	{ name: 'nd', kind: 'function', scope: 'all', signature: "nd('node')", doc: "A node's output: bare for a node with one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for a param's current value.", pick: 'node', args: [
+		{ name: 'name', kind: 'string', default: null, options: [], keyword: false, doc: "the node's display name" },
+	] },
+	{ name: 'sm', kind: 'function', scope: 'node', signature: "sm('playhead').element", doc: "A playhead of a state machine: `.state`, `.prev`, `.progress`, `.arrived` or one of its attributes, as the machine publishes them.", pick: 'machine', args: [
+		{ name: 'name', kind: 'string', default: null, options: [], keyword: false, doc: "a playhead's name" },
+	] },
+	{ name: 'sm', kind: 'function', scope: 'machine', signature: "sm('state' | 'playhead')", doc: "A state's census — `.residents`, `.playheads`, `.arrivals`, `.departures` — or another playhead's record, as `me` is.", pick: 'machine', args: [
+		{ name: 'name', kind: 'string', default: null, options: [], keyword: false, doc: "a state's or a playhead's name in this machine" },
+	] },
+	{ name: 'me', kind: 'value', scope: 'node', signature: "me", doc: "This node: bare for its one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for one of its params.", pick: null, args: [
+	] },
+	{ name: 'me', kind: 'value', scope: 'machine', signature: "me", doc: "The playhead this expression is read for: `.name`, `.state`, `.arrived` and one field per attribute.", pick: null, args: [
+	] },
+	{ name: 'vars', kind: 'namespace', scope: 'all', signature: "vars.group.element", doc: "The patch's variables: a control panel's widgets, a MIDI device's controls and the system's facts.", pick: null, args: [
+	] },
+	{ name: 't', kind: 'value', scope: 'all', signature: "t", doc: "Patch seconds: the patch clock at this evaluation.", pick: null, args: [
+	] },
+	{ name: 'np', kind: 'namespace', scope: 'all', signature: "np", doc: "numpy, whole. A frame arrives as a float32 array; a text as a str.", pick: null, args: [
+	] },
+	{ name: 'lfo', kind: 'function', scope: 'all', signature: "lfo(freq=1, src=t, vmin=…, vmax=…, fn='sin')", doc: "A periodic wave between `vmin` and `vmax`, one cycle per `1/freq` of `src`.", pick: null, args: [
+		{ name: 'freq', kind: 'number', default: "1", options: [], keyword: true, doc: "cycles per second of `src`" },
+		{ name: 'src', kind: 'number or array', default: "t", options: [], keyword: true, doc: "what the phase runs over; the patch time unless given" },
+		{ name: 'vmin', kind: 'number', default: "the param's minimum", options: [], keyword: true, doc: "the value at the bottom of the cycle" },
+		{ name: 'vmax', kind: 'number', default: "the param's maximum", options: [], keyword: true, doc: "the value at the top of the cycle" },
+		{ name: 'fn', kind: 'string', default: "'sin'", options: ['sin', 'cos', 'tri', 'sqr', 'saw'], keyword: true, doc: "the waveform over one cycle" },
+	] },
+	{ name: 'nse', kind: 'function', scope: 'all', signature: "nse(freq=1, src=t, vmin=…, vmax=…)", doc: "Smooth noise between `vmin` and `vmax`, new every `1/freq` of `src`.", pick: null, args: [
+		{ name: 'freq', kind: 'number', default: "1", options: [], keyword: true, doc: "cycles per second of `src`" },
+		{ name: 'src', kind: 'number or array', default: "t", options: [], keyword: true, doc: "what the phase runs over; the patch time unless given" },
+		{ name: 'vmin', kind: 'number', default: "the param's minimum", options: [], keyword: true, doc: "the value at the bottom of the cycle" },
+		{ name: 'vmax', kind: 'number', default: "the param's maximum", options: [], keyword: true, doc: "the value at the top of the cycle" },
+	] },
+	{ name: 'qtz', kind: 'function', scope: 'all', signature: "qtz(v, scale='major', root='C', mode='voct')", doc: "The nearest degree of `scale` from `root`, in the unit `v` came in.", pick: null, args: [
+		{ name: 'v', kind: 'number or array', default: null, options: [], keyword: false, doc: "the pitch to snap, elementwise over an array" },
+		{ name: 'scale', kind: 'string', default: "'major'", options: ['chromatic', 'major', 'minor', 'dorian', 'phrygian', 'lydian', 'mixolydian', 'locrian', 'pentatonic_major', 'pentatonic_minor', 'blues', 'harmonic_minor', 'whole_tone', 'harmonic'], keyword: false, doc: "the scale whose degrees are kept" },
+		{ name: 'root', kind: 'string or number', default: "'C'", options: ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'], keyword: false, doc: "a note name, or semitones above C" },
+		{ name: 'mode', kind: 'string', default: "'voct'", options: ['voct', 'hz'], keyword: false, doc: "what `v` is: volts per octave with C4 at 0 V, or hertz" },
+	] },
+];
+/** The names `from math import *` brings into every expression. */
+export const EXPR_MATH = ['acos', 'acosh', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'ceil', 'comb', 'copysign', 'cos', 'cosh', 'degrees', 'dist', 'erf', 'erfc', 'exp', 'expm1', 'fabs', 'factorial', 'floor', 'fmod', 'frexp', 'fsum', 'gamma', 'gcd', 'hypot', 'isclose', 'isfinite', 'isinf', 'isnan', 'isqrt', 'lcm', 'ldexp', 'lgamma', 'log', 'log10', 'log1p', 'log2', 'modf', 'nextafter', 'perm', 'pow', 'prod', 'radians', 'remainder', 'sin', 'sinh', 'sqrt', 'tan', 'tanh', 'trunc', 'ulp'] as const;
+export const EXPR_MATH_CONSTANTS = ['pi', 'e', 'tau', 'inf', 'nan'] as const;
 
 /** The type a sub-patch facade wears in the document. It is not in the palette — grouping
 * is what makes one. */

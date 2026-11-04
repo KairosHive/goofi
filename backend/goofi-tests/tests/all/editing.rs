@@ -96,12 +96,12 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A rename of an element or of its group follows into every expression that reads it, and
     // each is ONE command with an exact inverse.
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-                                   "expression": "variables.patch.participant * 2" }));
+                                   "expression": "vars.patch.participant * 2" }));
     let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expression"].clone();
     g.call("variable entry rename", j!({ "name": "patch.participant", "to": "patch.handle" }));
-    assert_eq!(expr(&g), j!("variables.patch.handle * 2"), "the element rename followed");
+    assert_eq!(expr(&g), j!("vars.patch.handle * 2"), "the element rename followed");
     g.call("variable group rename", j!({ "from": "patch", "to": "desk" }));
-    assert_eq!(expr(&g), j!("variables.desk.handle * 2"), "the group rename followed");
+    assert_eq!(expr(&g), j!("vars.desk.handle * 2"), "the group rename followed");
     assert!(g.doc()["variables"]["desk.handle"].is_object(), "the member moved with its group");
     let why = g.refuse("variable entry rename", j!({ "name": "desk.handle", "to": "loose" }));
     assert!(why.contains("group"), "a rename out of every group is refused: {why}");
@@ -132,7 +132,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let evaluator = std::sync::Arc::new(goofi_tests::FirstVar::default());
     g.graph().set_evaluator(evaluator.clone());
     let reader = g.add("LFO");
-    g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "variables.desk.level" }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "vars.desk.level" }));
     let mut ev = g.events();
     let mut amplitude = |_: &Goofi| {
         ev.next("param_values")["nodes"][hex(reader)]["values"]["lfo"]["amplitude"].as_f64()
@@ -1019,7 +1019,7 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
         g.refuse(op, payload);
     }
 
-    // An expression reads a name as an ATTRIBUTE — `variables.gain`, `nd('sub').out.slot` — so a name
+    // An expression reads a name as an ATTRIBUTE — `vars.gain`, `nd('sub').out.slot` — so a name
     // Python cannot parse as one is refused, whatever makes it unparseable. The refusal says the
     // rule rather than the one character it caught.
     for bad in ["a'b", "a\\b", "a\"b", "a b-2", "a_b", "nd()", "1st", "class", ""] {
@@ -1080,10 +1080,10 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
     field("the referrer's nd() term followed the rename", &|d| d["expression"] == j!("nd('signal') * 1"));
     // A term in a comment or a string is text: one scan decides what is text for every reader.
-    set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') vars.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "src" }));
     let d = field("the referrer's record", &|d| d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")));
-    assert_eq!(d["expression"], "nd('src') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    assert_eq!(d["expression"], "nd('src') + len(\"nd('signal') me\")  # me nd('signal') vars.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
     set("nd('signal')");
 

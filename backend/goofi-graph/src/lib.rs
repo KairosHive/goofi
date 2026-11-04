@@ -595,6 +595,8 @@ struct Runtime {
     settled: Patch,
     /// The resolved edges of that snapshot: what a wire that moved is told apart against.
     settled_edges: Vec<Edge>,
+    /// The producer outputs the machines read, as of the last settle.
+    machine_reads: Vec<(Uid, &'static str)>,
     /// The snapshot the document last projected, and the variable store's version then: what
     /// [`Graph::projection`] reads the changed records off.
     projected: Patch,
@@ -708,6 +710,7 @@ impl Graph {
                 bindings: HashMap::new(),
                 settled: patch.clone(),
                 settled_edges: Vec::new(),
+                machine_reads: Vec::new(),
                 settled_vars: 0,
                 // Roots of its own, so the first projection carries every root, empty or not.
                 projected: Patch {
@@ -992,6 +995,7 @@ impl Graph {
         let at = next.playheads.get_index_of(from).expect("checked");
         let record = next.playheads.shift_remove(from).expect("checked");
         next.playheads.shift_insert(at, to.to_string(), record);
+        next.rewrite_expressions(|e| expr_rewrite::rename_states(e, |n| (n == from).then(|| to.to_string())));
         let moved: Vec<(String, String)> =
             m.playhead_entries(from).into_iter().map(|(name, ..)| (name.clone(), name.replacen(from, to, 1))).collect();
         self.set_machine(machine, Some(next), None)?;
@@ -2062,8 +2066,12 @@ impl Graph {
                 (slot == Some(old) && Some(n) == facade.as_deref()).then(|| new.to_string()),
             )
         };
-        // A variable's expression spells a producer as a param's does, so the one rename reaches it.
+        // A variable's and a machine's expression spell a producer as a param's does, so the one
+        // rename reaches them.
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_refs(e, rename));
+        for m in self.machines_mut().values_mut() {
+            m.rewrite_expressions(|e| expr_rewrite::rename_refs(e, rename));
+        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_refs(&s.expression, rename)?, ..s.clone() })
         })
@@ -2981,10 +2989,64 @@ impl Graph {
                 Target::MeParam { group, param } => {
                     value(var, self.param_value_of(consumer, "me", group, param))
                 }
+                // A playhead's element is the variable its machine publishes it as.
+                Target::PlayheadField { playhead, field } => stream(var, &mut taken, self.playhead_field(playhead, field)),
                 // A node's rewrite never mints these; they are a machine's.
                 Target::Playhead | Target::State { .. } => BoundVar::Missing { var: var.to_string(), reason: "a machine's reference".to_string() },
             })
             .collect()
+    }
+
+    /// The variable slot `sm('playhead').field` reads, or why it reads none: the group is a
+    /// machine's, and the element is one it publishes.
+    fn playhead_field(&self, playhead: &str, field: &str) -> Result<(Uid, &'static str), String> {
+        let store = self.variables();
+        if store.machine(playhead).is_none() {
+            return Err(format!("no playhead named `{playhead}`"));
+        }
+        let key = format!("{playhead}.{field}");
+        if !store.contains(&key) {
+            return Err(format!("playhead `{playhead}` has no `{field}`: `state`, `prev`, `progress`, `arrived` or an attribute"));
+        }
+        Ok((Uid::VARIABLES, goofi_core::variables::slot_name(&key)))
+    }
+
+    /// The node output a machine's `nd('name')` term reads, resolved as a param's is.
+    pub fn machine_stream(&self, name: &str, slot: Option<&str>) -> Result<(Uid, &'static str), String> {
+        self.resolve_stream(name, slot)
+    }
+
+    /// The param value a machine's `nd('name').params.group.param` term reads, as a param's is.
+    pub fn machine_param(&self, name: &str, group: &str, param: &str) -> Result<Param, String> {
+        let uid = self.uid_by_name(name).ok_or_else(|| format!("no node named `{name}`"))?;
+        self.param_value_of(uid, name, group, param)
+    }
+
+    /// Every node reference the machines' expressions make, in the order the texts come.
+    fn machine_node_refs(&self) -> Vec<expr_rewrite::Target> {
+        let mut out = Vec::new();
+        for m in self.patch.machines.values() {
+            for text in m.expressions() {
+                let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
+                out.extend(refs.into_iter().map(|r| r.target).filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })));
+            }
+        }
+        out
+    }
+
+    /// The producer outputs the machines read through `nd()`: what rings the machines' door.
+    fn machine_reads(&self) -> Vec<(Uid, &'static str)> {
+        let mut out: Vec<(Uid, &'static str)> = self
+            .machine_node_refs()
+            .iter()
+            .filter_map(|t| match t {
+                Target::Node { name, slot } => self.resolve_stream(name, slot.as_deref()).ok(),
+                _ => None,
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// This node's own output, for `me.out.slot` and bare `me` — a leaf's manifest is the slot
@@ -3267,6 +3329,9 @@ impl Graph {
         let rebound = self.derive_nodes(&derive, &diff.edited);
         let lives_moved = !born.is_empty() || !reborn.is_empty() || !gone.is_empty();
         self.runtime.marks.ringers |= !rebound.is_empty() || lives_moved || self.runtime.binds_moved || redeliver;
+        // A machine's node reads resolve through names, wires, generations and param values.
+        self.runtime.marks.machines |= !self.machine_node_refs().is_empty()
+            && (redeliver || lives_moved || diff.relinked || !diff.renamed.is_empty() || !diff.named.is_empty() || !diff.edited.is_empty());
         self.runtime.marks.groups |= !derive.is_empty() || redeliver;
         self.runtime.marks.armed |= !diff.rearmed.is_empty() || lives_moved;
 
@@ -3275,7 +3340,8 @@ impl Graph {
         // producer was renamed (a multi slot labels its senders), a binding that moved, a watch
         // that moved — or every leaf, when a fact every node reads moved.
         let edges = self.resolved_edges();
-        let changed: Vec<Uid> = if redeliver {
+        let machine_reads = self.machine_reads();
+        let mut changed: Vec<Uid> = if redeliver {
             self.leaves().map(|(u, _)| u).collect()
         } else {
             let mut set: HashSet<Uid> = diff.changed.iter().copied().collect();
@@ -3298,11 +3364,21 @@ impl Graph {
             }
             set.into_iter().filter(|u| self.is_leaf(*u)).collect()
         };
+        // A producer the machines started or stopped reading is re-sent: what its outputs ring moved.
+        if !redeliver {
+            let was = &self.runtime.machine_reads;
+            let moved = was.iter().filter(|r| !machine_reads.contains(r)).chain(machine_reads.iter().filter(|r| !was.contains(r)));
+            for (uid, _) in moved {
+                if self.is_leaf(*uid) && !changed.contains(uid) {
+                    changed.push(*uid);
+                }
+            }
+        }
         let typed: HashMap<Uid, Arc<ParamGroups>> = self.leaves().map(|(u, l)| (u, self.typed(l))).collect();
         let published = {
             let Runtime { generations, instance, engines, watched, bindings, .. } = &mut self.runtime;
             let variables = self.patch.variables.lock();
-            let settled = Settled { bindings, generations, watched, instance };
+            let settled = Settled { bindings, generations, watched, instance, machine_reads: &machine_reads };
             let view = build_view(&self.patch.nodes, &settled, &typed, &edges, &variables);
             for e in engines.iter_mut() {
                 e.settle(&view, &changed);
@@ -3317,6 +3393,7 @@ impl Graph {
             self.variables().publish(name, value);
         }
         self.runtime.settled_edges = edges;
+        self.runtime.machine_reads = machine_reads;
     }
 
     /// What the batch changed, read off the patch and the snapshot the last settle delivered.
@@ -4187,6 +4264,8 @@ struct Settled<'a> {
     generations: &'a HashMap<Uid, u64>,
     watched: &'a HashSet<(Uid, String)>,
     instance: &'a str,
+    /// The producer outputs the machines read.
+    machine_reads: &'a [(Uid, &'static str)],
 }
 
 /// The settled view, borrowed from the one model — built at the settle point and nowhere else.
@@ -4197,7 +4276,7 @@ fn build_view<'a>(
     edges: &'a [Edge],
     variables: &'a goofi_core::variables::VariableStore,
 ) -> GraphView<'a> {
-    let Settled { bindings, generations, watched, instance } = *settled;
+    let Settled { bindings, generations, watched, instance, machine_reads } = *settled;
     let nodes = nodes
         .iter()
         .filter_map(|(uid, e)| {
@@ -4229,7 +4308,7 @@ fn build_view<'a>(
             ))
         })
         .collect();
-    GraphView::new(instance, edges, nodes, variables)
+    GraphView::new(instance, edges, nodes, variables, machine_reads)
 }
 
 /// One node's current error, derived fresh from the places one can arise. A free function so the

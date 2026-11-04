@@ -1055,7 +1055,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		}
 		await dragLabel();
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await source()).mode).toBe('expression');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
@@ -1073,7 +1073,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await page.getByTestId('control-edit-toggle').click();
 		await dragLabel(true);
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
@@ -1084,7 +1084,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await finger.moveTo({ x: target.x + target.width / 2, y: target.y + target.height / 2 });
 		await expect(row).toHaveClass(/over/);
 		await finger.up();
-		await expect.poll(async () => (await source()).expression).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 	} finally {
 		await handBack(

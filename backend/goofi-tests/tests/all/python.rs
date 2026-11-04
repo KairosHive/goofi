@@ -740,7 +740,7 @@ class Meeting(goofi.Node):
 
     #[test]
     fn the_patch_rate_variable_re_rates_every_producer_at_once() {
-        // `common.max_frequency` is BOUND to `variables.signal.default_ufreq`, and a binding needs the evaluator.
+        // `common.max_frequency` is BOUND to `vars.signal.default_ufreq`, and a binding needs the evaluator.
         let g = Goofi::new();
         g.graph().set_evaluator(std::sync::Arc::new(
             goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
@@ -750,7 +750,7 @@ class Meeting(goofi.Node):
         let probe = g.probe(osc, "out");
         g.ready(osc);
         let bound = g.doc()["nodes"][hex(osc)]["params"]["common"]["max_frequency"].clone();
-        assert_eq!((&bound["expression"], &bound["mode"]), (&j!("variables.signal.default_ufreq"), &j!("expression")),
+        assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.signal.default_ufreq"), &j!("expression")),
                    "the manifest's declared binding was seeded live, not flattened to a literal");
 
         // Counting emitted frames is the only way to see a rate: a stated value reads correct anyway.
@@ -773,13 +773,13 @@ class Meeting(goofi.Node):
         // Half the old period apart, which the 5 Hz rate never allows.
         goofi_tests::until_faster_than(&g, &probe, 0.1);
 
-        // The evaluator's namespace: `math`'s names and `time()` are simply there, beside `np`.
+        // The evaluator's namespace: `math`'s names and `t` are simply there, beside `np`.
         let r = g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-            "expression": "2 * sin(pi / 2) + exp(0) * (1 if time() > 0 else 0)" }));
+            "expression": "2 * sin(pi / 2) + exp(0) * (1 if t >= 0 else 0)" }));
         assert!(r["error"].is_null(), "the namespace compiles: {r}");
         // The doc keeps the STORED value; the evaluated one shows in `node state`'s text.
         // Observed in the output, where an amplitude IS observable: a ±1 sine cannot cross 2.
-        g.until("math and time to evaluate into the output's swing", |_| {
+        g.until("math and t to evaluate into the output's swing", |_| {
             probe.latest().filter(|d| f32s(d).iter().any(|v| v.abs() > 2.0)).map(|_| ())
         });
     }

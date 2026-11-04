@@ -24,7 +24,7 @@
 		testid: string;
 		/** The edited node's display name — what `me` completes against. */
 		selfName?: string;
-		/** The machine whose expression this is: `me` is then the playhead, `st()` its states. */
+		/** The machine whose expression this is: `me` is then the playhead, `sm()` its states and playheads. */
 		machine?: string;
 	} = $props();
 

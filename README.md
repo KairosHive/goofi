@@ -212,9 +212,9 @@ state decides which transition out to take every interval, in turn, by a weighte
 expression; a transition's own `condition` takes it the instant the condition turns true. Both are
 the Python a param's expression is, over `vars.*`, `nd()`, `t` and the same functions, plus `me`,
 the playhead the expression is read for, and `sm('name')`: a state's residents and the moves of
-the instant, or another playhead's record. A param reads a playhead the same way, `sm('name').x`. `goofi machine add`, `machine state add` and `machine arrange` build one from the CLI or
-an agent; the same ops drive the panel, where every setting is reached from the selected state's
-inspector.
+the instant, or another playhead's record. A param reads a playhead the same way, `sm('name').x`.
+`goofi machine add`, `machine state add` and `machine arrange` build one from the CLI or an agent;
+the same ops drive the panel, where every setting is reached from the selected state's inspector.
 
 ## Testing
 

@@ -216,7 +216,7 @@
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function elementMenu(x: number, y: number, name: string): void {
-		menu = { x, y, items: selection().referenceItems({ variable: name }, `variables.${name}`) };
+		menu = { x, y, items: selection().referenceItems({ variable: name }, `vars.${name}`) };
 	}
 	// A label lifts its variable; a held label is the touch door onto the right-click menu.
 	const lift = createVariableLift(elementMenu);

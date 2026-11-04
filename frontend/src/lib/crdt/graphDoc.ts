@@ -284,7 +284,7 @@ const RESERVED = new Set(
 );
 
 /** Whether `name` is legal in the ONE expression namespace, as the Rust `is_valid_identifier` says.
- * An expression reads every name as an ATTRIBUTE: `variables.gain`, `nd('chain').drain`. */
+ * An expression reads every name as an ATTRIBUTE: `vars.desk.gain`, `nd('chain').drain`. */
 export function isValidIdentifier(name: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name);
 }

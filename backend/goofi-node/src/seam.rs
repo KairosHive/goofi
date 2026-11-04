@@ -4,7 +4,7 @@
 
 use goofi_core::record::RecordedOutput;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,6 +138,8 @@ pub struct GraphView<'a> {
     /// Per producer output, every live stream binding reading it: the consumer, the index of the
     /// binding on it, and the doorbell id.
     readers: HashMap<(Uid, &'static str), Vec<Reader>>,
+    /// The producer outputs the machines read through `nd()`.
+    machine_reads: HashSet<(Uid, &'static str)>,
 }
 
 impl<'a> GraphView<'a> {
@@ -146,6 +148,7 @@ impl<'a> GraphView<'a> {
         edges: &'a [Edge],
         nodes: HashMap<Uid, NodeView<'a>>,
         variables: &'a goofi_core::variables::VariableStore,
+        machine_reads: &[(Uid, &'static str)],
     ) -> GraphView<'a> {
         let mut into: HashMap<Uid, Vec<Edge>> = HashMap::new();
         let mut out_of: HashMap<Uid, Vec<Edge>> = HashMap::new();
@@ -163,7 +166,12 @@ impl<'a> GraphView<'a> {
                 }
             }
         }
-        GraphView { instance, edges, nodes, variables, into, out_of, readers }
+        GraphView { instance, edges, nodes, variables, into, out_of, readers, machine_reads: machine_reads.iter().copied().collect() }
+    }
+
+    /// Whether a machine's expression reads `(producer, slot)`: the machines' door is rung for it.
+    pub fn read_by_machines(&self, producer: Uid, slot: &str) -> bool {
+        self.machine_reads.contains(&(producer, slot))
     }
 
     /// A consumer input slot's desired producers, in wire order.

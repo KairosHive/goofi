@@ -31,7 +31,7 @@ class MidiLearn {
 	}
 
 	/** Open every port and listen until one element moves against its baseline, then commit the
-	 * variable that moved, `variables.<group>.<entry>`, and the index that moved in it. Answers
+	 * variable that moved, `vars.<group>.<entry>`, and the index that moved in it. Answers
 	 * how many devices listen; none is told to the caller, not to the manager. */
 	async start(owner: string, target: string, commit: (reference: string, index: number) => void): Promise<number> {
 		this.stop();
@@ -56,7 +56,7 @@ class MidiLearn {
 					const index = Array.from(values).findIndex((v, i) => Number.isFinite(v) && v !== baseline![i]);
 					if (index < 0) return;
 					// The mapping lands before the learn ends, so the device it names stays open.
-					commit(`variables.${name}`, index);
+					commit(`vars.${name}`, index);
 					this.stop();
 				}));
 			}

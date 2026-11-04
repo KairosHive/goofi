@@ -51,7 +51,7 @@
 		</div>
 		<Field label="condition" doc="Taken the instant this turns true, for each playhead resting here; empty, the decision and the fire button alone take it">
 			<ExprEditor machine={name} label="condition" value={t.condition ?? ''} testid="transition-condition"
-				placeholder="st('{example}').residents >= 2 and me.name == st('{example}').playheads[0]"
+				placeholder="sm('{example}').residents >= 2 and me.name == sm('{example}').playheads[0]"
 				onCommit={(condition) => edit({ condition })} />
 		</Field>
 		<ParamField paramName="duration" descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}

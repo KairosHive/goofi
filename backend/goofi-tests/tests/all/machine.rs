@@ -1,12 +1,14 @@
 //! A state machine built through ops, read through its playheads' variables, and driven by every
-//! decision mode and by conditions over its variables, its playheads and its states, then saved,
-//! reopened and undone; and the stepper itself on explicit instants.
+//! decision mode and by conditions over its variables, its playheads, its states and the nodes,
+//! then saved, reopened and undone; and the stepper itself on explicit instants.
 
 use std::sync::Arc;
 
 use goofi_core::indexmap::IndexMap;
 use goofi_core::Data;
+use goofi_graph::expr_rewrite::Target;
 use goofi_graph::machine::Machines;
+use goofi_node::Local;
 use goofi_python::inproc::PyExprEvaluator;
 use goofi_tests::{f32s, hex, j, Goofi, Viewer};
 use serde_json::Value;
@@ -132,7 +134,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
 
     // A param reads an attribute as it reads any variable, bare or inside a computation.
     let reader = g.add("_TestScalar");
-    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "variables.head.gain" }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "vars.head.gain" }));
     let probe = g.probe(reader, "out");
     g.until("the reader to emit the start value", |_| probe.latest().filter(|d| f32s(d) == [0.2]));
 
@@ -190,11 +192,9 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // A condition reads a variable through the one expression language, and fires on the turn
     // from false to true: one true on arrival waits for the next turn.
     write("variable entry add", j!({ "name": "desk.gate", "value": 0.0 }));
-    let why = g.refuse("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "nd('reader')" }));
-    assert!(why.contains("reads a node"), "{why}");
-    let why = g.refuse("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "st('Z').residents" }));
-    assert!(why.contains("no state"), "{why}");
-    let t4 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "variables.desk.gate > 0" }))["id"].clone();
+    let why = g.refuse("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "sm('Z').residents" }));
+    assert!(why.contains("no state or playhead"), "{why}");
+    let t4 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "vars.desk.gate > 0" }))["id"].clone();
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a false condition holds");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 1.0 }));
     at_rest_in(&g, "head", "A");
@@ -202,7 +202,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     at_rest_in(&g, "head", "C");
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition already true on arrival is no turn");
     // An edited condition is read afresh: one true as edited waits for its next turn too.
-    write("machine transition edit", j!({ "machine": "seq", "id": t4, "condition": "variables.desk.gate > 0.5" }));
+    write("machine transition edit", j!({ "machine": "seq", "id": t4, "condition": "vars.desk.gate > 0.5" }));
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition true as edited is no turn");
     g.call("variable entry edit", j!({ "name": "desk.gate", "value": 0.0 }));
     assert!(g.stays(|g| text(g, "head.state") == "C"), "a condition turning false is no turn either");
@@ -210,27 +210,45 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     at_rest_in(&g, "head", "A");
     write("machine transition remove", j!({ "machine": "seq", "id": t4 }));
 
-    // Two playheads meet: `st()` reads the state's residents and `me` the playhead the condition is
+    // A condition reads a node's output as a param does: the frame the node emits is what settles
+    // the machine, and the turn from false to true fires it.
+    g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
+    at_rest_in(&g, "head", "C");
+    g.call("variable entry edit", j!({ "name": "desk.gate", "value": 0.25 }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "vars.desk.gate" }));
+    g.until("the reader to follow the gate", |_| probe.latest().filter(|d| f32s(d) == [0.25]));
+    let reader_name = g.name(&hex(reader));
+    let t5 = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": format!("nd('{reader_name}') > 0.5") }))["id"].clone();
+    assert!(g.stays(|g| text(g, "head.state") == "C"), "the reader emits 0.25: a false condition holds");
+    g.call("variable entry edit", j!({ "name": "desk.gate", "value": 1.0 }));
+    at_rest_in(&g, "head", "A");
+    let why = g.refuse("machine transition edit", j!({ "machine": "seq", "id": t5, "condition": format!("nd('{reader_name}').nope") }));
+    assert!(why.contains("not a reference"), "{why}");
+    write("machine transition remove", j!({ "machine": "seq", "id": t5 }));
+    g.call("variable entry edit", j!({ "name": "desk.gate", "value": 0.0 }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "vars.head.gain" }));
+
+    // Two playheads meet: `sm()` reads the state's residents and `me` the playhead the condition is
     // read for, so who goes is the condition's: the longest resident, the newest, or all. The one
     // left behind as the other leaves reads the departure.
     write("machine playhead add", j!({ "machine": "seq", "name": "second", "color": "#0f0", "start": "C" }));
     at_rest_in(&g, "second", "C");
     let meet = write("machine transition add", j!({ "machine": "seq", "from": "B", "to": "C",
-                                                      "condition": "st('B').residents >= 2 and me.name == st('B').playheads[0]" }))["id"].clone();
+                                                      "condition": "sm('B').residents >= 2 and me.name == sm('B').playheads[0]" }))["id"].clone();
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "B" }));
     at_rest_in(&g, "head", "B");
     g.call("machine jump", j!({ "machine": "seq", "playhead": "second", "state": "B" }));
     at_rest_in(&g, "head", "C");
     assert!(g.stays(|g| text(g, "second.state") == "B"), "the longest resident went, the arrival stays");
-    write("machine transition edit", j!({ "machine": "seq", "id": meet, "condition": "st('B').residents >= 2 and me.name == st('B').playheads[-1]" }));
+    write("machine transition edit", j!({ "machine": "seq", "id": meet, "condition": "sm('B').residents >= 2 and me.name == sm('B').playheads[-1]" }));
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "B" }));
     at_rest_in(&g, "head", "C");
     assert!(g.stays(|g| text(g, "second.state") == "B"), "the arrival went, the resident stays");
-    write("machine transition edit", j!({ "machine": "seq", "id": meet, "condition": "st('B').residents >= 2" }));
+    write("machine transition edit", j!({ "machine": "seq", "id": meet, "condition": "sm('B').residents >= 2" }));
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "B" }));
     at_rest_in(&g, "head", "C");
     at_rest_in(&g, "second", "C");
-    let alone = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "st('C').residents == 1 and st('C').departures > 0" }))["id"].clone();
+    let alone = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "sm('C').residents == 1 and sm('C').departures > 0" }))["id"].clone();
     g.call("machine jump", j!({ "machine": "seq", "playhead": "second", "state": "B" }));
     at_rest_in(&g, "head", "A");
     assert!(g.stays(|g| text(g, "second.state") == "B"), "the one that left is not the one left behind");
@@ -240,28 +258,28 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // `me` reads the playhead's own attributes as they stand, an envelope's climb included: the
     // condition turns true as the attack passes half. A state's name follows a rename into every
     // condition that spells it.
-    write("machine transition edit", j!({ "machine": "seq", "id": alone, "condition": "me.gain > 0.5 and st('C').residents == 1" }));
+    write("machine transition edit", j!({ "machine": "seq", "id": alone, "condition": "me.gain > 0.5 and sm('C').residents == 1" }));
     write("machine state edit", j!({ "machine": "seq", "name": "C", "values": { "gain": 0.9 }, "envelopes": { "gain": [0.2, 0.0, 1.0, -1.0] } }));
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "A");
     write("machine state edit", j!({ "machine": "seq", "name": "C", "values": { "gain": 0.0 }, "envelopes": { "gain": null } }));
     write("machine state rename", j!({ "machine": "seq", "name": "C", "to": "Mid" }));
-    assert_eq!(g.doc()["machines"]["seq"]["transitions"][alone.as_str().unwrap()]["condition"], j!("me.gain > 0.5 and st('Mid').residents == 1"));
+    assert_eq!(g.doc()["machines"]["seq"]["transitions"][alone.as_str().unwrap()]["condition"], j!("me.gain > 0.5 and sm('Mid').residents == 1"));
     write("machine state rename", j!({ "machine": "seq", "name": "Mid", "to": "C" }));
     write("machine transition remove", j!({ "machine": "seq", "id": alone }));
     write("machine transition remove", j!({ "machine": "seq", "id": meet }));
 
     // Renames reach what reads them: a playhead's group and an attribute's element both follow,
     // in a param's expression and in the machine's own.
-    let follows = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "variables.head.gain + me.gain > 9" }))["id"].clone();
+    let follows = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "vars.head.gain + me.gain > 9" }))["id"].clone();
     let condition = |g: &Goofi| g.doc()["machines"]["seq"]["transitions"][follows.as_str().unwrap()]["condition"].clone();
     write("machine playhead rename", j!({ "machine": "seq", "name": "head", "to": "lead" }));
-    assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("variables.lead.gain"));
-    assert_eq!(condition(&g), j!("variables.lead.gain + me.gain > 9"));
+    assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("vars.lead.gain"));
+    assert_eq!(condition(&g), j!("vars.lead.gain + me.gain > 9"));
     assert!(g.doc()["variables"]["head.gain"].is_null() && g.doc()["variables"]["lead.gain"].is_object());
     write("machine attribute rename", j!({ "machine": "seq", "name": "gain", "to": "level" }));
-    assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("variables.lead.level"));
-    assert_eq!(condition(&g), j!("variables.lead.level + me.level > 9"));
+    assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("vars.lead.level"));
+    assert_eq!(condition(&g), j!("vars.lead.level + me.level > 9"));
     write("machine transition remove", j!({ "machine": "seq", "id": follows }));
     assert_eq!(g.doc()["machines"]["seq"]["states"]["A"]["values"]["level"].as_f64(), Some(0.2));
     write("machine state rename", j!({ "machine": "seq", "name": "A", "to": "Start" }));
@@ -288,10 +306,10 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // Two computed reads of a playhead variable ride along: one of them spells the very text a
     // transition's condition compiles, so the evaluator holds one function for both.
     let computed = g.add("_TestScalar");
-    g.call("node param edit", j!({ "node": hex(computed), "param": "control/value", "expression": "variables.lead.level * 2 + 1" }));
+    g.call("node param edit", j!({ "node": hex(computed), "param": "control/value", "expression": "vars.lead.level * 2 + 1" }));
     let shared = g.add("_TestScalar");
-    g.call("node param edit", j!({ "node": hex(shared), "param": "control/value", "expression": "variables.lead.level >= 5.0" }));
-    write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "Start", "condition": "variables.lead.level >= 5.0" }));
+    g.call("node param edit", j!({ "node": hex(shared), "param": "control/value", "expression": "vars.lead.level >= 5.0" }));
+    write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "Start", "condition": "vars.lead.level >= 5.0" }));
     let bound = |g: &Goofi, step: &str, uid: goofi_tests::Uid, want: f32| {
         let state = g.call("node state", j!({ "node": hex(uid) }))["text"].as_str().unwrap_or_default().to_string();
         assert!(!state.contains("[error:"), "{step}: a computed read of a playhead variable stands: {state}");
@@ -388,7 +406,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
         },
         "playheads": { "p": { "start": "A" } }
     } })).unwrap();
-    let none = |_: &str| None;
+    let none = |t: &Target| Err(format!("{t:?} is not readable here"));
     let run = |instants: &[f64]| -> Vec<Vec<(String, Data)>> {
         let mut m = Machines::default();
         m.configure(model.clone(), Some(ev.clone()));
@@ -458,7 +476,7 @@ fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_e
         },
         "playheads": { "p": { "start": "off" } }
     } })).unwrap();
-    let none = |_: &str| None;
+    let none = |t: &Target| Err(format!("{t:?} is not readable here"));
     let near = |d: &Data, t: f64, want: f64| {
         let got = value_at(&ev, d, t);
         assert!((got - want).abs() < 1e-6, "at {t}: {got}, wanted {want}");
@@ -560,7 +578,7 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
     // A hub with three dead-end spokes, on explicit instants: each second's decision is read off
     // where the playhead went, then a jump puts it back in the hub, its place in a sequence kept.
     let ev = Arc::new(PyExprEvaluator::new().unwrap());
-    let walk = |hub: Value, read: &dyn Fn(&str) -> Option<Data>| -> (String, Vec<String>) {
+    let walk = |hub: Value, read: &dyn Fn(&Target) -> Result<Local, String>| -> (String, Vec<String>) {
         let model: IndexMap<String, goofi_graph::machine::Machine> = serde_json::from_value(j!({ "m": {
             "states": { "H": hub, "X": {}, "Y": {}, "Z": {} },
             "transitions": { "hx": { "from": "H", "to": "X" }, "hy": { "from": "H", "to": "Y" }, "hz": { "from": "H", "to": "Z" } },
@@ -583,7 +601,7 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
         }
         (path, m.take_errors())
     };
-    let none = |_: &str| None;
+    let none = |t: &Target| Err(format!("{t:?} is not readable here"));
     assert_eq!(walk(j!({ "mode": "sequence" }), &none).0, "XYZXYZ", "the next spoke in authored order, round the ring");
     assert_eq!(walk(j!({ "mode": "sequence", "interval": -1.0 }), &none).0, "------", "an interval of -1 never decides by time");
     assert_eq!(walk(j!({ "mode": "sequence", "interval_expression": "len(me.name) + 1" }), &none), ("-X-Y-Z".to_string(), Vec::new()), "an interval expression is read as each beat is armed");
@@ -594,16 +612,19 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
     let (path, _) = walk(j!({ "noop": 1.0, "weights": { "hx": 0.0, "hy": 0.0, "hz": 1.0 } }), &none);
     assert!(path.chars().all(|c| c == '-' || c == 'Z'), "{path}");
     // An expression picks the spoke by index; a negative one, or None, waits; past the last is an error.
-    let go = |name: &str| (name == "desk.go").then(|| Data::number(1.0));
-    assert_eq!(walk(j!({ "mode": "expression", "expression": "variables.desk.go * 2" }), &go).0, "ZZZZZZ");
-    assert_eq!(walk(j!({ "mode": "expression", "expression": "variables.desk.go - 2" }), &go), ("------".to_string(), Vec::new()));
-    assert_eq!(walk(j!({ "mode": "expression", "expression": "None if variables.desk.go else 0" }), &go), ("------".to_string(), Vec::new()));
-    let (path, errors) = walk(j!({ "mode": "expression", "expression": "variables.desk.go * 5" }), &go);
+    let go = |t: &Target| match t {
+        Target::Variable { key } if key == "desk.go" => Ok(Local::Frame(Data::number(1.0))),
+        t => Err(format!("{t:?} is not readable here")),
+    };
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "vars.desk.go * 2" }), &go).0, "ZZZZZZ");
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "vars.desk.go - 2" }), &go), ("------".to_string(), Vec::new()));
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "None if vars.desk.go else 0" }), &go), ("------".to_string(), Vec::new()));
+    let (path, errors) = walk(j!({ "mode": "expression", "expression": "vars.desk.go * 5" }), &go);
     assert_eq!(path, "------");
     assert!(errors.iter().any(|e| e.contains("past the last of 3")), "{errors:?}");
     // A decision reads the playhead and the states as a condition does: the one resident of the
     // hub picks the spoke by its own name's length, and the evaluator's functions are there.
-    assert_eq!(walk(j!({ "mode": "expression", "expression": "len(me.name) + st('H').residents - 1 + int(floor(lfo(freq=0, vmin=0, vmax=0)))" }), &none), ("YYYYYY".to_string(), Vec::new()));
+    assert_eq!(walk(j!({ "mode": "expression", "expression": "len(me.name) + sm('H').residents - 1 + int(floor(lfo(freq=0, vmin=0, vmax=0)))" }), &none), ("YYYYYY".to_string(), Vec::new()));
 }
 
 /// The distinct values of `xs` strictly inside `(lo, hi)`.
@@ -631,12 +652,12 @@ async fn a_flight_is_heard_between_its_frames_by_a_viewer_a_computation_and_an_a
         ("machine state edit", j!({ "machine": "m", "name": "A", "noop": 1.0, "weights": { "t1": 0.0 } })),
         ("machine playhead add", j!({ "machine": "m", "name": "head", "start": "A" })),
         ("variable entry add", j!({ "name": "desk.twice", "value": 0.0 })),
-        ("variable entry edit", j!({ "name": "desk.twice", "expression": "variables.head.gain * 2" })),
+        ("variable entry edit", j!({ "name": "desk.twice", "expression": "vars.head.gain * 2" })),
     ] {
         g.call(op, payload);
     }
     let reader = g.add("_TestScalar");
-    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "variables.head.gain + 1" }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "vars.head.gain + 1" }));
     let probe = g.probe(reader, "out");
     g.until("the reader to compute from the start value", |_| probe.latest().filter(|d| f32s(d) == [1.0]));
     g.until("the alias to follow the start value", |g| (number(g, "desk.twice") == 0.0).then_some(()));

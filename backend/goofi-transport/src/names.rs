@@ -10,6 +10,10 @@ pub const VIEW_EVENT_ID: EventId = 0;
 /// The id the bridge rings a view door with: what the reducer should do may have moved — a
 /// reader, a spec, a tap, an ask, or the graph itself.
 pub const VIEW_POKE_ID: EventId = 1;
+/// The id a producer rings the machines' door with: a frame a machine's expression reads is out.
+pub const MACHINES_FRAME_ID: EventId = 1;
+/// The id the manager rings the machines' door with: a message is in the thread's inbox.
+pub const MACHINES_INBOX_ID: EventId = 2;
 
 /// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
 /// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
@@ -45,6 +49,11 @@ pub fn record_service(base: &str, slot: &str, serial: u64) -> ServiceName {
     format!("goofi_{base}_rec_{slot}_{serial}")
 }
 
+/// The one door the machines' thread parks on, rung for a frame it reads and for its inbox.
+pub fn machines_door(instance: &str) -> ServiceName {
+    format!("goofi_{instance}_machines_door")
+}
+
 /// One node's door, from the view's birth facts.
 pub fn door_of(view: &GraphView<'_>, uid: Uid) -> Option<ServiceName> {
     let node = view.nodes.get(&uid)?;
@@ -63,6 +72,9 @@ pub fn targets_of<'a>(
         ringers.into_iter().filter_map(|r| Some((door_of(view, r.consumer)?, r.event_id))).collect();
     if view.nodes.get(&producer).is_some_and(|n| n.watched.contains(&slot)) {
         targets.push((view_door_service(view.instance, producer, slot), VIEW_EVENT_ID));
+    }
+    if view.read_by_machines(producer, slot) {
+        targets.push((machines_door(view.instance), MACHINES_FRAME_ID));
     }
     targets
 }

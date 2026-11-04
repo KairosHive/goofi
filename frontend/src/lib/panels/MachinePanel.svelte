@@ -295,7 +295,7 @@
 		const attrs = set.length > 0 ? set : Object.keys(m.attributes);
 		if (playheads.length === 0) return notify().failure('Map state', 'no playhead travels this machine; add one in the state inspector');
 		if (attrs.length === 0) return notify().failure('Map state', 'the machine has no attribute to read');
-		const send = (ph: string, a: string): void => void row.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `variables.${ph}.${a}` }));
+		const send = (ph: string, a: string): void => void row.dispatchEvent(new CustomEvent('variable-expression-drop', { detail: `sm('${ph}').${a}` }));
 		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
 		if (choices.length === 1) return send(choices[0].ph, choices[0].a);
 		picker = { x: at.x, y: at.y, items: choices.map(({ ph, a }) => ({ label: playheads.length > 1 ? `${ph}.${a}` : a, action: () => send(ph, a) })) };
@@ -397,7 +397,7 @@
 </script>
 
 {#if lifted}
-	<div class="link-ghost" use:portal style="left: {lifted.x}px; top: {lifted.y}px" aria-hidden="true">variables.⟨playhead⟩.{lifted.state}…</div>
+	<div class="link-ghost" use:portal style="left: {lifted.x}px; top: {lifted.y}px" aria-hidden="true">sm('⟨playhead⟩').{lifted.state}…</div>
 {/if}
 {#if picker}
 	<ContextMenu x={picker.x} y={picker.y} items={picker.items} onClose={() => (picker = null)} />

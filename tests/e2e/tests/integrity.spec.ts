@@ -261,7 +261,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'A', pos: [0, 0], values: { level: 0.2 } });
 				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'B', pos: [320, 40] });
 				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', duration: 1 });
-				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', condition: 'variables.system.time > 1' });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', condition: 'vars.system.time > 1' });
 				await rawCall(page, 'machine state edit', { machine: 'sweep', name: 'A', interval: 2, noop: 0.5, weights: { t1: 0.5 } });
 				await rawCall(page, 'machine playhead add', { machine: 'sweep', start: 'A' });
 				for (const name of names) {

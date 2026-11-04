@@ -25,7 +25,7 @@ rate or a latency.
   `on_param_changed` alone, one GIL read per tick.
 - `HostExecutor::source` rebuilds and remaps the whole upstream lineage on every emission; a
   32-node chain stays slow uncapped. Measure the lineage's share of a deep hop before changing it.
-- The shipped example patches bind `max_frequency` to `variables.system.default_ufreq`, a name
+- The shipped example patches bind `max_frequency` to `vars.system.default_ufreq`, a name
   no variable has: rename to `signal.default_ufreq`.
 
 ## Audio

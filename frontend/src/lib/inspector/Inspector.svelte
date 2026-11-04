@@ -147,7 +147,7 @@
 		const pick = selection().reference;
 		if (!pick) return null;
 		if ('variable' in pick) {
-			return g.variables.some((v) => v.name === pick.variable) ? { expression: `variables.${pick.variable}` } : null;
+			return g.variables.some((v) => v.name === pick.variable) ? { expression: `vars.${pick.variable}` } : null;
 		}
 		const expression = pick.node === node?.uid ? null : g.readFor(pick.node, d.type, pick.slot);
 		return expression ? { expression } : null;

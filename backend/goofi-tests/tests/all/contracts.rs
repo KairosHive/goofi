@@ -505,7 +505,7 @@ fn every_slot_name_is_letters_and_digits() {
 
 #[test]
 fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
-    // Cheap and evaluator-free: a typo'd `variables.defualt_ufreq` compiles, binds, then errors on every
+    // Cheap and evaluator-free: a typo'd `vars.defualt_ufreq` compiles, binds, then errors on every
     // instance. Read AS EACH TYPE SEES IT, since a declaration may condition on the manifest.
     let g = Goofi::new();
     let graph = g.graph();
@@ -519,7 +519,7 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
                 "{owner}: {}/{} has an empty expression", decl.group, decl.name);
         for read in goofi_node::expr::scan_variables(expr.source) {
             assert!(goofi_core::variables::SYSTEM_VARIABLES.iter().any(|g| g.name == read.name),
-                    "{owner}: the expression on {}/{} reads `variables.{}`, which no fresh patch has",
+                    "{owner}: the expression on {}/{} reads `vars.{}`, which no fresh patch has",
                     decl.group, decl.name, read.name);
         }
     }
@@ -536,7 +536,7 @@ fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
     g.add("_TestResettable");
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
-                                   "expression": "variables.signal.default_ufreq" }));
+                                   "expression": "vars.signal.default_ufreq" }));
     g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();

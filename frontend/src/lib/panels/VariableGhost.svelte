@@ -8,7 +8,7 @@
 </script>
 
 {#if lift.active && uiStore.variableDrag}
-	<div class="ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">variables.{uiStore.variableDrag.name}</div>
+	<div class="ghost" style={`left: ${uiStore.variableDrag.x + 12}px; top: ${uiStore.variableDrag.y + 12}px`} aria-hidden="true">vars.{uiStore.variableDrag.name}</div>
 {/if}
 
 <style>

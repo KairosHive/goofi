@@ -121,7 +121,7 @@
 
 	const MODE_TITLE: Record<ParamMode, string> = {
 		constant: 'a value set here by hand, unchanging until you edit it',
-		expression: "a bare nd('node') or variables.group.element copied as it comes, or Python over them"
+		expression: "a bare nd('node'), vars.group.element or sm('playhead').x copied as it comes, or Python over them"
 	};
 
 	function choose(mode: ParamMode): void {

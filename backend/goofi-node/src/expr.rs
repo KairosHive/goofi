@@ -1,6 +1,6 @@
-//! The one lexical scan of an expression's source. Every reader of `nd(..)`, `me` and
-//! `variables.*` walks these tokens, so a string, an f-string or a `#` comment hides a term from
-//! all of them alike.
+//! The one lexical scan of an expression's source. Every reader of `nd(..)`, `sm(..)`, `me` and
+//! `vars.*` walks these tokens, so a string, an f-string or a `#` comment hides a term from all of
+//! them alike.
 
 /// What a token is; the source between tokens is whitespace or a comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +92,7 @@ fn string_end(b: &[u8], at: usize) -> usize {
     b.len()
 }
 
-/// One `nd(..)` or `st(..)` call, with both spans its consumers need: the name literal a rename
+/// One `nd(..)` or `sm(..)` call, with both spans its consumers need: the name literal a rename
 /// replaces, and the whole term a rewrite replaces.
 pub struct Call<'a> {
     pub start: usize,
@@ -104,7 +104,8 @@ pub struct Call<'a> {
     pub name: &'a str,
 }
 
-/// Every `callee('name')` call in `source`, in source order: `nd` names a node, `st` a state.
+/// Every `callee('name')` call in `source`, in source order: `nd` names a node, `sm` a state or a
+/// playhead of a machine.
 pub fn scan_calls<'a>(source: &'a str, callee: &str) -> Vec<Call<'a>> {
     let toks = tokens(source);
     let mut out = Vec::new();
@@ -135,20 +136,20 @@ fn plain_string_body(source: &str, lit: &Token) -> Option<(usize, usize)> {
     (!body.contains(['\\', '\n']) && !body.starts_with(q as char)).then_some((lit.start + 1, lit.end - 1))
 }
 
-/// One `variables.<group>.<element>` read [`scan_variables`] found; the span covers the prefix too.
+/// One `vars.<group>.<element>` read [`scan_variables`] found; the span covers the prefix too.
 pub struct VariableRead<'a> {
     pub start: usize,
     pub end: usize,
     pub name: &'a str,
 }
 
-/// Every `variables.<group>.<element>` read in `source`. Every variable is `group.element`, so
-/// one identifier alone names nothing.
+/// Every `vars.<group>.<element>` read in `source`. Every variable is `group.element`, so one
+/// identifier alone names nothing.
 pub fn scan_variables(source: &str) -> Vec<VariableRead<'_>> {
     let toks = tokens(source);
     let mut out = Vec::new();
     for (i, t) in toks.iter().enumerate() {
-        if t.kind != Kind::Ident || &source[t.start..t.end] != "variables" {
+        if t.kind != Kind::Ident || &source[t.start..t.end] != "vars" {
             continue;
         }
         let path = [1, 2, 3, 4].map(|k| toks.get(i + k));
@@ -173,3 +174,88 @@ pub fn scan_me(source: &str) -> Vec<(usize, usize)> {
     }
     out
 }
+
+/// One argument of a builtin, as the editor documents it.
+#[derive(Clone, Copy)]
+pub struct Arg {
+    pub name: &'static str,
+    /// What it takes, in a word: `number`, `string`, `number or array`.
+    pub kind: &'static str,
+    /// The default, spelled as the user would; `None` is required.
+    pub default: Option<&'static str>,
+    /// The closed set of strings it takes, where there is one.
+    pub options: &'static [&'static str],
+    /// Keyword-only: it is spelled `name=value`.
+    pub keyword: bool,
+    pub doc: &'static str,
+}
+
+/// One name the evaluator injects into every expression, as the editor documents it. The harness
+/// in `goofi_python::inproc::expr` defines each; the python situation holds the two together.
+#[derive(Clone, Copy)]
+pub struct Builtin {
+    pub name: &'static str,
+    /// `function`, `value` or `namespace`.
+    pub kind: &'static str,
+    /// Where it reads: `all`, `node` (a param's expression) or `machine`.
+    pub scope: &'static str,
+    /// The call or the path as the user spells it.
+    pub signature: &'static str,
+    pub doc: &'static str,
+    pub args: &'static [Arg],
+    /// What the one name argument picks from the live patch: `node`, `machine` or nothing.
+    pub pick: Option<&'static str>,
+}
+
+const RANGE: [Arg; 4] = [
+    Arg { name: "freq", kind: "number", default: Some("1"), options: &[], keyword: true, doc: "cycles per second of `src`" },
+    Arg { name: "src", kind: "number or array", default: Some("t"), options: &[], keyword: true, doc: "what the phase runs over; the patch time unless given" },
+    Arg { name: "vmin", kind: "number", default: Some("the param's minimum"), options: &[], keyword: true, doc: "the value at the bottom of the cycle" },
+    Arg { name: "vmax", kind: "number", default: Some("the param's maximum"), options: &[], keyword: true, doc: "the value at the top of the cycle" },
+];
+
+/// Every name an expression may use beyond Python's own, `numpy` and `math`.
+pub static BUILTINS: &[Builtin] = &[
+    Builtin { name: "nd", kind: "function", scope: "all", signature: "nd('node')", pick: Some("node"), args: &[
+        Arg { name: "name", kind: "string", default: None, options: &[], keyword: false, doc: "the node's display name" },
+    ], doc: "A node's output: bare for a node with one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for a param's current value." },
+    Builtin { name: "sm", kind: "function", scope: "node", signature: "sm('playhead').element", pick: Some("machine"), args: &[
+        Arg { name: "name", kind: "string", default: None, options: &[], keyword: false, doc: "a playhead's name" },
+    ], doc: "A playhead of a state machine: `.state`, `.prev`, `.progress`, `.arrived` or one of its attributes, as the machine publishes them." },
+    Builtin { name: "sm", kind: "function", scope: "machine", signature: "sm('state' | 'playhead')", pick: Some("machine"), args: &[
+        Arg { name: "name", kind: "string", default: None, options: &[], keyword: false, doc: "a state's or a playhead's name in this machine" },
+    ], doc: "A state's census — `.residents`, `.playheads`, `.arrivals`, `.departures` — or another playhead's record, as `me` is." },
+    Builtin { name: "me", kind: "value", scope: "node", signature: "me", pick: None, args: &[],
+        doc: "This node: bare for its one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for one of its params." },
+    Builtin { name: "me", kind: "value", scope: "machine", signature: "me", pick: None, args: &[],
+        doc: "The playhead this expression is read for: `.name`, `.state`, `.arrived` and one field per attribute." },
+    Builtin { name: "vars", kind: "namespace", scope: "all", signature: "vars.group.element", pick: None, args: &[],
+        doc: "The patch's variables: a control panel's widgets, a MIDI device's controls and the system's facts." },
+    Builtin { name: "t", kind: "value", scope: "all", signature: "t", pick: None, args: &[],
+        doc: "Patch seconds: the patch clock at this evaluation." },
+    Builtin { name: "np", kind: "namespace", scope: "all", signature: "np", pick: None, args: &[],
+        doc: "numpy, whole. A frame arrives as a float32 array; a text as a str." },
+    Builtin { name: "lfo", kind: "function", scope: "all", signature: "lfo(freq=1, src=t, vmin=…, vmax=…, fn='sin')", pick: None, args: &[
+        RANGE[0], RANGE[1], RANGE[2], RANGE[3],
+        Arg { name: "fn", kind: "string", default: Some("'sin'"), options: &["sin", "cos", "tri", "sqr", "saw"], keyword: true, doc: "the waveform over one cycle" },
+    ], doc: "A periodic wave between `vmin` and `vmax`, one cycle per `1/freq` of `src`." },
+    Builtin { name: "nse", kind: "function", scope: "all", signature: "nse(freq=1, src=t, vmin=…, vmax=…)", pick: None, args: &[
+        RANGE[0], RANGE[1], RANGE[2], RANGE[3],
+    ], doc: "Smooth noise between `vmin` and `vmax`, new every `1/freq` of `src`." },
+    Builtin { name: "qtz", kind: "function", scope: "all", signature: "qtz(v, scale='major', root='C', mode='voct')", pick: None, args: &[
+        Arg { name: "v", kind: "number or array", default: None, options: &[], keyword: false, doc: "the pitch to snap, elementwise over an array" },
+        Arg { name: "scale", kind: "string", default: Some("'major'"), options: &goofi_core::scale::PRESET_NAMES, keyword: false, doc: "the scale whose degrees are kept" },
+        Arg { name: "root", kind: "string or number", default: Some("'C'"), options: goofi_core::scale::NOTES, keyword: false, doc: "a note name, or semitones above C" },
+        Arg { name: "mode", kind: "string", default: Some("'voct'"), options: &["voct", "hz"], keyword: false, doc: "what `v` is: volts per octave with C4 at 0 V, or hertz" },
+    ], doc: "The nearest degree of `scale` from `root`, in the unit `v` came in." },
+];
+
+/// The names `from math import *` brings into every expression.
+pub static MATH: &[&str] = &[
+    "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "ceil", "comb", "copysign", "cos", "cosh", "degrees", "dist",
+    "erf", "erfc", "exp", "expm1", "fabs", "factorial", "floor", "fmod", "frexp", "fsum", "gamma", "gcd", "hypot", "isclose",
+    "isfinite", "isinf", "isnan", "isqrt", "lcm", "ldexp", "lgamma", "log", "log10", "log1p", "log2", "modf", "nextafter", "perm",
+    "pow", "prod", "radians", "remainder", "sin", "sinh", "sqrt", "tan", "tanh", "trunc", "ulp",
+];
+/// The constants `from math import *` brings into every expression.
+pub static MATH_CONSTANTS: &[&str] = &["pi", "e", "tau", "inf", "nan"];

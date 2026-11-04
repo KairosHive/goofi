@@ -260,18 +260,18 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(inspector.getByTestId('transition-row-t1')).toContainText('#1');
 		await expect(label).toHaveText('#1');
 		// A condition typed into the open row rides the row's summary, and the canvas label stays the
-		// decision's; the condition's own editor completes `st(` with the machine's states.
+		// decision's; the condition's own editor completes `sm(` with the machine's states.
 		await press(inspector.getByTestId('transition-row-t1').locator('.ui-disclosure-summary'));
 		const condition = inspector.getByTestId('transition-condition');
 		await expect(condition).toBeVisible();
 		await press(condition);
-		await page.keyboard.type("st('");
+		await page.keyboard.type("sm('");
 		await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('state1');
 		await page.keyboard.press('Escape');
 		await page.keyboard.type("state1').residents > 0");
 		await page.keyboard.press('Enter');
-		await expect.poll(async () => (await machineState()).transitions.t1.condition).toBe("st('state1').residents > 0");
-		await expect(inspector.getByTestId('transition-row-t1')).toContainText("if st('state1').residents > 0");
+		await expect.poll(async () => (await machineState()).transitions.t1.condition).toBe("sm('state1').residents > 0");
+		await expect(inspector.getByTestId('transition-row-t1')).toContainText("if sm('state1').residents > 0");
 		await expect(label).toHaveText('#1');
 		await tapCorner();
 
@@ -406,7 +406,7 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await row.scrollIntoViewIfNeeded();
 
 		// The box dragged over the row is a mapping, not a move: the row lights, and the drop offers
-		// the attributes the state sets; the one picked maps the row to the playhead's variable.
+		// the attributes the state sets; the one picked maps the row to the playhead's element.
 		// The box is back where it was.
 		const name = card.getByTestId('state-card-name');
 		const [a, b] = await Promise.all([name.boundingBox(), row.boundingBox()]);
@@ -419,7 +419,7 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		const item = page.locator('.context-menu .item', { hasText: 'rate' });
 		await expect(item).toBeVisible();
 		await item.click();
-		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('variables.beat.rate');
+		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe("sm('beat').rate");
 		expect(await placed()).toEqual(before);
 
 		// In the row's editor, under its label, Tab takes the completion the editor offers, and
@@ -429,12 +429,12 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await expect(editor).toBeVisible();
 		await editor.click();
 		await page.keyboard.press('Control+a');
-		await page.keyboard.type('variables.beat.ga');
+		await page.keyboard.type('vars.beat.ga');
 		await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
 		await page.keyboard.press('Tab');
-		await expect(editor).toHaveText('variables.beat.gain');
+		await expect(editor).toHaveText('vars.beat.gain');
 		await page.keyboard.press('Enter');
-		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('variables.beat.gain');
+		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('vars.beat.gain');
 
 		// Delete goes to the active panel alone: with the box selected in the machine panel it takes
 		// the box and leaves the node selected in the editor; with the editor active, the reverse.

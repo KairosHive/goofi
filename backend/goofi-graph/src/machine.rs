@@ -18,7 +18,7 @@ use crate::expr_rewrite::{self, Target, VarRef};
 /// The elements of a playhead's group that are the machine's own, and no attribute's name.
 pub const OWN: [&str; 4] = ["state", "prev", "progress", "arrived"];
 
-/// What `st('name')` answers an expression: how many playheads rest in the state, their names
+/// What `sm('name')` answers an expression for a state: how many playheads rest in it, their names
 /// from the longest resident to the newest, and how many arrived in it and left it at this instant.
 pub const STATE_FIELDS: [&str; 4] = ["residents", "playheads", "arrivals", "departures"];
 
@@ -192,7 +192,7 @@ pub struct State {
     /// draws evenly.
     #[serde(default)]
     pub weights: IndexMap<String, f64>,
-    /// In `expression`: Python over `variables.*`, `me`, `st()` and `t` to the index of the
+    /// In `expression`: Python over `vars.*`, `nd()`, `me`, `sm()` and `t` to the index of the
     /// transition out to take; a negative one waits.
     #[serde(default)]
     pub expression: String,
@@ -219,7 +219,7 @@ pub struct Transition {
     /// A state name, or `*` for any state.
     pub from: String,
     pub to: String,
-    /// Python over `variables.*`, `me`, `st()` and `t`, read for each playhead resting in `from`
+    /// Python over `vars.*`, `nd()`, `me`, `sm()` and `t`, read for each playhead resting in `from`
     /// as it arrives and at every instant the machine settles after: the playhead takes the
     /// transition the instant the condition turns true. Empty, the state's decision and a fire
     /// alone take it.
@@ -240,15 +240,16 @@ pub struct Playhead {
 }
 
 impl Machine {
-    /// Why an expression cannot drive this machine: it reads a node, or a state it does not have.
+    /// Why an expression cannot drive this machine: its `sm()` names no state or playhead of it.
+    /// A node it reads resolves at the settle, as a param's does.
     pub fn check_expression(&self, expression: &str) -> Result<(), String> {
         let (_, refs) = expr_rewrite::rewrite_machine(expression).map_err(|e| e.0)?;
         let missing = refs.iter().find_map(|r| match &r.target {
-            Target::State { name } if !self.states.contains_key(name) => Some(name),
+            Target::State { name } if !self.states.contains_key(name) && !self.playheads.contains_key(name) => Some(name),
             _ => None,
         });
         match missing {
-            Some(name) => Err(format!("`{expression}` reads `st('{name}')`, which is no state of the machine")),
+            Some(name) => Err(format!("`{expression}` reads `sm('{name}')`, which is no state or playhead of the machine")),
             None => Ok(()),
         }
     }
@@ -342,6 +343,9 @@ impl Machine {
         for (name, p) in &self.playheads {
             if !is_valid_identifier(name) {
                 return Err(format!("invalid playhead name `{name}`: {NAME_RULE}"));
+            }
+            if self.states.contains_key(name) {
+                return Err(format!("`{name}` is a state of the machine; `sm()` names states and playheads alike, so a playhead cannot take it"));
             }
             if !self.states.contains_key(&p.start) {
                 return Err(format!("playhead `{name}` starts in `{}`, which is no state of the machine", p.start));
@@ -453,7 +457,7 @@ struct Head {
     arrived: f64,
     attrs: IndexMap<String, Motion>,
     flight: Option<Flight>,
-    /// The state it last left, and when: what `st().departures` counts at that instant.
+    /// The state it last left, and when: what `sm().departures` counts at that instant.
     left: Option<(String, f64)>,
     /// The state's next beat, at infinity once a 0 interval has decided; none where the interval
     /// is off, or 0 with no transition out.
@@ -614,7 +618,7 @@ impl Machines {
     /// Step every machine to `now`: every landing, due and request before it is settled at its
     /// own instant, in order, then the instant itself. Answers every playhead variable as it
     /// stands, a functional for an attribute in flight.
-    pub fn advance(&mut self, now: f64, read: &dyn Fn(&str) -> Option<Data>) -> Vec<(String, Data)> {
+    pub fn advance(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) -> Vec<(String, Data)> {
         // The clock restarted — a load, a new patch — so every instant a run or a request holds
         // is of the patch before: every run starts over at its playheads' starts.
         if now < self.last {
@@ -678,7 +682,7 @@ impl Machines {
 
     /// Everything owed at `at`: the requests stamped by then, then the landings and the moves
     /// that follow, machine by machine.
-    fn settle(&mut self, at: f64, read: &dyn Fn(&str) -> Option<Data>) {
+    fn settle(&mut self, at: f64, read: &dyn Fn(&Target) -> Result<Local, String>) {
         let ctx = Ctx::new(&self.compiled, &self.evaluator, read, at);
         let split = self.requests.iter().position(|(t, _)| *t > at).unwrap_or(self.requests.len());
         let requests: Vec<Request> = self.requests.drain(..split).map(|(_, r)| r).collect();
@@ -774,18 +778,21 @@ fn fold(head: &mut Head, now: f64) {
 struct Ctx<'a> {
     compiled: &'a HashMap<String, Expr>,
     evaluator: &'a Option<Arc<dyn ExprEvaluator>>,
-    read: &'a dyn Fn(&str) -> Option<Data>,
+    /// What a variable, a node's output or a node's param holds at this instant.
+    read: &'a dyn Fn(&Target) -> Result<Local, String>,
     now: f64,
     errors: std::cell::RefCell<Vec<String>>,
     census: std::cell::RefCell<Vec<Seen>>,
+    /// Every playhead's record, what `sm('playhead')` answers, taken with the census.
+    records: std::cell::RefCell<HashMap<String, Vec<(String, Field)>>>,
 }
 
 impl<'a> Ctx<'a> {
-    fn new(compiled: &'a HashMap<String, Expr>, evaluator: &'a Option<Arc<dyn ExprEvaluator>>, read: &'a dyn Fn(&str) -> Option<Data>, now: f64) -> Ctx<'a> {
-        Ctx { compiled, evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()), census: std::cell::RefCell::new(Vec::new()) }
+    fn new(compiled: &'a HashMap<String, Expr>, evaluator: &'a Option<Arc<dyn ExprEvaluator>>, read: &'a dyn Fn(&Target) -> Result<Local, String>, now: f64) -> Ctx<'a> {
+        Ctx { compiled, evaluator, read, now, errors: std::cell::RefCell::new(Vec::new()), census: std::cell::RefCell::new(Vec::new()), records: std::cell::RefCell::new(HashMap::new()) }
     }
 
-    /// Take the census `st()` answers from: every head as it stands, by arrival, before the moves
+    /// Take the census `sm()` answers from: every head as it stands, by arrival, before the moves
     /// that follow. A playhead's conditions are first read against the census taken before its own
     /// arrival, so the arrival itself can be what turns one true.
     fn census(&self, run: &Run) {
@@ -796,6 +803,7 @@ impl<'a> Ctx<'a> {
             .collect();
         seen.sort_by(|a, b| a.arrived.total_cmp(&b.arrived));
         *self.census.borrow_mut() = seen;
+        *self.records.borrow_mut() = run.heads.iter().map(|(ph, h)| (ph.clone(), playhead_record(h, self.now))).collect();
     }
 
     /// Evaluate `text` for `me`, the playhead it is read for.
@@ -807,18 +815,20 @@ impl<'a> Ctx<'a> {
         let mut locals: Vec<(String, Local)> = Vec::with_capacity(e.refs.len());
         for r in &e.refs {
             let local = match &r.target {
-                Target::Variable { key } => {
-                    let frame = (self.read)(key).ok_or_else(|| format!("variable `{key}` is not defined"))?;
-                    // A variable holding a functional is read at this instant, as any reader reads it.
-                    let frame = match (frame.as_functional().is_some(), self.evaluator) {
-                        (true, Some(ev)) => goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?,
-                        _ => frame,
-                    };
-                    Local::Frame(frame)
-                }
                 Target::Playhead => Local::Record(playhead_record(me, self.now)),
-                Target::State { name } => Local::Record(state_record(&self.census.borrow(), name, self.now)),
-                _ => return Err(format!("`{text}` reads a node; a machine reads variables alone")),
+                // A playhead's record under its name, else the census of the state so named.
+                Target::State { name } => Local::Record(match self.records.borrow().get(name) {
+                    Some(record) => record.clone(),
+                    None => state_record(&self.census.borrow(), name, self.now),
+                }),
+                target => match (self.read)(target)? {
+                    // A frame holding a functional is read at this instant, as any reader reads it.
+                    Local::Frame(frame) if frame.as_functional().is_some() => match self.evaluator {
+                        Some(ev) => Local::Frame(goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?),
+                        None => Local::Frame(frame),
+                    },
+                    local => local,
+                },
             };
             locals.push((r.var.clone(), local));
         }
@@ -854,8 +864,8 @@ fn playhead_record(head: &Head, now: f64) -> Vec<(String, Field)> {
     fields
 }
 
-/// `st('name')` as an expression reads it: [`STATE_FIELDS`] over the census — who rests there,
-/// and who arrived there or left it at this instant.
+/// `sm('name')` as an expression reads a state: [`STATE_FIELDS`] over the census — who rests
+/// there, and who arrived there or left it at this instant.
 fn state_record(seen: &[Seen], name: &str, now: f64) -> Vec<(String, Field)> {
     let residents: Vec<&Seen> = seen.iter().filter(|s| s.resting && s.state == name).collect();
     let values = [

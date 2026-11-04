@@ -27,7 +27,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
 
     g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0 }));
     g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size",
-                                   "expression": "variables.patch.gain * 64" }));
+                                   "expression": "vars.patch.gain * 64" }));
     // A control element is a variable that carries a widget, and the archive carries the record.
     g.call("variable entry edit", j!({ "name": "patch.gain", "control":
         { "kind": "knob", "min": 0.0, "max": 4.0, "step": 0.01, "x": 2.0, "y": 1.0, "w": 2.0, "h": 2.0 } }));
@@ -73,7 +73,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     // A source rides INLINE on the param it drives: the literal, the mode and the retained text.
     let source = &recs[&hex(sink)]["params"]["buffer"]["size"];
     assert_eq!((&source["value"], &source["mode"], &source["expression"]),
-               (&j!(256), &j!("constant"), &j!("variables.patch.gain * 64")), "{source}");
+               (&j!(256), &j!("constant"), &j!("vars.patch.gain * 64")), "{source}");
     assert!(saved["patch"]["links"].as_object().is_some_and(|l| !l.is_empty()), "links are a keyed map");
 
     let saved_gain = saved["patch"]["variables"]["patch.gain"].clone();
@@ -126,7 +126,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
         // A widget reads an entry of the bus as it reads a node's output, index and all, and the
         // read is what keeps the device open once the learn ends. No patch carries the group.
         g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
-        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("variables.{live}.cc[74]") }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("vars.{live}.cc[74]") }));
         g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
         g.call("midi learn", j!({ "on": false }));
         assert!(g.call("variable list", j!({}))["groups"].get(&live).is_some(), "read by a widget, the device stays open");
@@ -140,7 +140,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
         g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": "" }));
         g.until("the device to close with no reader", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
         assert!(!held(&g), "a device nothing reads is let go");
-        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("variables.{live}.cc[74]") }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("vars.{live}.cc[74]") }));
         g.until("the device to open for its reader", |g| held(g).then_some(()));
         // Pulled, the device takes its group with it; the reader waits for the next plug.
         drop(keys.take());

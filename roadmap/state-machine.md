@@ -13,7 +13,7 @@ Each as its own small change against the shipped model, in this order of value:
 1. An authored order of the transitions out of a state, editable on its card: `sequence` and an
    `expression`'s index read it. Today it is the transitions' authored order.
 2. `event {name}` and `always` triggers with a `machine event` op. A transition's `condition` is
-   the guard: one expression over `variables.*`, `me` and `st()`, taken on the turn to true.
+   the guard: one expression over `vars.*`, `nd()`, `me` and `sm()`, taken on the turn to true.
 3. Condition edge modes beyond the turn to true (`falling`, `change`, `level`).
 4. `exit_values` on a state and `values` on a transition; `internal` self-transitions.
 5. A random range `{min, max}` as a duration or an interval, sampled once from the machine's seed.
@@ -36,14 +36,13 @@ Each as its own small change against the shipped model, in this order of value:
 - **Exact step onsets in audio.** A functional lands one wire hop after its event, so a `Step`
   curve sounds up to one block late and is ramped across that block. The branch's 10 ms
   presentation delay fixes the onset at the price of latency. Build it only if a patch asks.
-- **A condition over a functional** is observed at events: the write, an arrival, a due. A
-  crossing mid-flight is seen at that flight's end. Root finding per curve is not planned. The
-  same holds for `t` in a condition: the thread does not poll.
+- **A condition over a functional** is observed at events: the write, an arrival, a due, a frame
+  of a node it reads. A crossing mid-flight is seen at that flight's end. Root finding per curve is
+  not planned. The same holds for `t` in a condition: the thread does not poll.
 
 ## Not to be done
 
 - A fixed-point tick type, a 48 kHz observation grid, a 1 kHz machine thread, or any periodic
   publication by the machine; a sample-exact break inside an audio block.
 - Python in a device callback or the render ticker; a presentation delay.
-- Re-evaluating alias expressions inside the machine; a Python purity whitelist; a change to
-  `time()`.
+- Re-evaluating alias expressions inside the machine; a Python purity whitelist.

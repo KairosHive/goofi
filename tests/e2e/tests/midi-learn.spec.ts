@@ -72,7 +72,7 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await baseline(page, 'midikeys_test_keys.notes');
 		keys.play([0x90, 60, 127]);
 		await expect(learn).toHaveAttribute('aria-pressed', 'false');
-		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('variables.midikeys_test_keys.notes[60]');
+		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('vars.midikeys_test_keys.notes[60]');
 		await expect(field.getByTestId('param-number')).toHaveValue('1');
 		await expect(learn.locator('svg')).toBeVisible();
 		// In the variables panel the device's group is locked whole: tagged, no rename, no add.
@@ -100,7 +100,7 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await expect.poll(() => openGroups(page), { timeout: WAIT }).toContain('midikeys_pads');
 		await baseline(page, 'midikeys_pads.cc');
 		pads.play([0xb0, 74, 127]);
-		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('variables.midikeys_pads.cc[74]');
+		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('vars.midikeys_pads.cc[74]');
 		await expect(field.getByTestId('param-number')).toHaveValue('1');
 		await expect.poll(() => openGroups(page), { timeout: WAIT }).toEqual(['midikeys_pads']);
 
@@ -122,7 +122,7 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		keys.play([0xb0, 74, 127]);
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
 		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
-			.toBe('variables.midikeys_test_keys.cc[74]');
+			.toBe('vars.midikeys_test_keys.cc[74]');
 		// A click on a listening learn cancels it.
 		await widget.click();
 		await expect(widget).toHaveAttribute('aria-pressed', 'true');
@@ -133,8 +133,8 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await baseline(page, 'midikeys_test_keys.notes');
 		keys.play([0x91, 61, 100]);
 		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
-			.toBe(`variables.midikeys_test_keys.notes[${128 + 61}]`);
-		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'variables.desk.level' });
+			.toBe(`vars.midikeys_test_keys.notes[${128 + 61}]`);
+		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'vars.desk.level' });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
 			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');

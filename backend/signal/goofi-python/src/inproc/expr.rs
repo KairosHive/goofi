@@ -13,9 +13,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
-/// The Python harness. The graph has already rewritten every `nd(..)` and `variables.*` term into a
-/// generated variable, so an expression compiles ONCE into a function of `t` and those variables,
-/// over a module scope with `np`, `math`'s whole namespace and `time()` simply there. `lfo()` and
+/// The Python harness. The graph has already rewritten every `nd(..)`, `sm(..)` and `vars.*` term
+/// into a generated variable, so an expression compiles ONCE into a function of `t` and those
+/// variables, over a module scope with `np` and `math`'s whole namespace simply there. `lfo()` and
 /// `nse()` read the call's time and range off a thread local, so no namespace is rebuilt per call;
 /// `qtz()` snaps through [`qtz_core`], so its scales are `goofi_core::scale`'s.
 /// A result leaves as a string, or as the shape and bytes of an f32 array.
@@ -25,9 +25,17 @@ import numpy as np
 import threading
 import types
 from math import *
-from time import time
 
 __goofi_call = threading.local()
+
+# One cycle of each waveform over the unit phase, spanning [0, 1].
+__goofi_waves = {
+    "sin": lambda p: (1 + sin(tau * p)) / 2,
+    "cos": lambda p: (1 + cos(tau * p)) / 2,
+    "tri": lambda p: 1 - abs(2 * (p % 1) - 1),
+    "sqr": lambda p: 1.0 if (p % 1) < 0.5 else 0.0,
+    "saw": lambda p: p % 1,
+}
 
 def __goofi_noise(src):
     # Hash integer coordinates, then interpolate with zero slope at each endpoint.
@@ -41,12 +49,15 @@ def __goofi_noise(src):
     blend = f * f * f * (f * (f * 6 - 15) + 10)
     return sample(x) * (1 - blend) + sample(x + 1) * blend
 
-def lfo(*, freq=1, src=None, vmin=None, vmax=None):
+def lfo(*, freq=1, src=None, vmin=None, vmax=None, fn="sin"):
     c = __goofi_call
     src = c.t if src is None else src
     vmin = c.lo if vmin is None else vmin
     vmax = c.hi if vmax is None else vmax
-    return vmin + (vmax - vmin) * (sin(tau * freq * src) + 1) / 2
+    wave = __goofi_waves.get(fn)
+    if wave is None:
+        raise ValueError(f"lfo: no waveform `{fn}`; one of {', '.join(__goofi_waves)}")
+    return vmin + (vmax - vmin) * wave(freq * src)
 
 def nse(*, freq=1, src=None, vmin=None, vmax=None):
     c = __goofi_call
@@ -55,10 +66,19 @@ def nse(*, freq=1, src=None, vmin=None, vmax=None):
     vmax = c.hi if vmax is None else vmax
     return vmin + (vmax - vmin) * __goofi_noise(freq * src)
 
-def qtz(v, scale="major", root="C"):
+# 0 V is C4, so a frequency's octave count from C4 is its pitch in volts.
+__goofi_c4 = 261.6255653005986
+
+def qtz(v, scale="major", root="C", mode="voct"):
+    if mode == "voct":
+        snap = lambda x: __goofi_qtz(x, scale, root)
+    elif mode == "hz":
+        snap = lambda x: __goofi_c4 * 2 ** __goofi_qtz(log2(x / __goofi_c4), scale, root)
+    else:
+        raise ValueError(f"qtz: no mode `{mode}`; one of voct, hz")
     if np.ndim(v) == 0:
-        return __goofi_qtz(float(v), scale, root)
-    return np.vectorize(lambda x: __goofi_qtz(float(x), scale, root), otypes=[float])(v)
+        return snap(float(v))
+    return np.vectorize(lambda x: snap(float(x)), otypes=[float])(v)
 
 def __goofi_compile(source, names):
     # The source on a line of its own, so a trailing comment ends before the closing parenthesis.

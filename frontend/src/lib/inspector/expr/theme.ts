@@ -62,8 +62,55 @@ export const EXPR_THEME_SPEC = {
 	},
 	'.cm-completionLabel': { flex: '1' },
 	'.cm-completionMatchedText': { textDecoration: 'none', color: 'var(--accent)' },
-	'.cm-completionDetail': { fontStyle: 'normal', color: 'var(--text-muted)' },
+	'.cm-completionDetail': {
+		fontStyle: 'normal',
+		color: 'var(--text-muted)',
+		marginLeft: '0',
+		maxWidth: '55%',
+		overflow: 'hidden',
+		textOverflow: 'ellipsis',
+		whiteSpace: 'nowrap'
+	},
 	'.cm-completionIcon': { color: 'var(--text-dim)', opacity: '1' },
+	'.cm-tooltip.cm-tooltip-autocomplete': {
+		minWidth: 'min(24rem, calc(100vw - 2 * var(--space-4)))',
+		maxWidth: 'min(36rem, calc(100vw - 2 * var(--space-4)))'
+	},
+
+	/* The doc pane: in flow under the list, one window with it, instead of the base theme's box
+	   floated beside. The content is `doc.ts`'s. */
+	'.cm-tooltip.cm-completionInfo.cm-completionInfo-below': {
+		position: 'static',
+		width: 'auto',
+		maxWidth: 'none',
+		padding: '0',
+		border: 'none',
+		borderTop: '1px solid var(--border)',
+		borderRadius: '0',
+		boxShadow: 'none',
+		whiteSpace: 'normal',
+		maxHeight: '14rem',
+		overflowY: 'auto',
+		fontFamily: 'var(--font-sans)',
+		fontSize: 'var(--fs-small)',
+		lineHeight: 'var(--lh-text)'
+	},
+	'.gx-doc': { display: 'flex', flexDirection: 'column' },
+	'.gx-doc-site': { padding: 'var(--space-2) var(--space-4)', borderBottom: '1px dashed var(--border)', background: 'var(--surface-1)' },
+	'.gx-doc-own': { padding: 'var(--space-2) var(--space-4)' },
+	'.gx-doc-sig': { display: 'block', fontFamily: 'var(--font-mono)', color: 'var(--syn-function)', fontWeight: '600' },
+	'.gx-doc-text': { margin: 'var(--space-1) 0 0', color: 'var(--text)' },
+	'.gx-doc-code, .gx-doc-option': { fontFamily: 'var(--font-mono)', color: 'var(--syn-string)' },
+	'.gx-doc-args': { margin: 'var(--space-2) 0 0', display: 'grid', gap: 'var(--space-1)' },
+	'.gx-doc-arg': { display: 'grid', gridTemplateColumns: 'minmax(5rem, auto) 1fr', gap: '0 var(--space-3)', padding: '0 var(--space-2)', borderRadius: 'var(--radius-sm)' },
+	'.gx-doc-arg-at': { background: 'var(--accent-fill)' },
+	'.gx-doc-arg-name': { fontFamily: 'var(--font-mono)', color: 'var(--syn-name)', display: 'flex', flexDirection: 'column' },
+	'.gx-doc-arg-facts': { fontFamily: 'var(--font-sans)', color: 'var(--text-muted)', fontSize: 'var(--fs-micro)', display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' },
+	'.gx-doc-arg-required': { color: 'var(--danger)' },
+	'.gx-doc-arg-doc': { margin: '0', color: 'var(--text)' },
+	'.gx-doc-arg-text': { margin: '0' },
+	'.gx-doc-options': { display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginTop: 'var(--space-1)' },
+	'.gx-doc-option': { padding: '0 var(--space-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' },
 
 	/* `underline wavy` rather than the base theme's data-URI squiggle, whose colour is baked into the SVG. */
 	'.cm-lintRange-error': {
@@ -77,8 +124,9 @@ export const EXPR_THEME_SPEC = {
 
 	/* `16px` is the iOS focus-zoom threshold, a device fact rather than a scale rung. */
 	'@media (hover: none) and (pointer: coarse)': {
-		'.cm-tooltip.cm-tooltip-autocomplete > ul': { fontSize: '16px' },
-		'.cm-tooltip.cm-tooltip-autocomplete > ul > li': { minHeight: 'var(--hit)' }
+		'.cm-tooltip.cm-tooltip-autocomplete > ul': { fontSize: '16px', maxHeight: '9rem' },
+		'.cm-tooltip.cm-tooltip-autocomplete > ul > li': { minHeight: 'var(--hit)' },
+		'.cm-tooltip.cm-completionInfo.cm-completionInfo-below': { fontSize: '16px', maxHeight: '9rem' }
 	}
 };
 

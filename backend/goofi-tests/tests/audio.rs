@@ -610,7 +610,7 @@ fn a_patch_sounds_under_the_external_clock() {
     ] {
         g.call(op, payload);
     }
-    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level" }));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level" }));
     sounds(&g, "the gain at the start state's level", |x| (peak(x) - 0.25).abs() < 0.01);
     // The blocks driven so far put the external clock's time far from the patch's; a device's
     // would be in step. The next block is now, then the blocks rendered keep pace with the ticks.
@@ -633,7 +633,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // corpse's, never the newborn's. The newborn, bound to the same text, reads clean.
     let evaluator = Arc::new(FirstVar::default());
     g.graph().set_evaluator(evaluator.clone());
-    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level * 1" }));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level * 1" }));
     g.until("the computed gain to land", |g| g.error(gain3).is_none().then_some(()));
     let keep = tempfile::tempdir().unwrap();
     let target = keep.path().join("bound.gfi");
@@ -646,7 +646,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.until("the stalled evaluation to answer", |_| (!stalled(&evaluator)).then_some(()));
     assert!(g.stays(|g| g.error(gain3).is_none()), "the corpse's answer is not the newborn's: {:?}", g.error(gain3));
     g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
-    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "variables.h.level" }));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level" }));
     g.until("the gain back on the playhead", |g| g.error(gain3).is_none().then_some(()));
 
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names

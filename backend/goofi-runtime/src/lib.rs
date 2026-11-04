@@ -98,7 +98,7 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
         }
         for (_, name) in feeds.iter().filter(|(slot, _)| *slot == s.name) {
             let service = goofi_transport::output_service(&goofi_transport::variables_base(view.instance), name);
-            subs.push(Sub::Slot { inbox, wire, service, source: format!("variables.{name}") });
+            subs.push(Sub::Slot { inbox, wire, service, source: format!("vars.{name}") });
             wire += 1;
         }
         inbox += 1;

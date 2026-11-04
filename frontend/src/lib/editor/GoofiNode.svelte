@@ -91,8 +91,10 @@
 		const names = new Set<string>();
 		for (const group of Object.values(node?.params ?? {}))
 			for (const d of Object.values(group))
-				for (const m of (d.mode === 'expression' && d.expression?.matchAll(/variables\.(\w+\.\w+)/g)) || [])
-					if (g.controlled.has(m[1])) names.add(m[1]);
+				for (const m of (d.mode === 'expression' && d.expression?.matchAll(/vars\.(\w+\.\w+)|sm\('(\w+)'\)\.(\w+)/g)) || []) {
+					const name = m[1] ?? `${m[2]}.${m[3]}`;
+					if (g.controlled.has(name)) names.add(name);
+				}
 		return [...names];
 	});
 </script>
@@ -138,7 +140,7 @@
 
 	{#if driving.length}
 		<div class="driving" data-testid="node-control-chips">
-			{#each driving as name (name)}<span class="chip" title="A param reads variables.{name}">{name}</span>{/each}
+			{#each driving as name (name)}<span class="chip" title="A param reads vars.{name}">{name}</span>{/each}
 		</div>
 	{/if}
 

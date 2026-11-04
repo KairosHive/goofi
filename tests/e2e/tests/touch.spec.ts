@@ -535,10 +535,10 @@ test('a held slot or control element is picked for reference, and a held param t
 			await tapNode(page, osc);
 			const field = pane(page).getByTestId('param-field-amplitude');
 			await field.scrollIntoViewIfNeeded();
-			const take = page.getByRole('menuitem', { name: 'Reference selection: variables.desk.level' });
+			const take = page.getByRole('menuitem', { name: 'Reference selection: vars.desk.level' });
 			await longPress(page, await corner(field), take);
 			await take.tap();
-			await expect.poll(() => param(osc, 'amplitude', 'expression')).toBe('variables.desk.level');
+			await expect.poll(() => param(osc, 'amplitude', 'expression')).toBe('vars.desk.level');
 			await expect(
 				page.locator(`.svelte-flow__node[data-id="${osc}"]`).getByTestId('node-control-chips'),
 				'the node names the element that drives it'

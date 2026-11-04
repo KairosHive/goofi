@@ -182,6 +182,39 @@ pub fn typescript() -> String {
     let quoted = |fields: &[&str]| fields.iter().map(|f| format!("'{f}'")).collect::<Vec<_>>().join(", ");
     let state_fields = quoted(&goofi_graph::machine::STATE_FIELDS);
     let me_fields = quoted(&goofi_graph::machine::ME_FIELDS);
+    let playhead_fields = quoted(&goofi_graph::machine::OWN);
+    let expr_args = |args: &[goofi_node::expr::Arg]| {
+        args.iter()
+            .map(|a| {
+                format!(
+                    "\t\t{{ name: '{}', kind: '{}', default: {}, options: [{}], keyword: {}, doc: {} }},\n",
+                    a.name,
+                    a.kind,
+                    a.default.map_or("null".to_string(), |d| json!(d).to_string()),
+                    quoted(a.options),
+                    a.keyword,
+                    json!(a.doc)
+                )
+            })
+            .collect::<String>()
+    };
+    let builtins = goofi_node::expr::BUILTINS
+        .iter()
+        .map(|b| {
+            format!(
+                "\t{{ name: '{}', kind: '{}', scope: '{}', signature: {}, doc: {}, pick: {}, args: [\n{}\t] }},\n",
+                b.name,
+                b.kind,
+                b.scope,
+                json!(b.signature),
+                json!(b.doc),
+                b.pick.map_or("null".to_string(), |p| format!("'{p}'")),
+                expr_args(b.args)
+            )
+        })
+        .collect::<String>();
+    let math = quoted(goofi_node::expr::MATH);
+    let math_constants = quoted(goofi_node::expr::MATH_CONSTANTS);
     let boundaries = BOUNDARY_TYPES
         .iter()
         .map(|(name, dir, dtype)| {
@@ -255,11 +288,44 @@ pub fn typescript() -> String {
          /** How many columns a control panel's grid is, whatever its pixel width. */\n\
          export const CONTROL_COLUMNS = {columns};\n\
          \n\
-         /** What `st('state')` answers a machine's expression: the residents, their names from the\n\
+         /** What `sm('state')` answers a machine's expression: the residents, their names from the\n\
           * longest resident to the newest, and the arrivals and departures of this instant. */\n\
          export const STATE_FIELDS = [{state_fields}] as const;\n\
          /** What `me` answers a machine's expression before the playhead's attributes. */\n\
          export const ME_FIELDS = [{me_fields}] as const;\n\
+         /** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */\n\
+         export const PLAYHEAD_FIELDS = [{playhead_fields}] as const;\n\
+         \n\
+         export interface ExprArgInfo {{\n\
+         \treadonly name: string;\n\
+         \t/** What it takes, in a word. */\n\
+         \treadonly kind: string;\n\
+         \t/** The default as the user would spell it; null is required. */\n\
+         \treadonly default: string | null;\n\
+         \t/** The closed set of strings it takes, where there is one. */\n\
+         \treadonly options: readonly string[];\n\
+         \t/** Keyword-only: spelled `name=value`. */\n\
+         \treadonly keyword: boolean;\n\
+         \treadonly doc: string;\n\
+         }}\n\
+         \n\
+         export interface ExprBuiltinInfo {{\n\
+         \treadonly name: string;\n\
+         \treadonly kind: 'function' | 'value' | 'namespace';\n\
+         \t/** Where it reads: every expression, a param's, or a machine's. */\n\
+         \treadonly scope: 'all' | 'node' | 'machine';\n\
+         \treadonly signature: string;\n\
+         \treadonly doc: string;\n\
+         \t/** What its one name argument picks from the live patch. */\n\
+         \treadonly pick: 'node' | 'machine' | null;\n\
+         \treadonly args: readonly ExprArgInfo[];\n\
+         }}\n\
+         \n\
+         /** Every name an expression may use beyond Python's own, numpy and math: what the editor completes and documents. */\n\
+         export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [\n{builtins}];\n\
+         /** The names `from math import *` brings into every expression. */\n\
+         export const EXPR_MATH = [{math}] as const;\n\
+         export const EXPR_MATH_CONSTANTS = [{math_constants}] as const;\n\
          \n\
          /** The type a sub-patch facade wears in the document. It is not in the palette — grouping\n\
           * is what makes one. */\n\
