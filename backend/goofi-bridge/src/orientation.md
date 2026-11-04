@@ -10,7 +10,8 @@ guess is refused with the whole set.
 `goofi` is on PATH, pointed at THIS server over local TCP: a sandbox that blocks the network blocks
 every op. One op is one line, `goofi <op> [--arg value …]`. `goofi op list` answers every op with
 its arguments and its kind; `goofi help <group>` lists a group; `<op> --help` explains one (read
-that, not `op list --doc`, the whole manual); `--json` answers raw JSON for `jq`. `goofi guide list`
+that, not `op list --doc`, the whole manual); `--json` answers raw JSON for `jq`. Text is compact
+on a pipe and laid out for a person at a terminal; `GOOFI_STYLE=compact|human` overrides. `goofi guide list`
 names the guides and `goofi guide get <name>` reads one: read the skill matching your task before
 building. Your ops land on the one undo history the human shares: `undo` takes back the last step,
 whoever made it. Several lines on stdin are ONE batch and ONE undo step, landing whole or not at

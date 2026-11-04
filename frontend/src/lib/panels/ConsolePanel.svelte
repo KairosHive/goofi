@@ -56,7 +56,7 @@
 			await log(`› ${line}`);
 			const response = await fetch('/exec', {
 				method: 'POST', headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ commands: [line], actor: getControl().actor })
+				body: JSON.stringify({ commands: [line], actor: getControl().actor, style: 'human' })
 			});
 			const result = await response.json();
 			if (!response.ok || result.error) throw new Error(result.error ?? `Request failed (${response.status})`);

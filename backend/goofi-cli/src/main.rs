@@ -167,8 +167,25 @@ fn notice_newer_release() {
     });
 }
 
+/// How this shell reads: human — parted and aligned to the terminal's width — when stdout is a
+/// terminal, compact when it is a pipe an agent or a script reads. `GOOFI_STYLE=human|compact`
+/// decides instead; the width is the terminal's, else `COLUMNS`, else 80.
+fn style() -> goofi_bridge::text::Style {
+    use std::io::IsTerminal;
+    let human = match std::env::var("GOOFI_STYLE").ok().as_deref() {
+        Some("human") => true,
+        Some("compact") => false,
+        _ => std::io::stdout().is_terminal(),
+    };
+    let width = terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
+        .unwrap_or(80);
+    goofi_bridge::text::Style { human, width: if human { width } else { 0 } }
+}
+
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
-/// carries them, the rendered text otherwise, or the raw JSON under `--json`.
+/// carries them, the text in this shell's style otherwise, or the raw JSON under `--json`.
 fn forward(lines: &[String], json: bool) -> i32 {
     let target = match goofi_client::resolve_target() {
         Ok(t) => t,
@@ -177,7 +194,8 @@ fn forward(lines: &[String], json: bool) -> i32 {
             return 1;
         }
     };
-    match goofi_client::exec(&target.url, lines, None) {
+    let style = style();
+    match goofi_client::exec_styled(&target.url, lines, None, style.human, style.width) {
         Ok(entries) => {
             use std::io::Write;
             let mut out = std::io::stdout().lock();
@@ -331,25 +349,33 @@ fn print_sessions(json: bool) -> i32 {
         println!("no running goofi — start one with `goofi`");
         return 0;
     }
-    for s in rows {
-        let mark = if current(&s) { "  ← GOOFI_SESSION" } else { "" };
-        println!("{}  {}{mark}", s.id, s.url);
+    let style = style();
+    let table: Vec<Vec<String>> = rows
+        .iter()
+        .map(|s| vec![s.id.clone(), s.url.clone(), if current(s) { "← GOOFI_SESSION".to_string() } else { String::new() }])
+        .collect();
+    match style.human {
+        true => println!("{}", goofi_bridge::text::table(&table, 0, style.width)),
+        false => table.iter().for_each(|r| println!("{}", r.iter().filter(|c| !c.is_empty()).cloned().collect::<Vec<_>>().join("  "))),
     }
     0
 }
 
-/// `goofi help [words…]`: any live session answers — help does not depend on which — and with
-/// none, the COMPILED-IN registry answers through the same renderer, so there is one help text.
+/// `goofi help [words…]`: the session this shell drives answers, else any live one — help does
+/// not depend on which — and with none, the COMPILED-IN registry answers through the same
+/// renderer, so there is one help text.
 fn help_main(rest: &[String]) -> i32 {
     let mut rest = rest.to_vec();
     take_json(&mut rest); // help is text; the flag is not a word to look up
     let rows = goofi_client::list();
-    let Some(live) = rows.first() else {
+    let style = style();
+    let resolved = goofi_client::resolve_target().ok();
+    let Some(live) = resolved.as_ref().or(rows.first()) else {
         let words: Vec<String> = std::iter::once("help".to_string()).chain(rest.clone()).collect();
         match goofi_bridge::phrase::help(&goofi_bridge::ops::table(goofi_bridge::Mode::default()), &words) {
             Some(h) => {
                 println!("no running server — the built-in index answers; `goofi` starts one.");
-                println!("{h}");
+                println!("{}", goofi_bridge::phrase::render(&h, &style));
                 return 0;
             }
             None => {
@@ -360,7 +386,7 @@ fn help_main(rest: &[String]) -> i32 {
     };
     let words: Vec<&str> =
         std::iter::once("help").chain(rest.iter().map(String::as_str)).collect();
-    match goofi_client::exec(&live.url, &[shell_words::join(words)], None) {
+    match goofi_client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width) {
         Ok(entries) => {
             for e in &entries {
                 println!("{}", e["text"].as_str().unwrap_or_default());

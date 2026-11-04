@@ -43,6 +43,8 @@ goofi-python = { path = "../signal/goofi-python", optional = true }
 goofi-provision = { path = "../goofi-provision" }
 # The one line that says how a development build is provisioned.
 goofi-init = { path = "../goofi-init" }
+# The terminal width the human style lays out for.
+terminal_size = "0.4"
 
 # The build script asks goofi-init which interpreter cargo resolved, so the build demands exactly
 # what that command provides, and the layout where that interpreter's base install is.
@@ -59,3 +61,4 @@ goofi-supervisor = { path = "../goofi-supervisor" }
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
 python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed"]
+

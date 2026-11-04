@@ -9,6 +9,7 @@ pub use txn::Txn;
 pub use boot::{boot, Config, Manager};
 pub mod autosave;
 pub mod phrase;
+pub mod text;
 /// The control-plane document and its deltas — shape-agnostic.
 pub mod doc;
 mod fsbrowse;
@@ -1163,8 +1164,9 @@ pub(crate) fn restart_changed(g: &mut Graph, diff: &ScanDiff) {
     }
 }
 
-/// `POST /exec {commands, actor}`: the CLI's door, with the MCP tool's parse and batch semantics.
-/// Each entry answers its JSON and its text; a refusal is one `{error}`.
+/// `POST /exec {commands, actor, style, width}`: the CLI's door, with the MCP tool's parse and
+/// batch semantics. Each entry answers its JSON and its text in the style the body asks for
+/// (`human` at `width` columns, else compact); a refusal is one `{error}`.
 async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -1174,12 +1176,13 @@ async fn exec_endpoint(State(state): State<AppState>, body: String) -> Response 
     };
     let lines = phrase::command_lines(&req);
     let actor = req["actor"].as_str().unwrap_or(DEFAULT_ACTOR).to_string();
+    let style = text::Style::from_request(&req);
     let ran = blocking(&state, move |state| phrase::exec_lines(state, &lines, &actor)).await;
     match ran {
         Ok(results) => {
             let entries: Vec<Value> = results
                 .iter()
-                .map(|r| json!({ "result": r, "text": phrase::render(r) }))
+                .map(|r| json!({ "result": r, "text": phrase::render(r, &style) }))
                 .collect();
             axum::Json(json!({ "results": entries })).into_response()
         }

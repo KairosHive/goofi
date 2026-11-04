@@ -88,7 +88,17 @@ fn call_tool(state: &AppState, params: &Value) -> Value {
     match phrase::exec_lines(state, &lines, actor) {
         // ONE shape whatever the count — the list of results, in order — so no data is
         // reachable at one arity and paraphrased at another.
-        Ok(results) => tool_result(phrase::pretty(&Value::Array(results)), false),
+        Ok(results) => {
+            // Help is prose for the reader; every other result stays the data it is.
+            let results: Vec<Value> = results
+                .into_iter()
+                .map(|r| match r.get("help").is_some() {
+                    true => Value::String(phrase::render(&r, &crate::text::Style::COMPACT)),
+                    false => r,
+                })
+                .collect();
+            tool_result(phrase::pretty(&Value::Array(results)), false)
+        }
         Err(e) => tool_result(e, true),
     }
 }
