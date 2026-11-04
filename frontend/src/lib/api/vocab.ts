@@ -121,7 +121,7 @@ export const STATE_FIELDS = ['residents', 'playheads', 'arrivals', 'departures']
 /** What `me` answers a machine's expression before the playhead's attributes. */
 export const ME_FIELDS = ['name', 'state', 'arrived'] as const;
 /** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */
-export const PLAYHEAD_FIELDS = ['state', 'prev', 'progress', 'arrived'] as const;
+export const PLAYHEAD_FIELDS = ['state', 'progress'] as const;
 
 export interface ExprArgInfo {
 	readonly name: string;
@@ -153,7 +153,7 @@ export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [
 	{ name: 'nd', kind: 'function', scope: 'all', signature: "nd('node')", doc: "A node's output: bare for a node with one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for a param's current value.", pick: 'node', args: [
 		{ name: 'name', kind: 'string', default: null, options: [], keyword: false, doc: "the node's display name" },
 	] },
-	{ name: 'sm', kind: 'function', scope: 'node', signature: "sm('playhead').element", doc: "A playhead of a state machine: `.state`, `.prev`, `.progress`, `.arrived` or one of its attributes, as the machine publishes them.", pick: 'machine', args: [
+	{ name: 'sm', kind: 'function', scope: 'node', signature: "sm('playhead').element", doc: "A playhead of a state machine: `.state`, `.progress` or one of its attributes, as the machine publishes them.", pick: 'machine', args: [
 		{ name: 'name', kind: 'string', default: null, options: [], keyword: false, doc: "a playhead's name" },
 	] },
 	{ name: 'sm', kind: 'function', scope: 'machine', signature: "sm('state' | 'playhead')", doc: "A state's census — `.residents`, `.playheads`, `.arrivals`, `.departures` — or another playhead's record, as `me` is.", pick: 'machine', args: [

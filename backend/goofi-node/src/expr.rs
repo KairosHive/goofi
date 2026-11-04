@@ -221,7 +221,7 @@ pub static BUILTINS: &[Builtin] = &[
     ], doc: "A node's output: bare for a node with one output, `.out.<slot>` for one of several, `.params.<group>.<param>` for a param's current value." },
     Builtin { name: "sm", kind: "function", scope: "node", signature: "sm('playhead').element", pick: Some("machine"), args: &[
         Arg { name: "name", kind: "string", default: None, options: &[], keyword: false, doc: "a playhead's name" },
-    ], doc: "A playhead of a state machine: `.state`, `.prev`, `.progress`, `.arrived` or one of its attributes, as the machine publishes them." },
+    ], doc: "A playhead of a state machine: `.state`, `.progress` or one of its attributes, as the machine publishes them." },
     Builtin { name: "sm", kind: "function", scope: "machine", signature: "sm('state' | 'playhead')", pick: Some("machine"), args: &[
         Arg { name: "name", kind: "string", default: None, options: &[], keyword: false, doc: "a state's or a playhead's name in this machine" },
     ], doc: "A state's census — `.residents`, `.playheads`, `.arrivals`, `.departures` — or another playhead's record, as `me` is." },

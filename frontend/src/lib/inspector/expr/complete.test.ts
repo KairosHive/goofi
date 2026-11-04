@@ -43,7 +43,7 @@ const CAT: ExprCatalogue = {
 		{ name: 'mixer.gain', group: 'mixer', element: 'gain', form: 'number' },
 		{ name: 'mixer.pan', group: 'mixer', element: 'pan', form: 'number' }
 	],
-	playheads: [{ name: 'walker', machine: 'sweep', fields: ['state', 'prev', 'progress', 'arrived', 'gain'] }]
+	playheads: [{ name: 'walker', machine: 'sweep', fields: ['state', 'progress', 'gain'] }]
 };
 
 /** The parsed state the editor would have. `python()` is the same grammar the editor loads. */
@@ -204,7 +204,7 @@ describe('the reference paths: .out, .params, me and sm', () => {
 	it('sm() names a playhead in a param’s expression, and its elements after the dot', () => {
 		expect(labels("sm('")).toEqual(['walker']);
 		expect(byLabel("sm('").get('walker')!.apply).toBe("walker').");
-		expect(labels("sm('walker').")).toEqual(['state', 'prev', 'progress', 'arrived', 'gain']);
+		expect(labels("sm('walker').")).toEqual(['state', 'progress', 'gain']);
 		expect(labels("sm('nope').")).toEqual([]);
 		expect(labels("sm('walker').state.")).toEqual([]);
 	});

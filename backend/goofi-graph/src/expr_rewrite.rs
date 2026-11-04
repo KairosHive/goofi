@@ -129,7 +129,7 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         }
         let Some((field, at)) = field else {
             return Err(ExprError(format!(
-                "sm('{}') needs an element here: `.state`, `.prev`, `.progress`, `.arrived` or `.<attribute>` of the playhead",
+                "sm('{}') needs an element here: `.state`, `.progress` or `.<attribute>` of the playhead",
                 call.name
             )));
         };
