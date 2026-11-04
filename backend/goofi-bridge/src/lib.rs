@@ -1664,14 +1664,7 @@ fn spawn_midi(state: AppState) {
     owner.scope.spawn("goofi-midi", move || {
         while !state.stopping.stopped() {
             let absent = state.midi.probe().is_some();
-            let changed = {
-                let g = state.graph.lock();
-                let (closed, changed) = state.midi.resync(&g);
-                drop(g);
-                drop(closed);
-                changed
-            };
-            if changed {
+            if resync_midi(&state) {
                 resync_and_broadcast(&state);
             }
             let poll = if absent { MIDI_POLL_ABSENT } else { MIDI_POLL };
@@ -1680,6 +1673,16 @@ fn spawn_midi(state: AppState) {
             }
         }
     });
+}
+
+/// Open the ports the patch reads or a learn wants and close the rest, off the settled graph;
+/// answers whether a port moved. The closed ports drop after the graph and the store are let go.
+pub(crate) fn resync_midi(state: &AppState) -> bool {
+    let g = state.graph.lock();
+    let (closed, changed) = state.midi.resync(&g);
+    drop(g);
+    drop(closed);
+    changed
 }
 
 /// Re-project the authoritative graph into the document and broadcast the delta, after an RPC

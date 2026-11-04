@@ -33,6 +33,8 @@ impl EffectOp for Learn {
         if a.on {
             state.midi.probe();
         }
+        // The ports move on the learn itself: a quiet patch has no settle to open them on.
+        crate::resync_midi(state);
         crate::resync_and_broadcast(state);
         let groups: Vec<Value> = state.midi.open().into_iter().map(|(group, port)| json!({ "group": group, "port": port })).collect();
         Ok(json!({ "groups": groups, "seconds": crate::midi::LEARN.as_secs() }))
