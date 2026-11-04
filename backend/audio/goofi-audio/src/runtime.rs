@@ -448,7 +448,7 @@ impl Frames {
         }
         match oscillator {
             true => self.oscillate(out),
-            false => self.loop_frames(out, (self.playback.smoothing(params) * self.rate) as usize),
+            false => self.loop_frames(out, self.playback.smoothing(params) as usize),
         }
     }
 

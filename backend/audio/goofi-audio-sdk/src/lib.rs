@@ -221,7 +221,7 @@ pub mod cross {
     /// The options of a `mode` that sets how the engine PLAYS the frames a node takes in: each
     /// looped until the next, or each value a sine at that many Hz. A waveform reads the params
     /// beside it: a bool `mix` plays the rows as one channel, `low..high` are the values that are
-    /// full scale, and a float `smoothing` in seconds crossfades one frame into the next.
+    /// full scale, and an integer `smoothing` in audio samples crossfades one frame into the next.
     pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
 
     /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale

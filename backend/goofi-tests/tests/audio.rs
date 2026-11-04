@@ -800,10 +800,10 @@ fn a_patch_sounds_under_the_external_clock() {
     });
 
     // Step: `smoothing` crossfades one frame into the next: a held quarter becomes a held 1 over
-    // a twentieth of a second, which is 2400 samples at the rate however late the frame arrived.
+    // 2400 audio samples however late the frame arrived.
     g.call("node remove", j!({ "node": hex(ramp) }));
     let level = g.add("_TestConst");
-    g.set_param(signal_in, "signal", "smoothing", 0.05);
+    g.set_param(signal_in, "signal", "smoothing", 2400);
     g.link(level, "out", signal_in, "input");
     g.set_param(level, "constant", "value", 0.25);
     sounds(&g, "the held quarter", |x| x.iter().all(|v| *v == 0.25));
@@ -818,7 +818,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // 0.3 to 0.95 is 0.65 of the 0.75 it climbs: 2080 of the 2400 samples.
     let between = morph.iter().filter(|v| (0.3..0.95).contains(*v)).count();
     assert!((2000..2160).contains(&between), "it takes 2400 samples, not one: {between} between");
-    g.set_param(signal_in, "signal", "smoothing", 0.0);
+    g.set_param(signal_in, "signal", "smoothing", 0);
     g.call("node remove", j!({ "node": hex(level) }));
 
     // Step: as an `oscillator`, each column of an [n] or [2, n] frame is a sine at that many Hz,

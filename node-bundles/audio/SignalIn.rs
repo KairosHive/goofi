@@ -58,9 +58,9 @@ goofi_audio_sdk::params! {
     SMOOTHING = ParamDecl {
         group: "signal",
         name: "smoothing",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 48000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("seconds a new frame crossfades in over"),
+        doc: Some("audio samples a new frame crossfades in over"),
         section: 0,
         show: WAVEFORM,
         role: None,
