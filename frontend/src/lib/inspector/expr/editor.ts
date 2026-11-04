@@ -1,5 +1,5 @@
 /** The mounted expression editor — one lazy CodeMirror chunk: a Python expression with goofi's
- *  completions and the doc pane under them. */
+ *  completions in the window under the field. */
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap, placeholder, tooltips, type KeyBinding } from '@codemirror/view';
 import { LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -9,6 +9,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { setDiagnostics } from '@codemirror/lint';
 import { MARGIN, overlayViewport } from 'panelty';
 import { goofiLanguageData } from './complete';
+import { completionWindow, type WindowRule } from './window';
 import { expressionDiagnostics } from './diagnostics';
 import { singleLineExpression } from './singleLine';
 import { exprHighlight, exprTheme } from './theme';
@@ -33,17 +34,20 @@ export interface ExprEditorHandle {
 	destroy(): void;
 }
 
-/** The popup follows the cursor: it opens on focus and whenever the cursor lands somewhere new
- *  while it is closed, so the pane always documents where the cursor sits. */
-const followCursor = EditorView.updateListener.of((update) => {
-	const focused = update.focusChanged && update.view.hasFocus;
-	const moved = update.selectionSet && !update.docChanged;
-	if ((focused || moved) && completionStatus(update.state) === null) {
-		queueMicrotask(() => {
-			if (update.view.hasFocus) startCompletion(update.view);
-		});
-	}
-});
+/** The window's one rule: open while the field has focus, closed by Escape alone, back with
+ *  Ctrl+Space or the next focus. The completion restarts whenever it closed with the field focused. */
+function keepOpen(rule: WindowRule): Extension {
+	return EditorView.updateListener.of((update) => {
+		const { view } = update;
+		if (update.focusChanged && !view.hasFocus) rule.dismissed = false;
+		if (!view.hasFocus || rule.dismissed) return;
+		if ((update.focusChanged || update.docChanged || update.selectionSet) && completionStatus(update.state) === null) {
+			queueMicrotask(() => {
+				if (view.hasFocus && !rule.dismissed && completionStatus(view.state) === null) startCompletion(view);
+			});
+		}
+	});
+}
 
 export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): ExprEditorHandle {
 	let committed = opts.doc;
@@ -53,25 +57,50 @@ export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): Ex
 		committed = next;
 		opts.onCommit(next);
 	};
-	/* Tab takes the completion and nothing else, the moment the popup shows: the delay that guards an
-	   Enter from an unseen option guards nothing once Enter only commits the text as typed. Escape
-	   must fall THROUGH once there is no popup: it is the app's, and dismisses the pane. */
+	const rule: WindowRule = { dismissed: false };
+	let tabWaits = false;
+	/* Tab takes the completion, the moment the list shows; while the list still catches up with the
+	   last keystroke it takes the option the list settles on, through `acceptWhenSettled`, rather
+	   than falling through and moving the focus. Escape falls THROUGH once the window is closed:
+	   it is the app's then, and dismisses the pane. */
 	const keys: KeyBinding[] = [
-		{ key: 'Escape', run: (view) => closeCompletion(view) },
-		{ key: 'Tab', run: (view) => acceptCompletion(view) },
-		{ key: 'Enter', run: (view) => (closeCompletion(view), commit(view), true) }
+		{
+			key: 'Escape',
+			run: (view) => {
+				if (rule.dismissed) return false;
+				rule.dismissed = true;
+				if (!closeCompletion(view)) view.dispatch({});
+				return true;
+			}
+		},
+		{
+			key: 'Ctrl-Space',
+			run: (view) => {
+				rule.dismissed = false;
+				return startCompletion(view);
+			}
+		},
+		{ key: 'Tab', run: (view) => acceptCompletion(view) || (tabWaits = completionStatus(view.state) === 'pending') },
+		{ key: 'Enter', run: (view) => (commit(view), true) }
 	];
+	const acceptWhenSettled = EditorView.updateListener.of((update) => {
+		if (!tabWaits) return;
+		const status = completionStatus(update.state);
+		if (update.docChanged || status === null) tabWaits = false;
+		else if (status === 'active') {
+			tabWaits = false;
+			queueMicrotask(() => acceptCompletion(update.view));
+		}
+	});
 	const extensions: Extension[] = [
 		// Python's own sources are folded into goofi's, so every option carries a doc.
 		new LanguageSupport(pythonLanguage, [goofiLanguageData(opts.catalogue)]),
 		syntaxHighlighting(exprHighlight),
-		autocompletion({
-			defaultKeymap: false,
-			interactionDelay: 0,
-			// The pane sits under the list, in the one window, whatever the space beside it.
-			positionInfo: () => ({ class: 'cm-completionInfo-below', style: '' })
-		}),
-		followCursor,
+		// CodeMirror's own popup stays hidden (theme.ts): the window renders what its state holds.
+		autocompletion({ defaultKeymap: false, interactionDelay: 0 }),
+		completionWindow(host, opts.catalogue, rule),
+		keepOpen(rule),
+		acceptWhenSettled,
 		keymap.of(completionKeymap.filter((b) => b.key !== 'Enter')),
 		history(),
 		exprTheme,

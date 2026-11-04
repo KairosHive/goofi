@@ -91,6 +91,12 @@
 		overflow: hidden;
 		tab-size: 4;
 	}
+	/* The window under it continues the box: no seam, no rounded corners between the two. The
+	   attribute is the window's (window.ts), set at runtime, so the rule is stated global. */
+	:global(.expr-host[data-window-open]) {
+		border-bottom-left-radius: 0;
+		border-bottom-right-radius: 0;
+	}
 	/* Restated because CodeMirror's base theme pins `outline: none` at a specificity app.css cannot reach. */
 	.expr-host:has(:focus-visible) {
 		outline: var(--focus-width) solid var(--focus-ink);

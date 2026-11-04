@@ -8,7 +8,7 @@ import type { EditorState, Extension } from '@codemirror/state';
 import type { SyntaxNode } from '@lezer/common';
 import { EXPR_BUILTINS, EXPR_MATH, EXPR_MATH_CONSTANTS, STATE_FIELDS, type ExprArgInfo, type ExprBuiltinInfo } from '$lib/api/vocab';
 import type { CatalogueNode, ExprCatalogue } from './catalogue';
-import { renderDoc, type Doc } from './doc';
+import type { Doc } from './doc';
 
 /** What a member chain hangs off: `me`, `nd('name')` or `sm('name')`. */
 export type RefTarget = { self: true } | { name: string } | { machine: string };
@@ -30,6 +30,9 @@ export interface CallSite {
 	/** The argument the cursor is at: by keyword, else by position; undefined past the last. */
 	arg?: ExprArgInfo;
 }
+
+/** An option with the doc its row and the window show. */
+export type GoofiCompletion = Completion & { doc: Doc };
 
 export type ExprContext =
 	| NameContext
@@ -128,11 +131,10 @@ function argAt(state: EditorState, argList: SyntaxNode, pos: number): { index: n
 	return { index, keyword, atStart, afterAssign };
 }
 
-/** The argument of `fn` at a position: the named one, else the `index`th positional. */
+/** The argument of `fn` at a position: the named one, else the `index`th in its signature. */
 function argOf(fn: ExprBuiltinInfo, index: number, keyword: string | null): ExprArgInfo | undefined {
 	if (keyword !== null) return fn.args.find((a) => a.name === keyword);
-	const positional = fn.args.filter((a) => !a.keyword);
-	return positional[index];
+	return fn.args[index];
 }
 
 /** The builtin call whose argument list holds `node`, and the site inside it. */
@@ -280,6 +282,24 @@ export function exprContext(state: EditorState, pos: number, machine = false): E
 	return { kind: 'scope', from: pos, to: pos };
 }
 
+/** The builtin the cursor documents: the one whose name it is on, else the call it sits in with
+ *  the argument it is at — off the tree as it stands, so `nse(` reads as `nse()` does. */
+export function docSite(state: EditorState, pos: number, machine: boolean): CallSite | null {
+	const node = syntaxTree(state).resolveInner(pos, -1);
+	if (node.name === 'VariableName') {
+		const fn = builtin(text(state, node), machine);
+		if (fn) return { fn };
+	}
+	for (let n: SyntaxNode | null = node; n; n = n.parent) {
+		if (n.name !== 'ArgList') continue;
+		const fn = builtinOf(state, n.parent, machine);
+		if (!fn) continue;
+		const at = argAt(state, n, pos);
+		return { fn, arg: argOf(fn, at.index, at.keyword) };
+	}
+	return null;
+}
+
 /** What `sm('…')` answers, in the order the manager declares the fields. */
 const STATE_FIELD_DOC: Record<(typeof STATE_FIELDS)[number], string> = {
 	residents: 'how many playheads rest in it',
@@ -304,9 +324,9 @@ const NUMPY_NAMES =
 	'power prod radians ravel real reshape roll round sign sin sinh sort sqrt square std sum tan tanh transpose ' +
 	'unwrap var vstack where zeros';
 
-/** One option with its doc attached for the pane. */
-function entry(c: Completion, doc: Doc, call?: CallSite): Completion {
-	return { ...c, info: () => renderDoc(doc, call) };
+/** One option with its doc attached for the window. */
+function entry(c: Completion, doc: Doc): GoofiCompletion {
+	return { ...c, doc };
 }
 
 /** What finishes a name typed inside `nd('` or `sm('`: only what is not written yet — an
@@ -337,26 +357,26 @@ function nodeOf(cat: ExprCatalogue, target: RefTarget): CatalogueNode | undefine
 }
 
 /** The scope's names as options: the builtins first, then math, each with its doc. */
-function scopeEntries(cat: ExprCatalogue, call?: CallSite): Completion[] {
+function scopeEntries(cat: ExprCatalogue): Completion[] {
 	const own = builtins(!!cat.machine).map((b) => {
 		const type = b.kind === 'function' ? 'function' : b.kind === 'namespace' ? 'namespace' : 'variable';
 		const base: Completion = { label: b.name, type, detail: b.signature, boost: 90 };
 		const doc: Doc = { builtin: b };
-		if (b.kind === 'function') return entry(snippetCompletion(`${b.name}(#{})`, base), doc, call);
-		if (b.kind === 'namespace') return entry({ ...base, apply: `${b.name}.` }, doc, call);
-		return entry(base, doc, call);
+		if (b.kind === 'function') return entry(snippetCompletion(`${b.name}(#{})`, base), doc);
+		if (b.kind === 'namespace') return entry({ ...base, apply: `${b.name}.` }, doc);
+		return entry(base, doc);
 	});
 	const math = [
-		...EXPR_MATH.map((label) => entry({ label, type: 'function', detail: 'math', boost: 50 }, { title: `${label}()`, text: `Python’s math.${label}, in scope as itself.` }, call)),
-		...EXPR_MATH_CONSTANTS.map((label) => entry({ label, type: 'constant', detail: 'math', boost: 50 }, { title: label, text: `Python’s math.${label}.` }, call))
+		...EXPR_MATH.map((label) => entry({ label, type: 'function', detail: 'math', boost: 50 }, { title: `${label}()`, text: `Python’s math.${label}, in scope as itself.` })),
+		...EXPR_MATH_CONSTANTS.map((label) => entry({ label, type: 'constant', detail: 'math', boost: 50 }, { title: label, text: `Python’s math.${label}.` }))
 	];
 	return [...own, ...math];
 }
 
 /** A playhead's fields, under `sm('name').` in a param's expression, or a machine's playhead's. */
-function playheadFields(fields: string[], call?: CallSite): Completion[] {
+function playheadFields(fields: string[]): Completion[] {
 	return fields.map((label) =>
-		entry({ label, type: 'property', detail: PLAYHEAD_FIELD_DOC[label] ? 'the machine’s own' : 'attribute' }, { title: `.${label}`, text: PLAYHEAD_FIELD_DOC[label] ?? 'An attribute the states set and the transitions ease.' }, call)
+		entry({ label, type: 'property', detail: PLAYHEAD_FIELD_DOC[label] ? 'the machine’s own' : 'attribute' }, { title: `.${label}`, text: PLAYHEAD_FIELD_DOC[label] ?? 'An attribute the states set and the transitions ease.' })
 	);
 }
 
@@ -368,8 +388,7 @@ function optionEntries(call: CallSite, quote: string, terminated: boolean): Comp
 	return arg.options.map((o) =>
 		entry(
 			{ label: o, type: 'constant', detail: arg.name, boost: 100, apply: quote ? `${o}${terminated ? '' : quote}` : `${open}${o}${open}` },
-			{ title: `${arg.name}=${open}${o}${open}`, text: `One of \`${arg.name}\`’s ${arg.options.length} options for ${call.fn.name}().`, arg },
-			call
+			{ title: `${arg.name}=${open}${o}${open}`, text: `One of \`${arg.name}\`’s ${arg.options.length} options for ${call.fn.name}().`, arg }
 		)
 	);
 }
@@ -452,18 +471,17 @@ export function entriesFor(ctx: ExprContext, cat: ExprCatalogue): Completion[] {
 					.map((a) =>
 						entry(
 							{ label: `${a.name}=`, displayLabel: a.name, type: 'property', detail: `${a.kind}${a.default ? ` · ${a.default}` : ''}`, boost: a === call.arg ? 99 : 98, apply: `${a.name}=` },
-							{ title: `${a.name}=`, text: a.doc, arg: a },
-							call
+							{ title: `${a.name}=`, text: a.doc, arg: a }
 						)
 					)
 			);
-			out.push(...scopeEntries(cat, call));
+			out.push(...scopeEntries(cat));
 			return out;
 		}
 		case 'option':
 			return optionEntries(ctx.call, ctx.quote, ctx.terminated);
 		case 'scope':
-			return scopeEntries(cat, ctx.call);
+			return scopeEntries(cat);
 	}
 }
 

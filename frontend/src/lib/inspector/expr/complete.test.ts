@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { python } from '@codemirror/lang-python';
-import { exprContext, entriesFor, type ExprContext } from './complete';
+import { docSite, exprContext, entriesFor, type ExprContext, type GoofiCompletion } from './complete';
 import type { ExprCatalogue } from './catalogue';
 
 /* The completion source, driven exactly the way the running editor drives it — a real Python parse
@@ -382,9 +382,31 @@ describe('inside a builtin’s call', () => {
 		expect(c && 'call' in c ? c.call : undefined).toBeUndefined();
 	});
 
-	it('hands every option the call it sits in, for the pane', () => {
+	it('hands every option a doc, for its row', () => {
 		const c = at('lfo(')!;
-		const opts = entriesFor(c, CAT);
-		for (const o of opts.slice(0, 5)) expect(typeof o.info, o.label).toBe('function');
+		const opts = entriesFor(c, CAT) as GoofiCompletion[];
+		for (const o of opts.slice(0, 5)) expect(o.doc, o.label).toBeTruthy();
+	});
+});
+
+describe('the window’s doc follows the cursor, parse errors and all', () => {
+	const site = (doc: string, pos = doc.length, machine = false) => {
+		const s = docSite(EditorState.create({ doc, extensions: [python()] }), pos, machine);
+		return s ? `${s.fn.name}${s.arg ? `.${s.arg.name}` : ''}` : null;
+	};
+	it('reads an unclosed call as the call it will be', () => {
+		expect(site('nse(')).toBe('nse.freq');
+		expect(site('nse(0.5')).toBe('nse.freq');
+		expect(site('lfo(1, ')).toBe('lfo.src');
+		expect(site('lfo(freq=')).toBe('lfo.freq');
+		expect(site('x + nse(1, vmin=0')).toBe('nse.vmin');
+		expect(site('lfo(freq=nse(')).toBe('nse.freq');
+	});
+	it('reads the name the cursor is on, and nothing in no call', () => {
+		expect(site('nse')).toBe('nse');
+		expect(site('lfo(nse')).toBe('nse');
+		expect(site('lfo(1) + ')).toBeNull();
+		expect(site('other(1')).toBeNull();
+		expect(site("nd('")).toBe('nd.name');
 	});
 });

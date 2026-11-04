@@ -273,7 +273,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect(condition).toBeVisible();
 		await press(condition);
 		await page.keyboard.type("sm('");
-		await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('state1');
+		await expect(page.getByTestId('expr-window')).toContainText('state1');
 		await page.keyboard.press('Escape');
 		await page.keyboard.type("state1').residents > 0");
 		await page.keyboard.press('Enter');
@@ -433,17 +433,30 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe("sm('beat').rate");
 		expect(await placed()).toEqual(before);
 
-		// In the row's editor, under its label, Tab takes the completion the editor offers, and
-		// Enter commits the line.
+		// In the row's editor, under its label, the completion window opens with the focus, as an
+		// extension of the field: its width, its top on the field's bottom edge. Typed at a hand's
+		// pace, every keystroke leaves the list catching up, and Tab lands while it still is: Tab
+		// takes the option the list settles on, and the window stays. Escape alone closes it,
+		// Ctrl+Space brings it back, and Enter commits the line.
 		await row.getByRole('button', { name: 'frequency', exact: true }).click();
 		const editor = row.getByTestId('param-expr-input');
 		await expect(editor).toBeVisible();
 		await editor.click();
+		const win = page.getByTestId('expr-window');
+		await expect(win).toBeVisible();
+		const field = (await row.locator('.expr-host').boundingBox())!;
+		const box = (await win.boundingBox())!;
+		expect([box.x, box.width, box.y].map(Math.round)).toEqual([field.x, field.width, field.y + field.height].map(Math.round));
 		await page.keyboard.press('Control+a');
-		await page.keyboard.type('vars.beat.ga');
-		await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+		await page.keyboard.type('vars.beat.ga', { delay: 40 });
 		await page.keyboard.press('Tab');
 		await expect(editor).toHaveText('vars.beat.gain');
+		await expect(win).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(win).toBeHidden();
+		await expect(editor).toBeFocused();
+		await page.keyboard.press('Control+Space');
+		await expect(win).toBeVisible();
 		await page.keyboard.press('Enter');
 		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe('vars.beat.gain');
 

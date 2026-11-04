@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EXPR_HIGHLIGHT_SPEC, EXPR_THEME_SPEC } from './theme';
+import { WINDOW_STYLE } from './window';
 
 /* The editor's styling has to be CSS-in-JS — CodeMirror generates the class names, and the completion
  * popup is mounted in `document.body` where no Svelte-scoped rule can reach it — which puts it outside
@@ -83,12 +84,13 @@ describe('the editor theme speaks the token ladder', () => {
 		expect(literals('var(--space-2) var(--space-4)')).toEqual([]);
 	});
 
-	// D-X8: the popup rows are tap targets, and a `--hit` floor is what makes them ones.
+	// D-X8: the window's rows are tap targets, and a `--hit` floor is what makes them ones. The
+	// window's sheet is CSS text (window.ts), so these read it as such.
 	it('floors the completion rows at --hit under coarse (D-X8)', () => {
-		const coarse = leaves(
-			(EXPR_THEME_SPEC as Record<string, object>)[`@media ${COARSE}`],
-			`@media ${COARSE}`
-		);
-		expect(coarse.find((l) => l.prop === 'minHeight')?.value).toBe('var(--hit)');
+		const coarse = WINDOW_STYLE.slice(WINDOW_STYLE.indexOf(`@media ${COARSE}`));
+		expect(coarse).toMatch(/\.gx-win-item \{[^}]*min-height: var\(--hit\)/);
+	});
+	it('names no colour literal in the window either (D-X2)', () => {
+		expect(WINDOW_STYLE).not.toMatch(/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i);
 	});
 });

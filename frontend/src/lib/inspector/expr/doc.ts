@@ -1,11 +1,14 @@
-/** The doc pane under the completion list: what the selected option is, and, when the cursor sits
- *  in a builtin's call, that call with the argument at the cursor marked. Plain DOM, because
- *  CodeMirror mounts the pane itself; the classes are themed in `theme.ts`. */
+/** The window's doc: the builtin the cursor sits in with the argument at the cursor marked, or the
+ *  scope's own line. Plain DOM, mounted by `window.ts`; the classes are themed in `theme.ts`. */
 import type { ExprArgInfo, ExprBuiltinInfo } from '$lib/api/vocab';
-import type { CallSite } from './complete';
 
 /** What one option documents: a builtin whole, or a title and a line, maybe about one argument. */
 export type Doc = { builtin: ExprBuiltinInfo } | { title: string; text: string; arg?: ExprArgInfo };
+
+/** An option's one line, for its row. */
+export function brief(doc: Doc): string {
+	return 'builtin' in doc ? doc.builtin.doc : doc.text;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
 	const node = document.createElement(tag);
@@ -50,28 +53,26 @@ function argRows(fn: ExprBuiltinInfo, mark?: ExprArgInfo): HTMLElement {
 	return list;
 }
 
-/** The pane for one option at one site. The site's call heads it, so an argument's or a value's
- *  option still shows the function it is for, with the argument under the cursor marked. */
-export function renderDoc(doc: Doc, call?: CallSite): HTMLElement {
+/** A builtin at the cursor: its signature, its line and its arguments, `mark` the one the cursor is at. */
+export function renderBuiltin(fn: ExprBuiltinInfo, mark?: ExprArgInfo): HTMLElement {
 	const root = el('div', 'gx-doc');
-	const own = 'builtin' in doc ? doc.builtin : null;
-	if (call && call.fn !== own) {
-		const head = el('div', 'gx-doc-site');
-		head.appendChild(el('code', 'gx-doc-sig', call.fn.signature));
-		head.appendChild(prose('gx-doc-text', call.fn.doc));
-		if (call.fn.args.length) head.appendChild(argRows(call.fn, 'arg' in doc ? doc.arg : call.arg));
-		root.appendChild(head);
-	}
-	const body = el('div', 'gx-doc-own');
-	if ('builtin' in doc) {
-		const own = doc.builtin;
-		body.appendChild(el('code', 'gx-doc-sig', own.signature));
-		body.appendChild(prose('gx-doc-text', own.doc));
-		if (own.args.length) body.appendChild(argRows(own, call && call.fn === own ? call.arg : undefined));
-	} else {
-		body.appendChild(el('code', 'gx-doc-sig', doc.title));
-		body.appendChild(prose('gx-doc-text', doc.text));
-	}
-	root.appendChild(body);
+	root.appendChild(el('code', 'gx-doc-sig', fn.signature));
+	root.appendChild(prose('gx-doc-text', fn.doc));
+	if (fn.args.length) root.appendChild(argRows(fn, mark));
+	return root;
+}
+
+/** A cursor in no call: what an expression of this scope reads. */
+export function renderScope(machine: boolean): HTMLElement {
+	const root = el('div', 'gx-doc');
+	root.appendChild(el('code', 'gx-doc-sig', machine ? 'a machine’s expression' : 'a param’s expression'));
+	root.appendChild(
+		prose(
+			'gx-doc-text',
+			machine
+				? 'Python over `me`, this playhead; `sm(\'name\')`, a state or a playhead; `nd(\'name\')`; `vars.<group>.<element>`; `t`; `lfo()`, `nse()`, `qtz()`; `np` and math.'
+				: 'Python over `nd(\'name\')`; `sm(\'playhead\')`; `me`, this node; `vars.<group>.<element>`; `t`; `lfo()`, `nse()`, `qtz()`; `np` and math.'
+		)
+	);
 	return root;
 }
