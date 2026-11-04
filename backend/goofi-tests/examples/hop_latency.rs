@@ -1,19 +1,21 @@
 //! Hop-latency probe (not a test): `_TestConst(len)` → N × `_TestEcho` on a booted instance,
 //! read off the stamps every frame carries. A frame names the input frame it was made from by
-//! node, output, index and tick time, so a probe on every hop joins the chain by index: per hop,
-//! the consumer's run `time` minus the producer's, which is the transport wake plus the decode.
-//! End to end: the last `time` minus the first. The producer's cap is `signal.default_ufreq`,
+//! node, output, index, `procstart` and `procend`, so a probe on every hop joins the chain by
+//! index: per hop, the WAIT is the consumer's `procstart` minus the producer's `procend` (the
+//! transport wake plus the decode) and the RUN is the consumer's own `procend` minus `procstart`.
+//! End to end: the last `procend` minus the source's. The producer's cap is `signal.default_ufreq`,
 //! set through the op, which needs the evaluator the binary installs — a bare graph never paces
 //! a producer.
 //!   cargo run -p goofi-tests --example hop_latency --release
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, MetaValue};
 use goofi_graph::Uid;
 use goofi_tests::{j, Goofi, OutputProbe};
 
-/// The input frame a frame was made from, on its one input: the producer's index and tick time.
+/// The input frame a frame was made from, on its one input: the producer's index and the
+/// instant the frame left it.
 fn made_from(d: &Data) -> Option<(u64, f64)> {
     let source = d.meta().source()?;
     let MetaValue::List(held) = source.values().next()? else { return None };
@@ -23,13 +25,13 @@ fn made_from(d: &Data) -> Option<(u64, f64)> {
         MetaValue::Int(i) if *i >= 0 => *i as u64,
         _ => return None,
     };
-    let MetaValue::Float(time) = from.get("time")? else { return None };
-    Some((index, *time))
+    let MetaValue::Float(procend) = from.get("procend")? else { return None };
+    Some((index, *procend))
 }
 
 /// The newest frames one hop emitted, by index, as many as a chain may run behind.
 #[derive(Default)]
-struct Recent(VecDeque<(u64, Data)>, BTreeMap<u64, f64>);
+struct Recent(VecDeque<(u64, Data)>);
 
 impl Recent {
     fn note(&mut self, d: Data) {
@@ -37,13 +39,9 @@ impl Recent {
         if self.0.back().is_some_and(|(i, _)| *i == index) {
             return;
         }
-        if let Some(time) = d.meta().time() {
-            self.1.insert(index, time);
-        }
         self.0.push_back((index, d));
         while self.0.len() > 256 {
-            let (gone, _) = self.0.pop_front().expect("not empty");
-            self.1.remove(&gone);
+            self.0.pop_front();
         }
     }
 
@@ -91,7 +89,8 @@ fn measure(label: &str, len: i64, hops: usize, cap: f64, window: Duration) {
     let first = index(last);
     let t = Instant::now();
     let mut recent: Vec<Recent> = (0..hops).map(|_| Recent::default()).collect();
-    let mut hop_lat: Vec<Vec<f64>> = vec![Vec::new(); hops];
+    let mut hop_wait: Vec<Vec<f64>> = vec![Vec::new(); hops];
+    let mut hop_run: Vec<Vec<f64>> = vec![Vec::new(); hops];
     let mut e2e: Vec<f64> = Vec::new();
     let mut last_seen = None;
     while t.elapsed() < window {
@@ -107,20 +106,21 @@ fn measure(label: &str, len: i64, hops: usize, cap: f64, window: Duration) {
                 // Walk back from the last hop: each frame names the index of the one it was made
                 // from, which the hop before it holds among its recent frames.
                 let mut at = Some(frame);
-                let mut times: Vec<f64> = Vec::new();
+                let mut ends: Vec<f64> = Vec::new();
                 for h in (0..hops).rev() {
                     let Some(d) = at else { break };
-                    let Some(now) = d.meta().time() else { break };
-                    let Some((from_index, from_time)) = made_from(&d) else { break };
-                    times.push(now);
-                    hop_lat[h].push((now - from_time) * 1e6);
+                    let (Some(began), Some(left)) = (d.meta().procstart(), d.meta().procend()) else { break };
+                    let Some((from_index, from_left)) = made_from(&d) else { break };
+                    ends.push(left);
+                    hop_wait[h].push((began - from_left) * 1e6);
+                    hop_run[h].push((left - began) * 1e6);
                     at = if h > 0 { recent[h - 1].frame(from_index).cloned() } else { Some(d) };
                     if h == 0 {
-                        times.push(from_time);
+                        ends.push(from_left);
                     }
                 }
-                if times.len() == hops + 1 {
-                    e2e.push((times[0] - times[hops]) * 1e6);
+                if ends.len() == hops + 1 {
+                    e2e.push((ends[0] - ends[hops]) * 1e6);
                 }
             }
         }
@@ -129,21 +129,19 @@ fn measure(label: &str, len: i64, hops: usize, cap: f64, window: Duration) {
     let emitted = index(last).saturating_sub(first);
     let rate = emitted as f64 / t.elapsed().as_secs_f64();
     e2e.sort_by(f64::total_cmp);
-    let per_hop: Vec<f64> = hop_lat
-        .iter()
-        .map(|v| {
-            let mut v = v.clone();
-            v.sort_by(f64::total_cmp);
-            percentile(&v, 0.5)
-        })
-        .collect();
+    let p50 = |v: &Vec<f64>| {
+        let mut v = v.clone();
+        v.sort_by(f64::total_cmp);
+        percentile(&v, 0.5)
+    };
+    let per_hop: Vec<String> = hop_wait.iter().zip(&hop_run).map(|(w, r)| format!("{:.0}+{:.0}", p50(w), p50(r))).collect();
     println!(
-        "{label:<36} {rate:>8.0} frames/s   e2e p50 {:>7.0} µs  p90 {:>7.0} µs  p99 {:>7.0} µs  (n={})  hop p50: {}",
+        "{label:<36} {rate:>8.0} frames/s   e2e p50 {:>7.0} µs  p90 {:>7.0} µs  p99 {:>7.0} µs  (n={})  hop p50 wait+run: {}",
         percentile(&e2e, 0.5),
         percentile(&e2e, 0.9),
         percentile(&e2e, 0.99),
         e2e.len(),
-        per_hop.iter().map(|us| format!("{us:.0}")).collect::<Vec<_>>().join(" "),
+        per_hop.join(" "),
     );
 }
 

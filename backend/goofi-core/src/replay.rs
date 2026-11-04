@@ -6,9 +6,6 @@ use indexmap::IndexMap;
 use serde_json::Value as Json;
 use std::path::Path;
 
-/// Meta keys the engine stamps on every frame it emits: a replay never carries them over.
-const STAMPS: [&str; 6] = ["time", "index", "emit", "source", "ufreq", "drift"];
-
 /// Which playback node a file belongs to, by the extension the recorder gave it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -186,10 +183,10 @@ fn shape_of(v: &Json) -> Option<Vec<usize>> {
     v.as_array()?.iter().map(|d| d.as_u64().map(|d| d as usize)).collect()
 }
 
-/// The meta a frame carried, without the stamps the engine sets afresh.
+/// The meta a frame carried, stamps and all: the engine sets its own afresh as the frame leaves.
 fn meta_of(said: &IndexMap<String, Json>) -> Meta {
     let mut meta = Meta::new();
-    for (key, v) in said.iter().filter(|(k, _)| !STAMPS.contains(&k.as_str())) {
+    for (key, v) in said.iter() {
         match key.as_str() {
             META_SFREQ => meta.set_sfreq(v.as_f64()),
             META_CHANNELS => meta.set_channels(axes_of(v)),

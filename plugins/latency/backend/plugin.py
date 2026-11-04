@@ -1,12 +1,15 @@
 """The latency from one node to another, summed hop by hop along the wires between them, one
 line per tick of the target.
 
-Every frame carries its `source`: per input slot, the frame it was made from, named by its node,
-output, index and tick time — the immediate inputs, nothing behind them. So a hop's latency is read
-off the hop's own frame, and a path is followed by index from one hop's recording into the one
+Every frame carries `procstart` and `procend`, when the run that made it began and when it left,
+and its `source`: per input slot, the frame it was made from, named by its node, output, index,
+`procstart` and `procend` — the immediate inputs, nothing behind them. So a hop's WAIT (its
+`procstart` minus the instant its input left) and its RUN (its own `procend` minus `procstart`) are
+read off the hop's own frame, and a path is followed by index from one hop's recording into the one
 before it. The recorder is the one path that keeps every frame, so a run arms the output of every
 node after the source on the path, records them under the plugin's data folder, and tails each
-sidecar as it is written. A tick whose chain does not reach the source is unpaired.
+sidecar as it is written: a line's `t` is its frame's `procstart`. A tick whose chain does not
+reach the source is unpaired.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from pathlib import Path
 from goofi_plugin import plugin
 
 TAIL_EVERY = 0.1
-FIXED = ["target_time", "target_index", "source_time", "source_index", "latency_ms"]
+FIXED = ["target_procend", "target_index", "source_procend", "source_index", "latency_ms"]
 
 
 @dataclass
@@ -44,7 +47,8 @@ class Hop:
     name: str
     slot_in: str
     slot_out: str
-    total_ms: float = 0.0
+    wait_ms: float = 0.0
+    run_ms: float = 0.0
     count: int = 0
     armed: bool = False
     path: Path | None = None
@@ -86,7 +90,12 @@ class Run:
             "target": {"uid": self.target, "name": self.target_name, "slot": self.target_slot, "frames": self.hops[-1].frames},
             "path": [self.source_name] + [h.name for h in self.hops],
             "hops": [
-                {"node": h.name, "slot": h.slot_in, "mean_ms": h.total_ms / h.count if h.count else None}
+                {
+                    "node": h.name,
+                    "slot": h.slot_in,
+                    "mean_wait_ms": h.wait_ms / h.count if h.count else None,
+                    "mean_run_ms": h.run_ms / h.count if h.count else None,
+                }
                 for h in self.hops
             ],
             "folder": str(self.folder),
@@ -211,19 +220,18 @@ def entry_from(line: dict, slot_in: str, upstream: str) -> dict | None:
     return next((e for e in held.get(slot_in, []) if isinstance(e, dict) and e.get("node") == upstream), None)
 
 
-def trace(r: Run, line: dict) -> tuple[list[float], dict] | None | bool:
-    """The hop latencies of a target frame, source to target, and the source frame's entry. None
-    where its chain does not reach the source node along the path; False while a hop's recording
-    has not yet reached the frame the chain names."""
-    hops: list[float] = []
+def trace(r: Run, line: dict) -> tuple[list[tuple[float, float]], dict] | None | bool:
+    """Each hop's wait and run, in ms, source to target, and the source frame's entry. None where
+    the chain does not reach the source node along the path or a frame lacks its stamps; False
+    while a hop's recording has not yet reached the frame the chain names."""
+    hops: list[tuple[float, float]] = []
     upstream = [r.source] + [h.uid for h in r.hops[:-1]]
     for k in range(len(r.hops) - 1, -1, -1):
         hop = r.hops[k]
         entry = entry_from(line, hop.slot_in, upstream[k])
-        if entry is None:
+        if entry is None or not stamped(entry, "procstart"):
             return None
-        # A line's own `t` is its frame's tick time; the sidecar carries the stamp nowhere else.
-        hops.append((line["t"] - entry["time"]) * 1000.0)
+        hops.append(((line["t"] - entry["procend"]) * 1000.0, (line["procend"] - line["t"]) * 1000.0))
         if k == 0:
             hops.reverse()
             return hops, entry
@@ -235,6 +243,10 @@ def trace(r: Run, line: dict) -> tuple[list[float], dict] | None | bool:
         line = nxt
 
 
+def stamped(frame: dict, start: str) -> bool:
+    return all(isinstance(frame.get(k), (int, float)) for k in (start, "procend"))
+
+
 def settle(r: Run, out) -> None:
     for h in r.hops:
         read_lines(h)
@@ -244,7 +256,7 @@ def settle(r: Run, out) -> None:
     held = deque()
     while r.pending:
         line = r.pending.popleft()
-        if "index" not in line or "t" not in line:
+        if "index" not in line or not stamped(line, "t"):
             r.unpaired += 1
             continue
         traced = trace(r, line)
@@ -255,12 +267,14 @@ def settle(r: Run, out) -> None:
             r.unpaired += 1
             continue
         hops, origin = traced
-        total = sum(hops)
-        cells = [repr(line["t"]), str(line["index"]), repr(origin["time"]), str(origin["index"]), f"{total:.6f}"]
-        cells += [f"{ms:.6f}" for ms in hops]
+        # Source to target: from the instant the source's frame left to the instant the target's did.
+        total = (line["procend"] - origin["procend"]) * 1000.0
+        cells = [repr(line["procend"]), str(line["index"]), repr(origin["procend"]), str(origin["index"]), f"{total:.6f}"]
+        cells += [f"{ms:.6f}" for wait, run in hops for ms in (wait, run)]
         out.write(",".join(cells) + "\n")
-        for hop, ms in zip(r.hops, hops):
-            hop.total_ms += ms
+        for hop, (wait, run) in zip(r.hops, hops):
+            hop.wait_ms += wait
+            hop.run_ms += run
             hop.count += 1
         r.paired += 1
         r.last_ms = total
@@ -292,7 +306,7 @@ async def locate(ctx, r: Run) -> None:
 async def tail(ctx, r: Run) -> None:
     try:
         with r.csv.open("w") as out:
-            out.write(",".join(FIXED + [f"{h.name}_ms" for h in r.hops]) + "\n")
+            out.write(",".join(FIXED + [f"{h.name}_{part}_ms" for h in r.hops for part in ("wait", "run")]) + "\n")
             out.flush()
             while not r.stopping:
                 await asyncio.sleep(TAIL_EVERY)

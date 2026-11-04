@@ -194,8 +194,8 @@ impl HostExecutor {
     }
 
     /// The frames this run was made from, as [`goofi_core::META_SOURCE`] says them: per input
-    /// slot, each frame held there, named by its node, output, index and tick time. `Null` for a
-    /// run that held none.
+    /// slot, each frame held there, named by its node, output, index and the run that made it.
+    /// `Null` for a run that held none.
     fn source(&self) -> MetaValue {
         let singles = self.inputs.iter().map(|(slot, cell)| (*slot, cell.iter().collect::<Vec<_>>()));
         let multis = self.multi_wires.iter().map(|(slot, cells)| (*slot, cells.iter().filter_map(|(_, _, f)| f.as_ref()).collect()));
@@ -254,9 +254,10 @@ impl HostExecutor {
         match result {
             Ok(()) => {
                 // The engine's own meta goes on before anything leaves the node — there is no
-                // second stamping site.
+                // second stamping site. The clock is read once the run is over: its `procend`.
+                let procend = cx.time.now();
                 let source = self.source();
-                let ufreq = stamp_meta(&mut outputs, cx.now, &cx.uid.to_hex(), source, &mut self.emits, &mut self.meter);
+                let ufreq = stamp_meta(&mut outputs, cx.now, procend, &cx.uid.to_hex(), source, &mut self.emits, &mut self.meter);
                 for (i, (_, frame)) in outputs.iter().enumerate() {
                     if let Some(frame) = frame {
                         publish(i, Out::Frame(frame));
@@ -409,11 +410,13 @@ impl Executor for HostExecutor {
 }
 
 /// Stamp the engine-owned meta on every frame just emitted, and answer the node's measured rate.
-/// `time` and `index` are this run's — patch seconds, and the node's count of emits, so a gap in
-/// the index means a frame was LOST. `ufreq` is the node's own EMA, never inherited.
+/// `procstart`, `procend` and `index` are this run's: the patch seconds it began and ended at, and
+/// the node's count of emits, so a gap in the index means a frame was LOST. `ufreq` is the node's
+/// own EMA, never inherited.
 fn stamp_meta(
     outputs: &mut IndexMap<&'static str, Option<Data>>,
-    now: f64,
+    procstart: f64,
+    procend: f64,
     node: &str,
     source: MetaValue,
     emits: &mut u64,
@@ -424,26 +427,26 @@ fn stamp_meta(
         return None;
     }
     // The smoothed inter-emit interval, inverted: `None` until the second emit.
-    let node_ufreq = meter.note(now, UFREQ_EMA_ALPHA);
-    let index = *emits;
+    let run = goofi_core::Run { procstart, procend, index: *emits, ufreq: meter.note(procstart, UFREQ_EMA_ALPHA) };
     *emits += 1;
     for (slot, d) in outputs.iter_mut() {
         if let Some(d) = d {
-            *d = d.with_stamps(now, index, node_ufreq, node, slot, source.clone());
+            *d = d.with_stamps(&run, node, slot, source.clone());
         }
     }
-    node_ufreq
+    run.ufreq
 }
 
 /// An input frame as a `source` entry names it, off its own stamps: the node and output it came
-/// from, its index and its tick time; nothing for a frame no engine stamped.
+/// from, its index, and when its run began and it left; nothing for a frame no engine stamped.
 fn origin(meta: &goofi_core::Meta) -> Option<MetaValue> {
-    let (index, time) = (meta.index()?, meta.time()?);
+    let (index, procstart, procend) = (meta.index()?, meta.procstart()?, meta.procend()?);
     let (node, slot) = meta.origin()?;
     Some(MetaValue::Map(BTreeMap::from([
         ("node".to_string(), MetaValue::Str(node.to_string())),
         ("slot".to_string(), MetaValue::Str(slot.to_string())),
         ("index".to_string(), MetaValue::Uint(index)),
-        ("time".to_string(), MetaValue::Float(time)),
+        ("procstart".to_string(), MetaValue::Float(procstart)),
+        ("procend".to_string(), MetaValue::Float(procend)),
     ])))
 }

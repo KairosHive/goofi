@@ -128,7 +128,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     // The first four frames come from a labelled 256 Hz source; the rest from one that says neither.
     let array = |shape: Vec<usize>, fill: f32, i: u64| {
         let mut meta = goofi_core::Meta::empty();
-        meta.set_time(Some(t0 + i as f64 / 256.0));
+        meta.set_procstart(Some(t0 + i as f64 / 256.0));
         meta.set_index(Some(i));
         if i < 4 {
             meta.set_sfreq(Some(256.0));
@@ -248,7 +248,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     rec.start(dir.path(), "table-fields", None, None).expect("table recording started");
     let at = time.now();
     let mut meta = goofi_core::Meta::empty();
-    meta.set_time(Some(at));
+    meta.set_procstart(Some(at));
     let table = goofi_core::Data::table([
         ("left,right".into(), goofi_core::Data::string("a,b", goofi_core::Meta::empty())),
         ("value \"quoted\"\nline".into(), goofi_core::Data::string("say \"yes\"", goofi_core::Meta::empty())),
@@ -274,7 +274,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let mut meta = goofi_core::Meta::empty();
         meta.set_sfreq(Some(rate));
         meta.set_index(Some(i as u64));
-        meta.set_time(Some(i as f64));
+        meta.set_procstart(Some(i as f64));
         meta.set_channels(goofi_core::Axes::new().with(
             0,
             goofi_core::Axis::coords(
@@ -327,7 +327,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
         let video = hub.sender(&queue, 4);
         let old = rec.start(dir.path(), &format!("slow-{restart}"), None, None).expect("started");
         let mut meta = goofi_core::Meta::new().with_sfreq(Some(60.0)).with_index(Some(1));
-        meta.set_time(Some(time.now()));
+        meta.set_procstart(Some(time.now()));
         assert!(video.send(Frame::Texels(std::sync::Arc::new(goofi_core::record::Texels { width: 1, height: 1, rgba: vec![0; 4], meta }))));
         until("the video to open", || (written(&rec) == 1).then_some(()));
         rec.arm(Vec::new());
@@ -1268,7 +1268,7 @@ fn taken(file: &std::path::Path) -> (Vec<String>, Vec<String>) {
                     v => meta.insert(k.clone(), v.clone()),
                 };
             }
-            meta.retain(|k, _| !["index", "node", "slot", "source", "ufreq", "drift"].contains(&k.as_str()));
+            meta.retain(|k, _| !["index", "procend", "node", "slot", "source", "ufreq", "drift"].contains(&k.as_str()));
             format!("{shape} {} {}", line["n"], serde_json::Value::Object(meta.clone()))
         })
         .collect();

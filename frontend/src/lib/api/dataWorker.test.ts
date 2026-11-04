@@ -66,13 +66,13 @@ describe('the data worker', () => {
 		const frame = bytes(golden.entries.find((e) => e.name === 'f32_1d')!.hex);
 		ws.fire('message', { data: frame });
 		// Stamps that land before the flush ride the pending frame; nothing goes out until it.
-		ws.fire('message', { data: stampsFrame({ time: 2 }) });
+		ws.fire('message', { data: stampsFrame({ procstart: 2 }) });
 		expect(posted.length, 'nothing crosses before the flush').toBe(0);
 		vi.advanceTimersByTime(20);
-		expect(posted.at(-1)).toMatchObject({ batch: [{ node: 'n', slot: 'out', frame: { dtype: 'ARRAY', meta: { time: 2 } } }] });
-		ws.fire('message', { data: stampsFrame({ time: 3 }) });
+		expect(posted.at(-1)).toMatchObject({ batch: [{ node: 'n', slot: 'out', frame: { dtype: 'ARRAY', meta: { procstart: 2 } } }] });
+		ws.fire('message', { data: stampsFrame({ procstart: 3 }) });
 		vi.advanceTimersByTime(20);
-		expect(posted.at(-1)).toEqual({ batch: [{ node: 'n', slot: 'out', stamps: { time: 3 } }] });
+		expect(posted.at(-1)).toEqual({ batch: [{ node: 'n', slot: 'out', stamps: { procstart: 3 } }] });
 		const count = posted.length;
 		ws.fire('message', { data: new Uint8Array([1, 2, 3]).buffer });
 		vi.advanceTimersByTime(20);

@@ -15,7 +15,7 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::sync::Arc;
 
-use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_INDEX, META_SOURCE, META_TIME, META_UFREQ};
+use goofi_core::{Coord, Data, MetaValue, Value, META_CHANNELS, META_INDEX, META_PROCEND, META_PROCSTART, META_SOURCE, META_UFREQ};
 use rmpv::Value as Mp;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -302,7 +302,7 @@ pub fn encode_f16(d: &Data) -> Result<Option<Vec<u8>>, EncodeError> {
 /// the frame they belong to already reached the viewers, and merged into it there.
 pub const STAMPS_TAG: u8 = 0xff;
 /// What the engine writes afresh on every emit, and what [`content_hash`] leaves out.
-const STAMP_KEYS: [&str; 4] = [META_TIME, META_INDEX, META_UFREQ, META_SOURCE];
+const STAMP_KEYS: [&str; 5] = [META_PROCSTART, META_PROCEND, META_INDEX, META_UFREQ, META_SOURCE];
 
 /// A 64-bit hash of what a frame SAYS: its kind, its body, and its meta without the engine's
 /// per-emit stamps. A table's child stamps are part of its body and stay in the hash. xxh3: a

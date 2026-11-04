@@ -136,14 +136,14 @@ describe('a held frame’s stamps', () => {
 		const off = bind('osc', 'out', (f) => got.push(f));
 		await settle();
 		const w = MockWorker.instances[0];
-		const frame = { dtype: 'ARRAY', data: { dtype: '<f4', shape: [1], values: [3] }, meta: { time: 1, index: 1 } };
+		const frame = { dtype: 'ARRAY', data: { dtype: '<f4', shape: [1], values: [3] }, meta: { procstart: 1, index: 1 } };
 		w.emit({ batch: [{ node: 'osc', slot: 'out', frame }] });
 		expect(got.length).toBe(1);
 		const before = latestFrame('osc', 'out');
-		w.emit({ batch: [{ node: 'osc', slot: 'out', stamps: { time: 2, index: 2 } }] });
+		w.emit({ batch: [{ node: 'osc', slot: 'out', stamps: { procstart: 2, index: 2 } }] });
 		const after = latestFrame('osc', 'out');
 		expect(after).not.toBe(before);
-		expect(after?.meta).toEqual({ time: 2, index: 2 });
+		expect(after?.meta).toEqual({ procstart: 2, index: 2 });
 		expect(after?.data, 'the body is the held one').toBe(frame.data);
 		expect(got.length, 'stamps alone deliver nothing').toBe(1);
 		off();

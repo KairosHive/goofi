@@ -83,25 +83,25 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let vals = npy_f32s(&bytes);
     assert!(vals.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "the unit sine, raw: {vals:?}");
     assert_eq!(snap["meta"]["sfreq"], 64.0, "meta rides the snapshot: {snap}");
-    assert!(snap["meta"]["time"].as_f64().is_some(), "…and so does the frame's time: {snap}");
+    assert!(snap["meta"]["procstart"].as_f64().is_some(), "…and so does the frame's run: {snap}");
 
-    // One patch time, and every node reads it. A frame's value is the wave at the second the frame
-    // is STAMPED with, so an oscillator made now is already in phase with one made at boot.
+    // One patch time, and every node reads it. A frame's value is the wave at the second its run
+    // BEGAN, its `procstart`, so an oscillator made now is already in phase with one made at boot.
     let late = g.add("LFO");
     g.set_param(late, "lfo", "frequency", 2.0);
     let lp = g.probe(late, "out");
     g.ready(late);
     let (v, t) = g.until("the late oscillator's first frame", |_| {
         let d = lp.latest()?;
-        Some((f32s(&d).first().copied()? as f64, d.meta().time()?))
+        Some((f32s(&d).first().copied()? as f64, d.meta().procstart()?))
     });
     assert!(t > 0.0 && t < 3600.0, "patch seconds, never an epoch: {t}");
     let want = (std::f64::consts::TAU * 2.0 * t).sin();
     assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
 
     // A frame also says where it left from and which input frames it was made from — the
-    // immediate ones, each by node, output, index and tick time — so a latency is read hop by hop
-    // from the frames themselves, and nothing behind an input rides along.
+    // immediate ones, each by node, output, index and the run that made it — so a latency is read
+    // hop by hop from the frames themselves, and nothing behind an input rides along.
     let smooth = g.add("Smoothing");
     g.link(late, "out", smooth, "input");
     let sp = g.probe(smooth, "out");
@@ -127,13 +127,19 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     assert_eq!(field(from, "slot"), Some(Str("out".into())));
     let upstream = up.meta().index().unwrap();
     assert!(count(field(from, "index")).is_some_and(|i| i <= upstream), "{from:?} against {upstream}");
-    let Some(Float(made)) = field(from, "time") else { panic!("the input's tick time: {from:?}") };
-    assert!(made <= m.time().unwrap(), "the oscillator's frame was made before the smoothed one: {made} <= {:?}", m.time());
+    let (Some(Float(began)), Some(Float(left))) = (field(from, "procstart"), field(from, "procend")) else { panic!("the input's run: {from:?}") };
+    assert!(began <= left, "the oscillator's run ended after it began: {began} <= {left}");
+    assert!(left < m.procstart().unwrap(), "the oscillator's frame left before the smoothed run began: {left} < {:?}", m.procstart());
+    assert!(m.procstart().unwrap() <= m.procend().unwrap(), "the smoothed run ended after it began: {m:?}");
     assert!(field(from, "source").is_none(), "an input is named, not its history: {from:?}");
     assert!(up.meta().source().is_none(), "a frame made from no input has no source: {:?}", up.meta());
 
+    // A beat broadcasts a rate the moment it moves, and a node's first measured rate is a move:
+    // a node born after the subscription is what a listener is sure to hear of.
     let mut ev = g.events();
-    let stats = g.until("a node_stats broadcast", |_| ev.next("node_stats")["stats"].get(hex(osc)).cloned());
+    let born = g.add("LFO");
+    g.ready(born);
+    let stats = g.until("a node_stats broadcast for the new node", |_| ev.next("node_stats")["stats"].get(hex(born)).cloned());
     assert!(stats["updates_per_second"].as_f64().is_some_and(|r| r > 0.0), "{stats}");
 }
 
@@ -148,10 +154,10 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
 
     // Frames counted against the producer's own stamps: a slow runner stretches both alike.
     let at_most = |cap: f64, frames: u64| {
-        let first = g.until("a first stamped frame", |_| probe.latest().and_then(|d| Some((d.meta().index()?, d.meta().time()?))));
+        let first = g.until("a first stamped frame", |_| probe.latest().and_then(|d| Some((d.meta().index()?, d.meta().procstart()?))));
         let last = g.until("frames to count", |_| {
             let d = probe.latest()?;
-            let (i, t) = (d.meta().index()?, d.meta().time()?);
+            let (i, t) = (d.meta().index()?, d.meta().procstart()?);
             (i >= first.0 + frames).then_some((i, t))
         });
         let (n, span) = (last.0 - first.0, last.1 - first.1);

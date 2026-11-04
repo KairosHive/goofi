@@ -90,7 +90,7 @@ impl GraphicsHalf {
             }
             let (width, height) = readback.size();
             let mut meta = Meta::new().with_sfreq(Some(readback.sfreq)).with_index(Some(readback.index));
-            meta.set_time(Some(readback.at));
+            meta.set_procstart(Some(readback.at));
             let texels = Arc::new(goofi_core::record::Texels { width, height, rgba, meta });
             publish(0, Out::Record(goofi_core::record::Frame::Texels(texels)));
         }

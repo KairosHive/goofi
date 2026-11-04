@@ -727,7 +727,7 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         }
         let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
-        meta.set_time(Some(anchor.seconds(n, epoch)));
+        meta.set_procstart(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
         if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
             publish(out, Out::Record(goofi_core::record::Frame::Data(frame)));

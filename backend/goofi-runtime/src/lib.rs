@@ -272,7 +272,7 @@ pub struct Cx<'a> {
     pub recorded: &'a [bool],
     /// The patch's time at this run.
     pub now: f64,
-    /// The patch's clock, read again as a frame leaves, for its `emit` stamp.
+    /// The patch's clock, read again as a frame leaves, for its `procend` stamp.
     pub time: &'a goofi_supervisor::timing::Time,
     /// The node this run is, as its frames' `source` names it.
     pub uid: Uid,

@@ -135,7 +135,7 @@ fn handle(rec: &Recorder, armed: &Mutex<Armed>, shared: &Shared, open: &mut Opti
         close(rec, shared, &a.id, open.take().expect("read above"), "stopped");
     }
     let meta = frame.meta();
-    let at = meta.time().unwrap_or_else(|| rec.time().now());
+    let at = meta.procstart().unwrap_or_else(|| rec.time().now());
     if !take.holds(a.timeline, at, meta.index()) || *dead == Some(take.id) {
         return;
     }
