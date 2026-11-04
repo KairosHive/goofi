@@ -20,12 +20,17 @@ fn number(g: &Goofi, name: &str) -> f64 {
     g.variable(name).as_f64().unwrap_or(f64::NAN)
 }
 
-/// Poll until the playhead is at rest in `state`: `progress` is the plain 1 only once the machine
-/// has landed it; in flight it is a functional, which reads as no number.
+/// Whether the playhead rests in `state`, off the KIND of its `progress` frame: a functional
+/// while it flies, the plain 1 once the machine has landed it. The number alone cannot say: a
+/// flight's progress rounds to 1 just before it lands.
+fn resting_in(g: &Goofi, playhead: &str, state: &str) -> bool {
+    let snapshot = |name: &str| g.call("node snapshot", j!({ "output": format!("variables/{playhead}.{name}") }));
+    snapshot("state")["value"] == j!(state) && snapshot("progress")["shape"].is_array()
+}
+
+/// Poll until the playhead is at rest in `state`.
 fn at_rest_in(g: &Goofi, playhead: &str, state: &str) {
-    g.until(&format!("{playhead} to rest in {state}"), |g| {
-        (text(g, &format!("{playhead}.state")) == state && number(g, &format!("{playhead}.progress")) == 1.0).then_some(())
-    });
+    g.until(&format!("{playhead} to rest in {state}"), |g| resting_in(g, playhead, state).then_some(()));
 }
 
 /// The state a frame's flight left, off its metadata: empty at rest.
@@ -179,7 +184,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
             samples.push((progress, number(g, "head.gain")));
             heard.extend(probe.latest().map(|d| f32s(&d)[0]));
         }
-        (state == "C" && number(g, "head.progress") == 1.0).then_some(())
+        resting_in(g, "head", "C").then_some(())
     });
     assert!(samples.windows(2).all(|w| w[0].0 <= w[1].0 && w[0].1 >= w[1].1), "progress rises and gain falls: {samples:?}");
     assert!(samples.iter().any(|(p, _)| *p > 0.0 && *p < 1.0), "the move was seen in flight: {samples:?}");

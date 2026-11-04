@@ -624,11 +624,13 @@ fn shaders_render_on_the_gpu() {
     }
     drawn(&g, inked, "an escaped quote and comma in one list element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("[{dial_name}.out, 0.25, (1, 2)[0], 'a,b']") }));
-    let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
-    for line in ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'"] {
-        assert!(text.contains(line), "{line} in {text}");
-    }
-    assert!(text.contains("look.ink = [0.5, 0.25, 1, 1]"), "the whole param is back on its literal: {text}");
+    // The engine's worker evaluates the list on its own clock: the state is polled, not read once.
+    let text = g.until("every element on its own source and the whole param back on its literal", |g| {
+        let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+        ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'", "look.ink = [0.5, 0.25, 1, 1]"]
+            .iter().all(|line| text.contains(line)).then_some(text)
+    });
+    assert!(text.contains("look.ink = [0.5, 0.25, 1, 1]"), "{text}");
     for node in [dial, full] {
         g.call("node remove", j!({ "node": hex(node) }));
     }
