@@ -25,12 +25,12 @@ export const WINDOW_STYLE = `
 	border-radius: 0 0 var(--radius-sm) var(--radius-sm); box-shadow: var(--shadow-1); color: var(--text);
 	font-family: var(--font-sans); font-size: var(--fs-small); line-height: var(--lh-text); z-index: var(--z-menu); }
 .gx-win[hidden] { display: none; }
-/* The doc shows five lines, then scrolls; the list takes what is left. */
-.gx-win-doc { flex: 0 0 auto; max-height: calc(5 * var(--lh-text) * 1em + 2 * var(--space-2)); overflow-y: auto;
-	background: var(--surface-2); border-bottom: 1px solid var(--border); }
+/* The doc shows whole, as far as the window goes, and scrolls only once it does not fit; the list
+   under it keeps three rows at the least and takes the rest. */
+.gx-win-doc { flex: 0 1 auto; min-height: 0; overflow-y: auto; background: var(--surface-2); border-bottom: 1px solid var(--border); }
 /* The list is a table: a name column, a line column that gives way, a kind column; the rows subgrid
    onto it, so every column lines up down the list and a row still paints its selection. */
-.gx-win-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0; padding: 0; list-style: none;
+.gx-win-list { flex: 1 1 auto; min-height: calc(3 * (var(--lh-text) * 1em + 2 * var(--space-1))); overflow-y: auto; margin: 0; padding: 0; list-style: none;
 	display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-content: start; }
 .gx-win-stale { opacity: 0.6; }
 .gx-win-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline;
