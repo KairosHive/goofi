@@ -650,7 +650,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     // say it moved — and then the graph, both kept with the patch's home.
     std::fs::write(g.state.mount().join("notes.md"), b"kept").unwrap();
     g.until("a workspace edit to be autosaved", |g| manifest(g).exists().then_some(()));
-    g.set_param(osc, "output", "sfreq", 3.0);
+    g.set_param(osc, "lfo", "sfreq", 3.0);
     g.until("the latest edit to be autosaved", |g| {
         std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq:\n            value: 3\n")).map(|_| ())
     });
@@ -694,7 +694,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     opened.call("session recover", j!({ "workspace": &recover }));
     let uid = opened.nodes()[0].clone();
     assert_eq!(opened.doc()["nodes"][&uid]["name"], "carrier");
-    assert_eq!(opened.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 3.0);
+    assert_eq!(opened.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 3.0);
     assert_eq!(std::fs::read(opened.state.mount().join("notes.md")).unwrap(), b"kept");
     assert_eq!(save_path(&opened), Some(spelled(&home)));
     assert!(dirty(&opened), "a recovery is unsaved work");

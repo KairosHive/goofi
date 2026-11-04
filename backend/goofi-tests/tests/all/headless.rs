@@ -49,6 +49,6 @@ fn a_headless_server_serves_no_layout_op_and_carries_an_arrangement_through() {
 
     // Everything OUTSIDE the group still runs: the mode is one group absent, not a second track.
     let osc = g.add("LFO");
-    g.set_param(osc, "output", "sfreq", 32.0);
+    g.set_param(osc, "lfo", "sfreq", 32.0);
     assert_eq!(g.call("undo", j!({}))["changed"], true);
 }

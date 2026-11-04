@@ -54,8 +54,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		await waitForNode(page, osc);
 		await page.evaluate((u) => {
 			const g = (window as any).goofi;
-			g.commands.updateParam(u, 'output', 'mode', 'block');
-			g.commands.updateParam(u, 'output', 'sfreq', 64);
+			g.commands.updateParam(u, 'lfo', 'mode', 'block');
+			g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		const body = card.locator('.slot-viewer .body');
@@ -185,8 +185,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await page.evaluate((u) => {
 				const g = (window as any).goofi;
 				g.commands.updateParam(u, 'lfo', 'amplitude', 0);
-				g.commands.updateParam(u, 'output', 'mode', 'block');
-				g.commands.updateParam(u, 'output', 'sfreq', 64);
+				g.commands.updateParam(u, 'lfo', 'mode', 'block');
+				g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 			}, flat);
 			const top = page.locator(`.svelte-flow__node[data-id="${flat}"]`);
 			const topBody = top.locator('.slot-viewer .body');

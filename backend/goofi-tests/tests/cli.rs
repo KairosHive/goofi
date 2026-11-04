@@ -144,9 +144,9 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let born: serde_json::Value =
         serde_json::from_str(&ok(&url, "shell_a", "node add --type LFO --name osc")).unwrap();
     let uid = born["uid"].as_str().unwrap().to_string();
-    ok(&url, "shell_a", &format!("node param edit {uid} output/sfreq --value 99"));
+    ok(&url, "shell_a", &format!("node param edit {uid} lfo/sfreq --value 99"));
     assert_eq!(
-        g.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 99.0,
+        g.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 99.0,
         "the edit reached the graph"
     );
     // …and completion turns LIVE: a `uid` position offers the patch's own nodes, by the NAME a
@@ -156,9 +156,9 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
             "a uid position completes from the graph");
     // A node reference is the uid OR the unique name — resolved server-side, in the one
     // namespace nd() reads, so every transport takes both and the endpoint's node half follows.
-    ok(&url, "names", "node param edit osc output/sfreq --value 55");
+    ok(&url, "names", "node param edit osc lfo/sfreq --value 55");
     assert_eq!(
-        g.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 55.0,
+        g.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 55.0,
         "the name reached the same node"
     );
     let why = client::exec(&url, &lines(&["node state nosuch"]), None).unwrap_err();

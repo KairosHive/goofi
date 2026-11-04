@@ -32,8 +32,8 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let buf = g.add("Buffer");
     g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 64);
-    g.set_param(osc, "output", "sfreq", 64.0);
-    g.set_param(osc, "output", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 64.0);
+    g.set_param(osc, "lfo", "mode", "block");
     // Nothing has flowed yet, so the raw read answers null WITH the reason — and the ask itself
     // is what opens the slot's feed.
     let idle = g.call("node snapshot", j!({ "output": ep(hex(buf), "out") }));
@@ -85,19 +85,33 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     assert_eq!(snap["meta"]["sfreq"], 64.0, "meta rides the snapshot: {snap}");
     assert!(snap["meta"]["procstart"].as_f64().is_some(), "…and so does the frame's run: {snap}");
 
-    // One patch time, and every node reads it. A frame's value is the wave at the second its run
-    // BEGAN, its `procstart`, so an oscillator made now is already in phase with one made at boot.
+    // One patch time, and every node reads it, and an oscillator's phase is a running sum on it:
+    // a run advances the phase by the time since the last run, at the frequency it reads, so a
+    // frequency edit bends the wave from where it sits. A sawtooth reads the phase back, value =
+    // 2·phase − 1, and triggered runs put the edit between two known runs.
     let late = g.add("LFO");
+    g.set_param(late, "lfo", "waveform", "sawtooth");
     g.set_param(late, "lfo", "frequency", 2.0);
+    g.set_param(late, "common", "autotrigger", false);
     let lp = g.probe(late, "out");
     g.ready(late);
-    let (v, t) = g.until("the late oscillator's first frame", |_| {
-        let d = lp.latest()?;
-        Some((f32s(&d).first().copied()? as f64, d.meta().procstart()?))
+    let runs = g.until("the late oscillator to settle", |g| {
+        let c = lp.count();
+        g.stays(|_| lp.count() == c).then_some(c)
     });
-    assert!(t > 0.0 && t < 3600.0, "patch seconds, never an epoch: {t}");
-    let want = (std::f64::consts::TAU * 2.0 * t).sin();
-    assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
+    let read = |d: goofi_core::Data| Some(((f32s(&d).first().copied()? as f64 + 1.0) / 2.0, d.meta().procstart()?));
+    let pulse = |g: &Goofi| g.call("node param request", j!({ "node": hex(late), "param": "common/trigger", "request": "pulse" }));
+    pulse(&g);
+    let (p1, t1) = g.until("one run on the pulse", |_| (lp.count() == runs + 1).then(|| read(lp.latest()?)).flatten());
+    assert!(t1 > 0.0 && t1 < 3600.0, "patch seconds, never an epoch: {t1}");
+    g.set_param(late, "lfo", "frequency", 5.0);
+    assert!(g.stays(|_| lp.count() == runs + 1), "a param edit ran the oscillator");
+    pulse(&g);
+    let (p2, t2) = g.until("the run after the edit", |_| (lp.count() == runs + 2).then(|| read(lp.latest()?)).flatten());
+    let want = (p1 + 5.0 * (t2 - t1)).rem_euclid(1.0);
+    assert!((p2 - want).abs() < 1e-4,
+            "the phase continues from where it sat, at the new rate: {p2} vs {p1} + 5\u{b7}({t2} \u{2212} {t1}) = {want}");
+    g.set_param(late, "common", "autotrigger", true);
 
     // A frame also says where it left from and which input frames it was made from — the
     // immediate ones, each by node, output, index and the run that made it — so a latency is read
@@ -172,8 +186,8 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     // The delivered rate never goes OVER the cap, and a low cap hides that, so the window that
     // judges it is a fast one. Edits land in order: a 1 kHz frame was made under the new cap.
     g.set_param(osc, "common", "max_frequency", 200.0);
-    g.set_param(osc, "output", "mode", "block");
-    g.set_param(osc, "output", "sfreq", 1000.0);
+    g.set_param(osc, "lfo", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 1000.0);
     g.until("the new cap to take hold", |_| probe.latest().filter(|d| d.meta().sfreq() == Some(1000.0)));
     at_most(200.0, 100);
 }
@@ -291,8 +305,8 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     let base = g.serve().await;
     let osc = g.add("LFO");
     // Far more samples per frame than any viewer asks for, so there is a reduction to fold at all.
-    g.set_param(osc, "output", "sfreq", 20000.0);
-    g.set_param(osc, "output", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 20000.0);
+    g.set_param(osc, "lfo", "mode", "block");
     // A block holds the samples the clock advanced by, so the rate cap is what makes it big.
     g.set_param(osc, "common", "max_frequency", 20.0);
     let key = (osc, "out".to_string());

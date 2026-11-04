@@ -348,8 +348,8 @@ async fn a_viewer_that_stops_reading_parks_nothing_and_reading_again_draws_the_n
     let base = g.serve().await;
     // A ten-second window of a 10 kHz block: frames that grow to 400 kB, each unlike the last.
     let lfo = g.add("LFO");
-    g.set_param(lfo, "output", "mode", "block");
-    g.set_param(lfo, "output", "sfreq", 10_000.0);
+    g.set_param(lfo, "lfo", "mode", "block");
+    g.set_param(lfo, "lfo", "sfreq", 10_000.0);
     let buf = g.add("Buffer");
     g.set_param(buf, "buffer", "size", 10.0);
     g.link(lfo, "out", buf, "input");

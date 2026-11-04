@@ -63,8 +63,8 @@ test('a pinch far out keeps a viewer\'s stream, however small the card draws', a
 		await waitForNode(page, osc);
 		await page.evaluate((u) => {
 			const g = (window as any).goofi;
-			g.commands.updateParam(u, 'output', 'mode', 'block');
-			g.commands.updateParam(u, 'output', 'sfreq', 64);
+			g.commands.updateParam(u, 'lfo', 'mode', 'block');
+			g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		await expect(card.locator('.slot-viewer .body')).toBeVisible();

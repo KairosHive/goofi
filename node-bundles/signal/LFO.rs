@@ -1,9 +1,9 @@
 //! LFO — one oscillator for both planes: a sample per update to modulate a param, or the block of
-//! samples real time advanced by. Phase is a function of PATCH TIME, so two LFOs of one frequency
-//! run together whenever each was made.
+//! samples real time advanced by. The phase is a running sum on the patch clock, so a frequency
+//! change bends the wave from where it sits and never jumps it.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show, Tag};
 
 /// The waveform's value at `t` cycles in `[0, 1)`, in `[-1, 1]`.
 fn wave(kind: &str, t: f64, duty: f64) -> f64 {
@@ -31,31 +31,22 @@ fn wave(kind: &str, t: f64, duty: f64) -> f64 {
 
 #[derive(Default)]
 struct LFO {
-    /// Cycles added to `frequency * now`. Zero unless a pulse re-phased this LFO — a frequency
-    /// change does NOT re-solve it, because holding the wave continuous there is what would put
-    /// two LFOs of one frequency out of phase.
-    phase_offset: f64,
-    /// A pulse asked for phase zero, applied at the next process where `now` is known.
-    rezero: bool,
-    /// `ctx.now` at the first emit — block pacing is measured from here.
+    /// Where the oscillator sits, in cycles within `[0, 1)`. Only the elapsed time at the
+    /// frequency of the moment advances it, so a frequency edit continues the wave in place.
+    phase: f64,
+    /// `ctx.now` at the last `value` emit — what the next advance measures from.
+    last: Option<f64>,
+    /// `ctx.now` at the first block — block pacing is measured from here.
     start: Option<f64>,
     /// Samples emitted since `start`; counting keeps the block size drift-free.
     emitted: u64,
 }
 
 impl LFO {
-    /// Cycles at patch second `now` — a pure function of the patch's time and this frequency.
-    fn phase_at(&self, freq: f64, now: f64) -> f64 {
-        (freq * now + self.phase_offset).rem_euclid(1.0)
-    }
-
-    /// A pulse asked for phase zero here, which is the one thing that takes an LFO off the shared
-    /// phase, and only until the next one.
-    fn anchor(&mut self, freq: f64, now: f64) {
-        if self.rezero {
-            self.phase_offset = -freq * now;
-            self.rezero = false;
-        }
+    /// Move the phase on by `cycles` and answer where it sits now.
+    fn advance(&mut self, cycles: f64) -> f64 {
+        self.phase = (self.phase + cycles).rem_euclid(1.0);
+        self.phase
     }
 }
 
@@ -70,18 +61,17 @@ impl Node for LFO {
         let freq = p.f64("lfo", "frequency").unwrap_or(1.0);
         let amp = p.f64("lfo", "amplitude").unwrap_or(1.0);
         let offset = p.f64("lfo", "offset").unwrap_or(0.0);
-        // Refuse non-finite BEFORE it reaches `self.phase`: nothing but a reset clears a NaN.
+        // Refuse non-finite BEFORE it reaches `self.phase`: nothing would clear a NaN from it.
         if !freq.is_finite() || !amp.is_finite() || !offset.is_finite() {
             return Err(format!("non-finite drive: frequency={freq}, amplitude={amp}, offset={offset}").into());
         }
         let kind = p.str("lfo", "waveform").unwrap_or("sine");
         let duty = p.f64("lfo", "duty").unwrap_or(0.5).clamp(0.0, 1.0);
         let skew = p.f64("lfo", "phase").unwrap_or(0.0);
-        let sfreq = p.f64("output", "sfreq").unwrap_or(250.0).max(1.0);
-        let block = p.str("output", "mode").unwrap_or("value") == "block";
+        let sfreq = p.f64("lfo", "sfreq").unwrap_or(250.0).max(1.0);
+        let block = p.str("lfo", "mode").unwrap_or("value") == "block";
 
-        self.anchor(freq, c.now);
-        let mut sample = |phase: f64| ((wave(kind, (phase + skew).rem_euclid(1.0), duty) * amp + offset) as f32).to_le_bytes();
+        let sample = |phase: f64| ((wave(kind, (phase + skew).rem_euclid(1.0), duty) * amp + offset) as f32).to_le_bytes();
 
         let (shape, buf, meta) = if block {
             let start = *self.start.get_or_insert(c.now);
@@ -90,36 +80,36 @@ impl Node for LFO {
             if n == 0 {
                 return Ok(());
             }
-            let first = self.emitted;
             self.emitted = total;
+            // Each sample advances the phase by one sample period at the frequency of the moment.
             let mut buf = Vec::with_capacity(n * 4);
-            for k in 0..n {
-                // Each sample sits at its OWN patch second, so a block draws the same wave the
-                // value mode would at those instants.
-                buf.extend_from_slice(&sample(self.phase_at(freq, start + (first + k as u64) as f64 / sfreq)));
+            for _ in 0..n {
+                buf.extend_from_slice(&sample(self.advance(freq / sfreq)));
             }
             (vec![n], buf, Meta::new().with_sfreq(Some(sfreq)))
         } else {
-            (vec![1], sample(self.phase_at(freq, c.now)).to_vec(), Meta::new())
+            let elapsed = c.now - self.last.unwrap_or(c.now);
+            self.last = Some(c.now);
+            (vec![1], sample(self.advance(freq * elapsed)).to_vec(), Meta::new())
         };
         out.set("out", Data::array_f32(shape, buf, meta).map_err(|e| e.to_string())?);
         Ok(())
     }
 
     fn on_param_changed(&mut self, key: &ParamKey, _v: &goofi_core::Param) -> NodeResult {
-        // A new rate or mode re-anchors the block pacing; the old count measures a gone clock.
-        if key.group == "output" {
+        // A new rate or mode re-anchors the pacing; the old count measures a gone clock. The
+        // phase stays where it is, so the wave continues across the switch.
+        if key.group == "lfo" && (key.name == "mode" || key.name == "sfreq") {
             self.start = None;
             self.emitted = 0;
+            self.last = None;
         }
         Ok(())
     }
-
-    fn on_pulse(&mut self, _key: &ParamKey, _p: &Params<'_>) -> NodeResult {
-        self.rezero = true;
-        Ok(())
-    }
 }
+
+const SQUARE: &[Show] = &[Show { param: "waveform", any_of: &["square"] }];
+const BLOCK: &[Show] = &[Show { param: "mode", any_of: &["block"] }];
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
@@ -135,9 +125,9 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("Cycles per second."),
+        doc: Some("Cycles per second. A change bends the wave from where it sits; it does not restart."),
         section: 0,
         show: &[],
         role: None,
@@ -145,7 +135,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "amplitude",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
         section: 0,
@@ -155,7 +145,7 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "lfo",
         name: "offset",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[0.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
         section: 0,
@@ -167,7 +157,7 @@ static PARAMS: &[ParamDecl] = &[
         name: "phase",
         spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("Where in the cycle the wave reads, in cycles; 0.25 is a quarter turn ahead."),
+        doc: Some("Shift of the read point, in cycles; 0.25 reads a quarter turn ahead of the oscillator."),
         section: 0,
         show: &[],
         role: None,
@@ -177,23 +167,13 @@ static PARAMS: &[ParamDecl] = &[
         name: "duty",
         spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("Fraction of the cycle a square wave spends high; the other waveforms ignore it."),
+        doc: Some("Fraction of the cycle the square wave spends high."),
         section: 0,
-        show: &[],
+        show: SQUARE,
         role: None,
     },
     ParamDecl {
         group: "lfo",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Put the phase back to the start of the cycle."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
         name: "mode",
         spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
         expression: None,
@@ -201,18 +181,18 @@ static PARAMS: &[ParamDecl] = &[
             "`value` emits one sample per update, which a param reference reads as a number; \
              `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
-        section: 0,
+        section: 1,
         show: &[],
         role: None,
     },
     ParamDecl {
-        group: "output",
+        group: "lfo",
         name: "sfreq",
         spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
-        section: 0,
-        show: &[],
+        doc: Some("Sample rate within an emitted block, in Hz."),
+        section: 1,
+        show: BLOCK,
         role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the

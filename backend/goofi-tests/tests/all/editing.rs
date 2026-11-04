@@ -83,7 +83,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // ONE step, whatever it carries: a rename, a move and a viewer in a single node edit.
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier", "pos": [40.0, 60.0],
                              "viewer": [{ "slot": "out", "kind": "line" }] }));
-    g.set_param(osc, "output", "sfreq", 128.0);
+    g.set_param(osc, "lfo", "sfreq", 128.0);
     g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01" }));
     // Every variable is in a group, so a bare name names nothing and is refused.
     let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0 }));
@@ -1045,7 +1045,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     let producer = g.add("LFO");
     // Block mode at a stated rate, so a frame carries several samples: the shape error below
     // needs one. There is no evaluator here, so the rate cap's binding cannot stand in for it.
-    g.set_param(producer, "output", "mode", "block");
+    g.set_param(producer, "lfo", "mode", "block");
     g.set_param(producer, "common", "max_frequency", 20.0);
     let consumer = g.add("LFO");
     g.call("node edit", j!({ "node": hex(producer), "name": "src" }));

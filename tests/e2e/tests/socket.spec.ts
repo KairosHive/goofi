@@ -225,20 +225,20 @@ test.describe('the control socket', () => {
 			});
 
 			await test.step('a slider drag previews each move and commits on release', async () => {
-				await page.getByTestId('param-search').fill('duty');
-				const field = page.getByTestId('param-field-duty');
+				await page.getByTestId('param-search').fill('phase');
+				const field = page.getByTestId('param-field-phase');
 				const range = field.locator('input[type=range]');
 				await range.scrollIntoViewIfNeeded();
 				const box = (await range.boundingBox())!;
 				const y = box.y + box.height / 2;
-				const duty = async () => (await backendDoc(page)).nodes[osc].params.lfo.duty.value as number;
+				const phase = async () => (await backendDoc(page)).nodes[osc].params.lfo.phase.value as number;
 				await page.mouse.move(box.x + box.width * 0.2, y);
 				await page.mouse.down();
 				await page.mouse.move(box.x + box.width * 0.5, y, { steps: 6 });
-				await expect.poll(duty, { message: 'the manager follows the finger before it lifts' }).toBeGreaterThan(0.4);
+				await expect.poll(phase, { message: 'the manager follows the finger before it lifts' }).toBeGreaterThan(0.4);
 				await page.mouse.move(box.x + box.width * 0.8, y, { steps: 6 });
 				await page.mouse.up();
-				await expect.poll(duty).toBeGreaterThan(0.7);
+				await expect.poll(phase).toBeGreaterThan(0.7);
 				await page.getByTestId('param-search').fill('');
 			});
 
@@ -950,8 +950,8 @@ test.describe('the control socket', () => {
 			await waitForNode(page, osc);
 			await page.evaluate((u) => {
 				const g = (window as any).goofi;
-				g.commands.updateParam(u, 'output', 'mode', 'block');
-				g.commands.updateParam(u, 'output', 'sfreq', 64);
+				g.commands.updateParam(u, 'lfo', 'mode', 'block');
+				g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 			}, osc);
 
 			const read = () => frameSummary(page, osc);

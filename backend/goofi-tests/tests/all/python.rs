@@ -710,7 +710,7 @@ class Meeting(goofi.Node):
         let osc = g.add("LFO");
         let probe = g.probe(osc, "out");
         g.ready(osc);
-        g.set_param(osc, "output", "mode", "block");
+        g.set_param(osc, "lfo", "mode", "block");
         g.set_param(osc, "lfo", "frequency", 8.0);
         // `me` is this node: the amplitude follows the node's OWN frequency param.
         let r = g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
@@ -728,7 +728,7 @@ class Meeting(goofi.Node):
         let osc2 = g.add("LFO");
         let probe2 = g.probe(osc2, "out");
         g.ready(osc2);
-        g.set_param(osc2, "output", "mode", "block");
+        g.set_param(osc2, "lfo", "mode", "block");
         let name = g.doc()["nodes"][hex(osc)]["name"].as_str().unwrap().to_string();
         let r = g.call("node param edit", j!({ "node": hex(osc2), "param": "lfo/amplitude",
             "expression": format!("nd('{name}').params.lfo.frequency + 1") }));

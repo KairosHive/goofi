@@ -146,7 +146,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 			// A PSD floor sits far below 1e-22 — a range a naive log tick walk never terminates on.
 			// A spectrum needs a run of samples that knows its own rate, so the source emits blocks
 			// and the buffer already on the canvas is what gathers them.
-			await rawCall(page, 'node param edit', { node: osc, param: 'output/mode', value: 'block' });
+			await rawCall(page, 'node param edit', { node: osc, param: 'lfo/mode', value: 'block' });
 			const psd = await addNode(page, 'Psd', [320, 240]);
 			await waitForNode(page, psd);
 			await page.evaluate(
