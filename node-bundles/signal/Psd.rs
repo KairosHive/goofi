@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use goofi_core::{resolve_axis, stream, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show, SlotDecl, Tag};
+
+const WELCH: &[Show] = &[Show { param: "mode", any_of: &["welch"] }];
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Psd {
@@ -52,7 +54,7 @@ impl Node for Psd {
 
         let taper = p.str("psd", "window").unwrap_or("hann");
         // Segment and overlap share one unit, so both are read through the same conversion.
-        let unit = p.str("welch", "unit").unwrap_or("fraction");
+        let unit = p.str("psd", "unit").unwrap_or("fraction");
         let samples = |size: f64| -> Result<f64, String> {
             Ok(match unit {
                 "samples" => size,
@@ -64,8 +66,8 @@ impl Node for Psd {
         let (seg, hop) = if p.str("psd", "mode").unwrap_or("welch") == "fft" {
             (n, n)
         } else {
-            let seg = (samples(p.f64("welch", "segment").unwrap_or(0.4))?.round().max(2.0) as usize).min(n);
-            let overlap = samples(p.f64("welch", "overlap").unwrap_or(0.3))?.round().max(0.0) as usize;
+            let seg = (samples(p.f64("psd", "segment").unwrap_or(0.4))?.round().max(2.0) as usize).min(n);
+            let overlap = samples(p.f64("psd", "overlap").unwrap_or(0.3))?.round().max(0.0) as usize;
             (seg, seg.saturating_sub(overlap).clamp(1, seg))
         };
 
@@ -76,16 +78,14 @@ impl Node for Psd {
         let fft = self.planner.plan_fft_forward(seg);
 
         let freqs: Vec<f64> = (0..bins).map(|k| k as f64 * sfreq / seg as f64).collect();
-        let low = p.f64("range", "low").unwrap_or(0.0);
-        let high = p.f64("range", "high").unwrap_or(0.0);
+        let low = p.f64("psd", "low").unwrap_or(0.0);
+        let high = p.f64("psd", "high").unwrap_or(0.0);
         let kept: Vec<usize> = (0..bins)
             .filter(|k| freqs[*k] >= low && (high <= 0.0 || freqs[*k] <= high))
             .collect();
         if kept.is_empty() {
             return Err(format!("no bin falls between {low} Hz and {high} Hz").into());
         }
-        let log = p.str("range", "scale").unwrap_or("linear") == "log";
-
         let mut scratch = vec![Complex32::default(); seg];
         let spectra: Vec<Vec<f32>> = stream::lanes(a.shape(), dim, a.as_bytes())
             .iter()
@@ -105,10 +105,7 @@ impl Node for Psd {
                     count += 1.0;
                 }
                 kept.iter()
-                    .map(|k| {
-                        let v = sum[*k] / count;
-                        if log { v.max(1e-12).ln() } else { v }
-                    })
+                    .map(|k| sum[*k] / count)
                     .collect()
             })
             .collect();
@@ -169,7 +166,7 @@ static PARAMS: &[ParamDecl] = &[
         role: None,
     },
     ParamDecl {
-        group: "welch",
+        group: "psd",
         name: "unit",
         spec: ParamSpec::Str {
             default: "fraction",
@@ -179,21 +176,21 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What `segment` and `overlap` count in. `fraction` is a share of the frame."),
         section: 0,
-        show: &[],
+        show: WELCH,
         role: None,
     },
     ParamDecl {
-        group: "welch",
+        group: "psd",
         name: "segment",
         spec: ParamSpec::Num { default: &[0.4], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
         section: 0,
-        show: &[],
+        show: WELCH,
         role: None,
     },
     ParamDecl {
-        group: "welch",
+        group: "psd",
         name: "overlap",
         spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
@@ -202,36 +199,26 @@ static PARAMS: &[ParamDecl] = &[
              slower; at a full segment the hop is one sample.",
         ),
         section: 0,
-        show: &[],
+        show: WELCH,
         role: None,
     },
     ParamDecl {
-        group: "range",
+        group: "psd",
         name: "low",
         spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The lowest frequency to keep, in Hz."),
-        section: 0,
+        section: 1,
         show: &[],
         role: None,
     },
     ParamDecl {
-        group: "range",
+        group: "psd",
         name: "high",
         spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "range",
-        name: "scale",
-        spec: ParamSpec::Str { default: "linear", options: &["linear", "log"], refresh: false },
-        expression: None,
-        doc: Some("Whether the power comes out as it is, or as its logarithm."),
-        section: 0,
+        section: 1,
         show: &[],
         role: None,
     },

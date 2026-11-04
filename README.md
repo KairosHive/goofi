@@ -90,7 +90,7 @@ VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its n
 machine the patch is open on, so goofi supports VST3 and ships none.
 
 The nodes goofi does ship live in `node-bundles/`, one directory per bundle: `signal` and `audio`
-(the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, preprocessing, band power, FOOOF, connectivity),
+(the Rust built-ins), `graphics` (the shaders), plus `eeg` (playback, preprocessing, band power, specparam, connectivity),
 `complexity` (the antropy measures), `biotuner` (harmonicity, microtonal keys, rhythm),
 `simulation` (attractors, Kuramoto, Hopfield, neural mass), `ai` (language, voice and coding-agent
 nodes), `ml`, `image`, `image-generation`, `computer-vision`, `harmonic-geometry` and `inception`. Every bundle is built at

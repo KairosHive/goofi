@@ -108,9 +108,9 @@ describe('search reaches the tree a node came from', () => {
 	});
 
 	it('finds a shipped node by its bundle, which is the word its row shows now', () => {
-		const eeg = typeInfo({ type: 'signal:Fooof', bundle: 'eeg' });
+		const eeg = typeInfo({ type: 'signal:Specparam', bundle: 'eeg' });
 		const core = typeInfo({ type: 'signal:Buffer', bundle: 'signal' });
-		expect(order([core, eeg], 'eeg')).toEqual(['signal:Fooof']);
+		expect(order([core, eeg], 'eeg')).toEqual(['signal:Specparam']);
 		expect(order([core, eeg], 'builtin'), 'the bundle replaced that word, not joined it').toEqual([]);
 	});
 

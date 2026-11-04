@@ -38,7 +38,7 @@ estimate matters more than a prompt one. Leave `axis` at time.
 
 ## Analysis sits on the buffer
 
-Spectral features go `Buffer → signal:Psd → eeg:EegPowerBands` or `→ eeg:Fooof`. Complexity
+Spectral features go `Buffer → signal:Psd → eeg:EegPowerBands` or `→ eeg:Specparam`. Complexity
 and entropy nodes (`complexity:LempelZiv`, `complexity:SampleEntropy`, …) take the buffer
 directly. Several analyses may share one buffer; do not add a second buffer per analysis unless
 they need different window lengths.
