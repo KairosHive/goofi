@@ -482,6 +482,9 @@ fn a_scheduled_engine_beside_the_signal_one() {
     // exists on a scheduled engine — and the echo slot republishes the freshest frame verbatim.
     // Named by engine, since the twin registered above offers `Oscillator` too.
     let osc = t.add("signal:LFO");
+    // Lifted off zero: its phase starts at 0, and a first sample equal to the meter's literal
+    // 0 below would be no change, so the bound write the meter counts would never come.
+    t.call("node param edit", j!({ "node": hex(osc), "param": "lfo/offset", "value": 2.0 }));
     t.link(osc, "out", audio, "input");
     let back = t.probe(audio, "echo");
     let boundary = t.until("the boundary echo", |_| back.latest());
