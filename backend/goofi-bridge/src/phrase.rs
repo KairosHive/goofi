@@ -672,11 +672,16 @@ pub fn complete(
         true => (&words[..], String::new()),
         false => (&words[..words.len() - 1], words[words.len() - 1].clone()),
     };
-    if let Ok((op, used)) = resolve(ops, done) {
-        return complete_args(op, &done[used..], &partial, state);
+    // A group word alone is its `list` for a call; for completion it is still a group being typed
+    // under (`log li` wants `list`), so the walk decides before the resolver does.
+    let stop = walk(done);
+    if !matches!(stop, Stop::Children(..)) {
+        if let Ok((op, used)) = resolve(ops, done) {
+            return complete_args(op, &done[used..], &partial, state);
+        }
     }
     let mut candidates = std::collections::BTreeMap::new();
-    if let Stop::Children(children, prefix) = walk(done) {
+    if let Stop::Children(children, prefix) = stop {
         for entry in children {
             if entry.word().starts_with(&partial) && served(ops, &prefix, entry) {
                 candidates.insert(entry.word().to_string(), doc_line(entry));

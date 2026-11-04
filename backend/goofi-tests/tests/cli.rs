@@ -169,6 +169,11 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
             "an op completes its flags, typed and marked: {flags}");
     assert!(complete("node ad").lines().all(|l| l.starts_with("ad")),
             "a partial word filters");
+    // A group word alone runs its `list`, but a word typed under it is still an op name: the
+    // console's Tab on `log li` lands `list`, and `log ` offers every op of the group.
+    assert!(complete("log li").lines().any(|l| l.starts_with("list\t")), "{}", complete("log li"));
+    let under = complete("log ");
+    assert!(under.lines().any(|l| l.starts_with("list\t")) && under.lines().any(|l| l.starts_with("write\t")), "{under}");
 
     // A param edit lands on the graph, and a multi-line batch is ONE step in ITS actor's stack.
     let born: serde_json::Value =
