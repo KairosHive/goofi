@@ -685,6 +685,9 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     assert_eq!(roster["instances"], json!([]), "the replaced patch's harnesses stayed: {roster}");
     // `read_until` itself is the pin: no exit frame within its deadline panics.
     read_until(&mut second, "exit_code").await;
+    // The deaf one went on the insist, not the ask, so its reap came after the grace: the exit
+    // frame is still the last thing its view gets, however the child went.
+    read_until(&mut deaf, "exit_code").await;
     let (ok, err) = exec(&addr, "/mcp", 6, &["node add --type Buffer"]).await;
     assert!(!err, "replacing the patch closed the central endpoint too: {ok}");
 

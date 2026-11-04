@@ -740,6 +740,9 @@ impl Instance {
     fn close(&self, deadline: timing::Deadline) {
         self.closing.store(true, Ordering::Relaxed);
         let _ = TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(100));
+        // The exit frame is the reaper's, pushed once the child is waited: the views are taken only
+        // after it, or every one of them would end without it. Bounded, for a child that stays.
+        self.reaped_within(deadline.left());
         // The senders go first: each writer delivers what it holds, the exit included, and ends.
         let views = std::mem::take(&mut self.fanout.lock().views);
         let (streams, writers): (Vec<_>, Vec<_>) = views.into_iter().map(|(_, _, s, w)| (s, w)).unzip();
