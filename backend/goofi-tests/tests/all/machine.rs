@@ -134,6 +134,15 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert_eq!(g.variable("head.label"), j!("a"));
     // Where it came from and when it arrived are the canvas's, on the frames: no variable says them.
     assert_eq!((g.variable("head.prev"), g.variable("head.arrived")), (Value::Null, Value::Null));
+    // …so an expression outside the machine reads a playhead's state, progress or attributes, and
+    // one asking for more is kept with its error, as a reader of a missing node is.
+    g.call("control add", j!({ "group": "desk", "kind": "knob", "element": "origin" }));
+    g.call("control edit", j!({ "group": "desk", "element": "origin", "expression": "sm('head').prev" }));
+    let error = g.doc()["variables"]["desk.origin"]["error"].clone();
+    assert!(error.as_str().is_some_and(|e| e.contains("has no `prev`: `state`, `progress` or an attribute")), "{error}");
+    g.call("control edit", j!({ "group": "desk", "element": "origin", "expression": "sm('head').gain" }));
+    assert!(g.doc()["variables"]["desk.origin"].get("error").is_none(), "an attribute resolves");
+    g.call("control remove", j!({ "group": "desk", "element": "origin" }));
     let listed = g.call("variable list", j!({}));
     assert_eq!(listed["groups"]["head"]["machine"], j!("seq"), "{}", listed["groups"]);
     assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "a number attribute's variable wears a knob");

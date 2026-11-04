@@ -3006,7 +3006,7 @@ impl Graph {
         }
         let key = format!("{playhead}.{field}");
         if !store.contains(&key) {
-            return Err(format!("playhead `{playhead}` has no `{field}`: `state`, `prev`, `progress`, `arrived` or an attribute"));
+            return Err(format!("playhead `{playhead}` has no `{field}`: `state`, `progress` or an attribute"));
         }
         Ok((Uid::VARIABLES, goofi_core::variables::slot_name(&key)))
     }
