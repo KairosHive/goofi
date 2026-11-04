@@ -72,9 +72,9 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 ## Architecture
 
 - One binary serves the app and acts as its CLI (`goofi help`). It prints the URL without opening
-  a browser; `--headless` serves only the API; `--demo` withholds the host-touching ops. The
-  Electron shell in `frontend/electron` runs it with `--shell`, holds its stdin, and installs the
-  update that the `update start` op requests.
+  a browser; `--headless` serves only the API; `--demo` withholds the host-touching ops; `--mcp`
+  mounts `/mcp`, off by default. The Electron shell in `frontend/electron` runs it with `--shell`,
+  holds its stdin, and installs the update that the `update start` op requests.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated with
   versioned path operations (`put`, `del`). The patch is a value: a write copies the one record it
   touches, a settle reads what a batch changed off the two snapshots, and the document is patched
@@ -132,8 +132,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   manifest for all. A take's boundary is an instant for a measured timeline and the audio
   clock's block for the derived one.
 - `plugins/` ships plugins as source, loaded from `~/.goofi/plugins/<id>`; `sdk/README.md` is the
-  plugin interface. `skills/` holds agent guides, embedded at build and seeded into a patch's
-  workspace when it has none.
+  plugin interface. `skills/` holds agent guides, embedded at build, seeded into a patch's
+  workspace when it has none, and served with the orientation by the `guide` ops.
 - The app targets one user on localhost or a trusted LAN. WebSockets have no auth; keep the
   `origin` guard (Sec-Fetch allowlist and Host check). `/dev/*` requires debug mode.
 - Support touch, tablet and desktop in both orientations. Navigation must not dirty the patch.

@@ -32,8 +32,9 @@ const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18",
 /// batch rule.
 const DESCRIPTION: &str = "\
 Drive goofi with command lines. Each entry in `commands` is one op: `<op> [--arg value …]`, with \
-bash's own quoting rules. Call `op list` first — it answers every op with its arguments and its \
-kind; `<op> --help` then explains the one you picked. A bool arg is `--x` or `--no-x`; a list arg \
+bash's own quoting rules. Call `guide get orientation` first — it says how goofi is driven — \
+then `op list`, which answers every op with its arguments and its kind; `<op> --help` explains \
+the one you picked. A bool arg is `--x` or `--no-x`; a list arg \
 repeats its flag; a `json` arg takes one JSON string.\n\n\
 The reply is every command's result, in order, as one JSON list. SEVERAL commands execute as \
 one batch and ONE undo step: a step is a read or an undoable write — an effect runs alone — and \
@@ -132,7 +133,7 @@ pub async fn endpoint(State(state): State<AppState>, body: String) -> Response {
                 },
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "goofi", "version": env!("CARGO_PKG_VERSION") },
-                // No `instructions`: the orientation is `AGENTS.md` in the harness's cwd.
+                // No `instructions`: the orientation is `guide get orientation`, one call away.
             }),
         ),
         "tools/list" => ok(id, json!({ "tools": tools() })),

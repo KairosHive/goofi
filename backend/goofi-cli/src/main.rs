@@ -79,6 +79,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     cli.headless |= env_flag("GOOFI_HEADLESS") || HEADLESS_BUILD;
     cli.debug |= env_flag("GOOFI_DEBUG");
     cli.demo |= env_flag("GOOFI_DEMO");
+    cli.mcp |= env_flag("GOOFI_MCP");
     cli.boot_only = env_flag("GOOFI_BOOT_ONLY");
     if cli.help {
         // `goofi --help` / a flag mix that asked: the SERVE usage, not the op help door.
@@ -93,8 +94,9 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
              the app out of the binary entirely. GOOFI_DEBUG=1 is --debug, which opens `/dev/*` \
              — the UI primitive gallery and the other development surfaces. GOOFI_LOAD is --load, \
              the patch to open at start; on a demo it is what `session new` returns to, and \
-             GOOFI_DEMO_BASE names where that set's other examples answer. GOOFI_BOOT_ONLY=1 \
-             boots the node library and exits, serving nothing.",
+             GOOFI_DEMO_BASE names where that set's other examples answer. GOOFI_MCP=1 is --mcp, \
+             which serves the MCP endpoint at /mcp. GOOFI_BOOT_ONLY=1 boots the node library and \
+             exits, serving nothing.",
         );
         return;
     }
@@ -122,7 +124,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
             std::process::exit(1);
         }
     }
-    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, shell: cli.shell };
+    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, mcp: cli.mcp, shell: cli.shell };
     report("Cleaning up after earlier sessions");
     // The session is held BEFORE the engines exist: every slot, door and exchange they open is
     // its. What dead sessions left is swept once it is held, so the sweep can never take this one.
@@ -175,8 +177,7 @@ fn forward(lines: &[String], json: bool) -> i32 {
             return 1;
         }
     };
-    let actor = std::env::var("GOOFI_ACTOR").ok();
-    match goofi_client::exec(&target.url, lines, actor.as_deref()) {
+    match goofi_client::exec(&target.url, lines, None) {
         Ok(entries) => {
             use std::io::Write;
             let mut out = std::io::stdout().lock();
@@ -394,7 +395,7 @@ async fn run(
     // Before ANY use of the embedded interpreter.
     configure_embedded();
 
-    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, load: _, help: _, shell: _ } = cli;
+    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, mcp, load: _, help: _, shell: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
     config.plugins = Some(layout::home());
@@ -480,7 +481,7 @@ async fn run(
                     startup.finish("Ready");
                 }
                 let _ = goofi_supervisor::log::print_url(&url);
-                if !demo {
+                if mcp && !demo {
                     println!("  MCP endpoint → {url}/mcp");
                 }
                 if goofi_provision::DIST {

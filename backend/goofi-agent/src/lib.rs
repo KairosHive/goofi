@@ -281,10 +281,9 @@ impl Agents {
         if !parent_speaks_utf8(env) {
             cmd.env("LC_ALL", "C.UTF-8");
         }
-        // How the shell finds ITS server: the id names the session file, the actor its undo
-        // stack, and the leading PATH entry makes `goofi` this server's own binary.
+        // How the shell finds ITS server: the id names the session file, and the leading PATH
+        // entry makes `goofi` this server's own binary.
         cmd.env(session::ENV, &self.session);
-        cmd.env("GOOFI_ACTOR", actor_of(&id));
         cmd.env("PATH", prepend_path(&own, env));
         // Git Bash's profile rebuilds PATH from ORIGINAL_PATH when a shell inherited one, and would
         // drop the entry above: an agent's `bash` tool then finds no `goofi`. Lead that one too.
@@ -830,16 +829,6 @@ fn take_cursor_queries(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     out.extend_from_slice(rest);
     Some(out)
-}
-
-/// The actor a spawned shell's ops carry: whose drags end with the instance.
-pub fn actor_of(id: &str) -> String {
-    format!("agent-{id}")
-}
-
-/// The instance an actor is the shell of, if it is one.
-pub fn instance_of(actor: &str) -> Option<&str> {
-    actor.strip_prefix("agent-")
 }
 
 /// The agent's command line under the user's own shell, as their terminal would run it: a LOGIN

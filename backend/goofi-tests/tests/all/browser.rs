@@ -400,8 +400,9 @@ async fn a_viewer_that_stops_reading_parks_nothing_and_reading_again_draws_the_n
 
 #[tokio::test]
 async fn a_patch_travels_as_bytes_between_two_instances_and_a_bad_upload_changes_nothing() {
-    // Two servers, because a round trip through one would pass against a route that packed nothing.
-    let src = Goofi::new();
+    // Two servers, because a round trip through one would pass against a route that packed nothing;
+    // both with `/mcp`, the door the `tool` helper drives them through.
+    let src = Goofi::mcp();
     let source = host(&src.serve().await).to_string();
     tool(&source, "node add --type LFO").await;
     tool(&source, "node add --type Buffer").await;
@@ -412,7 +413,7 @@ async fn a_patch_travels_as_bytes_between_two_instances_and_a_bad_upload_changes
     assert!(head.to_ascii_lowercase().contains("content-disposition"),
             "the reply names a filename, or the browser invents one from the URL: {head}");
 
-    let dst = Goofi::new();
+    let dst = Goofi::mcp();
     let dest = host(&dst.serve().await).to_string();
     let octet = "Content-Type: application/octet-stream\r\n";
     assert!(!tool(&dest, "nodes inspect").await.contains("LFO"), "it starts empty");
@@ -513,7 +514,8 @@ async fn ask(addr: &str, path: &str, method: &str, headers: &str, host: &str) ->
 
 #[tokio::test]
 async fn every_route_answers_the_same_origin_question_the_same_way() {
-    let g = Goofi::new();
+    // Served WITH `/mcp`, so the route walk below covers it: a route added later inherits the guard.
+    let g = Goofi::mcp();
     let addr = host(&g.serve_spa(&[("index.html", b"<!doctype html>goofi")]).await).to_string();
     let port = addr.rsplit(':').next().unwrap().to_string();
 

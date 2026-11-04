@@ -1,5 +1,5 @@
 //! The axum server: `/control` (JSON RPC, events, the document), `/data/<node>/<slot>` (ONE reduced
-//! stream per slot), `/params/<node>`, `/term`, `/mcp`, and the SPA compiled into the binary.
+//! stream per slot), `/params/<node>`, `/term`, `/mcp` under `--mcp`, and the SPA compiled into the binary.
 
 pub mod boot;
 mod event;
@@ -55,7 +55,7 @@ use tokio::sync::broadcast;
 /// Where the development surfaces live. One literal, so the gate and the app agree on the prefix.
 pub const DEV_ROUTE_PREFIX: &str = "/dev/";
 
-/// The undo actor for a caller that names none — one shared stack, isolated from every named one.
+/// The actor for a caller that names none — what a preview's drag is keyed by.
 pub const DEFAULT_ACTOR: &str = "default";
 
 /// Who is calling: the actor whose drag a preview belongs to, an opaque navigation `context` the
@@ -92,6 +92,8 @@ pub struct Mode {
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. It is NOT
     /// a sandbox — a param expression is still Python.
     pub demo: bool,
+    /// Serve `/mcp`. Off unless asked: a door with no auth that only an MCP client needs.
+    pub mcp: bool,
     /// Started by the app shell, which performs an update when `update start` asks for one.
     pub shell: bool,
 }
@@ -231,7 +233,7 @@ impl AppState {
         let graph = Arc::new(Mutex::new(graph_val));
         record::attach(&recorder, &graph);
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
-        let (machines, machines_rx) = machines::Driver::new();
+        let (machines, machines_rx) = machines::Driver::new(&hub, graph.lock().instance());
         graph.lock().variable_store().lock().set_watch(machines.watch());
         let reducers = reducer::SlotReducers::new(hub.clone(), graph.clone(), follow_tx);
         let state = AppState {
@@ -531,7 +533,8 @@ fn routes(state: AppState) -> Router {
 
 /// The routes a demo does not mount — the ones that reach the host rather than the graph.
 fn local_routes(state: AppState) -> Router {
-    Router::new()
+    let mcp = state.mode.mcp;
+    let router = Router::new()
         // The body limit is lifted: axum caps at 2 MB and a patch with a workspace is larger.
         .route(
             "/patch.gfi",
@@ -541,7 +544,6 @@ fn local_routes(state: AppState) -> Router {
         )
         // The CLI's door: the same lines, parse and batch semantics as `goofi_exec`.
         .route("/exec", post(exec_endpoint))
-        .route("/mcp", post(mcp::endpoint))
         .route("/plugins/{id}/{*file}", get(plugins::asset))
         // A spawned harness's terminal: binary frames are PTY bytes, text frames JSON control.
         .route(
@@ -551,8 +553,9 @@ fn local_routes(state: AppState) -> Router {
                  State(state): State<AppState>| async {
                 ws.on_upgrade(move |socket| handle_term(socket, state, instance))
             }),
-        )
-        .with_state(state)
+        );
+    let router = if mcp { router.route("/mcp", post(mcp::endpoint)) } else { router };
+    router.with_state(state)
 }
 
 /// How often the drained reports are broadcast — the event rate, distinct from the drain, which
@@ -735,17 +738,8 @@ pub fn spawn_workers(state: &AppState) {
             // catch-up broadcasts.
             broadcast.reset();
             // The harness plane is the session's, not this process's: an instance another process
-            // spawned, or one of its own that exited, shows up here. A drag of an agent that is not
-            // live ends BEFORE the broadcast, though its whole life fell between two beats.
+            // spawned, or one of its own that exited, shows up here.
             let roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
-            let running: std::collections::HashSet<&str> = roster["instances"].as_array().into_iter().flatten()
-                .filter(|i| i["state"] != "exited").filter_map(|i| i["id"].as_str()).collect();
-            let ended: Vec<String> = state.history.lock().previewing()
-                .filter(|a| goofi_agent::instance_of(a).is_some_and(|id| !running.contains(id)))
-                .map(str::to_string).collect();
-            for actor in ended {
-                state.end_previews(&actor);
-            }
             if roster != last_roster {
                 events.send(Event::HarnessChanged(roster.clone()));
                 last_roster = roster;

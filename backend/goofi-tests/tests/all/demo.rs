@@ -11,7 +11,8 @@ const DROPPED: [&str; 5] =
 
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
-    let full = Goofi::new();
+    // The full server is asked for `/mcp`, so the demo's absence below is the mode, not the default.
+    let full = Goofi::mcp();
     let mut g = Goofi::demo();
 
     // The rows are ABSENT, not filtered on read — the index, dispatch and the resolver agree,

@@ -65,7 +65,8 @@ which is what a CI job runs to prove the build; it has no flag.
 | `--bind HOST` | `127.0.0.1` | The address to serve on. Anything beyond this machine warns: there is no auth, and `/term` is a real shell. |
 | `--extra-nodes ROOT` | — | A folder of node files, scanned after the shipped bundles. Repeatable; a later root wins a type name it shares with an earlier one. The plugins' nodes, the private library `~/.goofi/custom/` and the open patch's own workspace are scanned after it, and each beats the roots before it. |
 | `--load PATCH` | — | Open this `.gfi` at start. `GOOFI_LOAD` is the same. |
-| `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, `/mcp`. The app's routes are never mounted and the `layout` ops leave the op table. |
+| `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, and `/mcp` under `--mcp`. The app's routes are never mounted and the `layout` ops leave the op table. |
+| `--mcp` | — | Serve the MCP endpoint at `/mcp`: one tool, `goofi_exec`, running the CLI's command lines. Off by default; `GOOFI_MCP=1` is the same switch. |
 | `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `update`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs and no plugin loads. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |
 
@@ -169,10 +170,12 @@ only their identity, count, sequence, and last timestamp. Agent PTYs keep their 
 
 goofi launches the coding harness you already use — `claude`, `codex` and `opencode` out of the
 box, any command you name in `config.toml`, with the flags its `model` and `effort` options become.
-It comes up on a PTY with the patch workspace as its working directory, reads that workspace's
-`AGENTS.md` to orient itself, and its terminal is a panel beside the canvas. The guides under
-`skills/` ride into every workspace that has none of its own: patching a biosignal chain, designing
-biofeedback, designing an emergent shader.
+It comes up on a PTY with the patch workspace as its working directory, and its terminal is a
+panel beside the canvas. The workspace's `AGENTS.md` says what the directory is and points at
+`goofi guide get orientation` — the same orientation an agent outside goofi reads, from any shell
+with `goofi` on its PATH. `goofi guide list` names it and the skills beside it: goofi's own, which
+ride into every workspace that has none (patching a biosignal chain, designing biofeedback,
+designing an emergent shader), and the patch's.
 
 ```bash
 goofi agent start --name claude --model opus --effort high
@@ -190,7 +193,7 @@ time; `VoiceAgent` is a live call with a speech-to-speech model whose one tool h
 `Agent` node; `Decision` picks one of the answers on its options input for each text, with the
 model's probability for each; `TextToSpeech` and `SpeechToText` cross between text and audio frames.
 
-Over `/mcp` an agent reaches the same ops the editor does, so there is nothing you can do that it
+Under `--mcp`, an agent connected over `/mcp` reaches the same ops the editor does, so there is nothing you can do that it
 cannot. Every edit it makes arrives as the delta every client gets, so you watch the patch build
 itself and take the mouse back whenever you like — its work lands on the same undo stack as yours.
 Everything goofi can do, it does through that one op vocabulary: `/control`, `/mcp`, the CLI and a
@@ -207,9 +210,9 @@ them, and playheads that step through them and set the patch's variables as they
 value may play an ADSR envelope on a playhead's arrival, and a transition eases what it sets. A
 state decides which transition out to take every interval, in turn, by a weighted draw or by an
 expression; a transition's own `condition` takes it the instant the condition turns true. Both are
-the Python a param's expression is, over `variables.*`, `t` and the same functions, plus `me`, the
-playhead the expression is read for, and `st('name')`, a state's residents and the moves of the
-instant. `goofi machine add`, `machine state add` and `machine arrange` build one from the CLI or
+the Python a param's expression is, over `vars.*`, `nd()`, `t` and the same functions, plus `me`,
+the playhead the expression is read for, and `sm('name')`: a state's residents and the moves of
+the instant, or another playhead's record. A param reads a playhead the same way, `sm('name').x`. `goofi machine add`, `machine state add` and `machine arrange` build one from the CLI or
 an agent; the same ops drive the panel, where every setting is reached from the selected state's
 inspector.
 

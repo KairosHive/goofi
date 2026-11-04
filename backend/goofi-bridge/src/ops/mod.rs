@@ -1,6 +1,7 @@
 //! The op registry: a phrase TREE, and the single place the op SET is declared. An op is a type;
 //! its typed `Args` are the validation on every transport, and its row is built from it once.
 
+pub mod guide;
 pub mod history;
 pub mod host;
 pub mod layout;
@@ -433,7 +434,7 @@ pub static TREE: &[Entry] = &[
         Leaf(write::<node::LinkAdd>()),
         Leaf(write::<node::LinkRemove>()),
     ]),
-    Group("variable", "the patch variables — what an expression reads as `variables.group.element`", &[
+    Group("variable", "the patch variables — what an expression reads as `vars.group.element`", &[
         Leaf(read::<variable::List>()),
         Group("entry", "one variable, addressed `group.element`", &[
             Leaf(write::<variable::EntryAdd>()),
@@ -456,7 +457,7 @@ pub static TREE: &[Entry] = &[
         Leaf(write::<machine::Rename>()),
         Leaf(write::<machine::Edit>()),
         Leaf(write::<machine::Arrange>()),
-        Group("attribute", "one attribute — a value every state may set, carried by every playhead as `variables.<playhead>.<attribute>`", &[
+        Group("attribute", "one attribute — a value every state may set, carried by every playhead as `vars.<playhead>.<attribute>`", &[
             Leaf(write::<machine::AttributeAdd>()),
             Leaf(write::<machine::AttributeEdit>()),
             Leaf(write::<machine::AttributeRemove>()),
@@ -511,6 +512,10 @@ pub static TREE: &[Entry] = &[
     Group("op", "the vocabulary itself", &[
         Leaf(read::<history::OpList>()),
         Leaf(read::<history::OpComplete>()),
+    ]),
+    Group("guide", "what an agent reads first: the orientation, then the skill for its task", &[
+        Leaf(read::<guide::List>()),
+        Leaf(read::<guide::Get>()),
     ]),
     Group("agent", "the agent harnesses goofi launches", &[
         Leaf(read::<host::AgentList>()),

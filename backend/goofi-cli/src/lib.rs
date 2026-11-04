@@ -17,6 +17,8 @@ pub struct Cli {
     /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
     /// by `GOOFI_DEMO` in the environment. Not a sandbox.
     pub demo: bool,
+    /// Serve `/mcp`. Also set by `GOOFI_MCP` in the environment.
+    pub mcp: bool,
     /// Started by the app shell, which holds stdin open for as long as it lives and performs
     /// `update start`. Not a door a user takes.
     pub shell: bool,
@@ -35,6 +37,7 @@ impl Default for Cli {
             headless: false,
             debug: false,
             demo: false,
+            mcp: false,
             shell: false,
             load: None,
             help: false,
@@ -43,7 +46,7 @@ impl Default for Cli {
 }
 
 pub const USAGE: &str = "usage: goofi [--port N] [--bind HOST] \
-     [--extra-nodes DIR] [--headless] [--debug] [--demo] [--load PATCH]";
+     [--extra-nodes DIR] [--headless] [--debug] [--demo] [--mcp] [--load PATCH]";
 
 /// The port with no door naming one.
 pub const DEFAULT_PORT: u16 = 8000;
@@ -64,6 +67,7 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String
             "--headless" => cli.headless = true,
             "--debug" => cli.debug = true,
             "--demo" => cli.demo = true,
+            "--mcp" => cli.mcp = true,
             "--shell" => cli.shell = true,
             "--load" => cli.load = Some(need(args.next())?),
             "-h" | "--help" => cli.help = true,

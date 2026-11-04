@@ -85,6 +85,8 @@ export type OpName =
 	| 'log write'
 	| 'op list'
 	| 'op complete'
+	| 'guide list'
+	| 'guide get'
 	| 'agent list'
 	| 'agent start'
 	| 'agent stop'
@@ -189,6 +191,8 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'log write': 'effect',
 	'op list': 'read',
 	'op complete': 'read',
+	'guide list': 'read',
+	'guide get': 'read',
 	'agent list': 'read',
 	'agent start': 'effect',
 	'agent stop': 'effect',

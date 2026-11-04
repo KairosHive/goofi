@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use goofi_agent::{actor_of, Launch};
+use goofi_agent::Launch;
 use goofi_bridge::ops::registry;
 use goofi_bridge::AppState;
 use goofi_tests::{host, http, Client, Goofi, WAIT};
@@ -38,7 +38,7 @@ static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(())
 /// before the next one reads the roster.
 async fn start_server() -> (tokio::sync::MutexGuard<'static, ()>, Goofi, String, AppState) {
     let serial = ONE_AT_A_TIME.lock().await;
-    let g = Goofi::new();
+    let g = Goofi::mcp();
     // The `_`-test agents are CONFIG entries now, written once into the test-scoped home the
     // fixture minted — never advertised, exactly as a user's own test entry would be.
     static CONFIG: std::sync::Once = std::sync::Once::new();
@@ -374,15 +374,12 @@ async fn read_until(ws: &mut Ws, want: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it_chose() {
-    let (_serial, g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
 
     // `6*7` is echoed input; only `42` can come from the child having run.
     term.send(Message::Binary(b"echo $((6*7))\n".to_vec().into())).await.unwrap();
     read_until(&mut term, "42").await;
-
-    // An edit under the shell's own actor, so the exit below can prove the stack dies with it.
-    g.client(&actor_of(&id)).call("node add", json!({ "type": "LFO" }));
 
     // `TAIL''MARK` is what the terminal echoes, so `TAILMARK` can only come from the child.
     term.send(Message::Binary(
@@ -411,26 +408,6 @@ async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it
     let inst = &roster["instances"][0];
     assert_eq!((&inst["id"], &inst["harness"], &inst["state"], &inst["exit_code"]),
                (&json!(id), &json!("_sh"), &json!("exited"), &json!(7)), "{roster}");
-    state.release_mount();
-}
-
-/// An agent's drag ends with it, though its whole life fell between two status beats.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_harness_gone_between_two_beats_takes_its_drag_back() {
-    let (_serial, g, addr, state) = start_server().await;
-    let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
-    attached(&mut term).await;
-    let osc = g.add("LFO");
-    g.set_param(osc, "lfo", "amplitude", 1.0);
-    let amp = |g: &Goofi| g.doc()["nodes"][goofi_tests::hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
-    g.client(&actor_of(&id)).preview("node param edit",
-        json!({ "node": goofi_tests::hex(osc), "param": "lfo/amplitude", "value": 0.3 }));
-    assert_eq!(amp(&g), json!(0.3));
-
-    term.send(Message::Binary(b"exit 0\n".to_vec().into())).await.unwrap();
-    read_until(&mut term, "exit_code").await;
-    call(&mut ctl, 2, "agent stop", json!({ "instance": id })).await;
-    g.until("the dismissed agent's drag to end", |g| (amp(g) == json!(1)).then_some(()));
     state.release_mount();
 }
 
@@ -630,13 +607,23 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     let (_serial, g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
 
+    // The workspace note points at the orientation, which is an OP — the same text for an agent
+    // spawned here and for one outside goofi — listed first among the guides, the skills after it.
     let mount = state.mount();
-    let agents = std::fs::read_to_string(mount.join("AGENTS.md"))
-        .expect("the workspace was seeded with the orientation");
+    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("guide get orientation"));
+    let guides = g.call("guide list", json!({}));
+    assert_eq!(guides["guides"][0]["name"], json!("orientation"), "{guides}");
+    assert!(guides["guides"].as_array().unwrap().iter().any(|e|
+                e["name"] == "patching-biosignals" && e["doc"].as_str().is_some_and(|d| d.contains("EEG"))),
+            "a shipped skill is listed under its frontmatter description: {guides}");
+    let skill = g.call("guide get", json!({ "name": "patching-biosignals" }));
+    assert!(skill["text"].as_str().is_some_and(|t| t.starts_with("---\nname: patching-biosignals")), "{skill}");
+    let refused = g.try_call("guide get", json!({ "name": "nope" })).unwrap_err();
+    assert!(refused.contains("orientation, designing-biofeedback"), "a miss names the guides: {refused}");
+    let agents = g.call("guide get", json!({ "name": "orientation" }))["text"].as_str().unwrap().to_string();
     assert!(agents.contains("goofi is a live"), "the orientation is the real one: {agents}");
-    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
     // The orientation's own node example, written where the orientation says, is a node — so the
-    // seeded text can never name a folder the scan does not read or a shape the probe refuses.
+    // text can never name a folder the scan does not read or a shape the probe refuses.
     let example: String = agents
         .lines()
         .skip_while(|l| !l.contains("# nodes_signal/scale.py"))
@@ -653,14 +640,13 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     // server's id, its own undo actor, and a `goofi` that resolves — out of the directory the
     // running binary sits in, which goofi puts on PATH.
     term.send(Message::Binary(
-        b"stty -echo; printf 'S[%s]A[%s]G[%s]P[%s]EN''D\n' \
-          \"$GOOFI_SESSION\" \"$GOOFI_ACTOR\" \"$(command -v goofi)\" \"$PATH\"\n".to_vec().into()))
+        b"stty -echo; printf 'S[%s]G[%s]P[%s]EN''D\n' \
+          \"$GOOFI_SESSION\" \"$(command -v goofi)\" \"$PATH\"\n".to_vec().into()))
         .await.unwrap();
     let said = read_until(&mut term, "END").await;
     // The SESSION's id, which is what the harness plane is keyed by: the binary names its one
     // instance after the session it holds, while this harness boots several into one session.
     assert!(said.contains(&format!("S[{}]", goofi_tests::session_id())), "{said}");
-    assert!(said.contains(&format!("A[{}]", actor_of(&id))), "{said}");
     // The SEAT, not the resolution: here the running binary is this test, and no `goofi` sits
     // beside it to be found — that half is only true of the real binary. What the contract puts
     // in the child either way is the running binary's own directory, first.
@@ -675,10 +661,8 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
             "goofi's own directory is not on the agent's PATH: {said}");
 
     // The stopped shell's edits stay in the one history: the graph keeps what the agent built,
-    // and any client's undo takes it back. The reaper ends its drags and THEN broadcasts, so the
-    // exited event is the settled signal.
-    let actor = actor_of(&id);
-    g.client(&actor).call("node add", json!({ "type": "LFO" }));
+    // and any client's undo takes it back.
+    g.call("node add", json!({ "type": "LFO" }));
     // A shell that leaves on the ask is reaped before the reply is written, so the exited event
     // may already have ridden the socket ahead of it.
     let (_, before) = call_with_events(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;

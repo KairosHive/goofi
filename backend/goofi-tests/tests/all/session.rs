@@ -477,18 +477,21 @@ fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits
     let mount = g.state.mount();
     assert_ne!(mount, old_mount, "a fresh workspace");
     assert!(!old_mount.exists(), "and the one it replaced is released, not leaked");
-    // `new` MINTS the workspace, so it seeds the orientation while `load`, one line away, must not.
-    assert!(!mount.join("agent.md").exists());
-    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
-    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
+    // `new` MINTS the workspace, so it seeds the note while `load`, one line away, must not. The
+    // note says what the directory is and where the orientation is; the orientation itself is
+    // `guide get orientation`, the same for an agent here and one outside.
+    assert!(!mount.join("CLAUDE.md").exists(), "AGENTS.md is the one file every harness reads");
+    let agents = std::fs::read_to_string(mount.join("AGENTS.md")).unwrap();
+    assert_eq!(agents, goofi_bridge::orientation::AGENTS_MD);
+    assert!(agents.contains(".goofiignore") && agents.contains("guide get orientation"), "{agents}");
     let ignore = goofi_graph::archive::IGNORE_FILE;
     assert_eq!(std::fs::read_to_string(mount.join(ignore)).unwrap(), goofi_graph::archive::DEFAULT_IGNORE);
     // Absent-only: what an agent or the author made of a seeded file is theirs.
-    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+    for name in ["AGENTS.md", ignore] {
         std::fs::write(mount.join(name), "their own\n").unwrap();
     }
     goofi_bridge::orientation::seed(&mount);
-    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+    for name in ["AGENTS.md", ignore] {
         assert_eq!(std::fs::read_to_string(mount.join(name)).unwrap(), "their own\n", "{name} was seeded over");
     }
 }

@@ -221,6 +221,11 @@ impl Goofi {
         Goofi::with_mode(goofi_bridge::Mode { demo: true, ..Default::default() })
     }
 
+    /// Boot one that serves `/mcp`, as `--mcp` does; the default serves none.
+    pub fn mcp() -> Goofi {
+        Goofi::with_mode(goofi_bridge::Mode { mcp: true, ..Default::default() })
+    }
+
     /// Boot one the app SHELL started, which performs an update on request.
     pub fn shelled() -> Goofi {
         Goofi::with_mode(goofi_bridge::Mode { shell: true, ..Default::default() })
