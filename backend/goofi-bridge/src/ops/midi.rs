@@ -33,6 +33,13 @@ impl EffectOp for Learn {
         if a.on {
             state.midi.probe();
         }
+        // The learn moves no group of the graph, so the settle below would not open the ports: the
+        // reply must name what is open NOW, not what the MIDI watch opens on its next poll.
+        let closed = {
+            let g = state.graph.lock();
+            state.midi.resync(&g).0
+        };
+        drop(closed);
         crate::resync_and_broadcast(state);
         let groups: Vec<Value> = state.midi.open().into_iter().map(|(group, port)| json!({ "group": group, "port": port })).collect();
         Ok(json!({ "groups": groups, "seconds": crate::midi::LEARN.as_secs() }))

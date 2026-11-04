@@ -96,10 +96,11 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     if midir::MidiOutput::new("goofi-test").is_ok() {
         use midir::os::unix::VirtualOutput;
         let mut keys = Some(midir::MidiOutput::new("goofi-test").unwrap().create_virtual("goofi-test-keys").expect("a virtual port"));
-        let live = g.until("the virtual port to open under a learn", |g| {
-            g.call("midi learn", j!({ "on": true }))["groups"].as_array().unwrap().iter()
-                .find(|p| p["port"].as_str().unwrap().contains("goofi-test-keys")).map(|p| p["group"].as_str().unwrap().to_string())
-        });
+        // The learn's own reply names what it opened: a page acts on that reply, not on a later poll.
+        let learned = g.call("midi learn", j!({ "on": true }));
+        let live = learned["groups"].as_array().unwrap().iter()
+            .find(|p| p["port"].as_str().unwrap().contains("goofi-test-keys")).map(|p| p["group"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| panic!("the learn opened the port and said so: {learned}"));
         // Named after the port as the host lists it: ALSA puts the client's name and its own
         // numbers around it, CoreMIDI lists the port alone. The numbers never reach the name.
         assert!(live.ends_with("goofi_test_keys") && !live.chars().any(|c| c.is_ascii_digit()),
