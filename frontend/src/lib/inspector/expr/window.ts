@@ -27,10 +27,10 @@ export const WINDOW_STYLE = `
 .gx-win[hidden] { display: none; }
 /* The doc shows whole, as far as the window goes, and scrolls only once it does not fit; the list
    under it keeps three rows at the least and takes the rest. */
-.gx-win-doc { flex: 0 1 auto; min-height: 0; overflow-y: auto; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.gx-win-doc { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: var(--space-4) 0; background: var(--surface-2); border-bottom: 1px solid var(--border); }
 /* The list is a table: a name column, a line column that gives way, a kind column; the rows subgrid
    onto it, so every column lines up down the list and a row still paints its selection. */
-.gx-win-list { flex: 1 1 auto; min-height: calc(3 * (var(--lh-text) * 1em + 2 * var(--space-1))); overflow-y: auto; margin: 0; padding: 0; list-style: none;
+.gx-win-list { flex: 1 1 auto; min-height: calc(3 * (var(--lh-text) * 1em + 2 * var(--space-1))); overflow-y: auto; margin: 0; padding: var(--space-4) 0 0; list-style: none;
 	display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-content: start; }
 .gx-win-stale { opacity: 0.6; }
 .gx-win-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline;
@@ -42,7 +42,7 @@ export const WINDOW_STYLE = `
 .gx-win-constant { color: var(--syn-literal); }
 .gx-win-brief { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
 .gx-win-detail { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: var(--fs-micro); text-align: right; }
-.gx-doc { display: flex; flex-direction: column; padding: var(--space-2) var(--space-4); }
+.gx-doc { display: flex; flex-direction: column; padding: 0 var(--space-4); }
 .gx-doc-sig { display: block; font-family: var(--font-mono); color: var(--syn-function); font-weight: 600; }
 .gx-doc-text { margin: var(--space-1) 0 0; color: var(--text); }
 .gx-doc-code, .gx-doc-option { font-family: var(--font-mono); color: var(--syn-string); }
