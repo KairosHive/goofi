@@ -299,7 +299,7 @@ pub struct Playback {
     speed: Option<usize>,
     resample: Option<usize>,
     morph: Option<usize>,
-    seam: Option<usize>,
+    smoothing: Option<usize>,
     sigma: Option<usize>,
 }
 
@@ -325,7 +325,7 @@ pub enum Entry {
 #[derive(Clone, Copy)]
 struct Shape {
     morph: bool,
-    seam: usize,
+    smoothing: usize,
     sigma: f32,
 }
 
@@ -343,7 +343,7 @@ impl Playback {
             speed: beside("speed"),
             resample: beside("resample"),
             morph: beside("morph"),
-            seam: beside("seam"),
+            smoothing: beside("smoothing"),
             sigma: beside("sigma"),
         }
     }
@@ -382,7 +382,7 @@ impl Playback {
     fn shape(&self, params: &[AtomicU64]) -> Shape {
         Shape {
             morph: Self::read(params, self.morph, 0.0) >= 0.5,
-            seam: Self::read(params, self.seam, 0.0).max(0.0) as usize,
+            smoothing: Self::read(params, self.smoothing, 0.0).max(0.0) as usize,
             sigma: Self::read(params, self.sigma, 1.0).max(f64::MIN_POSITIVE) as f32,
         }
     }
@@ -535,12 +535,11 @@ impl Frames {
             let (len, at) = (self.now.len, self.now.pos);
             let a = self.progress();
             // The seam: at the loop point both ends are their mean, and the far end's share falls
-            // off as a gaussian over `seam` samples on either side.
+            // off as a gaussian over `smoothing` samples on either side, `sigma` wide in those.
             let d = if len > 0 { at.min(len - 1 - at) } else { 0 };
-            let k = match d < shape.seam.min(len / 2) {
-                true => 0.5 * (-(d as f32 * d as f32) / (2.0 * shape.sigma * shape.sigma)).exp(),
-                false => 0.0,
-            };
+            let n = shape.smoothing.min(len / 2);
+            let x = d as f32 / (n as f32 * shape.sigma);
+            let k = if d < n { 0.5 * (-0.5 * x * x).exp() } else { 0.0 };
             for c in 0..channels {
                 out.chan_mut(c)[i] = match (len, k > 0.0) {
                     (0, _) => 0.0,

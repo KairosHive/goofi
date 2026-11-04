@@ -223,7 +223,8 @@ pub mod cross {
     /// beside it: a bool `mix` plays the rows as one channel, `low..high` are the values that are
     /// full scale, `speed` is frame samples per audio sample, made between by a `resample` of
     /// [`RESAMPLE`], a bool `morph` glides from the frame before over the time between arrivals,
-    /// and `seam` audio samples on each side of the loop point blend across it, a gaussian of `sigma`.
+    /// and `smoothing` audio samples on each side of the loop point blend across it, a gaussian
+    /// `sigma` of them wide.
     pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
 
     /// The options of a waveform's `resample`, in the order the engine reads their index.

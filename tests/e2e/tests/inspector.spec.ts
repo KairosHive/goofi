@@ -9,7 +9,7 @@ test('a param shown by another leaves the inspector when that one moves, and ret
 	const uid = await addNode(page, 'audio:SignalIn');
 	try {
 		await selectNode(page, uid);
-		const waveform = ['mix', 'low', 'high', 'speed', 'resample', 'morph', 'seam', 'sigma'].map((name) => page.getByTestId(`param-field-${name}`));
+		const waveform = ['mix', 'low', 'high', 'speed', 'resample', 'morph', 'smoothing', 'sigma'].map((name) => page.getByTestId(`param-field-${name}`));
 		const pitch = page.getByTestId('param-field-pitch');
 		await expect(page.getByTestId('param-field-mode')).toBeVisible();
 		for (const field of waveform) await expect(field).toBeVisible();

@@ -58,7 +58,7 @@ goofi_audio_sdk::params! {
     SPEED = ParamDecl {
         group: "signal",
         name: "speed",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.001, max: 100.0, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("frame samples played per audio sample: 1 is one for one, 2 twice as fast"),
         section: 1,
@@ -78,30 +78,30 @@ goofi_audio_sdk::params! {
     MORPH = ParamDecl {
         group: "signal",
         name: "morph",
-        spec: ParamSpec::Bool { default: false },
+        spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("glide from the previous frame to a new one over the time between their arrivals"),
         section: 2,
         show: WAVEFORM,
         role: None,
     },
-    SEAM = ParamDecl {
+    SMOOTHING = ParamDecl {
         group: "signal",
-        name: "seam",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 3000.0, int: true, options: &[], face: Face::Plain },
+        name: "smoothing",
+        spec: ParamSpec::Num { default: &[50.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("audio samples on each side of the loop point that blend across it, 0 for none"),
-        section: 2,
+        section: 3,
         show: WAVEFORM,
         role: None,
     },
     SIGMA = ParamDecl {
         group: "signal",
         name: "sigma",
-        spec: ParamSpec::Num { default: &[300.0], min: 1.0, max: 3000.0, int: false, options: &[], face: Face::Plain },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 3.0, int: false, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("the width of the seam's gaussian falloff, in audio samples"),
-        section: 2,
+        doc: Some("the width of the smoothing's gaussian falloff, as a share of `smoothing`"),
+        section: 3,
         show: WAVEFORM,
         role: None,
     },
@@ -117,7 +117,7 @@ static MANIFEST: Manifest = Manifest {
           As a `waveform`, a `[C, T]` frame enters as `C` audio channels, `speed` frame samples \
           to an audio sample. The newest frame loops until the next one takes over at its end, so \
           frames on time play back to back and a late one never leaves a gap; with `morph`, it \
-          takes over as it arrives and the loop glides into it. `seam` blends the loop's two ends \
+          takes over as it arrives and the loop glides into it. `smoothing` blends the loop's two ends \
           where they meet. With `mix`, the `C` rows play together as one channel, their mean. \
           `low..high` are the values that are full scale. As an `oscillator`, an `[n]` frame is \
           n sines at those pitches, Hz or volts per octave by `pitch`, and a `[2, n]` frame n \
