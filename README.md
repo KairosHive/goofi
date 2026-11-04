@@ -173,7 +173,7 @@ box, any command you name in `config.toml`, with the flags its `model` and `effo
 It comes up on a PTY with the patch workspace as its working directory, and its terminal is a
 panel beside the canvas. The workspace's `AGENTS.md` says what the directory is and points at
 `goofi guide get orientation` — the same orientation an agent outside goofi reads, from any shell
-with `goofi` on its PATH. `goofi guide list` names it and the skills beside it: goofi's own, which
+with `goofi` on its PATH. `goofi guide` names it and the skills beside it: goofi's own, which
 ride into every workspace that has none (patching a biosignal chain, designing biofeedback,
 designing an emergent shader), and the patch's.
 

@@ -163,6 +163,11 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
     assert!(err && text.contains("twice"), "{text}");
     let (text, err) = exec(&addr, "/mcp", 14, &["node add --type"]).await;
     assert!(err && text.contains("needs a value"), "{text}");
+    // A group word alone is its `list`; a group without one is still refused with its children.
+    let guides: Value = serde_json::from_str(&ok_exec(&addr, 60, "guide").await).unwrap();
+    assert_eq!(guides["guides"][0]["name"], json!("orientation"), "`guide` is `guide list`: {guides}");
+    let (text, err) = exec(&addr, "/mcp", 61, &["session"]).await;
+    assert!(err && text.contains("under `session`") && text.contains("session status"), "{text}");
 
     // …and each spelling the schema promises parses: `--flag=value`, the bool's `--no-` form on
     // a declared bool only, `any` as JSON-or-bare-string, and a variadic positional list.

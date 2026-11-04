@@ -34,8 +34,9 @@ fn walk(words: &[String]) -> Stop {
     Stop::Children(children, prefix)
 }
 
-/// The op a word sequence names among the served rows, and how many words it took. A refusal
-/// names the served phrases under the words that matched, or the group a mode withholds.
+/// The op a word sequence names among the served rows, and how many words it took. A group word
+/// alone is its `list` op where it has one (`goofi guide` is `guide list`). A refusal names the
+/// served phrases under the words that matched, or the group a mode withholds.
 pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize), String> {
     let line = words.join(" ");
     if let Some(op) = ops.iter().find(|op| {
@@ -46,7 +47,14 @@ pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize),
     }
     let prefix = match walk(words) {
         Stop::Op(name) => name,
-        Stop::Children(_, prefix) | Stop::Unknown(prefix) => prefix,
+        Stop::Children(kids, prefix) => {
+            let listing = format!("{prefix}list");
+            if let Some(op) = kids.iter().any(|k| k.word() == "list").then(|| ops.iter().find(|o| o.name == listing)).flatten() {
+                return Ok((op, words.len()));
+            }
+            prefix
+        }
+        Stop::Unknown(prefix) => prefix,
     };
     let near: Vec<&str> = match prefix.is_empty() {
         true => Vec::new(),
@@ -470,9 +478,9 @@ fn render_help(h: &Value, style: &Style) -> String {
     let missing = h.get("missing").map(text::cell);
     if !style.human {
         let top = format!(
-            "goofi speaks noun-first phrases. `help <group>` lists one group,\n\
-             `<phrase> --help` explains one op, and `op list` answers the registry as data —\n\
-             `op list --doc` explains every op at once, which is the whole manual.\n\
+            "goofi speaks noun-first phrases. `help <group>` lists one group, a group word\n\
+             alone runs its `list`, `<phrase> --help` explains one op, and `op list` answers\n\
+             the registry as data — `op list --doc` explains every op at once, the whole manual.\n\
              groups:\n{}\n\
              subjectless: {}.\n\
              reserved words: {} — and `goofi -` runs stdin lines as one batch.",
@@ -496,7 +504,7 @@ fn render_help(h: &Value, style: &Style) -> String {
         out.push_str(&format!("nothing under `{m}`\n\n"));
     }
     out.push_str(&format!(
-        "goofi speaks noun-first phrases: `goofi <group> <op> [args]`\n\n{}\n\ngroups\n{}\n\n{}",
+        "goofi speaks noun-first phrases: `goofi <group> <op> [args]`; a group word alone runs its `list`\n\n{}\n\ngroups\n{}\n\n{}",
         text::table(&doors, 2, style.width),
         text::table(&group_rows, 2, style.width),
         text::table(&words, 0, style.width),
