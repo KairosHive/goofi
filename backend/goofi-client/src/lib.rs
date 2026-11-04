@@ -33,11 +33,11 @@ pub fn resolve_target() -> Result<Record, String> {
     match rows.len() {
         0 => Err("no running goofi — start one with `goofi`".into()),
         1 => Ok(rows.remove(0)),
-        // One line per session, as the shell takes it: `export GOOFI_SESSION=<id>`.
+        // One line per session, as a command's prefix takes it: `GOOFI_SESSION=<id>`.
         _ => {
             let width = rows.iter().map(|s| s.id.len()).max().unwrap_or(0);
             let lines: Vec<String> =
-                rows.iter().map(|s| format!("  export GOOFI_SESSION={:<width$}  # {}", s.id, s.url)).collect();
+                rows.iter().map(|s| format!("  GOOFI_SESSION={:<width$}  # {}", s.id, s.url)).collect();
             Err(format!("several goofis are running — pick one:\n{}", lines.join("\n")))
         }
     }
