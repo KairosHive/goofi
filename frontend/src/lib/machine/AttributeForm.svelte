@@ -5,7 +5,6 @@
 	import type { Attribute } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
-	import RenameField from '$lib/inspector/RenameField.svelte';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { Button, Field, NumberInput, Select, TextInput, Toggle } from '$lib/ui';
@@ -39,7 +38,8 @@
 	</div>
 	<div class="fields">
 		<Field label="name" row>
-			<RenameField value={attr} valid={isValidIdentifier} label="Attribute name" testid="attribute-name" onRename={(to) => call('machine attribute rename', { to })} />
+			<TextInput inputmode="search" value={attr} aria-label="Attribute name" data-testid="attribute-name" autocomplete="off"
+				onChange={(to) => { if (to.trim() !== attr && isValidIdentifier(to.trim())) call('machine attribute rename', { to: to.trim() }); }} />
 		</Field>
 		<Field label="kind" row>
 			<Select data-testid="attribute-kind" aria-label="kind" value={faceOf(a)} options={FACES.map((f) => f.id)} onChange={setFace} />

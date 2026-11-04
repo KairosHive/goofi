@@ -3,18 +3,15 @@
 <script lang="ts">
 	import { ContextMenu, type MenuItem, type PanelProps } from 'panelty';
 	import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-	import type { DropPoint } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
-	import NodeDropHint from './NodeDropHint.svelte';
+	import { dropTarget, DropHint, type Point } from '$lib/drag';
 	import { byName } from './nodeChoices';
 	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput } from '$lib/ui';
 
 	const { panelId }: PanelProps = $props();
 
 	const g = graph();
-	const uiStore = ui();
 
 	// The next start's arguments, not a copy of backend state: empty is what makes the backend
 	// fall back to the `record.*` variables.
@@ -24,8 +21,8 @@
 
 	const rec = $derived(g.record);
 
-	let nodeMenu = $state<DropPoint | null>(null);
-	let slotMenu = $state<{ uid: string; at: DropPoint; slots: string[]; selected: string[] } | null>(null);
+	let nodeMenu = $state<Point | null>(null);
+	let slotMenu = $state<{ uid: string; at: Point; slots: string[]; selected: string[] } | null>(null);
 	const qualityLabels = { small: 'Smaller file', high: 'High', very_high: 'Very high' };
 
 	function armSlots(uid: string, slots: string[]): void {
@@ -39,7 +36,7 @@
 			.catch((e: unknown) => (failure = String(e)));
 	}
 
-	function chooseSlots(uid: string, at: DropPoint): void {
+	function chooseSlots(uid: string, at: Point): void {
 		const slots = Object.keys(g.nodeById(uid)?.output_slots ?? {});
 		if (slots.length === 1) armSlots(uid, slots);
 		else if (slots.length > 1) slotMenu = { uid, at, slots, selected: [...slots] };
@@ -81,7 +78,6 @@
 		];
 	});
 
-	$effect(() => uiStore.onNodeDrop(panelId, (uid, _zone, at) => chooseSlots(uid, at)));
 
 	type Row = {
 		uid: string;
@@ -129,7 +125,7 @@
 	}
 </script>
 
-<div class="recorder" data-testid="recorder-panel">
+<div class="recorder" data-testid="recorder-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source, at }) => chooseSlots(source.key, at) }}>
 	<Bar>
 		{#snippet start()}
 			<StatusDot
@@ -242,7 +238,7 @@
 		{/if}
 	</ScrollArea>
 
-	<NodeDropHint {panelId} />
+	<DropHint id={panelId} />
 </div>
 
 {#if nodeMenu}

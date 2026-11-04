@@ -473,19 +473,10 @@ textarea:disabled {
 	transform: rotate(90deg);
 }
 
-/* The dashed frame on a node drop target while a node is dragged out of an editor; it fills
-   in under the cursor. The host must be positioned. */
-.node-drop-hint {
-	position: absolute;
-	inset: 4px;
+/* While something is dragged, a disabled control is no surface: the browser dispatches no mouse
+   event to one, so a release over it would never reach the drag that let go. */
+html[data-drag] :disabled {
 	pointer-events: none;
-	border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-	border-radius: var(--radius-sm);
-	z-index: var(--z-drag-ghost);
-}
-.node-drop-hint.active {
-	border-style: solid;
-	background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* A ChoiceGrid launcher that fills its panel. `--bg`, not `--surface-1`: a tile is
    `--surface-1` and carries its separation by that step. */

@@ -1,16 +1,16 @@
 <!-- Control panel: widgets over ONE group of variables. Every change is a variables op, so the
      manager owns the state and this panel owns only the drawing and the gesture in flight. -->
 <script lang="ts">
-	import { onDestroy, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
-	import { asStateObject, ContextMenu, type MenuItem } from 'panelty';
+	import { asStateObject, beginDrag, ContextMenu, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import type { ControlView, VariableView, LockView } from '$lib/crdt/graphDoc';
 	import { effectiveLock, isValidIdentifier } from '$lib/crdt/graphDoc';
-	import { ui } from '$lib/stores/ui.svelte';
+	import { drag, draggable, dropTarget, DropHint, type DragSource, type DropTargetOptions, type Outcome, type Point } from '$lib/drag';
 	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
@@ -34,8 +34,6 @@
 	import { KIND, bornValue, cellAt, kindFits, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 	import ControlWidget from './ControlWidget.svelte';
 	import InstanceBar from './InstanceBar.svelte';
-	import VariableGhost from './VariableGhost.svelte';
-	import { createVariableLift } from './variableLift.svelte';
 
 	interface ControlState {
 		group?: string;
@@ -45,7 +43,7 @@
 
 	let props: PanelProps = $props();
 	const g = graph();
-	const uiStore = ui();
+	const engine = drag();
 
 	const st = $derived(asStateObject(props.state) as ControlState);
 	const group = $derived(st.group ?? '');
@@ -56,18 +54,12 @@
 	const elements = $derived(g.variables.filter((gv) => gv.group === group && gv.control));
 	// Values come over the data plane, one stream per widget drawn.
 	watchVariables(() => elements.map((gv) => gv.name));
-	/** What a widget's kind must draw for this value: the form it holds, `text` and `number` as the kinds say. */
-	// What a node dropped on one of this panel's widgets means, said by the panel that draws them.
-	$effect(() =>
-		uiStore.onNodeDrop(props.panelId, (uid, name) => {
-			void g.linkControl(name, uid).catch(() => {});
-		})
-	);
 	// Each panel starts in edit mode and owns its mode independently.
 	let editing = $state(true);
 	const edit = $derived(named && editing);
 
 	let board: HTMLDivElement | null = $state(null);
+	let wrap: HTMLDivElement | null = $state(null);
 	let picked = $state<string | null>(null);
 	let renaming = $state<string | null>(null);
 	const pickedView = $derived(elements.find((el) => el.name === picked) ?? null);
@@ -77,13 +69,13 @@
 		return board.querySelector<HTMLElement>(`[data-testid="control-${group}-${pickedView.element}"]`);
 	});
 
-	// The two gestures in flight: a widget being moved or resized, and a chip lifted off the palette.
-	let drag: { name: string; from: Cell; x: number; y: number; units: Units; resize: boolean; to: Cell | null } | null =
-		$state(null);
-	// `at` is the ghost's top-left: snapped to the cell it would land on while over the board, else
-	// under the pointer's centre.
-	let chip: { kind: Kind; at: { x: number; y: number }; snapped: boolean; w: number; h: number; from: { x: number; y: number } } | null =
-		$state(null);
+	// The gestures in flight. A widget pressed anywhere is ONE drag: a move while it stays in the
+	// panel, a reference carried to a target beyond it. A widget's corner resizes it; a chip lifted
+	// off the palette bears a widget where it lands.
+	let moving: { name: string; from: Cell; units: Units } | null = $state(null);
+	let resizing: { name: string; to: Cell } | null = $state(null);
+	let chip: { kind: Kind; w: number; h: number } | null = $state(null);
+	const boardId = $derived(`${props.panelId}#board`);
 	// A drop's cell outlives the pointer until the document agrees, so it never flashes back.
 	let pending: { name: string; to: Cell } | null = $state(null);
 	$effect(() => {
@@ -96,10 +88,22 @@
 		return { x: c.x, y: c.y, w: c.w, h: c.h };
 	}
 
+	/** Where a widget is drawn: under the gesture that holds it, else where the document has it. */
 	function placed(gv: VariableView): Cell {
-		if (drag?.name === gv.name && drag.to) return drag.to;
+		if (moving?.name === gv.name) {
+			const to = movedTo(moving);
+			if (to) return to;
+		}
+		if (resizing?.name === gv.name) return resizing.to;
 		if (pending?.name === gv.name) return pending.to;
 		return cellOf(gv);
+	}
+
+	/** The cell a move in flight has reached, or null while it is carried beyond the panel. */
+	function movedTo(m: { from: Cell; units: Units }): Cell | null {
+		const [s, p] = [engine.start, engine.point];
+		if (!s || !p || !engine.inHome) return null;
+		return movedBy(m.from, p.x - s.x, p.y - s.y, m.units, CONTROL_COLUMNS);
 	}
 
 	function unitsOf(el: HTMLElement): Units & { gap: number } {
@@ -111,15 +115,10 @@
 		return { x, y: Number.isFinite(row) ? row + gap : x, gap };
 	}
 
-	/** Where the pointer is on the board, in pixels into its grid, or null when it is off the
-	 * board's scroll area — the whole area, since the board itself is only as tall as its widgets. */
-	function onBoard(e: PointerEvent): { x: number; y: number } | null {
-		const zone = board?.closest('.ui-scrollarea') ?? board;
-		if (!board || !zone) return null;
-		const z = zone.getBoundingClientRect();
-		if (e.clientX < z.left || e.clientX > z.right || e.clientY < z.top || e.clientY > z.bottom) return null;
-		const o = origin(board);
-		return { x: e.clientX - o.x, y: e.clientY - o.y };
+	/** A client point in pixels into the board's grid. */
+	function onBoard(p: Point): Point {
+		const o = origin(board as HTMLElement);
+		return { x: p.x - o.x, y: p.y - o.y };
 	}
 
 	/** The board's grid origin in client pixels. */
@@ -129,21 +128,20 @@
 		return { x: r.left + parseFloat(cs.paddingLeft), y: r.top + parseFloat(cs.paddingTop) };
 	}
 
-	function bornCell(kind: Kind, point: { x: number; y: number }, u: Units): Cell {
+	function bornCell(kind: Kind, point: Point, u: Units): Cell {
 		return cellAt(point.x, point.y, KIND[kind].w, KIND[kind].h, u, CONTROL_COLUMNS);
 	}
 
-	/** The ghost's top-left for a pointer at `e`: the cell it would land on, in pixels, while over
-	 * the board; else centred under the pointer. */
-	function ghostAt(e: PointerEvent, kind: Kind, w: number, h: number): { at: { x: number; y: number }; snapped: boolean } {
-		const point = onBoard(e);
-		if (point && board) {
+	/** The chip ghost's top-left for the pointer at `p`: the cell it would land on, in pixels, while
+	 * over the board; else centred under the pointer. */
+	function ghostAt(p: Point, kind: Kind, w: number, h: number): { at: Point; snapped: boolean } {
+		if (board && engine.isOver(boardId)) {
 			const u = unitsOf(board);
-			const cell = bornCell(kind, point, u);
+			const cell = bornCell(kind, onBoard(p), u);
 			const o = origin(board);
 			return { at: { x: o.x + cell.x * u.x, y: o.y + cell.y * u.y }, snapped: true };
 		}
-		return { at: { x: e.clientX - w / 2, y: e.clientY - h / 2 }, snapped: false };
+		return { at: { x: p.x - w / 2, y: p.y - h / 2 }, snapped: false };
 	}
 
 	function pick(group: string): void {
@@ -198,9 +196,58 @@
 		return v === null ? Promise.resolve() : g.setVariableValue(gv.name, v).catch(() => {});
 	}
 
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function elementMenu(x: number, y: number, name: string): void {
+		menu = { x, y, items: selection().referenceItems({ variable: name }, `vars.${name}`) };
+	}
+
+	/** The form a widget's expression takes and gives: text for a text widget, a number otherwise. */
+	const tagOf = (c: ControlView): 'text' | 'number' => (KIND[c.kind].draws === 'text' ? 'text' : 'number');
+
+	/** What a press on a widget lifts: the variable, carried as `vars.<name>`; in edit mode the
+	 * panel is its home, where the drag is a move. */
+	function lift(gv: VariableView): DragSource | null {
+		if (edit && board) moving = { name: gv.name, from: cellOf(gv), units: unitsOf(board) };
+		return {
+			key: gv.name,
+			tags: [tagOf(gv.control as ControlView)],
+			label: `vars.${gv.name}`,
+			home: edit ? wrap : null,
+			expression: () => `vars.${gv.name}`
+		};
+	}
+
+	/** Which presses on a cell count: in edit mode all but its tools, else the label alone. */
+	function allowed(t: Element): boolean {
+		return edit ? !t.closest('.zap, .learn, .rename, .handle') : t.closest('.label') !== null;
+	}
+
+	function press(e: PointerEvent, gv: VariableView): void {
+		if (!edit) return;
+		picked = gv.name;
+		(e.currentTarget as HTMLElement).focus();
+		e.preventDefault();
+	}
+
+	// ONE op per gesture, so a drag is one undo step, the way every other frozen drag is.
+	function landMove(outcome: Outcome | null): void {
+		const m = moving;
+		moving = null;
+		if (!m || !outcome || !outcome.inHome) return;
+		const to = movedBy(m.from, outcome.at.x - outcome.start.x, outcome.at.y - outcome.start.y, m.units, CONTROL_COLUMNS);
+		land(m.name, m.from, to);
+	}
+
+	function land(name: string, from: Cell, to: Cell): void {
+		const gv = elements.find((el) => el.name === name);
+		if (!gv || sameCell(to, from)) return;
+		pending = { name, to };
+		void g.editControl(group, gv.element, to).catch(() => (pending = null));
+	}
+
 	// Listened to DIRECTLY, not delegated: a finger's touch is snapped to the nearest element that
-	// listens, and a delegated listener is on the root — so the corner buttons took every grab.
-	function grab(el: HTMLElement, on: (e: PointerEvent) => void): { update(on: (e: PointerEvent) => void): void; destroy(): void } {
+	// listens, and a delegated listener is on the root.
+	function corner(el: HTMLElement, on: (e: PointerEvent) => void): { update(on: (e: PointerEvent) => void): void; destroy(): void } {
 		let now = on;
 		const hear = (e: PointerEvent): void => now(e);
 		el.addEventListener('pointerdown', hear);
@@ -214,57 +261,35 @@
 		};
 	}
 
-	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-	function elementMenu(x: number, y: number, name: string): void {
-		menu = { x, y, items: selection().referenceItems({ variable: name }, `vars.${name}`) };
-	}
-	// A label lifts its variable; a held label is the touch door onto the right-click menu.
-	const lift = createVariableLift(elementMenu);
-	const mine = (name: string): boolean => elements.some((gv) => gv.name === name);
-	onDestroy(() => lift.cancel());
-
-	function down(e: PointerEvent, gv: VariableView, resize: boolean): void {
-		// The cell hears its press directly, before any delegated handler on a corner could stop it.
-		if (!edit || !board || (e.target as Element).closest('.zap, .learn, .rename')) return;
-		picked = gv.name;
-		if (!resize) lift.start(e, gv.name);
-		drag = { name: gv.name, from: cellOf(gv), x: e.clientX, y: e.clientY, units: unitsOf(board), resize, to: null };
-		const el = e.currentTarget as HTMLElement;
-		el.setPointerCapture(e.pointerId);
-		(el.closest('.cell') as HTMLElement | null)?.focus();
-		e.preventDefault();
+	/** The corner: a resize moves the far edge alone, and lands as one op. */
+	function resize(e: PointerEvent, gv: VariableView): void {
+		if (!edit || !board || e.button !== 0) return;
 		e.stopPropagation();
+		e.preventDefault();
+		const [from, units, start] = [cellOf(gv), unitsOf(board), { x: e.clientX, y: e.clientY }];
+		resizing = { name: gv.name, to: from };
+		beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
+			move: (m) => (resizing = { name: gv.name, to: resizedBy(from, m.clientX - start.x, m.clientY - start.y, units, CONTROL_COLUMNS) }),
+			commit: () => {
+				const r = resizing;
+				resizing = null;
+				if (r) land(gv.name, from, r.to);
+			},
+			cancel: () => (resizing = null)
+		});
 	}
 
-	function move(e: PointerEvent): void {
-		if (!drag) return;
-		if (!drag.resize && !onBoard(e)) {
-			lift.move(e);
-			drag.to = null;
-			return;
-		}
-		uiStore.variableDrag = null;
-		const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
-		drag.to = drag.resize
-			? resizedBy(drag.from, dx, dy, drag.units, CONTROL_COLUMNS)
-			: movedBy(drag.from, dx, dy, drag.units, CONTROL_COLUMNS);
-	}
-
-	// ONE op per gesture, so a drag is one undo step, the way every other frozen drag is.
-	function up(e: PointerEvent): void {
-		if (!drag) return;
-		if (!drag.resize && !onBoard(e)) {
-			lift.drop(e, mine);
-			drag = null;
-			return;
-		}
-		lift.cancel();
-		const { name, from, to } = drag;
-		drag = null;
-		const gv = elements.find((el) => el.name === name);
-		if (!gv || !to || sameCell(to, from)) return;
-		pending = { name, to };
-		void g.editControl(group, gv.element, to).catch(() => (pending = null));
+	/** What a widget takes in edit mode: an expression of its form, from anything but itself. */
+	function takesExpression(gv: VariableView): DropTargetOptions {
+		return {
+			id: `${props.panelId}#${gv.name}`,
+			tags: [tagOf(gv.control as ControlView)],
+			accept: (s) => s.key !== gv.name,
+			onDrop: async ({ source, tag, at }) => {
+				const expression = await source.expression?.(tag, at);
+				if (expression) void g.computeControl(group, gv.element, expression).catch(() => {});
+			}
+		};
 	}
 
 	function zap(e: KeyboardEvent, gv: VariableView): void {
@@ -273,35 +298,17 @@
 		void g.removeControl(group, gv.element);
 	}
 
-	function liftChip(e: PointerEvent, kind: Kind): void {
-		if (!board) return;
+	/** A chip off the palette: the kind it bears, at the size it would be born. */
+	function liftChip(kind: Kind): DragSource | null {
+		if (!board) return null;
 		const u = unitsOf(board);
 		const born = KIND[kind];
-		const [w, h] = [born.w * u.x - u.gap, born.h * u.y - u.gap];
-		chip = { kind, ...ghostAt(e, kind, w, h), w, h, from: { x: e.clientX, y: e.clientY } };
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-		e.preventDefault();
+		chip = { kind, w: born.w * u.x - u.gap, h: born.h * u.y - u.gap };
+		return { key: kind, tags: ['widget'] };
 	}
 
-	function driftChip(e: PointerEvent): void {
-		if (!chip) return;
-		const { at, snapped } = ghostAt(e, chip.kind, chip.w, chip.h);
-		chip.at = at;
-		chip.snapped = snapped;
-	}
-
-	// A tap bears the widget where the manager places it; a drag bears it where it was let go.
-	function dropChip(e: PointerEvent): void {
-		if (!chip) return;
-		const { kind, from } = chip;
-		chip = null;
-		const dragged = Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4;
-		const point = dragged ? onBoard(e) : null;
-		if (dragged && !point) return;
-		void bear(kind, point);
-	}
-
-	async function bear(kind: Kind, point: { x: number; y: number } | null): Promise<void> {
+	// A tap bears the widget where the manager places it; a drop bears it where it was let go.
+	async function bear(kind: Kind, point: Point | null): Promise<void> {
 		const cell = point && board ? bornCell(kind, point, unitsOf(board)) : undefined;
 		try {
 			picked = await g.addControl(group, kind, cell);
@@ -346,13 +353,11 @@
 
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && lift.active) { drag = null; lift.cancel(); } }} />
-
 {#if menu}
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 
-<div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit}>
+<div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit} bind:this={wrap}>
 	<InstanceBar testid="control-tabs" items={tabs} active={group} onSelect={pick} onAdd={() => void addGroup()} onRename={nameGroup} onClose={(t) => void removeGroup(t)}>
 		{#snippet end()}
 			<IconButton
@@ -371,36 +376,29 @@
 		<div class="strip">
 			<div class="palette" data-testid="control-palette">
 				{#each CONTROL_KINDS as { id: kind } (kind)}
-					<Chip
-						tone={chip?.kind === kind ? 'accent' : 'neutral'}
-						data-testid={`control-palette-${kind}`}
-						title="Drag onto the board, or tap to add"
-						onpointerdown={(e) => liftChip(e, kind)}
-						onpointermove={driftChip}
-						onpointerup={dropChip}
-						onpointercancel={() => (chip = null)}
-						onclick={(e) => {
-							if (e.detail === 0) void bear(kind, null);
-						}}>{kind}</Chip
-					>
+					<!-- The grip around the chip carries the press: an action needs an element of its own. -->
+					<span class="grip" use:draggable={{ source: () => liftChip(kind), onTap: () => void bear(kind, null), onEnd: () => (chip = null) }}>
+						<Chip
+							tone={chip?.kind === kind ? 'accent' : 'neutral'}
+							data-testid={`control-palette-${kind}`}
+							title="Drag onto the board, or tap to add"
+							onclick={(e) => {
+								if (e.detail === 0) void bear(kind, null);
+							}}>{kind}</Chip
+						>
+					</span>
 				{/each}
 			</div>
 		</div>
 	{/if}
 
 	<ScrollArea>
-		<div class="sheet">
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div
-				class="board"
-				data-testid="control-board"
-				bind:this={board}
-				style={`--columns: ${CONTROL_COLUMNS}`}
-				onpointermove={move}
-				onpointerup={up}
-				onpointercancel={() => { drag = null; lift.cancel(); }}
-				onlostpointercapture={() => { drag = null; lift.cancel(); }}
-			>
+		<!-- The sheet fills the scroll area, so a chip let go under the widgets still lands on the board. -->
+		<div
+			class="sheet"
+			use:dropTarget={edit ? { id: boardId, tags: ['widget'], onDrop: ({ source, at }) => void bear(source.key as Kind, onBoard(at)) } : null}
+		>
+			<div class="board" data-testid="control-board" bind:this={board} style={`--columns: ${CONTROL_COLUMNS}`}>
 				{#if elements.length === 0}
 					<div class="fill">
 						<EmptyState data-testid="control-empty">
@@ -419,10 +417,16 @@
 						class="cell"
 						class:picked={edit && picked === gv.name}
 						data-testid={`control-${group}-${gv.element}`}
-						data-node-drop={edit ? `${props.panelId}#${gv.name}` : undefined}
 						style={`grid-column: ${at.x + 1} / span ${at.w}; grid-row: ${at.y + 1} / span ${at.h}`}
 						tabindex={edit ? 0 : undefined}
-						use:grab={(e) => down(e, gv, false)}
+						use:draggable={{
+							source: () => lift(gv),
+							allow: allowed,
+							onPress: (e) => press(e, gv),
+							onHold: (at) => elementMenu(at.x, at.y, gv.name),
+							onEnd: landMove
+						}}
+						use:dropTarget={edit ? takesExpression(gv) : null}
 						onkeydown={(e) => zap(e, gv)}
 						oncontextmenu={(e) => {
 							e.preventDefault();
@@ -449,11 +453,6 @@
 						<span
 							class="label"
 							title="Drag onto a parameter to set its expression. Double-click to rename"
-							use:grab={(e) => lift.start(e, gv.name)}
-							onpointermove={lift.move}
-							onpointerup={(e) => lift.drop(e, mine)}
-							onpointercancel={lift.cancel}
-							onlostpointercapture={lift.cancel}
 							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
 							>{gv.element}</span
 						>
@@ -488,19 +487,8 @@
 								onclick={() => void g.removeControl(group, gv.element)}><Icon name="x" /></button
 							>
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<span
-								class="handle"
-								data-testid="control-resize"
-								title="Resize"
-								use:grab={(e) => down(e, gv, true)}
-							></span>
-						{/if}
-						{#if edit && uiStore.nodeDrag !== null}
-							<div
-								class="node-drop-hint"
-								class:active={uiStore.nodeDragOver === `${props.panelId}#${gv.name}`}
-								data-testid="node-drop-hint"
-							></div>
+							<span class="handle" data-testid="control-resize" title="Resize" use:corner={(e) => resize(e, gv)}></span>
+							<DropHint id={`${props.panelId}#${gv.name}`} />
 						{/if}
 					</div>
 				{/each}
@@ -508,7 +496,9 @@
 		</div>
 	</ScrollArea>
 
-	{#if edit && pickedView}
+	<!-- The settings stand down while a widget is moved or resized: they sit outside the panel, so
+	     a pointer over them would read as carried beyond it, and they hide the board it lands on. -->
+	{#if edit && pickedView && !moving && !resizing}
 		{@const pv = pickedView}
 		{@const pc = pv.control as ControlView}
 		{@const pheld = effectiveLock(pv, groupLock)}
@@ -608,10 +598,9 @@
 		{/key}
 	{/if}
 
-	<VariableGhost {lift} />
-
-	{#if chip}
-		<div class="ghost" class:snapped={chip.snapped} style={`left: ${chip.at.x}px; top: ${chip.at.y}px`} aria-hidden="true">
+	{#if chip && engine.point}
+		{@const ghost = ghostAt(engine.point, chip.kind, chip.w, chip.h)}
+		<div class="ghost" class:snapped={ghost.snapped} style={`left: ${ghost.at.x}px; top: ${ghost.at.y}px`} aria-hidden="true">
 			<div class="cell born" style={`width: ${chip.w}px; height: ${chip.h}px`}>
 				<div class="widget">
 					<ControlWidget
@@ -648,6 +637,9 @@
 		flex-wrap: wrap;
 		gap: var(--space-2);
 		touch-action: none;
+	}
+	.grip {
+		display: inline-flex;
 	}
 	.props {
 		display: flex;

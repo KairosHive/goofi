@@ -8,6 +8,8 @@
 	import RecoverDialog from '$lib/app/RecoverDialog.svelte';
 	import TitleTip from '$lib/app/TitleTip.svelte';
 	import PresenceOverlay from '$lib/app/PresenceOverlay.svelte';
+	import { DragGhost } from '$lib/drag';
+	import QuickPickHost from '$lib/app/QuickPickHost.svelte';
 	import { presence } from '$lib/stores/presence.svelte';
 	import { Tabs as WorkspaceTabs } from 'panelty';
 	import { Panels as WorkspaceView } from 'panelty';
@@ -187,6 +189,9 @@
 	<RecoverDialog />
 	<!-- One layer, mounted once, so every `title=` below is reachable without hover. -->
 	<TitleTip />
+	<!-- The one chip that follows whatever is carried beyond its panel, and the one list a drop asks with. -->
+	<DragGhost />
+	<QuickPickHost />
 	{#if g.disconnected}
 		<!-- An overlay, not a ring on the shell: panels make their own stacking contexts and would
 		     paint over one. -->

@@ -143,8 +143,8 @@ pub fn typescript() -> String {
         .iter()
         .map(|p| {
             format!(
-                "\t{{ id: '{}', title: '{}', icon: '{}', acceptsNode: {}, doc: '{}' }},\n",
-                p.id, p.title, p.icon, p.accepts_node, p.doc
+                "\t{{ id: '{}', title: '{}', icon: '{}', doc: '{}' }},\n",
+                p.id, p.title, p.icon, p.doc
             )
         })
         .collect::<String>();
@@ -243,8 +243,6 @@ pub fn typescript() -> String {
          \treadonly id: PanelTypeId;\n\
          \treadonly title: string;\n\
          \treadonly icon: IconName;\n\
-         \t/** Whether a node dragged onto this panel binds to it (`state.node`). */\n\
-         \treadonly acceptsNode: boolean;\n\
          \treadonly doc: string;\n\
          }}\n\
          \n\

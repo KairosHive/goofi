@@ -21,6 +21,7 @@
 	import { bareName } from '$lib/editor/typeId';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
 	import { isTextEditingTarget } from '$lib/ui/textEditing';
+	import type { DragSource } from '$lib/drag';
 	import ParamField from './ParamField.svelte';
 	import IdentityBar from './IdentityBar.svelte';
 	import RenameField from './RenameField.svelte';
@@ -125,16 +126,9 @@
 		uiStore.openEditor(id);
 		return () => uiStore.closeEditor(id);
 	});
-	// A node dragged out of the editor onto a param row: the row is a target only where the node HAS
-	// an output that param may read, so the drop never binds what the manager would refuse.
-	const dragged = $derived(uiStore.nodeDrag);
-	$effect(() =>
-		uiStore.onNodeDrop(formId, (uid, zone) => {
-			const [group, name] = zone.split('/');
-			const expression = g.readFor(uid, node?.params?.[group]?.[name]?.type ?? '');
-			if (expression) setSource(group, name, { expression });
-		})
-	);
+	// A row takes a dropped value of its own type from anything but the node it belongs to, so a
+	// drop never binds what the manager would refuse.
+	const notSelf = (source: DragSource): boolean => !(source.tags.includes('node') && source.key === node?.uid);
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
 	function modulate(group: string, name: string, kind: 'lfo' | 'nse'): void {
@@ -248,12 +242,6 @@
 			event.preventDefault();
 			modulate(group, name, key === 'l' ? 'lfo' : 'nse');
 		}
-	}
-
-	/** The row's drop-zone key, or null where this node cannot drive that param. */
-	function dropZone(group: string, name: string, d: ParamDescriptor): string | null {
-		if (!dragged || dragged === node?.uid) return null;
-		return g.readFor(dragged, d.type) ? `${formId}#${paramKey(group, name)}` : null;
 	}
 
 	// A group whose every param is hidden has no tab.
@@ -611,7 +599,7 @@
 										selfName={node?.name}
 										viewKey={`${node?.uid}/${group}/${paramName}`}
 										{descriptor}
-										dropZone={dropZone(group, paramName, descriptor)}
+										accept={notSelf}
 										data-testid={`param-field-${paramName}`}
 										refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
 										onCommit={(v) => setValue(group, paramName, v)}

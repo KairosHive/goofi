@@ -34,8 +34,6 @@ export interface PanelTypeInfo {
 	readonly id: PanelTypeId;
 	readonly title: string;
 	readonly icon: IconName;
-	/** Whether a node dragged onto this panel binds to it (`state.node`). */
-	readonly acceptsNode: boolean;
 	readonly doc: string;
 }
 
@@ -56,16 +54,16 @@ export interface ViewerKindInfo {
 }
 
 export const PANEL_TYPES: readonly PanelTypeInfo[] = [
-	{ id: 'empty', title: 'Empty', icon: 'square-dashed', acceptsNode: false, doc: 'a placeholder with no content yet — what a fresh split births' },
-	{ id: 'node-editor', title: 'Node Editor', icon: 'workflow', acceptsNode: false, doc: 'the patch canvas — nodes, wires and sub-patches' },
-	{ id: 'inspector', title: 'Inspector', icon: 'sliders-horizontal', acceptsNode: true, doc: 'the parameters, metadata and errors of one node' },
-	{ id: 'viewer', title: 'Viewer', icon: 'activity', acceptsNode: true, doc: 'live frames from one output slot, drawn by `state.kind`' },
-	{ id: 'console', title: 'Console', icon: 'terminal', acceptsNode: true, doc: 'the patch log; a bound node filters it to that node' },
-	{ id: 'variables', title: 'Variables', icon: 'globe', acceptsNode: false, doc: 'the patch variables, which any expression can read' },
-	{ id: 'control', title: 'Control', icon: 'sliders-vertical', acceptsNode: false, doc: 'knobs, sliders and text widgets over one group of variables' },
-	{ id: 'machine', title: 'State machine', icon: 'waypoints', acceptsNode: false, doc: 'one state machine: its states, transitions and playheads on a canvas' },
-	{ id: 'agent', title: 'Agent', icon: 'bot', acceptsNode: false, doc: 'a terminal on an agent harness, running in the patch workspace' },
-	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', acceptsNode: true, doc: 'capture the output slots of any node to disk, on one clock' },
+	{ id: 'empty', title: 'Empty', icon: 'square-dashed', doc: 'a placeholder with no content yet — what a fresh split births' },
+	{ id: 'node-editor', title: 'Node Editor', icon: 'workflow', doc: 'the patch canvas — nodes, wires and sub-patches' },
+	{ id: 'inspector', title: 'Inspector', icon: 'sliders-horizontal', doc: 'the parameters, metadata and errors of one node' },
+	{ id: 'viewer', title: 'Viewer', icon: 'activity', doc: 'live frames from one output slot, drawn by `state.kind`' },
+	{ id: 'console', title: 'Console', icon: 'terminal', doc: 'the patch log; a bound node filters it to that node' },
+	{ id: 'variables', title: 'Variables', icon: 'globe', doc: 'the patch variables, which any expression can read' },
+	{ id: 'control', title: 'Control', icon: 'sliders-vertical', doc: 'knobs, sliders and text widgets over one group of variables' },
+	{ id: 'machine', title: 'State machine', icon: 'waypoints', doc: 'one state machine: its states, transitions and playheads on a canvas' },
+	{ id: 'agent', title: 'Agent', icon: 'bot', doc: 'a terminal on an agent harness, running in the patch workspace' },
+	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', doc: 'capture the output slots of any node to disk, on one clock' },
 ];
 
 export const VIEWER_KINDS: readonly ViewerKindInfo[] = [

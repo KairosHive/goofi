@@ -41,7 +41,7 @@ import {
 	type LockView
 } from '$lib/crdt/graphDoc';
 import type { Literal, Machine, Midi } from '$lib/api/generated';
-import { KIND, type Cell } from '$lib/panels/controlLayout';
+import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
 import type { SourcePatch } from '$lib/api/types';
@@ -613,19 +613,17 @@ export class GraphStore {
 	 * output, everything else an ARRAY one — or null where no output fits. With `slot`, only that
 	 * slot may answer. */
 	readFor(uid: string, type: string, slot?: string): string | null {
-		const node = this.nodeById(uid);
-		if (!node) return null;
-		const want: SlotDtype = type === 'string' ? 'STRING' : 'ARRAY';
-		const key = Object.entries(node.output_slots).find(([k, d]) => (slot === undefined || k === slot) && feeds(d as SlotDtype, want))?.[0];
-		return key ? readExpression(node, key) : null;
+		return this.readOptions(uid, type).find((o) => slot === undefined || o.slot === slot)?.expression ?? null;
 	}
 
-	/** Make the widget named `name` read the first output of node `uid` that can feed it. */
-	async linkControl(name: string, uid: string): Promise<string | null> {
-		const gv = this.variables.find((v) => v.name === name);
-		const expression = gv ? this.readFor(uid, gv.control && KIND[gv.control.kind].draws === 'text' ? 'string' : 'float') : null;
-		if (gv && expression) await this.computeControl(gv.group, gv.element, expression);
-		return expression;
+	/** Every output of node `uid` a param of `type` may read, each with the expression that reads it. */
+	readOptions(uid: string, type: string): { slot: string; label: string; expression: string }[] {
+		const node = this.nodeById(uid);
+		if (!node) return [];
+		const want: SlotDtype = type === 'string' ? 'STRING' : 'ARRAY';
+		return Object.entries(node.output_slots)
+			.filter(([, d]) => feeds(d as SlotDtype, want))
+			.map(([slot]) => ({ slot, label: node.slot_labels?.[slot] ?? slot, expression: readExpression(node, slot) }));
 	}
 
 	async removeControl(group: string, element: string): Promise<void> {

@@ -43,7 +43,6 @@ export function registerAppPanels(): void {
 			title: t.title,
 			icon: t.icon,
 			component: components[t.id],
-			acceptsNode: t.acceptsNode,
 			confirmClose: confirmClose[t.id]
 		});
 	}

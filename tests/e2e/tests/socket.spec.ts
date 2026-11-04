@@ -1095,6 +1095,177 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	}
 });
 
+test('a widget moves through its own settings, which stand down for the drag', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5, { kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3 });
+			const panel = g.query.panels()[1];
+			await g.commands.setPanelType(panel.panelId, 'control');
+			await g.commands.setPanelState(panel.panelId, { group: 'desk' });
+		});
+		const widget = page.getByTestId('control-desk-level');
+		const props = page.getByTestId('control-props');
+		await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+		const cell = async (): Promise<{ y: number }> => {
+			const c = (await backendDoc(page)).variables['desk.level'].control;
+			return { y: c.y };
+		};
+		// A press picks the widget, and its settings open under it.
+		const before = (await widget.boundingBox())!;
+		await page.mouse.move(before.x + before.width / 2, before.y + 8);
+		await page.mouse.down();
+		await expect(props).toBeVisible();
+		const settings = (await props.boundingBox())!;
+		// Carried down through where the settings were: they stand down, and the widget follows.
+		await page.mouse.move(before.x + before.width / 2, before.y + 40, { steps: 4 });
+		await expect(props).toHaveCount(0);
+		await page.mouse.move(settings.x + settings.width / 2, settings.y + settings.height / 2, { steps: 12 });
+		await expect(page.getByTestId('drag-ghost'), 'inside the panel the drag is a move').toHaveCount(0);
+		await page.mouse.up();
+		await expect.poll(async () => (await cell()).y, 'the widget landed lower').toBeGreaterThan(0);
+		await expect(props, 'the settings return once the drag lands').toBeVisible();
+	} finally {
+		await handBack(
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'))
+		);
+	}
+});
+
+test('a node with several outputs dropped on a param asks which, in a list the keyboard walks', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO', [40, 40]);
+	const quant = await addNode(page, 'signal:Quantize', [40, 300]);
+	await waitForNode(page, osc);
+	await waitForNode(page, quant);
+	await selectNode(page, osc);
+	try {
+		const row = page.getByTestId('param-field-frequency');
+		await row.scrollIntoViewIfNeeded();
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const name = (await backendDoc(page)).nodes[quant].name;
+		const header = page.locator(`.svelte-flow__node[data-id="${quant}"] .header`);
+		const pick = page.getByTestId('quick-pick');
+		async function dropOnRow(): Promise<void> {
+			const [a, b] = await Promise.all([header.boundingBox(), row.boundingBox()]);
+			await page.mouse.move(a!.x + a!.width / 2, a!.y + a!.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(a!.x + a!.width / 2 + 30, a!.y + a!.height / 2 + 30, { steps: 4 });
+			await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
+			await expect(row).toHaveClass(/over/);
+			await page.mouse.up();
+		}
+		// Two outputs feed a number, so the drop asks; up from the first wraps to the last.
+		await dropOnRow();
+		await expect(pick.getByRole('option')).toHaveCount(2);
+		await expect(pick.getByRole('option', { name: 'out' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('ArrowUp');
+		await expect(pick.getByRole('option', { name: 'index' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Enter');
+		await expect(pick).toHaveCount(0);
+		await expect.poll(async () => (await source()).expression).toBe(`nd('${name}').out.index`);
+		// The row is driven now, its controls disabled: a release over one must still end the drag.
+		// Escape lets the list go, and the param keeps what it had.
+		await dropOnRow();
+		await expect(pick).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(pick).toHaveCount(0);
+		await expect(page.locator('.svelte-flow__node.dragging')).toHaveCount(0);
+		expect((await source()).expression).toBe(`nd('${name}').out.index`);
+	} finally {
+		await handBack(() => clearGraph(page));
+	}
+});
+
+test('the add-node list wraps its arrow keys and keeps the lit row in view', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await page.setViewportSize({ width: 1280, height: 500 });
+	await page.locator('.svelte-flow__pane').first().dblclick();
+	const search = page.getByTestId('add-menu-search');
+	await expect(search).toBeFocused();
+	const list = page.getByTestId('add-menu-list');
+	const rows = list.locator('.item');
+	const lit = list.locator('.item.hl');
+	const inView = async (): Promise<boolean> =>
+		lit.evaluate((el) => {
+			const r = el.getBoundingClientRect();
+			const box = el.closest('[data-testid="add-menu-list"]')!.getBoundingClientRect();
+			return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+		});
+	/** Which row is lit, by its place in the list. */
+	const litIndex = (): Promise<number> => rows.evaluateAll((els) => els.findIndex((el) => el.classList.contains('hl')));
+	const count = await rows.count();
+	expect(count).toBeGreaterThan(3);
+	await expect.poll(litIndex).toBe(0);
+	await search.press('ArrowUp');
+	await expect.poll(litIndex, 'up from the first lands on the last').toBe(count - 1);
+	expect(await inView(), 'and the last is scrolled into view').toBe(true);
+	await search.press('ArrowDown');
+	await expect.poll(litIndex, 'down from the last lands on the first').toBe(0);
+	expect(await inView()).toBe(true);
+	await search.press('Escape');
+});
+
+test('a variables row drags its variable onto a parameter of its own form', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5);
+			await g.commands.addVariable('desk.title', 'hi');
+			await g.commands.setPanelType(g.query.panels()[1].panelId, 'variables');
+		});
+		const desk = page.getByTestId('variables-panel').locator('[data-group="desk"]');
+		await desk.getByTestId('variable-group-toggle').click();
+		// The form a row offers is the one its stream shows, so the text row is a text row first.
+		await expect(desk.locator('[data-name="desk.title"]').getByTestId('variable-type').locator('select')).toHaveValue('text');
+		const row = page.getByTestId('param-field-frequency');
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const original = await source();
+		async function dragGrip(name: string): Promise<void> {
+			const grip = (await desk.locator(`[data-name="${name}"]`).getByTestId('variable-grip').boundingBox())!;
+			const target = (await row.boundingBox())!;
+			await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
+		}
+		// A text variable is no source for a number: the row never arms, and the drop writes nothing.
+		await dragGrip('desk.title');
+		await expect(page.getByTestId('drag-ghost')).toHaveText('vars.desk.title');
+		await expect(row).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		expect(await source()).toEqual(original);
+		await dragGrip('desk.level');
+		await expect(row).toHaveClass(/over/);
+		await page.mouse.up();
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	} finally {
+		await handBack(
+			() => clearGraph(page),
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level')),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.title'))
+		);
+	}
+});
+
 test('parameter modulation menu and hover keys use expressions with undo', async ({ page }) => {
 	await page.goto('/');
 	await waitForApp(page);

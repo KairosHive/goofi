@@ -6,6 +6,7 @@
 	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableView } from '$lib/crdt/graphDoc';
 	import { variableForm, variableValue, watchVariables, type Form } from '$lib/stores/variableValues.svelte';
 	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput } from '$lib/ui';
+	import { draggable, type DragSource } from '$lib/drag';
 
 	let {}: PanelProps = $props();
 	const g = graph();
@@ -19,6 +20,16 @@
 	let focusEntry = $state<string | null>(null);
 	let busy = $state(false);
 	let error = $state('');
+
+	/** What a row's grip lifts: the variable, carried as `vars.<name>`, in the form it holds. */
+	function lift(entry: VariableView, form: Form): DragSource {
+		return {
+			key: entry.name,
+			tags: [form === 'text' ? 'text' : 'number'],
+			label: `vars.${entry.name}`,
+			expression: () => `vars.${entry.name}`
+		};
+	}
 
 	$effect(() => {
 		const name = focusEntry;
@@ -162,6 +173,9 @@
 								<div class="entry" data-testid="variable-row" data-name={entry.name}
 									data-lock-config={held.config} data-lock-value={held.value}
 									data-control={entry.control?.kind}>
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<span class="grip" title="Drag onto a parameter to set its expression" data-testid="variable-grip"
+										use:draggable={{ source: () => lift(entry, form) }}><Icon name="grip-vertical" /></span>
 									<div class="entry-name">
 										{#if held.config}
 											<span class="fixed">{entry.element}</span>
@@ -285,11 +299,17 @@
 	}
 	.entry {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
+		grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
 		gap: var(--space-2);
 		align-items: center;
 		padding: var(--space-2) 0;
 		font-size: var(--fs-small);
+	}
+	.grip {
+		display: inline-flex;
+		color: var(--text-muted);
+		cursor: grab;
+		touch-action: none;
 	}
 	.entry + .entry {
 		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
@@ -307,8 +327,9 @@
 	}
 	.gp-body :global(.new-group) { margin-top: var(--space-4); }
 	@container (max-width: 280px) {
-		.entry { grid-template-columns: minmax(0, 1fr) auto var(--hit); }
-		.entry-name { grid-column: 1 / -1; }
+		.entry { grid-template-columns: auto minmax(0, 1fr) auto var(--hit); }
+		.entry-name { grid-column: 2 / -1; }
+		.entry-value { grid-column: 2; }
 	}
 	@media (hover: none) and (pointer: coarse) {
 		.group-name-input { font-size: 16px; }

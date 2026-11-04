@@ -175,7 +175,9 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => (await machineState()).states.state1.values?.gain).toBeCloseTo(0.7);
 		// A set number may land by an envelope: its knobs under the value, born as a short pluck; a
 		// turn of the attack writes the four, and the switch takes the envelope away again.
+		// The switch lives in the attribute's definition, under its pencil.
 		await expect(gain).toHaveAttribute('data-envelope', 'false');
+		await press(gain.getByTestId('attribute-edit'));
 		await press(gain.getByTestId('state-envelope'));
 		await expect(gain).toHaveAttribute('data-envelope', 'true');
 		const envelope = gain.getByTestId('state-attribute-envelope').getByTestId('param-envelope');
@@ -187,6 +189,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await press(gain.getByTestId('state-envelope'));
 		await expect(gain).toHaveAttribute('data-envelope', 'false');
 		await expect.poll(async () => (await machineState()).states.state1.envelopes?.gain).toBeUndefined();
+		await press(gain.getByTestId('attribute-edit'));
 		await tapCorner();
 
 		// Both boxes selected: the inspector writes a value to each as one step, and defines the
@@ -238,10 +241,13 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 			(await rawCall(page, 'session state')).result.machines.machine0.states.state0;
 		await expect(card0).toHaveAttribute('data-mode', 'random');
 		await press(name0);
-		await inspector.getByTestId('state-share-t1').locator('input').fill('0.6');
+		// A share is a param: typed into its number as well as slid.
+		const shareT1 = inspector.getByTestId('transition-row-t1').getByTestId('param-number');
+		await shareT1.fill('0.6');
+		await shareT1.press('Enter');
 		await expect.poll(async () => (await decision()).weights.t1).toBeCloseTo(0.6);
 		expect((await decision()).noop).toBeCloseTo(0.4);
-		await expect(inspector.getByTestId('state-share-wait')).toContainText('40%');
+		await expect(inspector.getByTestId('state-share-wait').getByTestId('param-number')).toHaveValue('0.4');
 		await expect(label).toHaveText('60%');
 		const interval = inspector.getByTestId('state-interval').getByTestId('param-number');
 		await interval.fill('1.05');
@@ -255,13 +261,14 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => (await rawCall(page, 'session state')).result.machines.machine0.states.state0.interval_expression).toBeUndefined();
 		await press(inspector.getByTestId('state-mode-sequence'));
 		await expect(card0).toHaveAttribute('data-mode', 'sequence');
-		await expect(card0.getByTestId('state-card-summary')).toContainText('seq · 1.05s');
-		await expect(inspector.getByTestId('state-share-t1')).toHaveCount(0);
+		await expect(card0.getByTestId('state-card-summary')).toContainText('seq');
+		await expect(card0.getByTestId('state-card-summary')).toContainText('1.05s');
+		await expect(inspector.getByTestId('transition-row-t1').getByTestId('param-number')).toHaveCount(0);
 		await expect(inspector.getByTestId('transition-row-t1')).toContainText('#1');
 		await expect(label).toHaveText('#1');
 		// A condition typed into the open row rides the row's summary, and the canvas label stays the
 		// decision's; the condition's own editor completes `sm(` with the machine's states.
-		await press(inspector.getByTestId('transition-row-t1').locator('.ui-disclosure-summary'));
+		await press(inspector.getByTestId('transition-row-t1').locator('.ui-field-summary'));
 		const condition = inspector.getByTestId('transition-condition');
 		await expect(condition).toBeVisible();
 		await press(condition);
@@ -311,7 +318,7 @@ test('a machine is built by gesture and its playhead crosses on a tap', async ({
 		await expect.poll(async () => Object.keys((await machineState()).transitions)).toEqual(['t1']);
 		const row = inspector.getByTestId('transition-row-t1');
 		await expect(row).toBeVisible();
-		await press(row.locator('.ui-disclosure-summary'));
+		await press(row.locator('.ui-field-summary'));
 		await press(row.getByTestId('transition-remove'));
 		await expect(row).toHaveCount(0);
 
@@ -416,9 +423,13 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
 		await expect(row).toHaveClass(/over/);
 		await page.mouse.up();
-		const item = page.locator('.context-menu .item', { hasText: 'rate' });
-		await expect(item).toBeVisible();
-		await item.click();
+		// The drop asks which attribute, in a list the keyboard walks: the second row is `rate`.
+		const pick = page.getByTestId('quick-pick');
+		await expect(pick.getByRole('option', { name: 'rate' })).toBeVisible();
+		await page.keyboard.press('ArrowDown');
+		await expect(pick.getByRole('option', { name: 'rate' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Enter');
+		await expect(pick).toHaveCount(0);
 		await expect.poll(async () => (await nodeParams(page, osc!)).lfo.frequency.expression).toBe("sm('beat').rate");
 		expect(await placed()).toEqual(before);
 

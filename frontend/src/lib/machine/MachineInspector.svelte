@@ -16,7 +16,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Badge, ColorPicker, Disclosure, ENVELOPE_BORN, Field, Icon, IconButton, ScrollArea, Segmented, Select, Slider, TextInput } from '$lib/ui';
+	import { Badge, ColorPicker, ENVELOPE_BORN, Field, Icon, IconButton, ScrollArea, Segmented, Select, TextInput, Toggle } from '$lib/ui';
 	import AttributeForm from './AttributeForm.svelte';
 	import { FACES, descriptorFor, envelopeDescriptor, literalOf, numberDescriptor } from './attributes';
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
@@ -66,7 +66,11 @@
 		draft = null;
 		editStates(weightsOf(p, out));
 	}
-	const percent = (p: number): string => `${Math.round(p * 100)}%`;
+	// The rows open by the selection on the canvas, and by their labels.
+	let opens = $state<Record<string, boolean>>({});
+	$effect(() => {
+		opens = Object.fromEntries(subject.open.map((id) => [id, true]));
+	});
 
 	// ---- the attributes: a name typed makes one, set in every selected state, as ONE step; a set
 	// number may play an envelope on arrival, drawn under its value.
@@ -123,34 +127,22 @@
 		<!-- A random state's draw: the wait leads the rows out, and each row out carries its share;
 		     a drag moves the others in their own ratio, so the shares always sum to one. -->
 		{#if addable && s?.mode === 'random' && list.length > 0}
-			<div class="row" data-testid="state-share-wait">
-				<span class="hint mono">wait</span>
-				<span class="share">
-					<Slider value={shown[0]} min={0} max={1} step={0.01} bounds={false} aria-label="wait" onInput={(v) => drag(0, v)} onChange={(v) => land(0, v)} />
-				</span>
-				<span class="hint mono">{percent(shown[0])}</span>
-			</div>
+			<ParamField paramName="wait" descriptor={numberDescriptor(shown[0], 0, 1)} literal viewKey={`${name}/${one}/wait`} data-testid="state-share-wait"
+				onPreview={(v) => drag(0, Number(v))} onCommit={(v) => land(0, Number(v))} />
 		{/if}
+		<!-- A transition is a param row: its share where the state draws, what it sums up as its
+		     note, and its settings when the label opens it. -->
 		{#each list as [id, t] (id)}
 			{@const k = out.indexOf(id)}
-			{@const open = subject.open.includes(id)}
-			<Disclosure class="transition-row" {open} data-testid={`transition-row-${id}`} data-open={open}>
-				{#snippet summary()}
-					<span class="arrow">{arrow(t)}</span>
-					<span class="part">{transitionSummary(m, id)}</span>
-					{#if t.condition}<span class="cond" title={t.condition}>if {t.condition}</span>{/if}
-				{/snippet}
-				{#snippet aside()}
-					{#if addable && s?.mode === 'random' && k >= 0}
-						<span class="share" data-testid={`state-share-${id}`}>
-							<Slider value={shown[k + 1]} min={0} max={1} step={0.01} bounds={false} aria-label={`share of ${id}`} onInput={(v) => drag(k + 1, v)} onChange={(v) => land(k + 1, v)} />
-						</span>
-					{/if}
-				{/snippet}
-				{#snippet children()}
+			{@const share = addable && s?.mode === 'random' && k >= 0}
+			<ParamField paramName={id} label={arrow(t)} note={`${transitionSummary(m, id)}${t.condition ? ` · if ${t.condition}` : ''}`}
+				descriptor={share ? numberDescriptor(shown[k + 1], 0, 1) : undefined} literal viewKey={`${name}/${id}/share`}
+				onPreview={(v) => drag(k + 1, Number(v))} onCommit={(v) => land(k + 1, Number(v))}
+				open={opens[id] === true} onToggle={() => (opens[id] = !opens[id])} data-testid={`transition-row-${id}`} data-open={opens[id] === true}>
+				{#snippet more()}
 					<TransitionForm {name} {m} {id} />
 				{/snippet}
-			</Disclosure>
+			</ParamField>
 		{/each}
 	</section>
 {/snippet}
@@ -203,7 +195,7 @@
 					<header>
 						<span>Attributes</span>
 						<span class="add-attr">
-							<TextInput class="add-attr-name" inputmode="search" placeholder="name a new attribute…" aria-label="New attribute" data-testid="attribute-name-new"
+							<TextInput class="add-attr-name" inputmode="search" placeholder="new…" aria-label="New attribute" data-testid="attribute-name-new"
 								value={fresh} onInput={(v) => (fresh = v)} onChange={(v) => { fresh = v; void create(); }} />
 							<IconButton variant="ghost" size="sm" label="Add the attribute" title="Add an attribute of that name, set in the selected states" disabled={!creatable}
 								data-testid="attribute-create" onclick={() => void create()}><Icon name="plus" /></IconButton>
@@ -217,30 +209,33 @@
 								<ParamField paramName={attr} label={h.mixed ? `${attr} (mixed)` : attr} descriptor={descriptorFor(a, h.value)} literal viewKey={`${name}/selection/${attr}`}
 									onCommit={(v) => editStates({ values: { [attr]: literalOf(v) } })}
 									onPreview={(v) => preview({ values: { [attr]: v } })} />
-								<!-- The tools keep their room set or not, so the value's track never changes width
-								     under a pointer; they show under the pointer, and always to a finger. -->
-								<span class="tools" class:pinned={env !== null || defining === attr}>
-									{#if shapable(a)}
-										<IconButton variant="ghost" size="sm" label={env ? `Land ${attr} plain` : `Shape ${attr}`} aria-pressed={env !== null} data-testid="state-envelope" disabled={!h.set}
-											title={env ? 'Remove the envelope: the value lands plain' : 'Add an envelope: on arrival the value plays an attack, decay, sustain and release'}
-											onclick={() => editStates({ envelopes: { [attr]: env ? null : ENVELOPE_BORN } })}><Icon name="activity" /></IconButton>
-									{/if}
+								<span class="tools">
 									<IconButton variant="ghost" size="sm" label={`Unset ${attr}`} title="Unset: a playhead entering keeps what it holds" data-testid="state-clear" disabled={!h.set}
 										onclick={() => editStates({ values: { [attr]: null } })}><Icon name="minus" /></IconButton>
 									<IconButton variant="ghost" size="sm" label={`Define ${attr}`} title="Its name, kind, range and default, for every state" data-testid="attribute-edit"
 										aria-pressed={defining === attr} onclick={() => (defining = defining === attr ? null : attr)}><Icon name="pencil" /></IconButton>
 								</span>
 							</div>
-							{#if env}
-								<div class="nested">
-									<ParamField paramName={`${attr} envelope`} label="envelope" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/selection/${attr}/envelope`}
-										data-testid="state-attribute-envelope"
-										onCommit={(v) => editStates({ envelopes: { [attr]: v } })}
-										onPreview={(v) => preview({ envelopes: { [attr]: v as number[] } })} />
-								</div>
-							{/if}
 							{#if defining === attr}
-								<div class="definition"><AttributeForm {name} {attr} {a} /></div>
+								<div class="definition">
+									<AttributeForm {name} {attr} {a} />
+									<!-- A set number may land by an envelope in the selected states: switched on here,
+									     its knobs show under the switch. -->
+									{#if shapable(a)}
+										<div class="fields">
+											<Field label="envelope" doc="On arrival the value plays an attack, decay, sustain and release" row>
+												<Toggle value={env !== null} disabled={!h.set} aria-label="envelope" data-testid="state-envelope"
+													onChange={(on) => editStates({ envelopes: { [attr]: on ? ENVELOPE_BORN : null } })} />
+											</Field>
+										</div>
+										{#if env}
+											<ParamField paramName={`${attr} envelope`} label="envelope" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/selection/${attr}/envelope`}
+												data-testid="state-attribute-envelope"
+												onCommit={(v) => editStates({ envelopes: { [attr]: v } })}
+												onPreview={(v) => preview({ envelopes: { [attr]: v as number[] } })} />
+										{/if}
+									{/if}
+								</div>
 							{/if}
 						</div>
 					{/each}
@@ -329,24 +324,23 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	/* A row's tools wait under the pointer, and are always there for a finger. */
 	.tools {
 		display: inline-flex;
 		align-items: center;
 		flex: 0 0 auto;
 		gap: var(--space-1);
+	}
+	/* A playhead row's tools wait under the pointer, and are always there for a finger. */
+	.row .tools {
 		opacity: 0;
 		transition: opacity var(--dur-fast) var(--ease);
 	}
-	.attr-row:hover .tools,
-	.attr-row:focus-within .tools,
 	.row:hover .tools,
-	.row:focus-within .tools,
-	.tools.pinned {
+	.row:focus-within .tools {
 		opacity: 1;
 	}
 	@media (hover: none) and (pointer: coarse) {
-		.tools {
+		.row .tools {
 			opacity: 1;
 		}
 	}
@@ -373,13 +367,11 @@
 	.attr.unset:focus-within > .attr-row > :global(.pf-param) {
 		opacity: 1;
 	}
-	/* What hangs off a row sits a step in, under it. */
-	.nested {
-		display: flex;
-		padding-inline-start: var(--space-6);
-	}
 	/* The definition is a form of its own, on the step above the body. */
 	.definition {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
 		padding: var(--space-3) var(--space-4);
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
@@ -411,40 +403,6 @@
 		display: inline-flex;
 		width: var(--chrome-control-h);
 	}
-	/* The wait's share sits where the rows' shares sit, so the column of sliders reads as one. */
-	.share {
-		display: inline-flex;
-		flex: 1 1 auto;
-		min-width: 0;
-	}
-	.row .share {
-		flex: 0 0 40%;
-	}
-	/* A transition's row is flat, and lights under the pointer as the rows around it do; the open
-	   one is a card on the step above, its settings inside. */
-	.rows :global(.transition-row) {
-		--disclosure-surface: transparent;
-		--disclosure-hover: var(--surface-2);
-		margin-inline: calc(0px - var(--space-3));
-		border-radius: var(--radius-sm);
-		transition: background var(--dur-fast) var(--ease);
-	}
-	.rows :global(.transition-row[data-open='true']) {
-		--disclosure-hover: var(--surface-3);
-		--disclosure-body-pad: var(--space-2) var(--space-4) var(--space-4);
-		background: var(--surface-2);
-	}
-	.arrow {
-		font-family: var(--font-mono);
-		font-weight: 600;
-	}
-	.part,
-	.cond {
-		margin-inline-start: var(--space-3);
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		font-weight: 400;
-	}
 	.add-attr {
 		display: flex;
 		align-items: center;
@@ -452,6 +410,8 @@
 		flex: 1 1 auto;
 		min-width: 0;
 		justify-content: flex-end;
+		/* A field, not a heading: the header's weight stops here. */
+		font-weight: 400;
 	}
 	.add-attr > :global(.add-attr-name) {
 		flex: 1 1 8rem;

@@ -4,6 +4,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
 	import Popover from './Popover.svelte';
+	import { reveal, stepWrapped } from './listNav';
 	import { claimFieldControlId } from './field';
 
 	export interface ComboOption {
@@ -71,7 +72,7 @@
 			e.preventDefault();
 			if (!open) return show();
 			const n = shown.length;
-			if (n) active = (active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+			active = stepWrapped(active, e.key === 'ArrowDown' ? 1 : -1, n);
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			const pick = open ? shown[active] : undefined;
@@ -125,10 +126,11 @@
 				<div
 					class="ui-combo-option"
 					class:active={i === active}
+					use:reveal={i === active}
 					role="option"
 					aria-selected={o.label === value}
 					onpointerdown={(e) => e.preventDefault()}
-					onpointerenter={() => (active = i)}
+					onpointermove={() => (active = i)}
 					onclick={() => commit(o.label)}
 				>
 					<span class="ui-combo-name">{o.label}</span>

@@ -751,6 +751,11 @@ const HOVER_ONLY_OK: { file: string; target: string; why: string }[] = [
 		why: 'its coarse door is a PROXIMITY reveal, not a resting form: `.conn.in.cable-near` (editor/slotProximity.ts, pinned by touch-slot-name.spec) names the inputs a cable in flight is closing on, for both modalities — the always-open coarse rule it replaced was the only way a finger could read an input name and therefore hung a name tag on every input on the canvas at all times'
 	},
 	{
+		file: 'machine/StateCard.svelte',
+		target: 'facts',
+		why: 'the facts are a reading, not a control, and the SELECTED box shows them on every pointer: a tap selects a box, so a finger reads them by the same door it reads the inspector by; resting them on every box at all times would put four lines of chrome on every card of the canvas'
+	},
+	{
 		file: 'panels/SidePane.svelte',
 		target: 'inspector-toggle',
 		why: 'it RESTS at opacity .5 — visible and tappable with no hover; the hover only brightens an affordance that is already there, and R-Task 8 removes it outright while the pane it opens is up'
@@ -878,11 +883,11 @@ describe('coarse-pointer doors', () => {
 	});
 
 	/* PanelHeader's split/join menu is the tree's only right-click, and R-Task 7 gave it a long
-	   press. This keeps that a rule rather than a coincidence. A variable lift handed a hold
-	   handler (`createVariableLift(menu)`) is that long press, built once in variableLift.svelte.ts. */
+	   press. This keeps that a rule rather than a coincidence. A draggable handed an `onHold` is
+	   that long press, built once in drag/draggable.ts. */
 	it('never leaves a right-click as the only door (§5.2)', () => {
 		const offenders = components()
-			.filter((c) => bindsRightClick(c.src) && !/createLongPress|createVariableLift\(\s*\w/.test(c.src))
+			.filter((c) => bindsRightClick(c.src) && !/createLongPress|onHold:/.test(c.src))
 			.map((c) => c.rel);
 		expect(offenders).toEqual([]);
 	});
