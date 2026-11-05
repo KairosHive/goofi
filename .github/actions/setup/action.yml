@@ -82,7 +82,6 @@ runs:
         path: |
           target/goofi-runtime/*/build
           !target/goofi-runtime/*/build/target
-          target/goofi-runtime/cache/cargo
         key: goofi-runtime-${{ runner.os }}-${{ hashFiles('backend/**/*-sdk/**', 'backend/goofi-build/**', 'node-bundles/**', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
         restore-keys: |
           goofi-runtime-${{ runner.os }}-

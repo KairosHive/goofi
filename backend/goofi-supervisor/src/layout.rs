@@ -131,62 +131,37 @@ pub fn runtime() -> Runtime {
     Runtime::at(root)
 }
 
-/// A program goofi runs: bundled under the runtime's `tools/` when it is there, else on PATH.
+/// A program goofi runs, found on PATH: a development build asks the machine for its tools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Cargo,
     Rustc,
-    Zig,
     Uv,
     Npm,
     Ffmpeg,
 }
 
-impl Tool {
-    /// The directory under `tools/` the program is unpacked into: one per bundled download.
-    pub fn name(self) -> &'static str {
-        match self {
-            Tool::Cargo | Tool::Rustc => "rust",
-            Tool::Zig => "zig",
-            Tool::Uv => "uv",
-            Tool::Npm => "node",
-            Tool::Ffmpeg => "ffmpeg",
-        }
-    }
-
-    /// Where the bundled copy sits under its directory.
-    fn bundled(self) -> PathBuf {
-        let exe = std::env::consts::EXE_SUFFIX;
-        let (dir, file) = match self {
-            Tool::Cargo => ("bin", format!("cargo{exe}")),
-            Tool::Rustc => ("bin", format!("rustc{exe}")),
-            Tool::Zig => ("", format!("zig{exe}")),
-            Tool::Uv => ("", format!("uv{exe}")),
-            Tool::Npm if cfg!(windows) => ("", "npm.cmd".into()),
-            Tool::Npm => ("bin", "npm".into()),
-            Tool::Ffmpeg => ("bin", format!("ffmpeg{exe}")),
-        };
-        PathBuf::from(self.name()).join(dir).join(file)
-    }
-
-    /// The name PATH is asked for: Windows needs npm's `.cmd` shim by name.
-    fn on_path(self) -> PathBuf {
-        match self {
-            // `CARGO` is what `cargo run` hands a goofi it started: the toolchain's own cargo,
-            // which a bare name on PATH may not resolve to.
-            Tool::Cargo => std::env::var_os("CARGO").map(PathBuf::from).unwrap_or_else(|| "cargo".into()),
-            Tool::Rustc => "rustc".into(),
-            Tool::Zig => "zig".into(),
-            Tool::Uv => "uv".into(),
-            Tool::Npm if cfg!(windows) => "npm.cmd".into(),
-            Tool::Npm => "npm".into(),
-            Tool::Ffmpeg => "ffmpeg".into(),
-        }
+/// The program to run for `tool`. Windows needs npm's `.cmd` shim by name.
+pub fn tool(tool: Tool) -> PathBuf {
+    match tool {
+        // `CARGO` is what `cargo run` hands a goofi it started: the toolchain's own cargo, which a
+        // bare name on PATH may not resolve to.
+        Tool::Cargo => std::env::var_os("CARGO").map(PathBuf::from).unwrap_or_else(|| "cargo".into()),
+        Tool::Rustc => "rustc".into(),
+        Tool::Uv => "uv".into(),
+        Tool::Npm if cfg!(windows) => "npm.cmd".into(),
+        Tool::Npm => "npm".into(),
+        Tool::Ffmpeg => "ffmpeg".into(),
     }
 }
 
-/// Everything goofi keeps for itself, bound to one version: tools, interpreters, build caches,
-/// the shipped tree. Only `cache/` and `state/` outlive a version.
+/// A command running `tool`, with no arguments yet.
+pub fn command(tool: Tool) -> std::process::Command {
+    std::process::Command::new(self::tool(tool))
+}
+
+/// Everything goofi keeps for itself, bound to one version: interpreters, build caches, the
+/// shipped tree. Only `cache/` outlives a version.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Runtime {
     root: PathBuf,
@@ -204,14 +179,9 @@ impl Runtime {
         &self.root
     }
 
-    /// This version's tree, removed whole after an update.
+    /// This version's tree, removed whole once another version runs.
     pub fn versioned(&self) -> PathBuf {
         self.root.join(VERSION)
-    }
-
-    /// The bundled programs, one directory each.
-    pub fn tools(&self) -> PathBuf {
-        self.versioned().join("tools")
     }
 
     /// The free-threaded venv the embedded interpreter is linked against, and the probe runs on.
@@ -235,46 +205,15 @@ impl Runtime {
         self.versioned().join("shipped")
     }
 
-    /// The sources of every crate a node build resolves, so it builds with no network.
-    pub fn vendor(&self) -> PathBuf {
-        self.versioned().join("vendor")
-    }
-
-    /// What every version shares: the uv cache, the Python installs, the cargo registry.
+    /// What every version shares: the uv cache and the Python installs.
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }
 
-    /// What survives an update: the update-check stamp.
-    pub fn state(&self) -> PathBuf {
-        self.root.join("state")
-    }
-
-    /// The program to run for `tool`: the bundled one when it is there, else PATH's.
-    pub fn tool(&self, tool: Tool) -> PathBuf {
-        let bundled = self.tools().join(tool.bundled());
-        if bundled.is_file() { bundled } else { tool.on_path() }
-    }
-
-    /// A command running `tool`. A bundled program's own directory leads the child's PATH: cargo
-    /// asks PATH for rustc, and npm's shim asks it for node.
-    pub fn command(&self, tool: Tool) -> std::process::Command {
-        let program = self.tool(tool);
-        let mut cmd = std::process::Command::new(&program);
-        if let Some(dir) = program.parent().filter(|_| program.starts_with(self.tools())) {
-            let mut path = vec![dir.to_path_buf()];
-            path.extend(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default());
-            if let Ok(joined) = std::env::join_paths(path) {
-                cmd.env("PATH", joined);
-            }
-        }
-        cmd
-    }
-
-    /// Whether an entry of the root is another version's tree: not this version's, and not
-    /// one of the two directories every version shares.
+    /// Whether an entry of the root is another version's tree: not this version's, and not the
+    /// cache every version shares.
     pub fn is_other_version(&self, name: &std::ffi::OsStr) -> bool {
-        name != VERSION && name != "cache" && name != "state"
+        name != VERSION && name != "cache"
     }
 }
 

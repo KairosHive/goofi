@@ -19,9 +19,6 @@ pub struct Cli {
     pub demo: bool,
     /// Serve `/mcp`. Also set by `GOOFI_MCP` in the environment.
     pub mcp: bool,
-    /// Started by the app shell, which holds stdin open for as long as it lives and performs
-    /// `update start`. Not a door a user takes.
-    pub shell: bool,
     /// A patch to open before the first client connects. Also `GOOFI_LOAD` in the environment.
     pub load: Option<String>,
     pub help: bool,
@@ -38,7 +35,6 @@ impl Default for Cli {
             debug: false,
             demo: false,
             mcp: false,
-            shell: false,
             load: None,
             help: false,
         }
@@ -68,7 +64,6 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<Cli, String
             "--debug" => cli.debug = true,
             "--demo" => cli.demo = true,
             "--mcp" => cli.mcp = true,
-            "--shell" => cli.shell = true,
             "--load" => cli.load = Some(need(args.next())?),
             "-h" | "--help" => cli.help = true,
             other => return Err(format!("unknown argument `{other}` (try --help)")),

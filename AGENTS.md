@@ -73,8 +73,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 
 - One binary serves the app and acts as its CLI (`goofi help`). It prints the URL without opening
   a browser; `--headless` serves only the API; `--demo` withholds the host-touching ops; `--mcp`
-  mounts `/mcp`, off by default. The Electron shell in `frontend/electron` runs it with `--shell`,
-  holds its stdin, and installs the update that the `update start` op requests.
+  mounts `/mcp`, off by default. goofi is development-only: it builds with `cargo`, `npm` and `uv`
+  from PATH, and ships no installer.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated with
   versioned path operations (`put`, `del`). The patch is a value: a write copies the one record it
   touches, a settle reads what a batch changed off the two snapshots, and the document is patched
@@ -98,10 +98,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   in-process. Graphics also takes `.wgsl` shaders and Python sources marked `# goofi: graphics`.
 - A `.gfi` patch is an archive of its document and workspace. Recordings are native data files
   with metadata sidecars.
-- `goofi_supervisor::layout` owns every path: the home (`~/.goofi`, what the user keeps), the
-  runtime (tools for one version, filled by `goofi-provision`) and the session. Nothing else reads
-  a path or tool from the environment. `goofi-init` provisions a development build and removes
-  `target/` artifacts untouched for three days.
+- `goofi_supervisor::layout` owns every path and tool: the home (`~/.goofi`, what the user keeps),
+  the runtime (one version's interpreters and build caches), the session, and the PATH lookup of
+  each tool. Nothing else reads a path or tool from the environment. `goofi-init` provisions the
+  runtime and removes `target/` artifacts untouched for three days.
 - A session (`goofi_supervisor::session`) owns every ephemeral resource; its lock is the one
   aliveness answer. Children, long-lived threads, scratch paths and devices are minted through
   `goofi_supervisor::{child, worker, scope}`, and listed by `session status`. A child's output

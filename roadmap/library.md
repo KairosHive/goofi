@@ -181,11 +181,10 @@ Completion means:
 
 ## Deferred library distribution
 
-Status: pending. This work is required for release binaries, after the local-library feature.
-`release-binaries.md` owns installer, provisioning and release delivery work; this section owns
-the library's additional tool and authentication requirements.
+Status: pending. This work is required for release binaries, which are not designed yet; this
+section owns the library's additional tool and authentication requirements for them.
 
-- Bundle Git for Linux, Windows and macOS through the pinned tool manifest and `layout::Tool`.
+- Bundle Git for Linux, Windows and macOS with the release's other tools, behind `layout::Tool`.
   Make Git available to library operations and to uv/Cargo for Git dependencies. Standalone
   library CLI operations must provision required tools without starting a goofi server.
 - Choose supported private-repo authentication paths: HTTPS credential helpers/browser login,

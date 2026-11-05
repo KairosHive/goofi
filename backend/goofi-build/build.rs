@@ -19,7 +19,6 @@ const CRATES: &[&str] = &[
 ];
 
 fn main() {
-    println!("cargo:rustc-env=GOOFI_TARGET={}", std::env::var("TARGET").expect("cargo sets TARGET"));
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     for dir in CRATES {

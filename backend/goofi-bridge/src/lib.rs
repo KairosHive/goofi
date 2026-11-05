@@ -95,8 +95,6 @@ pub struct Mode {
     pub demo: bool,
     /// Serve `/mcp`. Off unless asked: a door with no auth that only an MCP client needs.
     pub mcp: bool,
-    /// Started by the app shell, which performs an update when `update start` asks for one.
-    pub shell: bool,
 }
 
 #[derive(Clone)]

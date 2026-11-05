@@ -99,16 +99,10 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
         );
         return;
     }
-    let shutdown = watch_shutdown(cli.shell);
+    let shutdown = watch_shutdown();
     goofi_supervisor::process::fine_timer();
     let screen = Screen::begin();
     goofi_screen::banner(goofi_screen::Color::Cyan, concat!("v", env!("CARGO_PKG_VERSION")));
-    if goofi_provision::DIST {
-        report("Preparing goofi's runtime");
-        if let Err(e) = goofi_provision::ensure_runtime(&layout::runtime()) {
-            refuse(screen, &format!("Could not prepare the runtime: {e}"));
-        }
-    }
     report("Checking the Python environment");
     let python = match default_subproc_python() {
         Ok(p) => p,
@@ -119,7 +113,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
             refuse(screen, &format!("Could not capture application output: {e}"));
         }
     }
-    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, mcp: cli.mcp, shell: cli.shell };
+    let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, mcp: cli.mcp };
     report("Cleaning up after earlier sessions");
     // The session is held BEFORE the engines exist: every slot, door and exchange they open is
     // its. What dead sessions left is swept once it is held, so the sweep can never take this one.
@@ -162,18 +156,6 @@ fn refused(screen: &mut Option<Screen>, error: &str) -> i32 {
     1
 }
 
-/// One line when a newer release is out, from a thread of its own: the check may wait on the
-/// network, and the server does not.
-fn notice_newer_release() {
-    let _ = goofi_supervisor::worker::thread("goofi-update-check").spawn(|| {
-        if let Ok(latest) = goofi_provision::latest_release(&layout::runtime()) {
-            if goofi_provision::is_newer(&latest) {
-                say(&format!("    {} goofi {latest} is out — `goofi update` installs it", goofi_screen::warn(goofi_screen::glyph("↑", "^"))));
-            }
-        }
-    });
-}
-
 /// How this shell reads: human — parted and aligned to the terminal's width, in color — when
 /// stdout is a terminal, compact when it is a pipe an agent or a script reads. `GOOFI_STYLE=
 /// human|compact` decides the layout instead; the width is the terminal's, else `COLUMNS`, else
@@ -187,7 +169,7 @@ fn style() -> goofi_bridge::text::Style {
         Some("compact") => false,
         _ => terminal,
     };
-    let color = human && goofi_screen::color(terminal);
+    let color = human && goofi_screen::colored();
     let width = terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
@@ -219,6 +201,10 @@ fn forward(lines: &[String], json: bool) -> i32 {
                         b.push(b'\n');
                         b
                     }
+                    // A human's text as this terminal shows it; NPY bytes and compact text verbatim.
+                    false if style.human && e["result"].get("npy_b64").is_none() => {
+                        goofi_screen::fit(&String::from_utf8_lossy(&goofi_client::rendered(e))).into_owned().into_bytes()
+                    }
                     false => goofi_client::rendered(e),
                 };
                 let _ = out.write_all(&bytes);
@@ -244,8 +230,6 @@ fn client_main(mut words: Vec<String>) -> i32 {
     let json = take_json(&mut words);
     match (words.first().map(String::as_str), words.get(1).map(String::as_str)) {
         (Some("session"), Some("list")) => return print_sessions(json),
-        // `goofi update` is `update start`: the one word a user types to get the newest release.
-        (Some("update"), None) => return forward(&["update start".to_string()], json),
         (Some("completions"), shell) => return print_completions(shell),
         (Some("op"), Some("complete")) => return complete_line(&words[2..]),
         (Some("agent"), Some("term")) => {
@@ -366,7 +350,7 @@ fn print_sessions(json: bool) -> i32 {
         .map(|s| vec![s.id.clone(), s.url.clone(), if current(s) { "← GOOFI_SESSION".to_string() } else { String::new() }])
         .collect();
     match style.human {
-        true => println!("{}", goofi_bridge::text::table(&table, 0, &style, |_, j| (j == 0).then_some(goofi_bridge::text::Role::Name))),
+        true => println!("{}", goofi_screen::fit(&goofi_bridge::text::table(&table, 0, &style, |_, j| (j == 0).then_some(goofi_bridge::text::Role::Name)))),
         false => table.iter().for_each(|r| println!("{}", r.iter().filter(|c| !c.is_empty()).cloned().collect::<Vec<_>>().join("  "))),
     }
     0
@@ -385,8 +369,8 @@ fn help_main(rest: &[String]) -> i32 {
         let words: Vec<String> = std::iter::once("help".to_string()).chain(rest.clone()).collect();
         match goofi_bridge::phrase::help(&goofi_bridge::ops::table(goofi_bridge::Mode::default()), &words) {
             Some(h) => {
-                println!("no running server — the built-in index answers; `goofi` starts one.");
-                println!("{}", goofi_bridge::phrase::render(&h, &style));
+                println!("{}", goofi_screen::fit("no running server — the built-in index answers; `goofi` starts one."));
+                println!("{}", goofi_screen::fit(&goofi_bridge::phrase::render(&h, &style)));
                 return 0;
             }
             None => {
@@ -400,7 +384,7 @@ fn help_main(rest: &[String]) -> i32 {
     match goofi_client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width, style.color) {
         Ok(entries) => {
             for e in &entries {
-                println!("{}", e["text"].as_str().unwrap_or_default());
+                println!("{}", goofi_screen::fit(e["text"].as_str().unwrap_or_default()));
             }
             0
         }
@@ -432,7 +416,7 @@ async fn run(
     // Before ANY use of the embedded interpreter.
     configure_embedded();
 
-    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, mcp, load: _, help: _, shell: _ } = cli;
+    let Cli { port, bind, extra_nodes, boot_only, headless, debug, demo, mcp, load: _, help: _ } = cli;
     let port = port.unwrap_or(DEFAULT_PORT);
 
     config.plugins = Some(layout::home());
@@ -513,10 +497,7 @@ async fn run(
                 say("");
                 goofi_screen::url(&url);
                 if mcp && !demo {
-                    say(&format!("    MCP endpoint {} {url}/mcp", goofi_screen::glyph("→", "->")));
-                }
-                if goofi_provision::DIST {
-                    notice_newer_release();
+                    say(&format!("    MCP endpoint → {url}/mcp"));
                 }
                 let spa = if headless { &[][..] } else { SPA };
                 let mut facts = Vec::new();
@@ -558,9 +539,9 @@ async fn run(
         }
     };
     drop(screen);
-    say(&format!("  {} Stopping engines {}", goofi_screen::dim(goofi_screen::glyph("⋯", "...")), goofi_screen::dim(&format!("{} press Ctrl+C again to force exit", goofi_screen::glyph("·", "-")))));
+    say(&format!("  {} Stopping engines {}", goofi_screen::dim("⋯"), goofi_screen::dim("· press Ctrl+C again to force exit")));
     if state.recorder.running() {
-        say(&format!("  {} Draining recording {}", goofi_screen::dim(goofi_screen::glyph("⋯", "...")), goofi_screen::dim(&format!("{} waiting for queued frames to reach disk", goofi_screen::glyph("·", "-")))));
+        say(&format!("  {} Draining recording {}", goofi_screen::dim("⋯"), goofi_screen::dim("· waiting for queued frames to reach disk")));
     }
     // The manager releases what it holds, in its one order; the window loop is the process's.
     drop(manager);
@@ -593,32 +574,16 @@ fn record_url(url: &str) {
     }
 }
 
-/// The first request to stop — a signal, or under the app shell the end of stdin, which the
-/// shell holds open for as long as it lives — stops the server the orderly way; a second forces.
-fn watch_shutdown(shell: bool) -> tokio::sync::oneshot::Receiver<()> {
+/// The first signal to stop stops the server the orderly way; a second forces.
+fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
-    let (closed, stdin_closed) = tokio::sync::oneshot::channel::<()>();
-    if shell {
-        goofi_supervisor::worker::thread("goofi-shell-watch")
-            .spawn(move || {
-                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-                let _ = closed.send(());
-            })
-            .expect("the shell thread");
-    } else {
-        // Kept, never used: a dropped sender would resolve the receiver at once.
-        std::mem::forget(closed);
-    }
     goofi_supervisor::worker::thread("goofi-signals").spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("the signal runtime")
             .block_on(async {
-                tokio::select! {
-                    _ = shutdown_signal() => {}
-                    _ = stdin_closed => {}
-                }
+                shutdown_signal().await;
                 let _ = stop.send(());
                 shutdown_signal().await;
                 // Every child goofi spawned watches its liveness pipe, which this exit closes.
@@ -689,12 +654,11 @@ fn configure_embedded() {
 fn configure_embedded() {}
 
 /// Every node directory's requirements, checked against their interpreters before the scan imports
-/// anything. A distribution installs what its bundles need; a development build asks the terminal,
-/// and a failed or declined install stops startup.
+/// anything. The terminal approves an install; a failed or declined one stops startup.
 #[cfg(feature = "python")]
 fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String> {
     use std::io::IsTerminal;
-    let (shared, gil_only) = goofi_provision::requirement_sets(dirs);
+    let (shared, gil_only) = goofi_init::python::requirement_sets(dirs);
     if gil_only.is_empty() {
         return Ok(());
     }
@@ -710,7 +674,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
         }
         let py = py.ok_or_else(|| format!("missing Python environment; {}", goofi_init::RUN_ME))?;
         let shown = py.strip_prefix(runtime.root()).unwrap_or(&py).display().to_string();
-        match goofi_provision::missing_packages(&runtime, &py, reqs) {
+        match goofi_init::python::missing_packages(&runtime, &py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {
                 say(&format!("    {shown} lacks {}", missing.join(", ")));
@@ -726,22 +690,20 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
     for path in &gil_only {
         say(&format!("      {}", path.display()));
     }
-    if !goofi_provision::DIST {
-        if !std::io::stdin().is_terminal() {
-            return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
-        }
-        let mut answer = String::new();
-        goofi_screen::suspend(|| {
-            let _ = goofi_supervisor::log::terminal_line("    Install missing packages now? [y/N]");
-            std::io::stdin().read_line(&mut answer)
-        })
-        .map_err(|e| format!("could not read installation approval: {e}"))?;
-        if !answer.trim().eq_ignore_ascii_case("y") {
-            return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
-        }
+    if !std::io::stdin().is_terminal() {
+        return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
+    }
+    let mut answer = String::new();
+    goofi_screen::suspend(|| {
+        let _ = goofi_supervisor::log::terminal_line("    Install missing packages now? [y/N]");
+        std::io::stdin().read_line(&mut answer)
+    })
+    .map_err(|e| format!("could not read installation approval: {e}"))?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
     }
     for (py, reqs) in lacking {
-        goofi_provision::install_packages(&runtime, &py, &reqs)?;
+        goofi_init::python::install_packages(&runtime, &py, &reqs)?;
     }
     Ok(())
 }

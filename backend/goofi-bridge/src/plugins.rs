@@ -680,15 +680,14 @@ impl Package {
                     }
                     let frontend = work.join("frontend");
                     let out = work.join("output");
-                    let runtime = goofi_supervisor::layout::runtime();
-                    run(runtime.command(goofi_supervisor::layout::Tool::Npm).args(["ci"]).current_dir(&frontend))?;
+                    run(goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Npm).args(["ci"]).current_dir(&frontend))?;
                     let frontend_sdk = frontend.join("node_modules/@goofi/plugin");
                     std::fs::create_dir_all(&frontend_sdk).map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("index.ts"), FRONTEND_SDK)
                         .map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("package.json"), FRONTEND_PACKAGE)
                         .map_err(|e| e.to_string())?;
-                    run(runtime.command(goofi_supervisor::layout::Tool::Npm)
+                    run(goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Npm)
                         .args(["run", "build"])
                         .env("GOOFI_PLUGIN_OUT_DIR", &out)
                         .current_dir(&frontend))?;
@@ -730,7 +729,7 @@ impl Package {
                 identity.as_bytes(),
             ]));
             let runtime = goofi_supervisor::layout::runtime();
-            run(goofi_provision::uv(&runtime, ["sync", "--locked", "--no-install-project", "--python"])
+            run(goofi_init::python::uv(&runtime, ["sync", "--locked", "--no-install-project", "--python"])
                 .arg(python)
                 .env("UV_PROJECT_ENVIRONMENT", &env)
                 .current_dir(&self.root))?;

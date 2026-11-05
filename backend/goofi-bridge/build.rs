@@ -202,10 +202,9 @@ fn sync_frontend(frontend: &Path, started: SystemTime) {
         goofi_init::RUN_ME
     );
 
-    // The npm goofi-init installed with: the runtime's bundled one when it is there, else PATH's.
-    let runtime = goofi_supervisor::layout::runtime();
-    let npm = runtime.tool(goofi_supervisor::layout::Tool::Npm).display().to_string();
-    match runtime.command(goofi_supervisor::layout::Tool::Npm).args(["run", "build"]).current_dir(frontend).status() {
+    // The npm goofi-init installed with, as the layout names it.
+    let npm = goofi_supervisor::layout::tool(goofi_supervisor::layout::Tool::Npm).display().to_string();
+    match goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Npm).args(["run", "build"]).current_dir(frontend).status() {
         // Built here, so dated as this run's product (see `main`), or every build after would
         // find the app newer than this run and run this script again.
         Ok(s) if s.success() => date_tree(&frontend.join("build"), started),

@@ -1,15 +1,17 @@
-//! `cargo run -p goofi-init`: what a development checkout needs beyond the runtime the provisioner
-//! fills — the system libraries, the goofi wheel built from source, the cargo config pointing
-//! pyo3 at the interpreter, the frontend's dependencies. It must not depend on pyo3.
+//! `cargo run -p goofi-init`: what a development checkout needs that cargo cannot provide — the
+//! tools on PATH, the system libraries, the two Python interpreters with the goofi wheel built from
+//! source, the cargo config pointing pyo3 at one, the frontend's dependencies. No pyo3 here.
 
 use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "linux", windows))]
 use std::process::Command;
 use std::time::Duration;
 
-use goofi_provision::{answers, query, run, uv};
 use goofi_supervisor::layout::{self, Tool};
 use goofi_supervisor::progress;
+
+pub mod python;
+use python::{answers, query, run, uv};
 
 /// The repo root. Nothing is resolved, so a checkout reached through a symlink stays spelled the
 /// way the caller reached it.
@@ -44,14 +46,13 @@ pub fn init(root: &Path) -> Result<(), String> {
     let frontend = root.join("frontend");
     let needs_npm = frontend.join("package.json").is_file();
     if needs_npm {
-        require_npm(&runtime)?;
+        require_npm()?;
     }
     require_audio_libs()?;
 
     progress::report("Checking goofi's Python interpreters");
-    let pins = &goofi_provision::manifest().python;
-    let ft = goofi_provision::ensure_venv(&runtime, &runtime.python_ft(), &pins.ft)?;
-    let gil = goofi_provision::ensure_venv(&runtime, &runtime.python_gil(), &pins.gil)?;
+    let ft = python::ensure_venv(&runtime, &runtime.python_ft(), python::PYTHON_FT)?;
+    let gil = python::ensure_venv(&runtime, &runtime.python_gil(), python::PYTHON_GIL)?;
 
     // The config BEFORE the wheels, so a failed wheel build still leaves a config a re-run can use.
     write_config(root, &ft)?;
@@ -59,15 +60,15 @@ pub fn init(root: &Path) -> Result<(), String> {
     // The bundles' packages every time, never gated on presence: a bundle added since the last
     // run names new ones, and uv answers a satisfied list in milliseconds.
     let dirs = bundle_dirs(root);
-    let (shared, gil_only) = goofi_provision::requirement_sets(&dirs);
+    let (shared, gil_only) = python::requirement_sets(&dirs);
     for (label, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
-        if !goofi_provision::has_goofi(py) {
+        if !python::has_goofi(py) {
             let wheels = ensure_wheel(root, &runtime, label, py)?;
-            goofi_provision::ensure_wheels(&runtime, py, &wheels)?;
+            python::install_wheel(&runtime, py, &wheels)?;
         }
         if !reqs.is_empty() {
             progress::report(format!("Installing the node bundles' packages into {label}"));
-            goofi_provision::install_packages(&runtime, py, reqs)?;
+            python::install_packages(&runtime, py, reqs)?;
         }
     }
 
@@ -75,7 +76,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     // resolve step and a presence check would sail past a new dependency.
     if needs_npm {
         progress::report("Installing the frontend's dependencies");
-        run(runtime.command(Tool::Npm).args(["install", "--no-fund", "--no-audit"]).current_dir(&frontend), "install the frontend's dependencies")?;
+        run(layout::command(Tool::Npm).args(["install", "--no-fund", "--no-audit"]).current_dir(&frontend), "install the frontend's dependencies")?;
     }
     let (entries, bytes) = sweep_target(&root.join("target"), STALE_AFTER);
     if entries > 0 {
@@ -125,8 +126,8 @@ fn size_of(path: &Path) -> u64 {
     }
 }
 
-fn require_npm(runtime: &layout::Runtime) -> Result<(), String> {
-    answers(runtime.command(Tool::Npm).arg("--version")).then_some(()).ok_or_else(|| {
+fn require_npm() -> Result<(), String> {
+    answers(layout::command(Tool::Npm).arg("--version")).then_some(()).ok_or_else(|| {
         "goofi needs a working `npm` on PATH — the app is compiled into the binary, so building it \
          is part of building goofi. Install Node.js from https://nodejs.org and re-run."
             .to_string()
@@ -212,7 +213,7 @@ fn wheel_key(root: &Path) -> String {
     .map(|d| root.join(d))
     .collect();
     sources.push(root.join("Cargo.lock"));
-    goofi_provision::tree_digest(env!("CARGO_PKG_VERSION"), &sources)
+    python::tree_digest(env!("CARGO_PKG_VERSION"), &sources)
 }
 
 /// The wheel for THIS interpreter: the one under `target/wheels/<label>` when it was built from
@@ -298,7 +299,7 @@ fn write_config(root: &Path, ft: &Path) -> Result<(), String> {
 
 /// The triple cargo will build for, asked of `rustc` rather than assumed.
 fn host_triple() -> Result<String, String> {
-    let out = layout::runtime().command(Tool::Rustc).arg("-vV").output().map_err(|e| format!("run rustc: {e}"))?;
+    let out = layout::command(Tool::Rustc).arg("-vV").output().map_err(|e| format!("run rustc: {e}"))?;
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .find_map(|l| l.strip_prefix("host: ").map(str::to_string))

@@ -1,8 +1,9 @@
 //! The terminal screen goofi's binaries draw: the banner, a spinner per step that becomes a `✓`
 //! or `✗` line, a bar per folder being scanned, and the outcome. The one sink of [`progress`].
 //! Drawn on the terminal the log capture saved: live and in color only where it reads ANSI
-//! escapes, in Unicode only where the locale or the terminal says it draws it.
+//! escapes, in Unicode only where the locale or the terminal draws it, else folded to ASCII.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -65,9 +66,34 @@ fn unicode() -> bool {
         .is_some_and(|l| l.to_ascii_lowercase().replace('-', "").contains("utf8"))
 }
 
-/// `unicode` where the terminal draws it, else `ascii`.
-pub fn glyph(unicode: &'static str, ascii: &'static str) -> &'static str {
+/// `unicode` where the terminal draws it, else `ascii`: for what indicatif draws itself.
+fn glyph(unicode: &'static str, ascii: &'static str) -> &'static str {
     if caps().unicode { unicode } else { ascii }
+}
+
+/// `text` as the terminal can show it: as is in Unicode, else each character it cannot draw
+/// spelled in ASCII, and `?` where no spelling exists.
+pub fn fit(text: &str) -> Cow<'_, str> {
+    if caps().unicode || text.is_ascii() {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            c if c.is_ascii() => out.push(c),
+            '—' | '–' | '·' | '━' => out.push('-'),
+            '→' | '╸' => out.push_str("->"),
+            '←' => out.push_str("<-"),
+            '…' | '⋯' => out.push_str("..."),
+            '✓' => out.push('+'),
+            '✗' => out.push('x'),
+            '↑' => out.push('^'),
+            '‘' | '’' => out.push('\''),
+            '“' | '”' => out.push('"'),
+            _ => out.push('?'),
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// The step in progress, and the lines that print under it once it is closed.
@@ -88,13 +114,13 @@ struct State {
 /// `Some` while a [`Screen`] is up: reports outside one are logged, not drawn.
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
-/// Whether output to a terminal (`terminal`) is colored: `GOOFI_COLOR=always|never` decides,
-/// else a terminal is, unless `NO_COLOR` is set or `TERM=dumb`.
-pub fn color(terminal: bool) -> bool {
+/// Whether goofi's output is colored: `GOOFI_COLOR=always|never` decides, else a terminal that
+/// reads ANSI escapes is, unless `NO_COLOR` is set.
+pub fn colored() -> bool {
     match std::env::var("GOOFI_COLOR").ok().as_deref() {
         Some("always") => true,
         Some("never") => false,
-        _ => terminal && std::env::var_os("NO_COLOR").is_none() && std::env::var("TERM").map_or(true, |t| t != "dumb"),
+        _ => caps().live && std::env::var_os("NO_COLOR").is_none(),
     }
 }
 
@@ -127,9 +153,10 @@ fn screen() -> &'static MultiProgress {
 
 /// One line on the saved terminal, above any bars.
 pub fn say(text: &str) {
+    let text = fit(text);
     let screen = screen();
-    if screen.is_hidden() || screen.println(text).is_err() {
-        let _ = log::terminal_line(text);
+    if screen.is_hidden() || screen.println(&text).is_err() {
+        let _ = log::terminal_line(&text);
     }
 }
 
@@ -151,8 +178,8 @@ pub fn warn(text: &str) -> String {
 /// The mark a closed step carries: a green `✓`, or a red `✗`.
 pub fn mark(passed: bool) -> String {
     match passed {
-        true => style(glyph("✓", "+")).green().to_string(),
-        false => style(glyph("✗", "x")).red().bold().to_string(),
+        true => style("✓").green().to_string(),
+        false => style("✗").red().bold().to_string(),
     }
 }
 
@@ -176,8 +203,7 @@ pub fn banner(color: Color, under: &str) {
     say("");
 }
 
-/// The address a browser opens, as the Electron shell reads it: `goofi → <url>`, whatever the
-/// glyphs, since it matches that arrow.
+/// The address a browser opens: `goofi → <url>`.
 pub fn url(url: &str) {
     say(&format!("  goofi → {}", style(url).cyan().bold().underlined()));
 }
@@ -189,12 +215,12 @@ pub struct Screen {
 
 impl Screen {
     pub fn begin() -> Screen {
-        let colored = color(caps().live);
+        let colored = colored();
         console::set_colors_enabled(colored);
         console::set_colors_enabled_stderr(colored);
         let _ = progress::set_sink(|p| match p {
             Progress::Report(m) => report(m),
-            Progress::Note(m) => under(format!("    {} {}", style(glyph("·", "-")).dim(), style(m).dim())),
+            Progress::Note(m) => under(format!("    {} {}", style("·").dim(), style(m).dim())),
             Progress::Scanning(folder, files) => scanning(&folder, files),
             Progress::Reading(file) => reading(&file),
             Progress::Scanned(folder, file) => scanned(&folder, &file),
@@ -215,7 +241,7 @@ impl Screen {
     pub fn ready(self, message: &str) {
         self.close(true);
         let took = format!("in {:.1}s", self.started.elapsed().as_secs_f64());
-        say(&format!("  {} {}", style(format!("{} {message}", glyph("✓", "+"))).green().bold(), style(took).dim()));
+        say(&format!("  {} {}", style(format!("✓ {message}")).green().bold(), style(took).dim()));
     }
 
     /// The end on failure: `headline` and the step it failed at in red, then the error, its first
@@ -223,7 +249,7 @@ impl Screen {
     pub fn failed(self, headline: &str, error: &str) {
         self.close(false);
         let at = STATE.lock().as_ref().and_then(|s| s.failed_at.clone()).map(|s| format!(" at \"{s}\"")).unwrap_or_default();
-        say(&format!("  {}", style(format!("{} {headline}{at}.", glyph("✗", "x"))).red().bold()));
+        say(&format!("  {}", style(format!("✗ {headline}{at}.")).red().bold()));
         let mut lines = error.lines();
         say(&format!("    {}", style(lines.next().unwrap_or_default()).red()));
         for line in lines {
@@ -250,10 +276,10 @@ fn report(name: String) {
     close(state, true);
     let bar = screen().insert(0, ProgressBar::new_spinner());
     bar.set_style(ProgressStyle::with_template("  {spinner:.cyan} {msg} {elapsed:.dim}").expect("a template").tick_chars(glyph("⠁⠂⠄⡀⢀⠠⠐⠈ ", "-\\|/ ")));
-    bar.set_message(name.clone());
+    bar.set_message(fit(&name).into_owned());
     bar.enable_steady_tick(Duration::from_millis(100));
     if screen().is_hidden() {
-        let _ = log::terminal_line(&format!("  {} {name}", glyph("⋯", "...")));
+        say(&format!("  ⋯ {name}"));
     }
     state.step = Some(Step { name, bar, started: Instant::now(), under: Vec::new() });
 }
@@ -304,13 +330,13 @@ fn scanning(folder: &Path, files: usize) {
     let bar = screen().add(ProgressBar::new(files as u64));
     let style = ProgressStyle::with_template("    {spinner:.cyan} {prefix} {bar:24.cyan} {pos}/{len} {msg:.dim}").expect("a template").tick_chars(glyph("⠁⠂⠄⡀⢀⠠⠐⠈ ", "-\\|/ ")).progress_chars(glyph("━╸ ", "=> "));
     bar.set_style(style);
-    bar.set_prefix(shown(folder));
+    bar.set_prefix(fit(&shown(folder)).into_owned());
     bar.enable_steady_tick(Duration::from_millis(100));
     state.folders.insert(folder.to_path_buf(), bar);
 }
 
 fn file_name(file: &Path) -> String {
-    file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    file.file_name().map(|n| fit(&n.to_string_lossy()).into_owned()).unwrap_or_default()
 }
 
 /// `file` is being read: its folder's bar names it.
@@ -336,6 +362,6 @@ fn indexed(folder: &Path, nodes: usize, unavailable: usize) {
     bar.finish_and_clear();
     screen().remove(&bar);
     let noun = if nodes == 1 { "node" } else { "nodes" };
-    let greyed = if unavailable > 0 { format!(" {} {}", glyph("·", "-"), style(format!("{unavailable} unavailable")).yellow()) } else { String::new() };
-    under(format!("    {} {} {}{greyed}", mark(true), shown(folder), style(format!("{} {nodes} {noun}", glyph("·", "-"))).dim()));
+    let greyed = if unavailable > 0 { format!(" · {}", style(format!("{unavailable} unavailable")).yellow()) } else { String::new() };
+    under(format!("    {} {} {}{greyed}", mark(true), shown(folder), style(format!("· {nodes} {noun}")).dim()));
 }

@@ -32,7 +32,7 @@ goofi-agent = { path = "../goofi-agent" }
 # The same pipeline at run time: where the artifacts live, and a build before the lock.
 goofi-build = { path = "../goofi-build" }
 # The uv a plugin's backend environment is synced with.
-goofi-provision = { path = "../goofi-provision" }
+goofi-init = { path = "../goofi-init" }
 goofi-view = { path = "../goofi-view" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }

@@ -487,14 +487,13 @@ fn a_session_owns_its_directory_workspace_and_cache_parts() {
     fs::create_dir_all(runtime.shipped().join("fedcba9876543210")).unwrap();
     fs::create_dir_all(runtime.root().join("0.0.1")).unwrap();
     fs::create_dir_all(runtime.cache()).unwrap();
-    fs::create_dir_all(runtime.state()).unwrap();
     sweep_runtime();
     assert!(out.join(format!(".node.so.s{}", live.id())).exists(), "a live session's part stays");
     assert!(!out.join(".node.so.sfedcba9876543210").exists() && !work.exists(), "a dead session's go");
     assert!(runtime.shipped().join("fedcba9876543210").exists(), "a content key stays");
     assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists());
     assert!(!runtime.root().join("0.0.1").exists(), "another version's tree goes");
-    assert!(runtime.versioned().is_dir() && runtime.cache().is_dir() && runtime.state().is_dir(), "this version's and the shared ones stay");
+    assert!(runtime.versioned().is_dir() && runtime.cache().is_dir(), "this version's and the shared cache stay");
     let _ = fs::remove_dir_all(runtime.shipped().join("fedcba9876543210"));
     drop(live);
 

@@ -26,8 +26,6 @@ pub enum Event {
     /// The history moved: what every client's next undo and redo would take back, by label.
     History { undo: Option<String>, redo: Option<String> },
     Logs(Value),
-    /// `update start` was called: the app shell downloads the release and restarts into it.
-    UpdateRequested,
 }
 
 impl Event {
