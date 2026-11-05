@@ -1030,11 +1030,11 @@ dependencies = [
  "goofi-python",
  "goofi-record",
  "goofi-runtime",
+ "goofi-screen",
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
  "goofi-window",
- "indicatif",
  "serde_json",
  "shell-words",
  "terminal_size",
@@ -1142,10 +1142,9 @@ dependencies = [
 name = "goofi-init"
 version = "3.0.0"
 dependencies = [
- "console",
  "goofi-provision",
+ "goofi-screen",
  "goofi-supervisor",
- "indicatif",
 ]
 
 [[package]]
@@ -1234,6 +1233,15 @@ dependencies = [
  "goofi-supervisor",
  "goofi-transport",
  "indexmap",
+]
+
+[[package]]
+name = "goofi-screen"
+version = "3.0.0"
+dependencies = [
+ "console",
+ "goofi-supervisor",
+ "indicatif",
 ]
 
 [[package]]

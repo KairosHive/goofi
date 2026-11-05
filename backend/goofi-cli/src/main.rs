@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use goofi_bridge::{serve_app, Config, HEADLESS_BUILD, SPA};
 use goofi_cli::{exposure_warning, parse_args, Cli, DEFAULT_PORT, USAGE};
 use goofi_supervisor::layout;
+use goofi_screen::{say, Screen};
 use goofi_supervisor::progress::report;
-use startup::Startup;
 
-mod startup;
 
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
@@ -102,26 +101,22 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     }
     let shutdown = watch_shutdown(cli.shell);
     goofi_supervisor::process::fine_timer();
-    let startup = Startup::begin(env!("CARGO_PKG_VERSION"));
+    let screen = Screen::begin();
+    goofi_screen::banner(goofi_screen::Color::Cyan, concat!("v", env!("CARGO_PKG_VERSION")));
     if goofi_provision::DIST {
         report("Preparing goofi's runtime");
         if let Err(e) = goofi_provision::ensure_runtime(&layout::runtime()) {
-            eprintln!("Could not prepare the runtime: {e}");
-            std::process::exit(1);
+            refuse(screen, &format!("Could not prepare the runtime: {e}"));
         }
     }
     report("Checking the Python environment");
     let python = match default_subproc_python() {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
+        Err(e) => refuse(screen, &e),
     };
     if !cli.boot_only {
         if let Err(e) = goofi_supervisor::log::capture_stdio() {
-            eprintln!("Could not capture application output: {e}");
-            std::process::exit(1);
+            refuse(screen, &format!("Could not capture application output: {e}"));
         }
     }
     let mode = goofi_bridge::Mode { headless: cli.headless, demo: cli.demo, mcp: cli.mcp, shell: cli.shell };
@@ -130,10 +125,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     // its. What dead sessions left is swept once it is held, so the sweep can never take this one.
     let (session, hub) = match hold_session() {
         Ok(held) => held,
-        Err(e) => {
-            eprintln!("Could not hold a session: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => refuse(screen, &format!("Could not hold a session: {e}")),
     };
     let swept = goofi_supervisor::session::sweep_dead();
     goofi_supervisor::progress::note(match (swept.directories, swept.segments) {
@@ -145,7 +137,7 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     config.load = cli.load.clone().or_else(|| named_env("GOOFI_LOAD")).map(PathBuf::from);
     config.demo_base = named_env("GOOFI_DEMO_BASE");
     let window = ui.clone();
-    let code = run(cli, python, config, async { let _ = shutdown.await; }, ui, Some(startup)).await;
+    let code = run(cli, python, config, async { let _ = shutdown.await; }, ui, Some(screen)).await;
     // The window loop ends once every plugin editor and window was unmade by the shutdown above.
     if let Some(window) = window {
         window.stop();
@@ -155,13 +147,28 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     std::process::exit(code);
 }
 
+/// Startup stops before a session exists: the failed step and why, then exit.
+fn refuse(screen: Screen, error: &str) -> ! {
+    screen.failed("goofi could not start", error);
+    std::process::exit(1);
+}
+
+/// The end of a startup that holds a session: the failed step and why, and the exit code.
+fn refused(screen: &mut Option<Screen>, error: &str) -> i32 {
+    match screen.take() {
+        Some(screen) => screen.failed("goofi could not start", error),
+        None => say(&format!("  {error}")),
+    }
+    1
+}
+
 /// One line when a newer release is out, from a thread of its own: the check may wait on the
 /// network, and the server does not.
 fn notice_newer_release() {
     let _ = goofi_supervisor::worker::thread("goofi-update-check").spawn(|| {
         if let Ok(latest) = goofi_provision::latest_release(&layout::runtime()) {
             if goofi_provision::is_newer(&latest) {
-                let _ = goofi_supervisor::log::terminal_line(&format!("  goofi {latest} is out — `goofi update` installs it"));
+                say(&format!("    {} goofi {latest} is out — `goofi update` installs it", goofi_screen::warn("↑")));
             }
         }
     });
@@ -180,12 +187,7 @@ fn style() -> goofi_bridge::text::Style {
         Some("compact") => false,
         _ => terminal,
     };
-    let color = human
-        && match std::env::var("GOOFI_COLOR").ok().as_deref() {
-            Some("always") => true,
-            Some("never") => false,
-            _ => terminal && std::env::var_os("NO_COLOR").is_none() && std::env::var("TERM").map(|t| t != "dumb").unwrap_or(true),
-        };
+    let color = human && goofi_screen::color(terminal);
     let width = terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
@@ -425,7 +427,7 @@ async fn run(
     mut config: Config,
     shutdown: impl Future<Output = ()>,
     ui: Option<goofi_window::Ui>,
-    mut startup: Option<Startup>,
+    mut screen: Option<Screen>,
 ) -> i32 {
     // Before ANY use of the embedded interpreter.
     configure_embedded();
@@ -446,18 +448,12 @@ async fn run(
         report("Preparing parameter expressions");
         config.evaluator = match evaluator() {
             Ok(evaluator) => evaluator,
-            Err(error) => {
-                let _ = goofi_supervisor::log::terminal_line(&format!("Startup failed: {error}"));
-                return 1;
-            }
+            Err(error) => return refused(&mut screen, &error),
         };
     }
     let manager = match goofi_bridge::boot(config) {
         Ok(manager) => manager,
-        Err(error) => {
-            let _ = goofi_supervisor::log::terminal_line(&format!("Startup failed: {error}"));
-            return 1;
-        }
+        Err(error) => return refused(&mut screen, &error),
     };
     let state = &manager.state;
     if !demo {
@@ -467,40 +463,39 @@ async fn run(
 
     let code = if boot_only {
         let names = goofi_bridge::catalog_type_names(&state.graph());
-        if let Some(startup) = startup.take() {
-            startup.finish("Node library ready");
+        if let Some(screen) = screen.take() {
+            screen.ready("Node library ready");
         }
         println!("{} node types: {}", names.len(), names.join(", "));
         0
     // An arm of this chain rather than an early `return`: only the tail of this function gives
     // the workspace mount back.
     } else if !headless && SPA.is_empty() {
-        let _ = goofi_supervisor::log::terminal_line("refusing to start: no app is compiled into this binary.");
-        let _ = goofi_supervisor::log::terminal_line(
-            "  The app is compiled in, so building it is not enough — build it, then rebuild \
-             goofi:"
-        );
-        let _ = goofi_supervisor::log::terminal_line("    npm install && npm run build   (in frontend/)");
-        let _ = goofi_supervisor::log::terminal_line("    cargo build");
-        let _ = goofi_supervisor::log::terminal_line("  Or serve the API alone: --headless, or GOOFI_HEADLESS=1.");
-        1
+        refused(
+            &mut screen,
+            "No app is compiled into this binary.\n\
+             The app is compiled in, so building it is not enough — build it, then rebuild goofi:\n  \
+             npm install && npm run build   (in frontend/)\n  \
+             cargo build\n\
+             Or serve the API alone: --headless, or GOOFI_HEADLESS=1.",
+        )
     } else if let Err(e) = {
         if let Some(patch) = &state.load {
             report(format!("Opening patch {}", patch.display()));
         }
         goofi_bridge::open_load(state)
     } {
-        let _ = goofi_supervisor::log::terminal_line("refusing to start: the patch --load named did not open.");
-        let _ = goofi_supervisor::log::terminal_line(&format!("  {e}"));
-        1
+        refused(&mut screen, &format!("The patch --load named did not open.\n{e}"))
     } else {
         report(format!("Starting services on {bind}:{port}"));
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
-            Err(e) => {
-                let _ = goofi_supervisor::log::terminal_line(&format!("failed to bind {bind}:{port}: {e}"));
-                let _ = goofi_supervisor::log::terminal_line("  A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another.");
-                1
-            }
+            Err(e) => refused(
+                &mut screen,
+                &format!(
+                    "Could not bind {bind}:{port}: {e}\n\
+                     A goofi that already runs holds it: `goofi session list` names them, and `--port` picks another."
+                ),
+            ),
             Ok(listener) => {
                 let addr = listener.local_addr().unwrap();
                 // The session file needs the REAL address: `--port 0` makes it knowable
@@ -512,42 +507,48 @@ async fn run(
                 // The OPENABLE spelling, as the session file records it — `http://0.0.0.0` is
                 // not an address a browser can visit.
                 let url = state.local_url();
-                if let Some(startup) = startup.take() {
-                    startup.finish("Ready");
+                if let Some(screen) = screen.take() {
+                    screen.ready("goofi is ready");
                 }
-                let _ = goofi_supervisor::log::print_url(&url);
+                say("");
+                goofi_screen::url(&url);
                 if mcp && !demo {
-                    println!("  MCP endpoint → {url}/mcp");
+                    say(&format!("    MCP endpoint → {url}/mcp"));
                 }
                 if goofi_provision::DIST {
                     notice_newer_release();
                 }
                 let spa = if headless { &[][..] } else { SPA };
+                let mut facts = Vec::new();
                 if headless {
-                    println!("  headless: the API only, no app served");
+                    facts.push("headless: the API only, no app served".to_string());
                 } else {
-                    println!("  open {url} to use it");
+                    facts.push(format!("open {url} in a browser to use it"));
                 }
                 if demo {
-                    println!("  demo: no terminal, no agents, no filesystem, no audio");
+                    facts.push("demo: no terminal, no agents, no filesystem, no audio".to_string());
                 }
                 if let Some(patch) = &state.load {
-                    println!("  opened {}", patch.display());
+                    facts.push(format!("opened {}", patch.display()));
                 }
                 if debug && !headless {
-                    println!("  debug: {url}/dev/ui is open — the UI primitive gallery");
+                    facts.push(format!("debug: {url}/dev/ui is open — the UI primitive gallery"));
                 }
-                println!("  Ctrl+C to stop\n");
-                // Last, and on stderr, so it is the line still on screen and survives a `> log`.
+                facts.push("Ctrl+C to stop".to_string());
+                for fact in facts {
+                    say(&format!("    {}", goofi_screen::dim(&fact)));
+                }
+                say("");
+                // Last, so it is the line still on screen.
                 if let Some(warning) = exposure_warning(&bind).filter(|_| !demo) {
-                    let _ = goofi_supervisor::log::terminal_line(&warning);
+                    say(&goofi_screen::warn(&warning));
                 }
                 // The stop is here, not in `serve_app`, whose other callers serve forever.
                 tokio::select! {
                     served = serve_app(listener, state.clone(), spa, debug) => match served {
                         Ok(()) => 0,
                         Err(e) => {
-                            let _ = goofi_supervisor::log::terminal_line(&format!("server error: {e}"));
+                            say(&goofi_screen::warn(&format!("  server error: {e}")));
                             1
                         }
                     },
@@ -556,14 +557,14 @@ async fn run(
             }
         }
     };
-    drop(startup);
-    let _ = goofi_supervisor::log::terminal_line("  Stopping engines · press Ctrl+C again to force exit");
+    drop(screen);
+    say(&format!("  {} Stopping engines {}", goofi_screen::dim("⋯"), goofi_screen::dim("· press Ctrl+C again to force exit")));
     if state.recorder.running() {
-        let _ = goofi_supervisor::log::terminal_line("  Draining recording · waiting for queued frames to reach disk");
+        say(&format!("  {} Draining recording {}", goofi_screen::dim("⋯"), goofi_screen::dim("· waiting for queued frames to reach disk")));
     }
     // The manager releases what it holds, in its one order; the window loop is the process's.
     drop(manager);
-    let _ = goofi_supervisor::log::terminal_line("  Stopped");
+    say(&format!("  {} Stopped", goofi_screen::mark(true)));
     code
 }
 
@@ -675,7 +676,7 @@ async fn managed_stop() {
 fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
     let ev = goofi_python::inproc::PyExprEvaluator::new()
         .map_err(|e| format!("param-expression evaluator unavailable: {e}"))?;
-    println!("  param-expression evaluator ready (free-threaded Python)");
+    goofi_supervisor::progress::note("the evaluator runs on free-threaded Python");
     Ok(Some(std::sync::Arc::new(ev)))
 }
 
@@ -712,7 +713,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
         match goofi_provision::missing_packages(&runtime, &py, reqs) {
             Ok(missing) if missing.is_empty() => {}
             Ok(missing) => {
-                let _ = goofi_supervisor::log::terminal_line(&format!("  {shown} lacks {}", missing.join(", ")));
+                say(&format!("    {shown} lacks {}", missing.join(", ")));
                 lacking.push((py, reqs.clone()));
             }
             Err(e) => return Err(format!("could not check {shown}: {e}")),
@@ -721,17 +722,20 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
     if lacking.is_empty() {
         return Ok(());
     }
-    let _ = goofi_supervisor::log::terminal_line("  Requirements files:");
+    say("    Requirements files:");
     for path in &gil_only {
-        let _ = goofi_supervisor::log::terminal_line(&format!("    {}", path.display()));
+        say(&format!("      {}", path.display()));
     }
     if !goofi_provision::DIST {
         if !std::io::stdin().is_terminal() {
             return Err(format!("required Python packages are missing and no terminal can approve installation; {}", goofi_init::RUN_ME));
         }
-        let _ = goofi_supervisor::log::terminal_line("  Install missing packages now? [y/N]");
         let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer).map_err(|e| format!("could not read installation approval: {e}"))?;
+        goofi_screen::suspend(|| {
+            let _ = goofi_supervisor::log::terminal_line("    Install missing packages now? [y/N]");
+            std::io::stdin().read_line(&mut answer)
+        })
+        .map_err(|e| format!("could not read installation approval: {e}"))?;
         if !answer.trim().eq_ignore_ascii_case("y") {
             return Err(format!("required Python packages were not installed; {}", goofi_init::RUN_ME));
         }
@@ -747,7 +751,7 @@ fn ensure_packages(_dirs: &[PathBuf], _subproc_python: &str) -> Result<(), Strin
 
 #[cfg(not(feature = "python"))]
 fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
-    println!("  param expressions DISABLED — rebuild with `--features python` to enable the evaluator");
+    goofi_supervisor::progress::note("param expressions are off — rebuild with `--features python` to turn them on");
     Ok(None)
 }
 

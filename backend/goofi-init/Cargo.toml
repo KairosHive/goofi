@@ -9,9 +9,8 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-provision = { path = "../goofi-provision" }
-# The setup screen: a spinner per step, as the goofi binary draws its startup.
-indicatif = "0.18"
-console = "0.16"
+# The setup screen, the one goofi draws its startup on.
+goofi-screen = { path = "../goofi-screen" }
 
 [[bin]]
 name = "goofi-init"

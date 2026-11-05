@@ -1,0 +1,11 @@
+[package]
+name = "goofi-screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The terminal screen goofi and goofi-init draw. No pyo3: goofi-init links it.
+[dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
+indicatif = "0.18"
+console = "0.16"

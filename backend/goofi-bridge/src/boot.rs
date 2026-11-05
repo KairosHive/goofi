@@ -9,6 +9,12 @@ use goofi_supervisor::progress::{note, report};
 
 use crate::{AppState, Clock, Mode};
 
+/// A boot problem that does not stop the boot: logged, and shown under the step in progress.
+fn warn(text: String) {
+    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("goofi"), goofi_supervisor::log::Level::Warning, None, text.clone());
+    note(text);
+}
+
 /// A check of every scanned root's package requirements, before the scan imports anything.
 pub type Requirements = Box<dyn FnOnce(&[PathBuf]) -> Result<(), String>>;
 /// A registration of the caller's own node types, before the scan.
@@ -96,7 +102,7 @@ pub fn boot(config: Config) -> Result<Manager, String> {
     if let (Some(home), Some(python)) = (&plugins, &python) {
         report("Preparing plugins");
         if let Err(error) = crate::plugins::Plugins::load(&mut manager.state, home, std::path::Path::new(python)) {
-            let _ = goofi_supervisor::log::terminal_line(&format!("Could not load plugins: {error}"));
+            warn(format!("Could not load plugins: {error}"));
         }
     }
     manager.state.roots.extend(roots);
@@ -157,7 +163,7 @@ pub fn boot(config: Config) -> Result<Manager, String> {
             Scanned::Registered { isolation, replaced } => {
                 // The boot registry starts empty, so a replacement is two files claiming one name.
                 if replaced {
-                    eprintln!("warning: two node files claim the type name `{}`; the later one wins", t.type_name);
+                    warn(format!("two node files claim the type name `{}`; the later one wins", t.type_name));
                 }
                 match isolation {
                     // Nothing at boot is hosted: a hosted node is one authored later.
@@ -168,7 +174,7 @@ pub fn boot(config: Config) -> Result<Manager, String> {
                 }
             }
             Scanned::Unavailable(reason) => {
-                eprintln!("  node `{}` unavailable: {reason}", t.type_name);
+                warn(format!("node `{}` unavailable: {reason}", t.type_name));
                 n_bad += 1;
             }
         }

@@ -296,9 +296,6 @@ pub fn terminal_line(text: &str) -> std::io::Result<()> {
     terminal_write(&format!("{text}\n"))
 }
 
-pub fn print_url(url: &str) -> std::io::Result<()> { terminal_line(&format!("goofi → {url}")) }
-
-
 #[cfg(windows)]
 fn redirect_crt(writer: &filedescriptor::FileDescriptor, target: i32) -> Result<(), String> {
     use std::os::windows::io::{AsRawHandle, IntoRawHandle};
