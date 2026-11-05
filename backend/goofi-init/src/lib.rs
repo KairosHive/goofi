@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use goofi_provision::{answers, query, run, uv};
 use goofi_supervisor::layout::{self, Tool};
+use goofi_supervisor::progress;
 
 /// The repo root. Nothing is resolved, so a checkout reached through a symlink stays spelled the
 /// way the caller reached it.
@@ -36,6 +37,7 @@ pub const RUN_ME: &str = "run `cargo run -p goofi-init` first — it provisions 
 /// Provision everything, from nothing, idempotently.
 pub fn init(root: &Path) -> Result<(), String> {
     let runtime = layout::runtime();
+    progress::report("Checking the tools goofi builds with");
     require_uv(&runtime)?;
 
     // Both tools asked for BEFORE either is used, so a long provision cannot stop for want of npm.
@@ -46,6 +48,7 @@ pub fn init(root: &Path) -> Result<(), String> {
     }
     require_audio_libs()?;
 
+    progress::report("Checking goofi's Python interpreters");
     let pins = &goofi_provision::manifest().python;
     let ft = goofi_provision::ensure_venv(&runtime, &runtime.python_ft(), &pins.ft)?;
     let gil = goofi_provision::ensure_venv(&runtime, &runtime.python_gil(), &pins.gil)?;
@@ -63,7 +66,7 @@ pub fn init(root: &Path) -> Result<(), String> {
             goofi_provision::ensure_wheels(&runtime, py, &wheels)?;
         }
         if !reqs.is_empty() {
-            println!("  installing the bundles' packages into {label}");
+            progress::report(format!("Installing the node bundles' packages into {label}"));
             goofi_provision::install_packages(&runtime, py, reqs)?;
         }
     }
@@ -71,12 +74,12 @@ pub fn init(root: &Path) -> Result<(), String> {
     // Run every time, never gated on `node_modules`: no lockfile ships, so `npm install` IS the
     // resolve step and a presence check would sail past a new dependency.
     if needs_npm {
-        println!("  installing the frontend's dependencies");
-        run(runtime.command(Tool::Npm).arg("install").current_dir(&frontend), "install the frontend's dependencies")?;
+        progress::report("Installing the frontend's dependencies");
+        run(runtime.command(Tool::Npm).args(["install", "--no-fund", "--no-audit"]).current_dir(&frontend), "install the frontend's dependencies")?;
     }
     let (entries, bytes) = sweep_target(&root.join("target"), STALE_AFTER);
     if entries > 0 {
-        println!("  removed {entries} build artifacts untouched for {} days ({} MB)", STALE_AFTER.as_secs() / 86_400, bytes >> 20);
+        progress::note(format!("removed {entries} build artifacts untouched for {} days ({} MB)", STALE_AFTER.as_secs() / 86_400, bytes >> 20));
     }
     Ok(())
 }
@@ -221,7 +224,7 @@ fn ensure_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) 
     let held = std::fs::read_to_string(&stamp).is_ok_and(|k| k == key)
         && std::fs::read_dir(&out).is_ok_and(|mut d| d.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "whl"))));
     if held {
-        println!("  the goofi wheel for {label} is built from these sources already");
+        progress::note(format!("the goofi wheel for {label} is built from these sources already"));
         return Ok(out);
     }
     build_wheel(root, runtime, label, py)?;
@@ -232,7 +235,7 @@ fn ensure_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) 
 /// Build the wheel for THIS interpreter into a directory of its own, emptied first, so the wheel
 /// just built is the only file in it. Answers that directory.
 fn build_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) -> Result<PathBuf, String> {
-    println!("  building the goofi wheel for {label}");
+    progress::report(format!("Building the goofi wheel for {label}"));
     let out = root.join("target").join("wheels").join(label);
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).map_err(|e| format!("wheel output directory: {e}"))?;

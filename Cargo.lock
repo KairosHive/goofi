@@ -1142,8 +1142,10 @@ dependencies = [
 name = "goofi-init"
 version = "3.0.0"
 dependencies = [
+ "console",
  "goofi-provision",
  "goofi-supervisor",
+ "indicatif",
 ]
 
 [[package]]

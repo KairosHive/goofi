@@ -59,13 +59,18 @@ pub fn uv<'a>(runtime: &Runtime, args: impl IntoIterator<Item = &'a str>) -> Com
     cmd
 }
 
-/// Run `cmd` to completion, or say what could not be done.
+/// Run `cmd` to completion with its output held, or say what could not be done and the last
+/// lines the tool printed about it.
 pub fn run(cmd: &mut Command, what: &str) -> Result<(), String> {
-    match cmd.status() {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(format!("could not {what} ({s})")),
-        Err(e) => Err(format!("could not {what}: {e}")),
+    let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("could not {what}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
     }
+    let said = [&out.stderr, &out.stdout].map(|b| String::from_utf8_lossy(b).into_owned());
+    let text = said.iter().find(|t| !t.trim().is_empty()).map(String::as_str).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(20)..].join("\n");
+    Err(format!("could not {what} ({})\n{tail}", out.status).trim_end().to_string())
 }
 
 /// Whether `cmd` runs and succeeds, with its output discarded.
