@@ -182,7 +182,7 @@ pub fn boot(config: Config) -> Result<Manager, String> {
     let bad = if n_bad > 0 { format!(", {n_bad} unavailable") } else { String::new() };
     let total = n_native + n_in + n_sub + n_shader;
     note(format!("Node library: {total} available{bad}"));
-    note(format!("{n_native} native · {n_in} in-process · {n_sub} subprocess · {n_shader} shaders"));
+    note(format!("{n_native} native, {n_in} in-process, {n_sub} subprocess, {n_shader} shaders"));
     crate::spawn_workers(&manager.state);
     Ok(manager)
 }

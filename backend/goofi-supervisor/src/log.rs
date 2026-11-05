@@ -191,21 +191,9 @@ pub fn capture_stdio() -> Result<(), String> {
     use filedescriptor::{FileDescriptor, Pipe, StdioDescriptor};
     static CAPTURE: OnceLock<Result<(), String>> = OnceLock::new();
     CAPTURE.get_or_init(|| {
+        // The mode belongs to the console, so the saved terminal keeps it.
+        let _ = enable_ansi();
         let terminal = FileDescriptor::dup(&std::io::stdout()).map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        {
-            // The startup screen moves the cursor with ANSI escapes; a classic console reads them
-            // only in this mode.
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::System::Console::{GetConsoleMode, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING};
-            let mut mode = 0;
-            // SAFETY: mode calls on a handle this process holds.
-            unsafe {
-                if GetConsoleMode(terminal.as_raw_handle(), &mut mode) != 0 {
-                    SetConsoleMode(terminal.as_raw_handle(), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-                }
-            }
-        }
         let _ = TERMINAL.set(Mutex::new(terminal));
         for (stream, descriptor) in [("stdout", StdioDescriptor::Stdout), ("stderr", StdioDescriptor::Stderr)] {
             let pipe = Pipe::new().map_err(|e| e.to_string())?;
@@ -263,7 +251,8 @@ fn write_text(out: &mut filedescriptor::FileDescriptor, text: &str) -> std::io::
     Ok(())
 }
 
-/// Whether the terminal is one, and how wide: `None` when output goes to a file or a pipe.
+/// Whether the terminal is one, and how wide (80 when it reports no size): `None` when output
+/// goes to a file or a pipe.
 pub fn terminal_width() -> Option<u16> {
     #[cfg(unix)]
     {
@@ -275,7 +264,7 @@ pub fn terminal_width() -> Option<u16> {
         let mut size: libc::winsize = unsafe { std::mem::zeroed() };
         // SAFETY: a query on an fd this process holds, into a struct of the size it expects.
         (unsafe { libc::isatty(fd) == 1 && libc::ioctl(fd, libc::TIOCGWINSZ, &mut size) == 0 })
-            .then_some(size.ws_col.max(40))
+            .then_some(if size.ws_col == 0 { 80 } else { size.ws_col })
     }
     #[cfg(windows)]
     {
@@ -288,7 +277,31 @@ pub fn terminal_width() -> Option<u16> {
         let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
         // SAFETY: a query on a handle this process holds, into a struct of the size it expects.
         (unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } != 0)
-            .then(|| ((info.srWindow.Right - info.srWindow.Left + 1) as u16).max(40))
+            .then(|| (info.srWindow.Right - info.srWindow.Left + 1).max(1) as u16)
+    }
+}
+
+/// Whether the terminal reads ANSI escapes. A classic Windows console reads them only once
+/// asked, so it is asked here; false when output goes to a file or a pipe.
+pub fn enable_ansi() -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{GetConsoleMode, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING};
+        let handle = match TERMINAL.get() {
+            Some(out) => out.lock().unwrap_or_else(|e| e.into_inner()).as_raw_handle(),
+            None => std::io::stdout().as_raw_handle(),
+        };
+        let mut mode = 0;
+        // SAFETY: mode calls on a handle this process holds.
+        unsafe {
+            GetConsoleMode(handle, &mut mode) != 0
+                && (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 || SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        terminal_width().is_some()
     }
 }
 

@@ -1,6 +1,7 @@
 //! The terminal screen goofi's binaries draw: the banner, a spinner per step that becomes a `✓`
 //! or `✗` line, a bar per folder being scanned, and the outcome. The one sink of [`progress`].
-//! Everything is drawn on the terminal the log capture saved, and in color only on a terminal.
+//! Drawn on the terminal the log capture saved: live and in color only where it reads ANSI
+//! escapes, in Unicode only where the locale or the terminal says it draws it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,51 @@ const BANNER: [&str; 6] = [
     "╚██████╔╝╚██████╔╝╚██████╔╝██║     ██║",
     " ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝     ╚═╝",
 ];
+
+const ASCII_BANNER: [&str; 6] = [
+    r"                    __ _ ",
+    r"  __ _  ___   ___  / _(_)",
+    r" / _` |/ _ \ / _ \| |_| |",
+    r"| (_| | (_) | (_) |  _| |",
+    r" \__, |\___/ \___/|_| |_|",
+    r" |___/                   ",
+];
+
+/// What the terminal is drawn with, decided once.
+struct Caps {
+    /// Spinners, bars and color: a terminal that reads ANSI escapes and is not `TERM=dumb`.
+    live: bool,
+    /// The banner's blocks and the marks, else their ASCII spellings.
+    unicode: bool,
+}
+
+fn caps() -> &'static Caps {
+    static CAPS: OnceLock<Caps> = OnceLock::new();
+    CAPS.get_or_init(|| {
+        let dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
+        Caps { live: !dumb && log::enable_ansi(), unicode: unicode() }
+    })
+}
+
+/// A UTF-8 locale on unix, by POSIX precedence; on Windows a terminal known to have the glyphs,
+/// since the classic console's fonts lack `✓`.
+fn unicode() -> bool {
+    if cfg!(windows) {
+        return std::env::var_os("WT_SESSION").is_some() || std::env::var_os("TERM_PROGRAM").is_some();
+    }
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|v| std::env::var(v).ok().filter(|l| !l.is_empty()))
+        .is_some_and(|l| l.to_ascii_lowercase().replace('-', "").contains("utf8"))
+}
+
+/// `unicode` where the terminal draws it, else `ascii`.
+pub fn glyph(unicode: &'static str, ascii: &'static str) -> &'static str {
+    if caps().unicode { unicode } else { ascii }
+}
 
 /// The step in progress, and the lines that print under it once it is closed.
 struct Step {
@@ -71,9 +117,9 @@ impl TermLike for Terminal {
 fn screen() -> &'static MultiProgress {
     static SCREEN: OnceLock<MultiProgress> = OnceLock::new();
     SCREEN.get_or_init(|| {
-        let target = match log::terminal_width() {
-            Some(_) => ProgressDrawTarget::term_like(Box::new(Terminal)),
-            None => ProgressDrawTarget::hidden(),
+        let target = match caps().live {
+            true => ProgressDrawTarget::term_like(Box::new(Terminal)),
+            false => ProgressDrawTarget::hidden(),
         };
         MultiProgress::with_draw_target(target)
     })
@@ -105,24 +151,33 @@ pub fn warn(text: &str) -> String {
 /// The mark a closed step carries: a green `✓`, or a red `✗`.
 pub fn mark(passed: bool) -> String {
     match passed {
-        true => style("✓").green().to_string(),
-        false => style("✗").red().bold().to_string(),
+        true => style(glyph("✓", "+")).green().to_string(),
+        false => style(glyph("✗", "x")).red().bold().to_string(),
     }
 }
 
-/// The GOOFI banner in `color`, with `under` beneath it when it is not empty.
+/// The GOOFI banner in `color`, with `under` centered beneath it; one line on a terminal too
+/// narrow for it.
 pub fn banner(color: Color, under: &str) {
+    let art = if caps().unicode { BANNER } else { ASCII_BANNER };
+    let wide = art.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     say("");
-    for line in BANNER {
-        say(&format!("  {}", style(line).fg(color).bold()));
-    }
-    if !under.is_empty() {
-        say(&format!("  {}", style(under).dim()));
+    if log::terminal_width().is_some_and(|w| (w as usize) < wide + 2) {
+        say(&format!("  {} {}", style("goofi").fg(color).bold(), style(under).dim()));
+    } else {
+        for line in art {
+            say(&format!("  {}", style(line).fg(color).bold()));
+        }
+        if !under.is_empty() {
+            let pad = wide.saturating_sub(under.chars().count()) / 2;
+            say(&format!("  {}{}", " ".repeat(pad), style(under).dim()));
+        }
     }
     say("");
 }
 
-/// The address a browser opens, as the Electron shell reads it: `goofi → <url>`.
+/// The address a browser opens, as the Electron shell reads it: `goofi → <url>`, whatever the
+/// glyphs, since it matches that arrow.
 pub fn url(url: &str) {
     say(&format!("  goofi → {}", style(url).cyan().bold().underlined()));
 }
@@ -134,12 +189,12 @@ pub struct Screen {
 
 impl Screen {
     pub fn begin() -> Screen {
-        let colored = color(log::terminal_width().is_some());
+        let colored = color(caps().live);
         console::set_colors_enabled(colored);
         console::set_colors_enabled_stderr(colored);
         let _ = progress::set_sink(|p| match p {
             Progress::Report(m) => report(m),
-            Progress::Note(m) => under(format!("    {} {}", style("·").dim(), style(m).dim())),
+            Progress::Note(m) => under(format!("    {} {}", style(glyph("·", "-")).dim(), style(m).dim())),
             Progress::Scanning(folder, files) => scanning(&folder, files),
             Progress::Reading(file) => reading(&file),
             Progress::Scanned(folder, file) => scanned(&folder, &file),
@@ -160,7 +215,7 @@ impl Screen {
     pub fn ready(self, message: &str) {
         self.close(true);
         let took = format!("in {:.1}s", self.started.elapsed().as_secs_f64());
-        say(&format!("  {} {}", style(format!("✓ {message}")).green().bold(), style(took).dim()));
+        say(&format!("  {} {}", style(format!("{} {message}", glyph("✓", "+"))).green().bold(), style(took).dim()));
     }
 
     /// The end on failure: `headline` and the step it failed at in red, then the error, its first
@@ -168,7 +223,7 @@ impl Screen {
     pub fn failed(self, headline: &str, error: &str) {
         self.close(false);
         let at = STATE.lock().as_ref().and_then(|s| s.failed_at.clone()).map(|s| format!(" at \"{s}\"")).unwrap_or_default();
-        say(&format!("  {}", style(format!("✗ {headline}{at}.")).red().bold()));
+        say(&format!("  {}", style(format!("{} {headline}{at}.", glyph("✗", "x"))).red().bold()));
         let mut lines = error.lines();
         say(&format!("    {}", style(lines.next().unwrap_or_default()).red()));
         for line in lines {
@@ -194,11 +249,11 @@ fn report(name: String) {
     let Some(state) = state.as_mut() else { return };
     close(state, true);
     let bar = screen().insert(0, ProgressBar::new_spinner());
-    bar.set_style(ProgressStyle::with_template("  {spinner:.cyan} {msg} {elapsed:.dim}").expect("a template"));
+    bar.set_style(ProgressStyle::with_template("  {spinner:.cyan} {msg} {elapsed:.dim}").expect("a template").tick_chars(glyph("⠁⠂⠄⡀⢀⠠⠐⠈ ", "-\\|/ ")));
     bar.set_message(name.clone());
     bar.enable_steady_tick(Duration::from_millis(100));
     if screen().is_hidden() {
-        let _ = log::terminal_line(&format!("  ⋯ {name}"));
+        let _ = log::terminal_line(&format!("  {} {name}", glyph("⋯", "...")));
     }
     state.step = Some(Step { name, bar, started: Instant::now(), under: Vec::new() });
 }
@@ -247,7 +302,7 @@ fn scanning(folder: &Path, files: usize) {
     let mut state = STATE.lock();
     let Some(state) = state.as_mut() else { return };
     let bar = screen().add(ProgressBar::new(files as u64));
-    let style = ProgressStyle::with_template("    {spinner:.cyan} {prefix} {bar:24.cyan} {pos}/{len} {msg:.dim}").expect("a template").progress_chars("━╸ ");
+    let style = ProgressStyle::with_template("    {spinner:.cyan} {prefix} {bar:24.cyan} {pos}/{len} {msg:.dim}").expect("a template").tick_chars(glyph("⠁⠂⠄⡀⢀⠠⠐⠈ ", "-\\|/ ")).progress_chars(glyph("━╸ ", "=> "));
     bar.set_style(style);
     bar.set_prefix(shown(folder));
     bar.enable_steady_tick(Duration::from_millis(100));
@@ -281,6 +336,6 @@ fn indexed(folder: &Path, nodes: usize, unavailable: usize) {
     bar.finish_and_clear();
     screen().remove(&bar);
     let noun = if nodes == 1 { "node" } else { "nodes" };
-    let greyed = if unavailable > 0 { format!(" · {}", style(format!("{unavailable} unavailable")).yellow()) } else { String::new() };
-    under(format!("    {} {} {}{greyed}", style("✓").green(), shown(folder), style(format!("· {nodes} {noun}")).dim()));
+    let greyed = if unavailable > 0 { format!(" {} {}", glyph("·", "-"), style(format!("{unavailable} unavailable")).yellow()) } else { String::new() };
+    under(format!("    {} {} {}{greyed}", mark(true), shown(folder), style(format!("{} {nodes} {noun}", glyph("·", "-"))).dim()));
 }

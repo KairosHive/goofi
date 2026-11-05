@@ -168,7 +168,7 @@ fn notice_newer_release() {
     let _ = goofi_supervisor::worker::thread("goofi-update-check").spawn(|| {
         if let Ok(latest) = goofi_provision::latest_release(&layout::runtime()) {
             if goofi_provision::is_newer(&latest) {
-                say(&format!("    {} goofi {latest} is out — `goofi update` installs it", goofi_screen::warn("↑")));
+                say(&format!("    {} goofi {latest} is out — `goofi update` installs it", goofi_screen::warn(goofi_screen::glyph("↑", "^"))));
             }
         }
     });
@@ -513,7 +513,7 @@ async fn run(
                 say("");
                 goofi_screen::url(&url);
                 if mcp && !demo {
-                    say(&format!("    MCP endpoint → {url}/mcp"));
+                    say(&format!("    MCP endpoint {} {url}/mcp", goofi_screen::glyph("→", "->")));
                 }
                 if goofi_provision::DIST {
                     notice_newer_release();
@@ -558,9 +558,9 @@ async fn run(
         }
     };
     drop(screen);
-    say(&format!("  {} Stopping engines {}", goofi_screen::dim("⋯"), goofi_screen::dim("· press Ctrl+C again to force exit")));
+    say(&format!("  {} Stopping engines {}", goofi_screen::dim(goofi_screen::glyph("⋯", "...")), goofi_screen::dim(&format!("{} press Ctrl+C again to force exit", goofi_screen::glyph("·", "-")))));
     if state.recorder.running() {
-        say(&format!("  {} Draining recording {}", goofi_screen::dim("⋯"), goofi_screen::dim("· waiting for queued frames to reach disk")));
+        say(&format!("  {} Draining recording {}", goofi_screen::dim(goofi_screen::glyph("⋯", "...")), goofi_screen::dim(&format!("{} waiting for queued frames to reach disk", goofi_screen::glyph("·", "-")))));
     }
     // The manager releases what it holds, in its one order; the window loop is the process's.
     drop(manager);
