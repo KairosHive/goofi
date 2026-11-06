@@ -71,7 +71,7 @@ class DinoMorph(goofi.Node):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.auto = None
         self.built = None
-        self.grids = {}  # by sender: (frame key, grid of tokens)
+        self.grids = {}  # by sender: ((fingerprint, resolution), tokens, (rows, cols))
         self.drawn = None
 
     def process(self, images):
@@ -83,16 +83,23 @@ class DinoMorph(goofi.Node):
             self.auto = Autoencoder(p.space, self.device)
             self.built = p.space
 
-        first = np.asarray(images[0][1].data)
-        rows, cols = self.auto.grid(first.shape[1], first.shape[0], max(1, p.resolution // 16))
-        senders = []
+        # A picture is encoded again only when its texels moved — a texture's stamp is the tick
+        # that drew it, which moves whether or not the picture did — so a run on still pictures
+        # is one decode. The first picture sets the grid, and one held on another grid is encoded again.
+        senders, grid = [], None
         for src, frame in images:
             senders.append(src)
-            key = (rows, cols, frame.meta.get("index"), frame.meta.get("procend"))
-            if src not in self.grids or self.grids[src][0] != key:
-                self.grids[src] = (key, self.auto.encode(picture(frame.data), (rows, cols)))
+            x = np.asarray(frame.data)
+            key = (fingerprint(x), p.resolution)
+            held = self.grids.get(src)
+            if held is not None and held[0] == key and (grid is None or held[2] == grid):
+                grid = held[2]
+                continue
+            grid = grid or self.auto.grid(x.shape[1], x.shape[0], max(1, p.resolution // 16))
+            self.grids[src] = (key, self.auto.encode(x, grid), grid)
         for gone in [s for s in self.grids if s not in senders]:
             del self.grids[gone]
+        rows, cols = grid
 
         grids = [self.grids[s][1] for s in senders]
         want = (tuple(self.grids[s][0] for s in senders), round(p.position, 4), p.curve)
@@ -128,17 +135,21 @@ def along(grids, position):
     return 0.5 * (2 * p1 + (p2 - p0) * s + (2 * p0 - 5 * p1 + 4 * p2 - p3) * s * s + (3 * p1 - p0 - 3 * p2 + p3) * s**3)
 
 
-def picture(data):
-    """Whatever came down the wire, as `[H, W, 3]` floats in 0..1."""
-    x = np.asarray(data, dtype=np.float32)
+def fingerprint(x):
+    """What a picture is, cheaply: a hash of every 32nd texel, which a new frame of a video moves."""
+    return hash(np.ascontiguousarray(x[::32, ::32]).tobytes())
+
+
+def picture(x, device):
+    """Whatever came down the wire, as `[1, 3, H, W]` floats in 0..1 on the GPU: the texels cross once, the rest happens there."""
     if x.ndim == 2:
         x = x[..., None]
     if x.ndim != 3:
         raise ValueError(f"DinoMorph reads a picture; this frame is {x.shape}")
-    x = x[..., :3] if x.shape[2] >= 3 else np.repeat(x[..., :1], 3, axis=2)
-    if x.max() > 1.0:
-        x = x / 255.0
-    return np.clip(x, 0.0, 1.0)
+    t = torch.from_numpy(np.ascontiguousarray(x)).to(device, torch.float32).permute(2, 0, 1)[None]
+    t = t[:, :3] if t.shape[1] >= 3 else t[:, :1].expand(-1, 3, -1, -1)
+    t = torch.where(t.amax() > 1.0, t / 255.0, t)
+    return t.clamp(0.0, 1.0)
 
 
 class Holder(nn.Module):
@@ -262,9 +273,9 @@ class Autoencoder:
 
     @torch.inference_mode()
     def encode(self, image, grid):
-        """`[H, W, 3]` in 0..1 -> `[rows*cols, dim]` tokens, the picture fitted to the grid."""
+        """A `[H, W, C]` array off the wire -> `[rows*cols, dim]` tokens, the picture fitted to the grid."""
         rows, cols = grid
-        x = torch.from_numpy(np.ascontiguousarray(image)).to(self.device).permute(2, 0, 1)[None]
+        x = picture(image, self.device)
         x = F.interpolate(x, size=(rows * self.pixels, cols * self.pixels), mode="bicubic", align_corners=False)
         x = ((x - self.mean) / self.std).to(self.encoder.dtype)
         if self.space == "dinov2":
