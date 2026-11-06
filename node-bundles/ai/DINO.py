@@ -1,15 +1,19 @@
 """DINO — what DINOv3 sees in a picture: one embedding, the patch features, and a segmentation.
 
 The model runs on the GPU end to end: the frame is resized and normalized there, the ViT runs in
-bf16 through SDPA attention (`compile` adds CUDA graphs), and the PCA behind `segment` runs on the
-patch features where they lie, so only the answers cross back. The weights come from the Hugging
+bf16 through SDPA attention (`compile` adds CUDA graphs and fuses the PCA), and the PCA behind
+`segment` runs on the patch features where they lie, so the answers cross back in one copy. The weights come from the Hugging
 Face hub: Meta's repos are gated, so accept the DINOv3 license on the repo page and `hf auth
 login` once, or point `repo` at an ungated mirror in the transformers format.
 
+`image` takes a texture straight off the graphics plane — a camera, a video, a renderer — read
+back once per frame, which is the one picture path that costs no copy on the way in.
+
 `segment` is the self-supervised procedure of the DINOv2 paper: a PCA of the patch features,
 whose first component splits foreground from background, and a second PCA of the foreground
-patches whose three components are drawn as red, green and blue. `memory` keeps the PCA basis
-from one frame to the next, so the colours do not swap as the picture moves.
+patches whose three components are drawn as red, green and blue, both drawn at the picture's own size.
+`memory` keeps the PCA basis and the foreground side from one frame to the next, so neither
+swaps as the picture moves.
 """
 
 import numpy as np
@@ -30,7 +34,7 @@ class DINO(goofi.Node):
     """DINOv3 embeddings and patch features of a picture, and a self-supervised segmentation of it."""
 
     TAGS = ["analysis", "image", "ml"]
-    INPUTS = {"image": goofi.InputSlot(goofi.DataType.ARRAY)}
+    INPUTS = {"image": goofi.InputSlot(goofi.DataType.TEXTURE)}
     OUTPUTS = {
         "embedding": goofi.DataType.ARRAY,
         "patches": goofi.DataType.ARRAY,
@@ -77,6 +81,10 @@ class DINO(goofi.Node):
         self.built = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.pca = None
+        self.landing = [None, None]
+        self.turn = 0
+        self.mean = torch.tensor(MEAN, device=self.device).view(1, 3, 1, 1)
+        self.std = torch.tensor(STD, device=self.device).view(1, 3, 1, 1)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
@@ -90,22 +98,43 @@ class DINO(goofi.Node):
         self.clear_input("image")
 
         with torch.inference_mode():
-            x = self.prepare(image.data, p.resolution)
+            x, full = self.prepare(image.data, p.resolution)
             tokens = self.model(pixel_values=x).last_hidden_state[0]
+            hp, wp = x.shape[2] // PATCH, x.shape[3] // PATCH
             cls = tokens[0].float()
             patches = tokens[self.prefix :].float()
-            hp, wp = x.shape[2] // PATCH, x.shape[3] // PATCH
-            out = {
-                "embedding": (cls.cpu().numpy(), {"model": want[0]}),
-                "patches": (patches.reshape(hp, wp, -1).cpu().numpy(), {"model": want[0]}),
-            }
+            parts = [cls, patches.reshape(-1)]
             if p.mode == "segment":
                 if self.pca is None or self.pca.dim != patches.shape[1]:
-                    self.pca = PCA(patches.shape[1], self.device)
+                    self.pca = PCA(patches.shape[1], self.device, p.compile)
                 mask, colors = self.pca.step(patches, hp, wp, p.threshold, p.invert, p.memory)
-                out["map"] = (draw(colors, mask, x.shape[2:]), {"channels": {"dim2": ["r", "g", "b"]}})
-                out["mask"] = draw(mask[None], None, x.shape[2:])[..., 0]
+                parts += [draw(colors, mask, full).reshape(-1), draw(mask[None], None, full).reshape(-1)]
+            flat = self.land(torch.cat(parts))
+
+        # One copy for every answer: the views are cut out of it on the host.
+        meta = {"model": want[0]}
+        at = 0
+        out = {}
+        for name, shape, extra in (
+            ("embedding", (cls.numel(),), meta),
+            ("patches", (hp, wp, patches.shape[1]), meta),
+            ("map", (*full, 3), {"channels": {"dim2": ["r", "g", "b"]}}),
+            ("mask", full, {}),
+        ):
+            n = int(np.prod(shape))
+            if at + n > flat.numel():
+                break
+            out[name] = (flat[at : at + n].numpy().reshape(shape), extra)
+            at += n
         return out
+
+    def land(self, flat):
+        """`flat` on the host, in pinned memory: two buffers in turn, so a frame handed off is whole while the next one lands."""
+        self.turn ^= 1
+        if self.landing[self.turn] is None or self.landing[self.turn].numel() != flat.numel():
+            self.landing[self.turn] = torch.empty(flat.numel(), pin_memory=self.device.type == "cuda")
+        self.landing[self.turn].copy_(flat)
+        return self.landing[self.turn]
 
     def build(self, want):
         """The model `want` names, on the GPU in the precision asked, compiled when asked."""
@@ -130,21 +159,21 @@ class DINO(goofi.Node):
         self.pca = None
 
     def prepare(self, data, resolution):
-        """The frame as the `[1, 3, H, W]` the model reads: resized to `resolution` on its short side, normalized, on the GPU."""
+        """The frame as the `[1, 3, H, W]` the model reads, resized to `resolution` on its short side and normalized on the GPU, and the frame's own `(H, W)`."""
         x = np.asarray(data, dtype=np.float32)
         if x.ndim == 2:
             x = x[..., None]
         if x.ndim != 3 or x.shape[2] < 1:
             raise ValueError(f"DINO reads a picture; this frame is {x.shape}")
         x = x[..., :3] if x.shape[2] >= 3 else np.repeat(x[..., :1], 3, axis=2)
-        t = torch.from_numpy(np.ascontiguousarray(x)).to(self.device, non_blocking=True).permute(2, 0, 1)[None]
+        t = torch.from_numpy(np.ascontiguousarray(x)).to(self.device).permute(2, 0, 1)[None]
         h, w = x.shape[0], x.shape[1]
         scale = resolution / min(h, w)
         size = (max(PATCH, round(h * scale / PATCH) * PATCH), max(PATCH, round(w * scale / PATCH) * PATCH))
         t = F.interpolate(t, size=size, mode="bilinear", antialias=True, align_corners=False)
-        mean = torch.tensor(MEAN, device=self.device).view(1, 3, 1, 1)
-        std = torch.tensor(STD, device=self.device).view(1, 3, 1, 1)
-        return ((t.clamp(0.0, 1.0) - mean) / std).to(self.dtype)
+        # A picture is 0..1 or 0..255; one that is 8-bit in a float array is told by its peak.
+        t = torch.where(t.amax() > 1.0, t / 255.0, t)
+        return ((t.clamp(0.0, 1.0) - self.mean) / self.std).to(self.dtype), (h, w)
 
     def stop(self):
         self.model = None
@@ -160,64 +189,71 @@ class PCA:
     The first PCA is of every patch: its leading component, signed so the picture's border reads as
     background, is the foreground score. The second is of the foreground patches alone: its three
     leading components, each scaled by its spread, are the colours. Every step is a handful of
-    matmuls on fixed shapes, with no sync: the axes come from power iteration warm-started on the
-    last frame's, which also keeps their signs from swapping.
+    matmuls on fixed shapes with no sync and no branch, so it compiles into a few kernels: the axes
+    come from power iteration warm-started on the last frame's, which also keeps their signs from
+    swapping, and the foreground side is read off a running average, so it does not flip either.
     """
 
-    def __init__(self, dim, device):
+    def __init__(self, dim, device, compiled):
         self.dim = dim
         self.device = device
-        self.all = Moments(dim, device)
-        self.fore = Moments(dim, device)
-        self.first = torch.randn(dim, 1, device=device)
-        self.axes = torch.randn(dim, 3, device=device)
-        self.span = None
+        self.state = (
+            torch.zeros(dim, device=device),  # mean of every patch
+            torch.eye(dim, device=device),  # covariance of every patch
+            torch.randn(dim, 1, device=device),  # the foreground axis
+            torch.zeros(dim, device=device),  # mean of the foreground patches
+            torch.eye(dim, device=device),  # covariance of the foreground patches
+            torch.randn(dim, 3, device=device),  # the colour axes
+            torch.zeros(2, 3, device=device),  # centre and spread of the colours
+            torch.zeros((), device=device),  # how far the border scores above the rest
+            torch.zeros((), device=device),  # 1 once a frame was seen, so `memory` has a past to keep
+        )
+        self.eye = torch.eye(dim, device=device) * 1e-6
+        self.border = None
+        self.fn = torch.compile(segment, dynamic=False) if compiled and device.type == "cuda" else segment
 
     def step(self, x, hp, wp, threshold, invert, memory):
         """The foreground mask `[hp, wp]` and the colours `[3, hp, wp]` of one frame's patch features."""
-        mean, cov = self.all.update(x, torch.ones(x.shape[0], 1, device=self.device), memory)
-        self.first = top(cov, self.first)
-        score = ((x - mean) @ self.first)[:, 0]
-        border = torch.ones(hp, wp, dtype=torch.bool, device=self.device)
-        border[1:-1, 1:-1] = False
-        sign = torch.where(score[border.flatten()].mean() > score.mean(), -1.0, 1.0)
-        score = score * (-sign if invert else sign)
-        mask = (score > threshold * score.std()).float()
-
-        weight = mask[:, None]
-        mean, cov = self.fore.update(x, weight, memory)
-        self.axes = top(cov, self.axes)
-        proj = (x - mean) @ self.axes
-        count = weight.sum().clamp_min(1.0)
-        center = (proj * weight).sum(0) / count
-        spread = (((proj - center) ** 2 * weight).sum(0) / count).sqrt()
-        span = torch.stack([center, spread])
-        self.span = span if self.span is None or memory <= 0.0 else memory * self.span + (1.0 - memory) * span
-        colors = ((proj - self.span[0]) / (5.0 * self.span[1]).clamp_min(1e-6) + 0.5).clamp(0.0, 1.0) * weight
+        if self.border is None or self.border.shape != (hp, wp):
+            self.border = torch.ones(hp, wp, dtype=torch.bool, device=self.device)
+            self.border[1:-1, 1:-1] = False
+        knobs = torch.tensor([threshold, -1.0 if invert else 1.0, memory], device=self.device)
+        mask, colors, *state = self.fn(x, self.border.flatten(), self.eye, knobs, *self.state)
+        self.state = tuple(state)
         return mask.view(hp, wp), colors.T.reshape(3, hp, wp)
 
 
-class Moments:
-    """A weighted mean and covariance, replaced each frame or kept as a running average by `memory`."""
+def segment(x, border, eye, knobs, mean, cov, first, mean_fg, cov_fg, axes, span, gap, seen):
+    """One frame of the PCA segmentation, as a pure function of the patch features and the running state."""
+    threshold, flip, memory = knobs[0], knobs[1], knobs[2]
+    blend = memory * seen
+    ones = torch.ones(x.shape[0], 1, device=x.device)
+    mean, cov = moments(x, ones, mean, cov, blend, eye)
+    first = top(cov, first)
+    score = ((x - mean) @ first)[:, 0]
+    gap = blend * gap + (1.0 - blend) * (score[border].mean() - score.mean())
+    score = score * torch.where(gap > 0.0, -1.0, 1.0) * flip
+    mask = (score > threshold * score.std()).float()
 
-    def __init__(self, dim, device):
-        self.mean = torch.zeros(dim, device=device)
-        self.cov = torch.eye(dim, device=device)
-        self.eye = torch.eye(dim, device=device) * 1e-6
-        self.seen = False
+    weight = mask[:, None]
+    mean_fg, cov_fg = moments(x, weight, mean_fg, cov_fg, blend, eye)
+    axes = top(cov_fg, axes)
+    proj = (x - mean_fg) @ axes
+    count = weight.sum().clamp_min(1.0)
+    center = (proj * weight).sum(0) / count
+    spread = (((proj - center) ** 2 * weight).sum(0) / count).sqrt()
+    span = blend * span + (1.0 - blend) * torch.stack([center, spread])
+    colors = ((proj - span[0]) / (5.0 * span[1]).clamp_min(1e-6) + 0.5).clamp(0.0, 1.0) * weight
+    return mask, colors, mean, cov, first, mean_fg, cov_fg, axes, span, gap, torch.ones_like(seen)
 
-    def update(self, x, weight, memory):
-        count = weight.sum().clamp_min(1.0)
-        mean = (x * weight).sum(0) / count
-        centered = x - mean
-        cov = (centered * weight).T @ centered / count + self.eye
-        if self.seen and memory > 0.0:
-            self.mean = memory * self.mean + (1.0 - memory) * mean
-            self.cov = memory * self.cov + (1.0 - memory) * cov
-        else:
-            self.mean, self.cov = mean, cov
-        self.seen = True
-        return self.mean, self.cov
+
+def moments(x, weight, mean_old, cov_old, blend, eye):
+    """The weighted mean and covariance of `x`, blended into the running ones by `blend`."""
+    count = weight.sum().clamp_min(1.0)
+    mean = (x * weight).sum(0) / count
+    centered = x - mean
+    cov = (centered * weight).T @ centered / count + eye
+    return blend * mean_old + (1.0 - blend) * mean, blend * cov_old + (1.0 - blend) * cov
 
 
 def top(cov, warm, steps=8):
@@ -244,4 +280,4 @@ def draw(planes, mask, size):
     up = F.interpolate(planes[None], size=size, mode="bilinear", align_corners=False)
     if mask is not None:
         up = up * F.interpolate(mask[None, None], size=size, mode="bilinear", align_corners=False)
-    return np.ascontiguousarray(up[0].permute(1, 2, 0).clamp(0.0, 1.0).cpu().numpy())
+    return up[0].permute(1, 2, 0).clamp(0.0, 1.0).contiguous()

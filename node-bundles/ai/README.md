@@ -44,13 +44,14 @@ by OpenAI, ElevenLabs or an OpenAI-compatible server.
 
 ## DINO
 
-DINOv3 on the GPU: `embedding` is the class token (384 to 4096 numbers by `size`), `patches` the
-normalized patch features as `[rows, columns, dim]`, both from the last layer. The frame is resized
-on its short side to `resolution` and run in bf16 through SDPA attention; `compile` adds CUDA
-graphs after a minute of warm-up. Meta's Hugging Face repos are gated: accept the DINOv3 license
+DINOv3 on the GPU, over a texture on `image` (a camera, a video, a renderer): `embedding` is the
+class token (384 to 4096 numbers by `size`), `patches` the normalized patch features as
+`[rows, columns, dim]`, both from the last layer. The frame is resized on its short side to
+`resolution` and run in bf16 through SDPA attention; `compile` adds CUDA graphs and fuses the PCA
+after a minute of warm-up. Meta's Hugging Face repos are gated: accept the DINOv3 license
 on the repo page and `hf auth login` once, or set `repo` to an ungated mirror in the transformers
 format. `segment` mode adds the self-supervised segmentation of the DINOv2 paper: a PCA of the
 patch features whose first component, above `threshold`, is the foreground (`mask`), and a PCA of
-the foreground patches whose three components are the colours of `map`, both at the model's
-resolution. `memory` carries the PCA basis from frame to frame so the colours stay put; `invert`
-swaps foreground and background when the border of the picture is the subject.
+the foreground patches whose three components are the colours of `map`, both at the picture's
+own size. `memory` carries the PCA basis and the foreground side from frame to frame so neither
+flips; `invert` swaps foreground and background when the border of the picture is the subject.
