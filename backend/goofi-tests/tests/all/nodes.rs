@@ -687,3 +687,38 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
         emits(&opened, running(&opened), 1.0);
     }
 }
+
+/// `Select` with `interpolate` reads a position with a fraction as a point between two entries
+/// and blends them, so a swept `keep` glides along the axis; without it, the same text names no
+/// entry at all. The point is held inside the axis, and the entry carries the nearer label.
+#[test]
+fn select_blends_two_entries_at_a_fractional_position_when_asked() {
+    let g = Goofi::new();
+    let (text, json, table, pick) = (g.add("Text"), g.add("FromJson"), g.add("TableSelect"), g.add("Select"));
+    g.set_param(text, "text", "value", r#"{"rows": [[0.0, 1.0], [10.0, 11.0], [20.0, 21.0]]}"#);
+    g.set_param(table, "table", "key", "rows");
+    g.set_param(pick, "select", "keep", "0.25");
+    g.set_param(pick, "select", "interpolate", true);
+    g.link(text, "out", json, "input");
+    g.link(json, "out", table, "input");
+    g.link(table, "array", pick, "input");
+    let out = format!("{}/out", g.name(&goofi_tests::hex(pick)));
+    let blended = g.until("a quarter of the way from the first row to the second", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [2.5, 3.5])
+    });
+    assert_eq!(goofi_tests::shape(&blended), [2], "one entry, squeezed");
+
+    g.set_param(pick, "select", "keep", "-0.5");
+    g.until("a point past the last row is held on it", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [20.0, 21.0])
+    });
+    g.set_param(pick, "select", "keep", "1.5, 0");
+    g.until("a blend beside an exact position, the axis kept", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [15.0, 16.0, 0.0, 1.0] && goofi_tests::shape(d) == [2, 2])
+    });
+
+    g.set_param(pick, "select", "interpolate", false);
+    g.until("without `interpolate`, `1.5, 0` names only the position 0", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [0.0, 1.0])
+    });
+}
