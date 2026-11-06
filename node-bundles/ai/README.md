@@ -55,3 +55,15 @@ patch under `point` (a share of the width and height) and every other patch, a c
 at the picture's own size that follows whatever the point sits on, and `mask` is that field above
 `threshold`. Drive `point` from a pose or a cursor and the map tracks what is pointed at; a higher
 `resolution` gives a finer field.
+
+## DinoMorph
+
+The morph on the front of `Kairos-Hive/latent-textures`: every texture wired into `images` is
+encoded once into a grid of DINO tokens, `position` picks a point along the list (in pictures,
+looping; `linear` mixes the two nearest, `spline` runs one smooth Catmull-Rom loop through all),
+and the representation autoencoder's decoder draws that grid as a picture of `resolution` on its
+long side, in the first picture's proportions. `space` is `dinov2` (DINOv2-B with registers under
+RAE's ViT-XL decoder, MIT: halfway between two pictures it draws one new surface) or `dinov3-k23`
+and `dinov3-k7` (DINOv3 ViT-L under RAEv2's decoders, CC BY-NC 4.0: they keep the photographs).
+The node runs on its own clock, so an expression on `position` glides between the held pictures.
+Each decoder is 1.7 GB from the hub on first use; DINOv3 is gated, as for `DINO`.
