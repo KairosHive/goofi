@@ -103,10 +103,13 @@ impl GraphicsHalf {
         let Some(readback) = self.cells.tap.take() else { return };
         let (w, h) = readback.size();
         let shape = vec![h as usize, w as usize, 4];
-        // A frame that was shrunk on the way out says so, in the words `reduce_for_view` uses —
-        // otherwise it would understate its own origin and a viewer could not map a texel back
-        // to the pixel it came from.
+        // The frame is stamped with the tick that drew it, so a reader tells a new frame from the
+        // one it already holds without comparing texels. A frame that was shrunk on the way out
+        // says so, in the words `reduce_for_view` uses — otherwise it would understate its own
+        // origin and a viewer could not map a texel back to the pixel it came from.
         let mut meta = Meta::new();
+        meta.set_procstart(Some(readback.at));
+        meta.set_procend(Some(readback.at));
         let shrunk = readback.shrunk;
         if shrunk.from != shrunk.to {
             let axes = [(0, shrunk.from.1 as usize), (1, shrunk.from.0 as usize)];

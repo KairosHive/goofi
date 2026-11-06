@@ -1257,3 +1257,37 @@ fn native_host_program_writes_the_shared_output() {
     drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
     g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
 }
+
+/// A texture that crosses to the signal plane is stamped with the tick that drew it, so a node
+/// reading it tells a new frame from the one it already holds without comparing texels.
+#[test]
+fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
+    let _py = goofi_tests::require_python();
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_signal");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Stamp.py"),
+        "import goofi\nimport numpy as np\n\nclass Stamp(goofi.Node):\n    \
+         INPUTS = {\"input\": goofi.InputSlot(goofi.DataType.TEXTURE)}\n    \
+         OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n\n    \
+         def process(self, input):\n        self.clear_input(\"input\")\n        \
+         at = input.meta.get(\"procend\")\n        \
+         return {\"out\": np.array([-1.0 if at is None else at], dtype=\"float32\")}\n",
+    )
+    .unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["signal:Stamp"]));
+    let field = g.add("graphics:Gradient");
+    g.ready(field);
+    let stamp = g.add("Stamp");
+    g.link(field, "out", stamp, "input");
+    let read = g.probe(stamp, "out");
+    let first = g.until("a texture frame with the tick that drew it", |g| {
+        render(g, 1);
+        read.latest().map(|d| f32s(&d)[0]).filter(|at| *at > 0.0)
+    });
+    g.until("a later frame carries a later tick", |g| {
+        render(g, 1);
+        read.latest().map(|d| f32s(&d)[0]).filter(|at| *at > first)
+    });
+}
