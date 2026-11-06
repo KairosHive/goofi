@@ -140,7 +140,7 @@ pub struct ParamDecl {
 /// member of a section — of one `slot` of a list, where `base` is its name inside the section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    Count { section: &'static str },
+    Count { section: &'static str, widget: Option<goofi_core::probe::Widget> },
     Member { section: &'static str, base: &'static str, slot: Option<u32> },
     /// A `Str` param naming a variable's element, beside the `Str` param `group` of the same
     /// param group naming its group: that variable's wire feeds input `slot`, as a cable would.

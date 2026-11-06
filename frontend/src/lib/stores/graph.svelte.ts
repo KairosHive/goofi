@@ -517,6 +517,26 @@ export class GraphStore {
 		await this.ctl.call('compound', { ops });
 	}
 
+	/** Store a list whole, as ONE undo step: slot `k` takes `slots[k]`'s value for every base it
+	 * names, and the count becomes how many there are. A value a slot already holds is not resent. */
+	async writeListSlots(node: string, group: string, section: string, slots: object[]): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		if (!list) throw new Error(`no list ${group}/${section} on node ${node}`);
+		const params = this.nodeById(node)?.params?.[group] ?? {};
+		const ops: { op: string; payload: Record<string, unknown> }[] = [];
+		slots.forEach((slot, k) => {
+			for (const [base, value] of Object.entries(slot)) {
+				if (JSON.stringify(params[`${base}_${k}`]?.value) === JSON.stringify(value)) continue;
+				ops.push({ op: 'node param edit', payload: { node, param: `${group}/${base}_${k}`, value } });
+			}
+		});
+		if (params[list.count]?.value !== slots.length) {
+			ops.push({ op: 'node param edit', payload: { node, param: `${group}/${list.count}`, value: slots.length } });
+		}
+		if (ops.length === 0) return;
+		await this.ctl.call('compound', { ops });
+	}
+
 	/** Move the slot at `from` so it sits at `to`, the slots between shifting one step. */
 	async moveListSlot(node: string, group: string, section: string, from: number, to: number): Promise<void> {
 		if (from === to) return;

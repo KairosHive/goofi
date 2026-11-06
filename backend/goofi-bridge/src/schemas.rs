@@ -1,6 +1,7 @@
 //! JSON projections of the engine graph into the shapes the frontend mirrors (`control.ts`).
 //! These are the wire contract: co-edit the frontend when a field or shape changes.
 
+use goofi_core::probe::Widget;
 use goofi_core::{control, Data, Face, Param};
 use goofi_graph::{Graph, Mode, Origin, Uid};
 use serde::Serialize;
@@ -68,7 +69,7 @@ pub struct ParamShow {
 #[derive(Serialize, TS)]
 #[serde(tag = "as", rename_all = "lowercase")]
 pub enum ParamRole {
-    Count { section: String },
+    Count { section: String, widget: Option<Widget> },
     Member { section: String, base: String, slot: Option<u32> },
     Feed { slot: String, group: String },
 }
@@ -119,7 +120,7 @@ pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDe
         }),
         // A held value is the save's concern alone: the inspector shows it as any other.
         role: decl.and_then(|d| d.role).and_then(|r| match r {
-            goofi_node::Role::Count { section } => Some(ParamRole::Count { section: section.into() }),
+            goofi_node::Role::Count { section, widget } => Some(ParamRole::Count { section: section.into(), widget }),
             goofi_node::Role::Member { section, base, slot } => Some(ParamRole::Member { section: section.into(), base: base.into(), slot }),
             goofi_node::Role::Feed { slot, group } => Some(ParamRole::Feed { slot: slot.into(), group: group.into() }),
             goofi_node::Role::Held => None,
@@ -395,6 +396,7 @@ pub fn typescript() -> String {
         // The literal of a frame: a number, a string, a bool or a list, nested for a wider array.
         "type Literal = number | string | boolean | Literal[];".to_string(),
         Face::decl(&cfg),
+        Widget::decl(&cfg),
         Mode::decl(&cfg),
         ParamEntry::decl(&cfg),
         VideoQuality::decl(&cfg),

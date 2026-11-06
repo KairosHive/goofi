@@ -6,6 +6,7 @@
 export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in string]: JsonValue } | null;
 export type Literal = number | string | boolean | Literal[];
 export type Face = "plain" | "color" | "envelope";
+export type Widget = "colormap";
 export type Mode = "constant" | "expression";
 export type ParamEntry = { value?: Literal, mode?: Mode, expression?: string, };
 export type VideoQuality = "small" | "high" | "very_high";
@@ -98,7 +99,7 @@ links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };
-export type ParamRole = { "as": "count", section: string, } | { "as": "member", section: string, base: string, slot: number | null, } | { "as": "feed", slot: string, group: string, };
+export type ParamRole = { "as": "count", section: string, widget: Widget | null, } | { "as": "member", section: string, base: string, slot: number | null, } | { "as": "feed", slot: string, group: string, };
 export type ParamBase = { doc: string | null, 
 /**
  * What the declaration says this param is worth untouched; `None` for a pulse.

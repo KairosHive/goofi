@@ -220,7 +220,7 @@ describe('settleNonDefault', () => {
 
 describe('shown', () => {
 	const count = (value: number): ParamDescriptor =>
-		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], face: 'plain', section: 0, show: [], role: { as: 'count', section: 'stops' } }) as ParamDescriptor;
+		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], face: 'plain', section: 0, show: [], role: { as: 'count', section: 'stops', widget: null } }) as ParamDescriptor;
 	const slot = (n: number): ParamDescriptor =>
 		({ ...float(0, 0), section: 0, show: [], role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
 	const groups = { ramp: { stops: count(2), at_0: slot(0), at_1: slot(1), at_2: slot(2) } };

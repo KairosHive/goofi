@@ -231,6 +231,17 @@ default, and the last carries on. The shader reads a list as `p.name[i]` and the
  "params": [{"name": "at", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0}]}
 ```
 
+A section's own `show` shows every param of it, the count included. A list with a `widget` in
+place of `params` is drawn whole by the inspector and declares its own slots: `"widget":
+"colormap"` is a colormap configurator, each slot a stop's `at` from 0 to 1, its `colour`, and
+the `blend` to the next stop — `linear`, `smooth` or `step`. The shader reads `p.at[i]`,
+`p.colour[i]` and `p.blend[i]` (0, 1, 2) up to `p.<section>`; SignalIn's `custom` colormap is one.
+
+```json
+{"group": "signal", "section": "stops", "widget": "colormap", "doc": "the stops of the custom colormap",
+ "repeat": {"min": 2, "max": 16, "default": 2}, "show": {"param": "colormap", "any_of": ["custom"]}}
+```
+
 ```python
 PARAMS = {"filter": [
     {"mode": goofi.StringParam("fir", options=["fir", "iir"])},

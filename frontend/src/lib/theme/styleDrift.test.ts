@@ -678,11 +678,13 @@ describe('style vocabulary', () => {
 
 	// F stripped every gradient: the surface ladder carries elevation now, and a gradient reads as
 	// a different material sitting on the flat palette. Nothing but this stops one coming back.
-	// The colour picker is the one exception: its square and strips ARE the colour space, drawn as
-	// gradients because that is what a hand reads a colour off; they are not a surface.
+	// The colour pickers are the one exception: the panel's square and strips ARE the colour
+	// space, and the colormap field's bar IS the map, drawn as gradients because that is what a
+	// hand reads a colour off; the checkerboard under them shows an alpha. None is a surface.
 	it('paints surfaces flat — no gradients anywhere (C4)', () => {
+		const colour = ['ui/ColorPanel.svelte', 'ui/ColorPicker.svelte', 'inspector/ColormapField.svelte'];
 		const offenders = sources()
-			.filter((s) => s.rel !== 'ui/ColorPicker.svelte' && /gradient\(/.test(s.css))
+			.filter((s) => !colour.includes(s.rel) && /gradient\(/.test(s.css))
 			.map((s) => s.rel);
 		expect(offenders).toEqual([]);
 	});

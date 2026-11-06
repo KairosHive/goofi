@@ -176,7 +176,7 @@ pub fn describe(
                     any_of: s.any_of.iter().map(|v| v.to_string()).collect(),
                 }).collect(),
                 role: p.role.map(|r| match r {
-                    crate::Role::Count { section } => probe::Role::Count { section: section.to_string() },
+                    crate::Role::Count { section, widget } => probe::Role::Count { section: section.to_string(), widget },
                     crate::Role::Member { section, base, slot } => {
                         probe::Role::Member { section: section.to_string(), base: base.to_string(), slot }
                     }
@@ -400,7 +400,7 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
                 .into_boxed_slice(),
         ),
         role: p.role.as_ref().map(|r| match r {
-            probe::Role::Count { section } => crate::Role::Count { section: leak_str(section) },
+            probe::Role::Count { section, widget } => crate::Role::Count { section: leak_str(section), widget: *widget },
             probe::Role::Member { section, base, slot } => {
                 crate::Role::Member { section: leak_str(section), base: leak_str(base), slot: *slot }
             }

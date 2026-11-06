@@ -47,6 +47,9 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 
 const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
+/// A widget section with params of its own, which a widget declares itself.
+const WIDGETED: &str = "/* goofi\n{ \"doc\": \"two stop lists\", \"params\": [{\"group\": \"look\", \"section\": \"stops\", \"widget\": \"colormap\", \"repeat\": {\"min\": 2, \"max\": 4, \"default\": 2}, \"params\": [{\"name\": \"v\", \"kind\": \"num\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
+
 const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"section\": \"colour\", \"params\": [{\"name\": \"hue\", \"kind\": \"num\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
 /// A colour param, read whole by the shader.
@@ -221,6 +224,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "common", "height", 32);
 
     g.set_param(up, "signal", "mode", "line");
+    g.set_param(up, "signal", "colormap", "viridis");
     g.set_param(up, "signal", "autoscale", false);
     g.set_param(up, "signal", "min", 0.0);
     g.set_param(up, "signal", "max", 1.0);
@@ -233,8 +237,10 @@ fn shaders_render_on_the_gpu() {
     assert!(first > 28 && last < 3, "the ramp rises from the floor to the ceiling: {first} to {last}");
     assert!(path.windows(2).all(|w| w[1] <= w[0]), "and never turns back down: {path:?}");
     assert!(close(px(&plot, 0, 0), [0.0, 0.0, 0.0, 0.0]), "on transparent ground: {:?}", px(&plot, 0, 0));
+    // One series takes the colormap's centre, viridis's teal, over the transparent ground.
     let ink = px(&plot, last, 63);
-    assert!(ink[2] > ink[1] && ink[1] > ink[0], "drawn in the viewers' first series colour: {ink:?}");
+    let cover = ink[3];
+    assert!(cover > 0.5 && (ink[0] / cover - 0.129).abs() < 0.02 && (ink[1] / cover - 0.565).abs() < 0.02, "the centre of viridis: {ink:?}");
 
     // …and the same frame with two channels is a trajectory: one against the other, the range
     // shared so the shape is not distorted.
@@ -277,6 +283,32 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
     drawn(&g, up, "the gray frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
+
+    // Step: `custom` is the node's own stops. A stop's alpha thins the texel; the blend to the next
+    // stop runs straight, eased or held; and a stop opened between two takes its place by `at`.
+    g.set_param(up, "signal", "colormap", "custom");
+    g.set_param(up, "signal", "colour_0", j!([1.0, 0.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "colour_1", j!([0.0, 0.0, 1.0, 0.5]));
+    let f = 31.0 / 63.0;
+    let frame = drawn(&g, up, "the custom map, red to half-clear blue", |d| close(px(d, 0, 63), [0.0, 0.0, 1.0, 0.5]));
+    assert!(close(px(&frame, 0, 0), [1.0, 0.0, 0.0, 1.0]), "the first stop: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 31), [1.0 - f, 0.0, f, 1.0 - 0.5 * f]), "straight between: {:?}", px(&frame, 0, 31));
+    g.set_param(up, "signal", "blend_0", "step");
+    drawn(&g, up, "held to the next stop", |d| close(px(d, 0, 31), [1.0, 0.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "blend_0", "smooth");
+    let e = f * f * (3.0 - 2.0 * f);
+    drawn(&g, up, "eased between", |d| close(px(d, 0, 31), [1.0 - e, 0.0, e, 1.0 - 0.5 * e]));
+    g.set_param(up, "signal", "stops", 3);
+    g.set_param(up, "signal", "at_1", 0.5);
+    g.set_param(up, "signal", "colour_1", j!([0.0, 1.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "at_2", 1.0);
+    g.set_param(up, "signal", "colour_2", j!([0.0, 0.0, 1.0, 1.0]));
+    // 31/63 sits just under the middle stop, so the eased red-to-green there is all but green.
+    let frame = drawn(&g, up, "a third stop at the middle", |d| close(px(d, 0, 63), [0.0, 0.0, 1.0, 1.0]));
+    let mid = px(&frame, 0, 31);
+    assert!(mid[1] > 0.95 && mid[0] < 0.05 && mid[3] == 1.0, "green at the middle stop: {mid:?}");
+    g.set_param(up, "signal", "colormap", "gray");
+    g.set_param(up, "signal", "stops", 2);
     g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
 
     // Step: the audio plane and this one, both ways, over the ONE cross-engine transport. Each
@@ -513,6 +545,7 @@ fn shaders_render_on_the_gpu() {
     std::fs::write(dir.join("Tinted.wgsl"), TINTED).unwrap();
     std::fs::write(dir.join("Untinted.wgsl"), TINTED.replace("\"tint\", \"any_of\"", "\"tone\", \"any_of\"")).unwrap();
     std::fs::write(dir.join("Overlong.wgsl"), OVERLONG).unwrap();
+    std::fs::write(dir.join("Widgeted.wgsl"), WIDGETED).unwrap();
     g.call("library refresh", j!({}));
     let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["colour_hue"];
     assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!([{ "group": "look", "name": "tint", "any_of": ["true"] }])));
@@ -526,12 +559,26 @@ fn shaders_render_on_the_gpu() {
     let row = row.expect("a shader whose list is too long is still a row");
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("section `many` repeats 1 to 100 times"), "{row}");
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Widgeted").cloned();
+    let row = row.expect("a shader whose widget lists params is still a row");
+    assert_eq!(row["available"], false, "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("section `stops` is a widget, which declares its own params"), "{row}");
+
+    // A `widget` section declares its own slots — a colormap's at, colour and blend — and a
+    // section's `show` shows the whole list, count included.
+    let sig = &g.call("library get", j!({ "type": "graphics:SignalIn" }))["params"]["signal"];
+    assert_eq!(sig["stops"]["role"], j!({ "as": "count", "section": "stops", "widget": "colormap" }));
+    assert_eq!(sig["stops"]["show"], j!([{ "group": "signal", "name": "colormap", "any_of": ["custom"] }]));
+    assert_eq!(sig["blend_3"]["role"], j!({ "as": "member", "section": "stops", "base": "blend", "slot": 3 }));
+    assert_eq!(sig["blend_3"]["options"], j!(["linear", "smooth", "step"]));
+    assert_eq!((&sig["colour_1"]["face"], &sig["colour_1"]["show"]), (&j!("color"), &sig["stops"]["show"]));
+    assert!(sig.get("at_16").is_none(), "no slot past the list's max");
 
     // Step: a LIST section is one param per slot, counted by an int named after the section, and
     // the shader reads it as an array. A default given as a list is each slot's own, the last
     // carrying on; a third stop opened in the middle of a ramp shows at its centre.
     let ramp = &g.call("library get", j!({ "type": "graphics:Gradient" }))["params"]["ramp"];
-    assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops" }));
+    assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops", "widget": null }));
     assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
     assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0), &j!(1), &j!(1)));
     assert!(ramp.get("at_16").is_none(), "no slot past the list's max");

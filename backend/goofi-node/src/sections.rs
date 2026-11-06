@@ -1,9 +1,11 @@
 //! A SECTION in a header's `params`: a run of params drawn apart from the rest of their group and
 //! stored as `section_name`, or with `repeat` a LIST of them, repeated by a count param and
-//! stored as one param per slot, `name_<slot>`.
+//! stored as one param per slot, `name_<slot>`. A `widget` names what a list is to its reader
+//! and declares its members itself; a `show` on a section shows every param of it.
 
 use std::collections::HashMap;
 
+use goofi_core::probe::Widget;
 use serde_json::{json, Value};
 
 /// The most slots a list declares: a shader keeps one uniform field per slot.
@@ -31,12 +33,23 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
         }
         let group = text(&entry, "group").ok_or_else(|| format!("section `{name}` names its group"))?.to_string();
         let index = runs.entry(group.clone()).or_default().next(true);
-        let members = match entry.get_mut("params").and_then(Value::as_array_mut) {
-            Some(m) => std::mem::take(m),
-            None => return Err(format!("section `{name}` lists its params")),
+        let widget = entry
+            .get("widget")
+            .map(|w| serde_json::from_value::<Widget>(w.clone()).map_err(|_| format!("section `{name}`: widget `{w}` is not `colormap`")))
+            .transpose()?;
+        let shows = rules(entry.get("show"));
+        let members = match (widget, entry.get_mut("params").and_then(Value::as_array_mut)) {
+            (Some(_), Some(_)) => return Err(format!("section `{name}` is a widget, which declares its own params")),
+            (Some(Widget::Colormap), None) => colormap_members(),
+            (None, Some(m)) => std::mem::take(m),
+            (None, None) => return Err(format!("section `{name}` lists its params")),
         };
+        let members: Vec<Value> = members.into_iter().map(|m| shown_by(m, &shows)).collect();
         let repeat = entry.get("repeat").map(|r| Repeat::parse(r, &name)).transpose()?;
         let Some(repeat) = repeat else {
+            if widget.is_some() {
+                return Err(format!("section `{name}` is a widget, which repeats"));
+            }
             for mut m in members {
                 let base = text(&m, "name").ok_or_else(|| format!("a param of section `{name}` has a name"))?.to_string();
                 if m.get("defaults").is_some() {
@@ -53,12 +66,12 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
         let mut count = json!({
             "group": group, "name": name, "kind": "num", "int": true, "section": index,
             "default": repeat.default, "min": repeat.min, "max": repeat.max,
-            "role": { "as": "count", "section": name },
+            "role": { "as": "count", "section": name, "widget": widget },
         });
         if let Some(doc) = entry.get("doc") {
             count["doc"] = doc.clone();
         }
-        out.push(count);
+        out.push(shown_by(count, &shows));
         let bases: Vec<String> = members.iter().filter_map(|m| text(m, "name").map(str::to_string)).collect();
         for slot in 0..repeat.max {
             for m in &members {
@@ -96,7 +109,38 @@ pub fn expand(entries: Vec<Value>) -> Result<Vec<Value>, String> {
 }
 
 fn is_section(entry: &Value) -> bool {
-    entry.get("params").is_some()
+    entry.get("params").is_some() || entry.get("widget").is_some()
+}
+
+/// A `show` as its list of rules: one rule bare, a list of them, or none.
+fn rules(show: Option<&Value>) -> Vec<Value> {
+    match show {
+        Some(Value::Array(list)) => list.clone(),
+        Some(rule) => vec![rule.clone()],
+        None => Vec::new(),
+    }
+}
+
+/// `param` shown by the section's rules as well as its own.
+fn shown_by(mut param: Value, shows: &[Value]) -> Value {
+    if !shows.is_empty() {
+        let mut all = rules(param.get("show"));
+        all.extend(shows.iter().cloned());
+        param["show"] = Value::Array(all);
+    }
+    param
+}
+
+/// The slots of a colormap: a stop's place on the map, its colour, and the way to the next stop.
+fn colormap_members() -> Vec<Value> {
+    vec![
+        json!({ "name": "at", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0,
+                "doc": "where the stop sits on the map, from 0 to 1" }),
+        json!({ "name": "colour", "kind": "color", "defaults": [[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]],
+                "doc": "the colour at the stop" }),
+        json!({ "name": "blend", "kind": "str", "default": "linear", "options": ["linear", "smooth", "step"],
+                "doc": "how the colour runs to the next stop: straight, eased in and out, or held" }),
+    ]
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {

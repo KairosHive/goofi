@@ -577,6 +577,73 @@ test('a plain vector opens as one list or as its entries', async ({ page }) => {
 	}
 });
 
+test('a colormap list is one row, and its configurator seeds, blends, adds, drags and removes stops', async ({ page, hasTouch }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// SignalIn's stops are a list the inspector draws whole: hidden under a preset colormap, and
+		// under `custom` one row — the map — with no count row and no slot of its own.
+		const uid = await addNode(page, 'graphics:SignalIn', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
+		await expect(row('signal/colormap')).toBeVisible();
+		await expect(row('signal/stops')).toHaveCount(0);
+		await rawCall(page, 'node param edit', { node: uid, param: 'signal/colormap', value: 'custom' });
+		const bar = page.getByTestId('param-colormap');
+		await expect(bar).toHaveAttribute('title', '2 stops');
+		await expect(row('signal/at_0')).toHaveCount(0);
+		await expect(page.getByTestId('param-count-stops')).toHaveCount(0);
+		await expect(page.getByTestId('param-slot-stops-0')).toHaveCount(0);
+		await bar.click();
+		const pop = page.getByTestId('colormap-pop');
+		await expect(pop).toBeVisible();
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+
+		// A preset seeds the whole list: jet is six stops, evenly spaced and blended straight.
+		await pop.getByTestId('colormap-preset-jet').click();
+		await expect(bar).toHaveAttribute('title', '6 stops');
+		await expect.poll(state).toMatch(/signal\.at_1 = 0\.2 [\s\S]*signal\.colour_5 = \[0\.50\d*, 0, 0, 1\]/);
+		// The blend between two stops is picked between their rows.
+		await pop.getByTestId('colormap-blend-0-step').click();
+		await expect.poll(state).toContain('signal.blend_0 = \\"step\\"');
+
+		// A press on the track where no handle is opens a stop there, in its place by `at`.
+		const track = pop.getByTestId('colormap-bar');
+		const box = (await track.boundingBox())!;
+		await track.click({ position: { x: box.width * 0.5, y: box.height / 2 } });
+		await expect(bar).toHaveAttribute('title', '7 stops');
+		await expect.poll(state).toMatch(/signal\.at_3 = 0\.(49|5)\d* /);
+
+		// A handle drags along the track, and the list re-orders by place: the stop from the middle
+		// lands at 0.9, past the one at 0.8, so it is the sixth of seven.
+		const handle = pop.getByTestId('colormap-stop-3');
+		const from = (await handle.boundingBox())!;
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: from.x + from.width / 2, y: from.y + from.height / 2 });
+		await hand.moveTo({ x: box.x + box.width * 0.9, y: box.y + box.height / 2 });
+		await hand.up();
+		await expect.poll(state).toMatch(/signal\.at_5 = 0\.(89|9)\d* /);
+
+		// The picker edits the stop in hand: its hex field names the colour exactly.
+		await pop.getByTestId('colormap-swatch-0').click();
+		await pop.getByTestId('color-hex').fill('#ff0000');
+		await pop.getByTestId('color-hex').press('Enter');
+		await expect.poll(state).toContain('signal.colour_0 = [1, 0, 0, 1]');
+
+		// A stop's ✕ closes it, and the floor closes none.
+		await pop.getByTestId('colormap-remove-6').click();
+		await expect(bar).toHaveAttribute('title', '6 stops');
+		await expect.poll(state).toMatch(/signal\.stops = 6 /);
+		for (const i of [5, 4, 3, 2]) await pop.getByTestId(`colormap-remove-${i}`).click();
+		await expect(bar).toHaveAttribute('title', '2 stops');
+		await expect(pop.getByTestId('colormap-remove-0'), 'the floor of the list').toBeDisabled();
+		await expectIntact(page, 'a custom colormap');
+	} finally {
+		await tearDown(page);
+	}
+});
+
 test('a colour param is picked, and its alpha slid', async ({ page, hasTouch }) => {
 	await page.goto('/');
 	await waitForApp(page);

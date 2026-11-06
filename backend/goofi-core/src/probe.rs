@@ -86,7 +86,11 @@ pub struct Param {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "as", rename_all = "lowercase")]
 pub enum Role {
-    Count { section: String },
+    Count {
+        section: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        widget: Option<Widget>,
+    },
     Member {
         section: String,
         base: String,
@@ -97,6 +101,14 @@ pub enum Role {
     Feed { slot: String, group: String },
     /// A value the node's own saved state holds: shown in the document, left out of a patch.
     Held,
+}
+
+/// What a list section is to its reader, drawn as one widget over every slot: a colormap, whose
+/// slots are a stop's `at`, `colour` and the `blend` to the next stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Widget {
+    Colormap,
 }
 
 /// One rule of a param's `show`: it holds while `param` (`name` in the same group, or

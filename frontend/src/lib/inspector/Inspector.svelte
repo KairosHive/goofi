@@ -23,6 +23,8 @@
 	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import type { DragSource } from '$lib/drag';
 	import ParamField from './ParamField.svelte';
+	import ColormapField from './ColormapField.svelte';
+	import type { Stop } from './colormap';
 	import IdentityBar from './IdentityBar.svelte';
 	import RenameField from './RenameField.svelte';
 	import { isNumeric } from './controlKind';
@@ -301,8 +303,38 @@
 		const all = searching
 			? matchParams(n.params, query)
 			: activeGroup ? Object.entries(n.params[activeGroup]).map(([name, descriptor]) => ({ group: activeGroup, name, descriptor })) : [];
-		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name));
+		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name) && !inWidget(r));
 	});
+	/** The count of a list section, whose role says what widget draws the list whole. */
+	const countOf = (group: string, section: string): ParamDescriptor | undefined =>
+		Object.values(node?.params?.[group] ?? {}).find((d) => d.role?.as === 'count' && d.role.section === section);
+	/** Whether a row is a slot's member that its section's widget draws, so it has no row of its own. */
+	const inWidget = (r: ParamHit): boolean => {
+		const role = r.descriptor.role;
+		if (role?.as !== 'member' || role.slot == null) return false;
+		const count = countOf(r.group, role.section)?.role;
+		return count?.as === 'count' && count.widget != null;
+	};
+	/** A colormap list's open slots as stops, and whether a hand may set them: the count and every
+	 *  open member hold a value of their own. */
+	function colormapOf(group: string, section: string, count: number): { stops: Stop[]; held: boolean } {
+		const params = node?.params?.[group] ?? {};
+		let held = params[section]?.mode === 'constant';
+		const stops: Stop[] = [];
+		for (let k = 0; k < count; k++) {
+			const at = params[`at_${k}`];
+			const colour = params[`colour_${k}`];
+			const blend = params[`blend_${k}`];
+			if (!at || !colour || !blend) break;
+			held &&= at.mode === 'constant' && colour.mode === 'constant' && blend.mode === 'constant';
+			stops.push({
+				at: typeof at.value === 'number' ? at.value : 0,
+				colour: Array.isArray(colour.value) ? (colour.value as number[]) : [0, 0, 0, 1],
+				blend: blend.value === 'smooth' || blend.value === 'step' ? blend.value : 'linear'
+			});
+		}
+		return { stops, held };
+	}
 	/** The section a row sits in, so a named section's heading opens once. */
 	const sectionOf = (r: ParamHit | undefined): string | null => {
 		const role = r?.descriptor.role;
@@ -552,7 +584,7 @@
 							{/if}
 							<div
 								class="pf-row"
-								class:pf-count={role?.as === 'count'}
+								class:pf-count={role?.as === 'count' && !role.widget}
 								role="group"
 								aria-label={paramName}
 								data-param-form={formId}
@@ -567,7 +599,21 @@
 								{#if searching}
 									<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
 								{/if}
-								{#if role?.as === 'count' && descriptor.type === 'num'}
+								{#if role?.as === 'count' && descriptor.type === 'num' && role.widget === 'colormap'}
+									{@const map = colormapOf(group, role.section, numValue(descriptor))}
+									<!-- A colormap list is one row: the map, opening its configurator. -->
+									<ColormapField
+										section={role.section}
+										doc={descriptor.doc ?? undefined}
+										stops={map.stops}
+										min={descriptor.vmin}
+										max={descriptor.vmax}
+										disabled={!map.held}
+										onWrite={(stops) => send('write stops', (uid) => g.writeListSlots(uid, group, role.section, stops))}
+										onPreview={(slot, base, value) => node && g.previewParam(node.uid, group, `${base}_${slot}`, value)}
+										data-testid={`param-field-${paramName}`}
+									/>
+								{:else if role?.as === 'count' && descriptor.type === 'num'}
 									{@const held = numValue(descriptor)}
 									<!-- A list's count is its heading: the name, how many, and a step either way. -->
 									<span class="pf-count-name" title={descriptor.doc ?? undefined}>{paramName}</span>

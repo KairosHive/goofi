@@ -1,7 +1,8 @@
 /** Colormaps as RGB control stops, plus a LUT sampler. */
 export type RGB = [number, number, number];
 
-const STOPS: Record<string, RGB[]> = {
+/** The stops of each named colormap, evenly spaced, as bytes. */
+export const STOPS: Record<string, RGB[]> = {
 	viridis: [
 		[68, 1, 84],
 		[59, 82, 139],
