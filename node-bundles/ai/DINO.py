@@ -1,19 +1,18 @@
-"""DINO — what DINOv3 sees in a picture: one embedding, the patch features, and a segmentation.
+"""DINO — what DINOv3 sees in a picture: one embedding, the patch features, and a similarity map.
 
 The model runs on the GPU end to end: the frame is resized and normalized there, the ViT runs in
-bf16 through SDPA attention (`compile` adds CUDA graphs and fuses the PCA), and the PCA behind
-`segment` runs on the patch features where they lie, so the answers cross back in one copy. The weights come from the Hugging
+bf16 through SDPA attention (`compile` adds CUDA graphs), and the map is drawn from the patch
+features where they lie, so the answers cross back in one copy. The weights come from the Hugging
 Face hub: Meta's repos are gated, so accept the DINOv3 license on the repo page and `hf auth
 login` once, or point `repo` at an ungated mirror in the transformers format.
 
 `image` takes a texture straight off the graphics plane — a camera, a video, a renderer — read
 back once per frame, which is the one picture path that costs no copy on the way in.
 
-`segment` is the self-supervised procedure of the DINOv2 paper: a PCA of the patch features,
-whose first component splits foreground from background, and a second PCA of the foreground
-patches whose three components are drawn as red, green and blue, both drawn at the picture's own size.
-`memory` keeps the PCA basis and the foreground side from one frame to the next, so neither
-swaps as the picture moves.
+`segment` is the picture on the front of the DINOv3 repo: the cosine similarity between the patch
+under `point` and every other patch, a continuous field over the whole picture that follows the
+thing the point sits on, drawn at the picture's own size; `mask` is that field above `threshold`.
+Drive `point` from a pose or a cursor and the map tracks what is pointed at.
 """
 
 import numpy as np
@@ -45,7 +44,7 @@ class DINO(goofi.Node):
         "dino": [
             {
                 "mode": goofi.StringParam(
-                    "embed", MODES, doc="`embed` answers the embedding and patch features; `segment` also draws the PCA map and mask."
+                    "embed", MODES, doc="`embed` answers the embedding and patch features; `segment` also draws the similarity map and mask."
                 ),
                 "size": goofi.StringParam("vits16", SIZES, doc="Which DINOv3 ViT: `vits16` runs in a millisecond, `vit7b16` needs 14 GB."),
                 "repo": goofi.StringParam(
@@ -60,14 +59,11 @@ class DINO(goofi.Node):
                 ),
             },
             {
+                "point": goofi.NumParam(
+                    (0.5, 0.5), 0.0, 1.0, show=("mode", ["segment"]), doc="Where the reference patch sits, as a share of the picture's width and height from its top left."
+                ),
                 "threshold": goofi.NumParam(
-                    0.0, -3.0, 3.0, show=("mode", ["segment"]), doc="Where the first PCA component splits foreground from background, in standard deviations."
-                ),
-                "invert": goofi.BoolParam(
-                    False, show=("mode", ["segment"]), doc="Swap foreground and background, when the border of the picture is the subject."
-                ),
-                "memory": goofi.NumParam(
-                    0.9, 0.0, 0.99, show=("mode", ["segment"]), doc="How much of the last frame's PCA to keep, so the colours stay put; 0 fits every frame alone."
+                    0.5, 0.0, 1.0, show=("mode", ["segment"]), doc="The similarity above which a patch is in `mask`."
                 ),
             },
         ],
@@ -80,7 +76,6 @@ class DINO(goofi.Node):
         self.model = None
         self.built = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.pca = None
         self.landing = [None, None]
         self.turn = 0
         self.mean = torch.tensor(MEAN, device=self.device).view(1, 3, 1, 1)
@@ -105,10 +100,8 @@ class DINO(goofi.Node):
             patches = tokens[self.prefix :].float()
             parts = [cls, patches.reshape(-1)]
             if p.mode == "segment":
-                if self.pca is None or self.pca.dim != patches.shape[1]:
-                    self.pca = PCA(patches.shape[1], self.device, p.compile)
-                mask, colors = self.pca.step(patches, hp, wp, p.threshold, p.invert, p.memory)
-                parts += [draw(colors, mask, full).reshape(-1), draw(mask[None], None, full).reshape(-1)]
+                sim = similarity(patches, hp, wp, p.point)
+                parts += [draw(sim, full).reshape(-1), draw((sim > p.threshold).float(), full).reshape(-1)]
             flat = self.land(torch.cat(parts))
 
         # One copy for every answer: the views are cut out of it on the host.
@@ -118,7 +111,7 @@ class DINO(goofi.Node):
         for name, shape, extra in (
             ("embedding", (cls.numel(),), meta),
             ("patches", (hp, wp, patches.shape[1]), meta),
-            ("map", (*full, 3), {"channels": {"dim2": ["r", "g", "b"]}}),
+            ("map", full, {}),
             ("mask", full, {}),
         ):
             n = int(np.prod(shape))
@@ -156,7 +149,6 @@ class DINO(goofi.Node):
         self.model = torch.compile(model, mode="reduce-overhead", dynamic=False) if compiled and self.device.type == "cuda" else model
         self.dtype = dtype
         self.built = want
-        self.pca = None
 
     def prepare(self, data, resolution):
         """The frame as the `[1, 3, H, W]` the model reads, resized to `resolution` on its short side and normalized on the GPU, and the frame's own `(H, W)`."""
@@ -178,106 +170,18 @@ class DINO(goofi.Node):
     def stop(self):
         self.model = None
         self.built = None
-        self.pca = None
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
 
-class PCA:
-    """The two PCAs of the segmentation, with the running statistics `memory` keeps between frames.
-
-    The first PCA is of every patch: its leading component, signed so the picture's border reads as
-    background, is the foreground score. The second is of the foreground patches alone: its three
-    leading components, each scaled by its spread, are the colours. Every step is a handful of
-    matmuls on fixed shapes with no sync and no branch, so it compiles into a few kernels: the axes
-    come from power iteration warm-started on the last frame's, which also keeps their signs from
-    swapping, and the foreground side is read off a running average, so it does not flip either.
-    """
-
-    def __init__(self, dim, device, compiled):
-        self.dim = dim
-        self.device = device
-        self.state = (
-            torch.zeros(dim, device=device),  # mean of every patch
-            torch.eye(dim, device=device),  # covariance of every patch
-            torch.randn(dim, 1, device=device),  # the foreground axis
-            torch.zeros(dim, device=device),  # mean of the foreground patches
-            torch.eye(dim, device=device),  # covariance of the foreground patches
-            torch.randn(dim, 3, device=device),  # the colour axes
-            torch.zeros(2, 3, device=device),  # centre and spread of the colours
-            torch.zeros((), device=device),  # how far the border scores above the rest
-            torch.zeros((), device=device),  # 1 once a frame was seen, so `memory` has a past to keep
-        )
-        self.eye = torch.eye(dim, device=device) * 1e-6
-        self.border = None
-        self.fn = torch.compile(segment, dynamic=False) if compiled and device.type == "cuda" else segment
-
-    def step(self, x, hp, wp, threshold, invert, memory):
-        """The foreground mask `[hp, wp]` and the colours `[3, hp, wp]` of one frame's patch features."""
-        if self.border is None or self.border.shape != (hp, wp):
-            self.border = torch.ones(hp, wp, dtype=torch.bool, device=self.device)
-            self.border[1:-1, 1:-1] = False
-        knobs = torch.tensor([threshold, -1.0 if invert else 1.0, memory], device=self.device)
-        mask, colors, *state = self.fn(x, self.border.flatten(), self.eye, knobs, *self.state)
-        self.state = tuple(state)
-        return mask.view(hp, wp), colors.T.reshape(3, hp, wp)
+def similarity(patches, hp, wp, point):
+    """The cosine similarity of every patch to the one under `point`, as a `[1, hp, wp]` field in 0..1."""
+    x = F.normalize(patches, dim=1)
+    px = min(wp - 1, int(point[0] * wp))
+    py = min(hp - 1, int(point[1] * hp))
+    return (x @ x[py * wp + px]).clamp(0.0, 1.0).view(1, hp, wp)
 
 
-def segment(x, border, eye, knobs, mean, cov, first, mean_fg, cov_fg, axes, span, gap, seen):
-    """One frame of the PCA segmentation, as a pure function of the patch features and the running state."""
-    threshold, flip, memory = knobs[0], knobs[1], knobs[2]
-    blend = memory * seen
-    ones = torch.ones(x.shape[0], 1, device=x.device)
-    mean, cov = moments(x, ones, mean, cov, blend, eye)
-    first = top(cov, first)
-    score = ((x - mean) @ first)[:, 0]
-    gap = blend * gap + (1.0 - blend) * (score[border].mean() - score.mean())
-    score = score * torch.where(gap > 0.0, -1.0, 1.0) * flip
-    mask = (score > threshold * score.std()).float()
-
-    weight = mask[:, None]
-    mean_fg, cov_fg = moments(x, weight, mean_fg, cov_fg, blend, eye)
-    axes = top(cov_fg, axes)
-    proj = (x - mean_fg) @ axes
-    count = weight.sum().clamp_min(1.0)
-    center = (proj * weight).sum(0) / count
-    spread = (((proj - center) ** 2 * weight).sum(0) / count).sqrt()
-    span = blend * span + (1.0 - blend) * torch.stack([center, spread])
-    colors = ((proj - span[0]) / (5.0 * span[1]).clamp_min(1e-6) + 0.5).clamp(0.0, 1.0) * weight
-    return mask, colors, mean, cov, first, mean_fg, cov_fg, axes, span, gap, torch.ones_like(seen)
-
-
-def moments(x, weight, mean_old, cov_old, blend, eye):
-    """The weighted mean and covariance of `x`, blended into the running ones by `blend`."""
-    count = weight.sum().clamp_min(1.0)
-    mean = (x * weight).sum(0) / count
-    centered = x - mean
-    cov = (centered * weight).T @ centered / count + eye
-    return blend * mean_old + (1.0 - blend) * mean, blend * cov_old + (1.0 - blend) * cov
-
-
-def top(cov, warm, steps=8):
-    """The leading eigenvectors of `cov`, as many as `warm` has columns, by power iteration from `warm`."""
-    q = warm
-    for _ in range(steps):
-        q = orthonormal(cov @ q)
-    return q * torch.sign((q * warm).sum(0, keepdim=True) + 1e-12)
-
-
-def orthonormal(z):
-    """Gram-Schmidt over the few columns of `z`: cheaper than a QR launch for three of them."""
-    cols = []
-    for i in range(z.shape[1]):
-        v = z[:, i]
-        for u in cols:
-            v = v - (u @ v) * u
-        cols.append(v / v.norm().clamp_min(1e-12))
-    return torch.stack(cols, 1)
-
-
-def draw(planes, mask, size):
-    """A `[C, hp, wp]` grid as the `[H, W, C]` picture the graphics plane draws, bilinear, masked when given."""
-    up = F.interpolate(planes[None], size=size, mode="bilinear", align_corners=False)
-    if mask is not None:
-        up = up * F.interpolate(mask[None, None], size=size, mode="bilinear", align_corners=False)
-    return up[0].permute(1, 2, 0).clamp(0.0, 1.0).contiguous()
+def draw(field, size):
+    """A `[1, hp, wp]` patch grid as the `[H, W]` picture the graphics plane draws, bilinear."""
+    return F.interpolate(field[None], size=size, mode="bilinear", align_corners=False)[0, 0].contiguous()
