@@ -18,6 +18,7 @@ On an RTX 4090 Laptop GPU at 1500 MHz, 48 x 48 tokens draw in 48 ms (fp16: 61), 
 (fp16: 94); the drawings differ from fp16's by 4 of 255 per pixel on average, which does not show.
 """
 
+import importlib.util
 import math
 
 import numpy as np
@@ -50,7 +51,7 @@ class DinoDecode(goofi.Node):
     PARAMS = {
         "decode": {
             "precision": goofi.StringParam(
-                "fp8", PRECISIONS, doc="`fp8` draws a third faster on the fp8 tensor cores of an Ada or newer GPU, and is fp16 elsewhere; `fp16` is the decoder as trained."
+                "fp8", PRECISIONS, doc="`fp8` draws a third faster on the fp8 tensor cores of an Ada or newer GPU with Triton installed, and is fp16 elsewhere; `fp16` is the decoder as trained."
             ),
         },
         "common": {
@@ -141,7 +142,9 @@ class DinoDecode(goofi.Node):
         if missing or unexpected:
             raise ValueError(f"{file} is not an RAE decoder: missing {missing[:4]}, unexpected {unexpected[:4]}")
         decoder = decoder.to(self.device, self.half).eval().requires_grad_(False)
-        self.precision = "fp8" if precision == "fp8" and self.device.type == "cuda" and torch.cuda.get_device_capability() >= (8, 9) else "fp16"
+        # fp8 runs compiled, and torch.compile on CUDA needs Triton, which the Windows wheels lack.
+        fp8 = self.device.type == "cuda" and torch.cuda.get_device_capability() >= (8, 9) and importlib.util.find_spec("triton") is not None
+        self.precision = "fp8" if precision == "fp8" and fp8 else "fp16"
         if self.precision == "fp8":
             decoder.decoder_layers = nn.ModuleList(Layer8(layer) for layer in decoder.decoder_layers)
             decoder = torch.compile(decoder, dynamic=False)
