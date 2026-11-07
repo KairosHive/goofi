@@ -247,7 +247,7 @@ Second batch:
 | --- | --- | --- |
 | Function | Per-channel abs, sign, power, root, log, exp, sin/cos, floor, ceil, round and fract; define invalid-domain results. Math keeps scale/range behavior. | Function |
 | Operation | Scalar operands use Math; texture operands use Composite's add/subtract/multiply/divide/minimum/maximum, with the shared alpha policy above. | Math, Function |
-| Edge / Convolve | Shared neighborhood sampling; Sobel magnitude/direction, Laplacian, sharpen, emboss and a small custom kernel. Presets share one node. | Edge, Convolve, Emboss |
+| Convolve | Sharpen, emboss and a small custom kernel. Edge already has the derivative kernels. | Convolve, Emboss |
 | Image | Load a still image from the patch workspace onto the graphics plane, preserve alpha and report decode failures. ImageFile in the external image bundle currently loads onto the signal plane. | Movie File In |
 | Text | Render a string with font, size, alignment, wrapping, foreground and background. Needs a font/raster upload path. | Text |
 | Remap | Sample an image at absolute UV coordinates from another texture with explicit outside-frame behavior. Could be a Displace mode. | Remap |
