@@ -75,3 +75,47 @@ export function descriptorFor(a: Attribute, value: Literal): ParamDescriptor {
 export function literalOf(v: unknown): Literal {
 	return typeof v === 'boolean' ? (v ? 1 : 0) : (v as Literal);
 }
+
+/** Where `value` stands in the cell's height, 0 the bottom and 1 the top: a number across its
+ * range, a bool on or off, an option by its place in the list from the top; null where the face
+ * is not a slider, such as a colour or a text. With `dim`, that entry of a vector. */
+export function fractionOf(a: Attribute, value: Literal, dim = 0): number | null {
+	const k = a.kind;
+	if (k.type === 'bool') return Number(value) > 0 ? 1 : 0;
+	if (k.type === 'string') {
+		const n = k.options?.length ?? 0;
+		if (n < 2) return null;
+		const at = k.options!.indexOf(String(value));
+		return at < 0 ? null : 1 - at / (n - 1);
+	}
+	if (k.face !== 'plain') return null;
+	const v = Array.isArray(value) ? Number(value[dim] ?? 0) : Number(value);
+	const span = k.vmax - k.vmin || 1;
+	return Math.min(1, Math.max(0, (v - k.vmin) / span));
+}
+
+/** The value a pointer at `fraction` of the cell's height paints: the inverse of `fractionOf`,
+ * an integer rounded, a vector's entry `dim` replaced in `held`; null where nothing is painted. */
+export function valueAt(a: Attribute, fraction: number, held: Literal, dim = 0): Literal | null {
+	const f = Math.min(1, Math.max(0, fraction));
+	const k = a.kind;
+	if (k.type === 'bool') return f > 0.5 ? 1 : 0;
+	if (k.type === 'string') {
+		const n = k.options?.length ?? 0;
+		if (n < 2) return null;
+		return k.options![Math.round((1 - f) * (n - 1))];
+	}
+	if (k.face !== 'plain') return null;
+	const raw = k.vmin + f * (k.vmax - k.vmin);
+	const v = k.int ? Math.round(raw) : Number(raw.toFixed(3));
+	if (Array.isArray(held)) return held.map((x, i) => (i === dim ? v : x));
+	return v;
+}
+
+/** A value in a cell's few characters: a number short, a list as its numbers, a text as it is. */
+export function brief(value: Literal): string {
+	if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
+	if (typeof value === 'boolean') return value ? 'on' : 'off';
+	if (Array.isArray(value)) return value.map((v) => brief(v as Literal)).join(' ');
+	return String(value);
+}

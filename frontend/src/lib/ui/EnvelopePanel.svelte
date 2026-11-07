@@ -1,9 +1,12 @@
-<!-- Envelope — an ADSR as four knobs under the shape they make: attack, decay and release in
-     seconds up to `max`, sustain in 0..1. A turn previews through `onInput`; its release commits.
-     With `hold`, the release's cap is a switch to ∞: a release of -1, which holds the sustain. -->
+<!-- EnvelopePanel — an ADSR's surface: the shape it makes over four knobs, each with its number
+     typed under it: attack, decay and release in seconds up to `max`, sustain in 0..1. A turn
+     previews through `onInput`; its release commits. With `hold`, the release's cap is a switch
+     to ∞: a release of -1, which holds the sustain. EnvelopePicker hangs it under a bar; a control
+     panel lays it inside a cell of its own. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import Knob from './Knob.svelte';
+	import NumberInput from './NumberInput.svelte';
 	import { ADSR, ADSR_SHORT, HOLD, envelopePoints, pathOf, readout, withStage } from './envelope';
 
 	let {
@@ -51,6 +54,8 @@
 	const held = $derived(adsr[3] < 0);
 	/** A hold let go lands the release where a fresh envelope has it. */
 	const toggleHold = (): void => land(3, held ? 0.3 : HOLD);
+	/** A typed number lands on the stage's own bounds: a time in 0..max, the sustain in 0..1. */
+	const typed = (i: number, v: number): void => land(i, Math.min(i === 2 ? 1 : max, Math.max(0, v)));
 </script>
 
 <div {...rest} class={`ui-envelope ${klass}`.trim()} class:disabled role="group" aria-label={label}>
@@ -61,13 +66,17 @@
 	<div class="ui-envelope-knobs">
 		{#each ADSR as stage, i (stage)}
 			<div class="ui-envelope-knob" data-stage={stage}>
+				<span class="ui-envelope-cap"><b>{ADSR_SHORT[i]}</b> {stage}</span>
 				<Knob value={adsr[i]} min={0} max={i === 2 ? 1 : max} step={0} disabled={disabled || (i === 3 && held)} label={label ? `${label} ${stage}` : stage}
 					onInput={(v) => turn(i, v)} onChange={(v) => land(i, v)} />
-				{#if hold && i === 3}
-					<button type="button" class="ui-envelope-cap ui-envelope-hold" aria-pressed={held} {disabled} title={held ? 'Let the release go' : 'Hold the sustain: no release'}
-						onclick={toggleHold}><b>{ADSR_SHORT[i]}</b> {readout(i, adsr[i])}</button>
+				{#if hold && i === 3 && held}
+					<button type="button" class="ui-envelope-hold" aria-pressed="true" {disabled} title="Let the release go" onclick={toggleHold}>∞</button>
 				{:else}
-					<span class="ui-envelope-cap"><b>{ADSR_SHORT[i]}</b> {readout(i, adsr[i])}</span>
+					<NumberInput value={i === 2 ? Math.round(adsr[i] * 100) / 100 : adsr[i]} min={0} max={i === 2 ? 1 : max} step={i === 2 ? 0.01 : 0.01} {disabled}
+						aria-label={`${stage} value`} title={readout(i, adsr[i])} data-testid={`envelope-${stage}`} onChange={(v) => typed(i, v)} />
+				{/if}
+				{#if hold && i === 3 && !held}
+					<button type="button" class="ui-envelope-hold" aria-pressed="false" {disabled} title="Hold the sustain: no release" onclick={toggleHold}>hold</button>
 				{/if}
 			</div>
 		{/each}
@@ -79,18 +88,18 @@
 	.ui-envelope {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-1);
+		gap: var(--space-2);
 		width: 100%;
 		height: 100%;
 		min-width: 0;
 		min-height: 0;
 	}
 	.ui-envelope-shape {
-		flex: 1 1 1.5rem;
-		min-height: 1.5rem;
+		flex: 1 1 2rem;
+		min-height: 2rem;
 		width: 100%;
 		border-radius: var(--radius-sm);
-		background: var(--surface-2);
+		background: var(--surface-1);
 	}
 	.ui-envelope-fill {
 		fill: var(--accent-fill);
@@ -104,32 +113,43 @@
 	.ui-envelope-knobs {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: var(--space-1);
+		gap: var(--space-2);
+		--number-width: 100%;
 	}
 	.ui-envelope-knob {
 		display: flex;
 		flex-direction: column;
-		align-items: center;
+		align-items: stretch;
+		gap: var(--space-1);
 		min-width: 0;
-		height: calc(var(--hit) + 1.2em);
+	}
+	.ui-envelope-knob > :global(.ui-knob) {
+		height: calc(var(--hit) + var(--space-4));
 	}
 	.ui-envelope-cap {
 		font-family: var(--font-mono);
 		font-size: var(--fs-micro);
-		font-variant-numeric: tabular-nums;
 		color: var(--text-muted);
 		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		text-align: center;
 	}
 	.ui-envelope-hold {
-		appearance: none;
-		border: 0;
-		background: none;
-		padding: 0;
-		cursor: pointer;
+		height: var(--chrome-control-h);
+		padding: 0 var(--space-2);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
+		background: var(--surface-2);
+		color: var(--text-muted);
+		font: inherit;
+		font-family: var(--font-mono);
+		font-size: var(--fs-micro);
+		cursor: pointer;
 	}
 	.ui-envelope-hold[aria-pressed='true'] {
 		color: var(--accent);
+		border-color: var(--accent);
 	}
 	.ui-envelope-hold:focus-visible {
 		outline: var(--focus-width) solid var(--focus-ink);

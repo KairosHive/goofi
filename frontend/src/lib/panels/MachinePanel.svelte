@@ -1,8 +1,10 @@
 <!-- State machine panel: one machine on a canvas — its states as boxes, its transitions as lines,
-     its playheads as dots that move as the manager moves them — with the editor's inspector pane
-     beside it for the selected states; the seed rides the tab bar. A box dragged onto a param row
-     maps the row to one of its attributes. Every change is a `machine` op, so the manager owns the
-     model and this panel the drawing and the gesture. -->
+     its playheads as dots that move as the manager moves them — with the score beside it, the
+     inspector that shows the whole machine as columns and rows; the seed rides the tab bar. A box
+     dragged onto a param row maps the row to one of its attributes. A connection dragged out of a
+     selected group fans out, into one fans in, and with the chain tool it wires every box it
+     crosses in turn. Every change is a `machine` op, so the manager owns the model and this panel
+     the drawing and the gesture. -->
 <script lang="ts">
 	import {
 		Background,
@@ -32,16 +34,16 @@
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
 	import PlayheadDots from '$lib/machine/PlayheadDots.svelte';
 	import StateCard from '$lib/machine/StateCard.svelte';
-	import type { Subject } from '$lib/machine/model';
 	import TransitionEdge from '$lib/machine/TransitionEdge.svelte';
 	import { GRID } from '$lib/editor/nodeMetrics';
 	import { CARD_W, TITLE_Y, cardBox } from '$lib/machine/layout';
-	import { summary } from '$lib/machine/model';
+	import { addStates, allToAll, chained, connect, fragmentOf, parseFragment, pasteFragment, summary, type Subject } from '$lib/machine/model';
+	import { copyText } from '$lib/clipboard';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { EmptyState, Icon, IconButton, isTextEditingTarget, NumberInput } from '$lib/ui';
+	import { Button, EmptyState, Field, Icon, IconButton, NumberInput, Popover, Toggle, isTextEditingTarget } from '$lib/ui';
 	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
 
@@ -92,22 +94,16 @@
 		}
 	}
 
-	// ---- the selection and the inspector: the editor's store, so a dismissed pane re-arms the same way.
-	// A selected transition is read through the state it leaves (a `*` one through the state it
-	// enters), its row open there: every setting of the machine is reached from a state.
+	// ---- the selection and the score: the editor's store, so a dismissed pane re-arms the same way.
+	// The score shows the whole machine always; the selection lights its columns and arcs.
 	const inspectorOn = $derived(sel.inspectorVisibleFor(panelId));
 	const subject = $derived.by<Subject | null>(() => {
 		const m = machine;
 		if (!m) return null;
-		const edges = [...sel.edges(panelId)].filter((id) => id in m.transitions);
-		const ids = new Set([...sel.nodes(panelId)].filter((id) => id in m.states));
-		for (const id of edges) {
-			const t = m.transitions[id];
-			ids.add(t.from in m.states ? t.from : t.to);
-		}
-		return ids.size > 0 ? { ids: [...ids], open: edges } : null;
+		return { selected: [...sel.nodes(panelId)].filter((id) => id in m.states), open: [...sel.edges(panelId)].filter((id) => id in m.transitions) };
 	});
 	const dismiss = (): void => sel.dismissInspectorFor(panelId);
+	const selectedStates = (): string[] => [...sel.nodes(panelId)].filter((id) => machine !== undefined && id in machine.states);
 
 	// ---- the flow's nodes and edges, derived from the document; a drag pins a box until the doc agrees.
 	let flowNodes = $state.raw<Node[]>([]);
@@ -124,7 +120,7 @@
 		flowNodes = Object.entries(m.states).map(([id, s]) => {
 			const held = previous.get(id);
 			const position = pinned.get(id) ?? { x: s.pos[0], y: s.pos[1] };
-			return { ...held, id, type: 'state', position, data: { machine: name }, draggable: true, selected: selected.has(id) } as Node;
+			return { ...held, id, type: 'state', position, data: { machine: name, panelId }, draggable: true, selected: selected.has(id) } as Node;
 		});
 	});
 	$effect(() => {
@@ -152,6 +148,7 @@
 				zIndex: 1001,
 				selected: selected.has(id),
 				data: {
+					machine: name,
 					summary: summary(m, id),
 					k: siblings.indexOf(id),
 					n: siblings.length,
@@ -228,19 +225,73 @@
 		if (touching && onBarePane(e.target)) panePress.start(e);
 	}
 
+	// ---- several states at once: the + in the cluster adds a count, chained or not.
+	let adding = $state(false);
+	let addAnchor = $state<HTMLElement | null>(null);
+	let addCount = $state(4);
+	let addChain = $state(true);
+	async function addMany(): Promise<void> {
+		adding = false;
+		const picked = selectedStates();
+		const names = await addStates(name, Math.max(1, Math.round(addCount)), addChain, picked.length === 1 ? picked[0] : null);
+		if (names.length) sel.setSelection(panelId, names, []);
+	}
+
 	// ---- a connection drawn from one box's band onto any part of another is a transition, taken by
 	// its state's decision until it is edited. Flow measures its radius from a box's centre, so the
 	// radius reaches the corners and the line snaps only while the pointer is over the box itself.
 	// The document is the one owner of edges: `false` keeps Flow from drawing a provisional one.
+	// Out of a selected group the line fans out to the target, or asks for all-to-all when the
+	// target is one of the group; into a selected group it fans in from the source. With the chain
+	// tool, or Alt held, the line wires every box it crossed, in the order it crossed them.
 	let pointer = { x: 0, y: 0 };
+	let chainTool = $state(false);
+	let alt = false;
+	/** The boxes a connection in flight has crossed, the source first, each once in a row. */
+	let crossed: string[] | null = null;
+	function boxAt(p: { x: number; y: number }): string | null {
+		const q = screenToFlow?.(p);
+		if (!q) return null;
+		for (const n of flowNodes) {
+			const b = cardBox(flowNodes, n.id)!;
+			if (q.x >= b.x && q.x <= b.x + b.w && q.y >= b.y && q.y <= b.y + b.h) return n.id;
+		}
+		return null;
+	}
 	function overTarget(c: Connection | Edge): boolean {
 		const box = cardBox(flowNodes, c.target ?? '');
 		const p = screenToFlow?.(pointer);
 		return !!box && !!p && p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h;
 	}
 	function onConnect(c: Connection): false {
-		if (c.source && c.target) void addTransition(c.source, c.target);
+		const path = crossed;
+		crossed = null;
+		if (!c.source || !c.target || !machine) return false;
+		const m = machine;
+		const picked = selectedStates();
+		const group = picked.length > 1;
+		if ((chainTool || alt) && path && path.length > 1) {
+			const chain = path[path.length - 1] === c.target ? path : [...path, c.target];
+			void connect(name, m, chained(chain), 'Chain states');
+		} else if (group && picked.includes(c.source) && picked.includes(c.target)) {
+			void askAllToAll(c.source, c.target, picked);
+		} else if (group && picked.includes(c.source)) {
+			void connect(name, m, picked.map((s): [string, string] => [s, c.target!]), `Connect ${picked.length} states to ${c.target}`);
+		} else if (group && picked.includes(c.target)) {
+			void connect(name, m, picked.map((s): [string, string] => [c.source!, s]), `Connect ${c.source} to ${picked.length} states`);
+		} else {
+			void addTransition(c.source, c.target);
+		}
 		return false;
+	}
+	/** The target is one of the group: all to all among them, or this one line alone. */
+	async function askAllToAll(from: string, to: string, picked: string[]): Promise<void> {
+		const choice = await quickPick().ask(pointer, [
+			{ id: 'all', label: `All to all among the ${picked.length} selected` },
+			{ id: 'one', label: `${from} → ${to} only` }
+		], 'Connect');
+		if (choice === 'all') await connect(name, machine!, allToAll(picked), 'Connect all to all');
+		else if (choice === 'one') await addTransition(from, to);
 	}
 	async function addTransition(from: string, to: string): Promise<void> {
 		try {
@@ -261,6 +312,31 @@
 			if (!gone.has(e.source) && !gone.has(e.target)) void call('machine transition remove', { id: e.id });
 		}
 		for (const n of nodes) void call('machine state remove', { name: n.id });
+	}
+
+	// ---- copy and paste: the selected states and the transitions among them, as text on the
+	// clipboard and in hand; a paste lands them a cell off their origin, the copies selected.
+	let held: string | null = null;
+	async function copySelection(): Promise<string | null> {
+		const picked = selectedStates();
+		if (!machine || picked.length === 0) return null;
+		held = JSON.stringify(fragmentOf(machine, picked));
+		void copyText(held);
+		return held;
+	}
+	async function pasteText(text: string | null): Promise<void> {
+		const f = text ? parseFragment(text) : null;
+		if (!f || !machine) return;
+		const names = await pasteFragment(name, f, [GRID * 2, GRID * 2]);
+		if (names.length) sel.setSelection(panelId, names, []);
+	}
+	function onPaste(e: ClipboardEvent): void {
+		if (ws.activePanelId !== panelId || isTextEditingTarget(e.target as HTMLElement | null)) return;
+		const text = e.clipboardData?.getData('text/plain') ?? '';
+		if (parseFragment(text) || held) {
+			e.preventDefault();
+			void pasteText(parseFragment(text) ? text : held);
+		}
 	}
 
 	// ---- a box drag previews the state's place and lands it, on the grid, as one edit. A hold
@@ -367,17 +443,30 @@
 	}
 
 	/** The keys of the active panel, outside its text fields and dialogs: Escape drops a lift or the
-	 * selection, Delete takes the selection. Nothing reaches a panel that is not the active one. */
+	 * selection, Delete takes the selection, Ctrl+C copies it, Ctrl+D duplicates it, Ctrl+A takes
+	 * every box. Nothing reaches a panel that is not the active one. */
 	function onKeydown(e: KeyboardEvent): void {
+		alt = e.altKey;
 		const t = e.target as HTMLElement | null;
 		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(t) || t?.closest?.('dialog[open]')) return;
 		const selected = sel.nodes(panelId).size || sel.edges(panelId).size;
+		const mod = e.ctrlKey || e.metaKey;
 		if (e.key === 'Escape' && selected) {
 			sel.clear(panelId);
 			e.preventDefault();
 		} else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
 			e.preventDefault();
 			deleteSelection();
+		} else if (mod && e.key.toLowerCase() === 'c' && selected) {
+			e.preventDefault();
+			void copySelection();
+		} else if (mod && e.key.toLowerCase() === 'd' && selected) {
+			e.preventDefault();
+			void copySelection().then(pasteText);
+		} else if (mod && e.key.toLowerCase() === 'a' && machine) {
+			e.preventDefault();
+			sel.setSelection(panelId, Object.keys(machine.states), []);
+			void tick().then(reassertSelection);
 		}
 	}
 
@@ -398,11 +487,18 @@
 			on(root, 'pointerdown', onPanePointerDown),
 			on(root, 'pointermove', (e: PointerEvent) => {
 				pointer = { x: e.clientX, y: e.clientY };
+				alt = e.altKey;
 				panePress.move(e);
+				if (crossed) {
+					const over = boxAt(pointer);
+					if (over && crossed[crossed.length - 1] !== over) crossed.push(over);
+				}
 			}),
 			on(root, 'pointerup', panePress.cancel),
 			on(root, 'pointercancel', panePress.cancel),
-			on(document, 'keydown', onKeydown)
+			on(document, 'keydown', onKeydown),
+			on(document, 'keyup', (e: KeyboardEvent) => (alt = e.altKey)),
+			on(document, 'paste', onPaste)
 		];
 		return () => {
 			offs.forEach((off) => off());
@@ -439,6 +535,8 @@
 					connectionRadius={CARD_W / 2 + 20}
 					isValidConnection={overTarget}
 					onbeforeconnect={onConnect}
+					onconnectstart={(_, p) => (crossed = p.nodeId ? [p.nodeId] : null)}
+					onconnectend={() => void tick().then(() => (crossed = null))}
 					onnodedragstart={onNodeDragStart}
 					onnodedrag={onNodeDrag}
 					onnodedragstop={onNodeDragStop}
@@ -466,12 +564,32 @@
 						<ControlButton title="Arrange the states on a ring" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
 							<Icon name="workflow" />
 						</ControlButton>
+						<ControlButton title="Chain: a connection wires every box it crosses, in turn (or hold Alt)" aria-label="Chain tool" aria-pressed={chainTool} class={chainTool ? 'on' : ''}
+							data-testid="chain-tool" onclick={() => (chainTool = !chainTool)}>
+							<Icon name="link" />
+						</ControlButton>
+						<span bind:this={addAnchor}>
+							<ControlButton title="Add several states at once" aria-label="Add states" data-testid="add-states" onclick={() => (adding = !adding)}>
+								<Icon name="plus" />
+							</ControlButton>
+						</span>
 					</Controls>
 					<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
 					<ViewportPortal target="front">
 						<PlayheadDots m={machine} nodes={flowNodes} />
 					</ViewportPortal>
 				</SvelteFlow>
+				<Popover anchor={addAnchor} open={adding} onDismiss={() => (adding = false)} flip role="dialog" aria-label="Add states" data-testid="add-states-menu">
+					<div class="add-form">
+						<Field label="states" row>
+							<NumberInput value={addCount} min={1} max={64} step={1} aria-label="how many" data-testid="add-states-count" onChange={(v) => (addCount = v)} />
+						</Field>
+						<Field label="chain" doc="Each to the next; from the selected state when one is selected" row>
+							<Toggle value={addChain} aria-label="chain them" data-testid="add-states-chain" onChange={(v) => (addChain = v)} />
+						</Field>
+						<Button size="sm" data-testid="add-states-go" onclick={() => void addMany()}>add</Button>
+					</div>
+				</Popover>
 				{#if flowNodes.length === 0}
 					<div class="empty-hint">
 						<EmptyState>
@@ -483,7 +601,7 @@
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
 				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} onClose={dismiss} />
+						<MachineInspector {name} m={machine} subject={shown} {panelId} onClose={dismiss} />
 					{/snippet}
 				</SidePane>
 			</div>
@@ -534,6 +652,11 @@
 	.canvas :global(.svelte-flow__controls:focus-within) {
 		opacity: 1;
 	}
+	/* The chain tool, while it is on. */
+	.canvas :global(.svelte-flow__controls-button.on) {
+		color: var(--accent);
+		box-shadow: inset 0 0 0 1px var(--accent);
+	}
 	@media (hover: none) and (pointer: coarse) {
 		.canvas :global(.svelte-flow__controls) {
 			opacity: 1;
@@ -544,6 +667,18 @@
 				bottom: calc(var(--space-6) + var(--hit));
 			}
 		}
+	}
+	.add-form {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		column-gap: var(--space-5);
+		row-gap: var(--space-3);
+		align-items: center;
+		--number-width: 100%;
+	}
+	.add-form > :global(button) {
+		grid-column: 2;
+		justify-self: end;
 	}
 	.empty-hint {
 		position: absolute;

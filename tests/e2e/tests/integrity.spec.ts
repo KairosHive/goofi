@@ -272,10 +272,14 @@ test('a patch under construction holds together at every stage', async ({ page }
 							g.commands.setPanelState(g.query.panels()[0].panelId, { machine: 'sweep' });
 						});
 						await expect(page.getByTestId('state-card-A')).toBeVisible();
-						// The label shows once a box of the transition is selected.
+						// The label shows once a box of the transition is selected; picked, it lights its
+						// arc in the score, whose chip opens the transition's settings.
 						await page.getByTestId('state-card-A').getByTestId('state-card-name').click();
 						await page.getByTestId('transition-t1').click();
+						await expect(page.getByTestId('arc-t1')).toHaveClass(/picked/);
+						await page.getByTestId('arc-t1').click();
 						await expect(page.getByTestId('machine-transition')).toBeVisible();
+						await page.keyboard.press('Escape');
 					}
 					if (name === 'Inspector') {
 						await page.getByTestId('panel-node').locator('select').selectOption(osc);

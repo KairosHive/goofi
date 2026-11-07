@@ -1,17 +1,23 @@
 <!-- A state's box on the machine canvas: its name, and one line that sums up how it decides. Its
-     settings are the inspector's. Its border band is the one connection handle, so a drag from the
-     edge draws a transition and a drag from the name moves the box. -->
+     settings are the score's. Its border band is the one connection handle, so a drag from the
+     edge draws a transition and a drag from the name moves the box. The pointer on it lights its
+     column in the score, and the score's column lights it. Its menu wires a selected group. -->
 <script lang="ts">
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { DECISIONS, outgoing } from './model';
+	import { selection } from '$lib/stores/selection.svelte';
+	import { machineHover } from './hover.svelte';
+	import { DECISIONS, allToAll, byPosition, chained, connect, outgoing } from './model';
 	import { CARD_H, CARD_W } from './layout';
 
 	let { id, data }: NodeProps = $props();
 	const g = graph();
+	const sel = selection();
+	const hover = machineHover();
 	const machine = $derived(data.machine as string);
+	const panelId = $derived(data.panelId as string);
 	const m = $derived(g.machines[machine]);
 	const s = $derived(m?.states[id]);
 	const out = $derived(m ? outgoing(m, id).length : 0);
@@ -20,15 +26,26 @@
 	const beat = $derived(s ? (s.interval_expression ? 'ƒ' : s.interval < 0 ? 'no beat' : `${s.interval.toFixed(2)}s`) : '');
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	/** The menu: a selected group of two or more wires itself in a pattern; any box deletes. */
 	function openMenu(x: number, y: number): void {
+		const picked = [...sel.nodes(panelId)].filter((s) => m && s in m.states);
+		const group = picked.length > 1 && picked.includes(id) && m ? picked : null;
+		const patterns: MenuItem[] = group
+			? [
+					{ label: `Connect ${group.length} all to all`, icon: 'workflow', action: () => void connect(machine, m!, allToAll(group), 'Connect all to all') },
+					{ label: 'Chain by position', icon: 'link', action: () => void connect(machine, m!, chained(byPosition(m!, group)), 'Chain states') },
+					{ label: 'Ring by position', icon: 'refresh-cw', action: () => void connect(machine, m!, chained(byPosition(m!, group), true), 'Ring states') }
+				]
+			: [];
 		menu = {
 			x,
 			y,
 			items: [
+				...patterns,
 				{
-					label: 'Delete state',
+					label: group ? `Delete ${group.length} states` : 'Delete state',
 					icon: 'x',
-					action: () => void g.machine('machine state remove', { machine, name: id }).catch((e) => notify().failure('Remove state', e))
+					action: () => (group ?? [id]).forEach((s) => void g.machine('machine state remove', { machine, name: s }).catch((e) => notify().failure('Remove state', e)))
 				}
 			]
 		};
@@ -37,7 +54,9 @@
 	const press = createLongPress((at) => openMenu(at.clientX, at.clientY));
 </script>
 
-<div class="card" style={`width: ${CARD_W}px; height: ${CARD_H}px`} data-testid={`state-card-${id}`} data-state={id} data-mode={s?.mode}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="card" class:lit={hover.litState(machine, id)} style={`width: ${CARD_W}px; height: ${CARD_H}px`} data-testid={`state-card-${id}`} data-state={id} data-mode={s?.mode}
+	onpointerenter={() => hover.overState(machine, id)} onpointerleave={() => hover.clear()}>
 	<Handle type="source" position={Position.Top} class="port" />
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
@@ -109,6 +128,7 @@
 	   while a cable in flight has this box as its target. */
 	:global(.svelte-flow__node.selected) .card,
 	.card:hover,
+	.card.lit,
 	.card:has(> :global(.port.connectingto)),
 	.card:has(> :global(.port.valid)) {
 		border-color: var(--accent);

@@ -185,7 +185,14 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(g.stays(|g| g.call("session status", j!({}))["dirty"] == false), "a fire changes nothing in the patch");
 
     // An eased transition is sampled: monotonic, ending at the target, `progress` rising to 1.
-    let t2 = write("machine transition add", j!({ "machine": "seq", "from": "B", "to": "C", "duration": 0.6, "curve": "smooth" }))["id"].clone();
+    // The curve is the attribute's: a preset, or a bezier whose handles keep x in 0..1.
+    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "wavy" }));
+    assert!(why.contains("bezier") && why.contains("smooth"), "{why}");
+    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": { "bezier": [1.5, 0.0, 0.5, 1.0] } }));
+    assert!(why.contains("0..1"), "{why}");
+    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "smooth" }));
+    assert_eq!(g.doc()["machines"]["seq"]["attributes"]["gain"]["curve"], j!("smooth"));
+    let t2 = write("machine transition add", j!({ "machine": "seq", "from": "B", "to": "C", "duration": 0.6 }))["id"].clone();
     g.call("machine fire", j!({ "machine": "seq", "playhead": "head", "transition": t2 }));
     let mut samples: Vec<(f64, f64)> = Vec::new();
     let mut heard: Vec<f32> = Vec::new();
@@ -389,7 +396,7 @@ fn a_load_starts_every_machine_over_and_replays_no_flight() {
         ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
         ("machine state add", j!({ "machine": "amp", "name": "low", "values": { "level": 0.25 } })),
         ("machine state add", j!({ "machine": "amp", "name": "high", "values": { "level": 1.0 } })),
-        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "duration": 30.0, "curve": "linear" })),
+        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "duration": 30.0 })),
         ("machine state edit", j!({ "machine": "amp", "name": "low", "noop": 1.0, "weights": { "t1": 0.0 } })),
         ("machine playhead add", j!({ "machine": "amp", "name": "h", "start": "low" })),
     ] {
@@ -431,8 +438,8 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
             "B": { "values": { "gain": 1.0 }, "interval": period, "mode": "sequence" }
         },
         "transitions": {
-            "ab": { "from": "A", "to": "B", "duration": period, "curve": "linear" },
-            "ba": { "from": "B", "to": "A", "duration": period, "curve": "linear" }
+            "ab": { "from": "A", "to": "B", "duration": period },
+            "ba": { "from": "B", "to": "A", "duration": period }
         },
         "playheads": { "p": { "start": "A" } }
     } })).unwrap();
@@ -467,6 +474,21 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let progress = written(mid, "p.progress");
     assert!((value_at(&ev, progress, 1.75 * period) - 0.75).abs() < 1e-9);
     assert_eq!(d[2].iter().filter(|(n, _)| n == "p.gain").count(), 1);
+    // An attribute's own curve shapes its functional: a bezier easing out lies above the diagonal,
+    // and the Python the reader runs answers what the Rust blend answers.
+    let bezier = goofi_core::ease::Curve::Bezier([0.1, 0.9, 0.3, 1.0]);
+    let mut eased = model.clone();
+    eased["pp"].attributes["gain"].curve = bezier;
+    let mut m = Machines::default();
+    m.configure(eased, Some(ev.clone()));
+    m.advance(0.0, &none);
+    let w = m.advance(1.5 * period, &none);
+    let gain = written(&w, "p.gain");
+    assert!(gain.as_functional().is_some(), "{gain:?}");
+    for x in [0.25, 0.5, 0.8] {
+        let (py, rs) = (value_at(&ev, gain, (1.0 + x) * period), bezier.at(x));
+        assert!((py - rs).abs() < 1e-3 && rs > x, "at {x}: python {py}, rust {rs}");
+    }
     // A request is stamped where it is made and lands in order with the deadlines: a jump at
     // 0.4 periods, before the first decision is due, puts the head in B then; the one out of B is
     // due a period after THAT instant, not after the advance that carried it.
@@ -499,10 +521,10 @@ fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_e
         },
         "transitions": {
             "up": { "from": "off", "to": "on" },
-            "down": { "from": "on", "to": "off", "duration": 0.3, "curve": "linear" },
+            "down": { "from": "on", "to": "off", "duration": 0.3 },
             "hold": { "from": "on", "to": "held" },
-            "let": { "from": "held", "to": "off", "duration": 0.3, "curve": "linear" },
-            "swap": { "from": "held", "to": "on", "duration": 0.4, "curve": "linear" }
+            "let": { "from": "held", "to": "off", "duration": 0.3 },
+            "swap": { "from": "held", "to": "on", "duration": 0.4 }
         },
         "playheads": { "p": { "start": "off" } }
     } })).unwrap();
@@ -678,7 +700,7 @@ async fn a_flight_is_heard_between_its_frames_by_a_viewer_a_computation_and_an_a
         ("machine attribute add", j!({ "machine": "m", "name": "gain", "value": 0.0, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
         ("machine state add", j!({ "machine": "m", "name": "A", "values": { "gain": 0.0 } })),
         ("machine state add", j!({ "machine": "m", "name": "B", "values": { "gain": 1.0 } })),
-        ("machine transition add", j!({ "machine": "m", "from": "A", "to": "B", "duration": 1.5, "curve": "linear" })),
+        ("machine transition add", j!({ "machine": "m", "from": "A", "to": "B", "duration": 1.5 })),
         ("machine state edit", j!({ "machine": "m", "name": "A", "noop": 1.0, "weights": { "t1": 0.0 } })),
         ("machine playhead add", j!({ "machine": "m", "name": "head", "start": "A" })),
         ("variable entry add", j!({ "name": "desk.twice", "value": 0.0 })),

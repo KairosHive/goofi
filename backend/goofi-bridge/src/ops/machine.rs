@@ -16,7 +16,7 @@ const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, re
 
 op!(List, "machine list", 0, NoArgs,
     "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `vars.<playhead>.state` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind}}, states: {name: {pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration, curve}}, playheads: {name: {color, start}}, seed?}}}");
+    "{machines: {name: {attributes: {name: {default, kind, curve}}, states: {name: {pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration}}, playheads: {name: {color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
@@ -50,8 +50,9 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     pub value: Any,
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
+    pub curve: Option<Value>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `vars.<playhead>.<name>`, or `sm('<playhead>').<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `vars.<playhead>.<name>`, or `sm('<playhead>').<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. `curve` is how the attribute eases over a transition's duration: `step`, `linear` (the default), `in`, `out`, `in_out`, `smooth`, or `{bezier: [x1, y1, x2, y2]}`, a cubic from (0, 0) through two handles to (1, 1) as CSS writes one, the handles' x in 0..1. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
     "{name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -60,8 +61,9 @@ op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
     pub value: Option<Any>,
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
+    pub curve: Option<Value>,
 },
-    "Change an attribute's default and/or its kind; the kind must hold the default. A new kind reads every state's value as a param reads a frame: a text parses to numbers, a number prints as a text, a bool is its truth, a vector fills or cuts to the default's length; a value the kind still cannot hold, such as a text outside the options, becomes the default.",
+    "Change an attribute's default, its kind and/or its curve (see `machine attribute add`); the kind must hold the default. A new kind reads every state's value as a param reads a frame: a text parses to numbers, a number prints as a text, a bool is its truth, a vector fills or cuts to the default's length; a value the kind still cannot hold, such as a text outside the options, becomes the default.",
     "{name}");
 
 op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
@@ -133,9 +135,8 @@ op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub to: String,
     pub condition: Option<String>,
     pub duration: Option<f64>,
-    pub curve: Option<String>,
 },
-    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), when `machine fire` or the inspector's fire button fires it, or the instant its `condition` turns true: the condition is read for each playhead resting in `from` as it arrives and at every instant the machine settles after — a write to a variable it reads, a playhead's landing, a decision's due — and fires on the turn from false to true, so one already true on arrival waits for the next turn. Several conditions turning true at one instant take the first in authored order; a condition goes before a decision due at the same instant. `sm('A').residents >= 2` fires every resident as a second playhead arrives, `… and me.name == sm('A').playheads[0]` the longest resident alone, `… [-1]` the newest; `sm('A').residents == 1 and sm('A').departures > 0` fires the one left behind as the other leaves. `duration` is seconds (0, instant, is the default); `curve` is step/linear/in/out/in_out/smooth, eased from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival; an attribute the entering state shapes with an envelope, or one the leaving state's envelope has at rest, moves by that envelope instead (see `machine state add`). An expression is the one Python a param's expression is, over `vars.<group>.<element>`, `nd('<node>')` (its output, `.out.<slot>` or `.params.<group>.<param>`, read as a param reads it; a frame it emits settles the machine), `t` (patch seconds), `np`, `math` and `lfo()`, `nse()` and `qtz()`; a machine's also reads `me` — the playhead it is read for: `me.name`, `me.state`, `me.arrived` and `me.<attribute>` — and `sm('<name>')`: a state's `.residents` (how many playheads rest there), `.playheads` (their names, longest resident first), `.arrivals` and `.departures` (how many arrived there and left it at this instant), or another playhead's record, as `me` is",
+    "Add a transition from one state to another (`from` may be `*`, any state; `to` may equal `from`, a re-entry that restarts the state's decisions). A playhead takes it when its `from` state's decision picks it (see `machine state edit`), when `machine fire` or the inspector's fire button fires it, or the instant its `condition` turns true: the condition is read for each playhead resting in `from` as it arrives and at every instant the machine settles after — a write to a variable it reads, a playhead's landing, a decision's due — and fires on the turn from false to true, so one already true on arrival waits for the next turn. Several conditions turning true at one instant take the first in authored order; a condition goes before a decision due at the same instant. `sm('A').residents >= 2` fires every resident as a second playhead arrives, `… and me.name == sm('A').playheads[0]` the longest resident alone, `… [-1]` the newest; `sm('A').residents == 1 and sm('A').departures > 0` fires the one left behind as the other leaves. `duration` is seconds (0, instant, is the default): each attribute the entering state sets eases over it by the attribute's own `curve` (see `machine attribute add`), from what the playhead holds now so a redirection is continuous, arrays of one shape elementwise, anything else switching on arrival; an attribute the entering state shapes with an envelope, or one the leaving state's envelope has at rest, moves by that envelope instead (see `machine state add`). An expression is the one Python a param's expression is, over `vars.<group>.<element>`, `nd('<node>')` (its output, `.out.<slot>` or `.params.<group>.<param>`, read as a param reads it; a frame it emits settles the machine), `t` (patch seconds), `np`, `math` and `lfo()`, `nse()` and `qtz()`; a machine's also reads `me` — the playhead it is read for: `me.name`, `me.state`, `me.arrived` and `me.<attribute>` — and `sm('<name>')`: a state's `.residents` (how many playheads rest there), `.playheads` (their names, longest resident first), `.arrivals` and `.departures` (how many arrived there and left it at this instant), or another playhead's record, as `me` is",
     "{id} — the transition's id, `t1`, `t2`, …, which every later op addresses it by");
 
 op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
@@ -145,7 +146,6 @@ op!(TransitionEdit, "machine transition edit", 2, TransitionEditArgs {
     pub to: Option<String>,
     pub condition: Option<String>,
     pub duration: Option<f64>,
-    pub curve: Option<String>,
 },
     "Change a transition: any of the fields `machine transition add` takes, the rest kept; an empty `condition` leaves it to its state's decision and the fire button.",
     "{id}");
@@ -284,11 +284,13 @@ fn values_of(m: &Machine, values: Option<Value>) -> Result<Edits<Data>, String> 
     Ok(out)
 }
 
-fn parse_curve(v: &str) -> Result<Curve, String> {
-    serde_json::from_value(json!(v)).map_err(|_| {
-        let curves = Curve::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
-        format!("`curve` is one of {curves}, not `{v}`")
-    })
+fn parse_curve(v: Value) -> Result<Curve, String> {
+    let curve: Curve = serde_json::from_value(v.clone()).map_err(|_| {
+        let presets = Curve::PRESETS.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
+        format!("`curve` is one of {presets} or `{{bezier: [x1, y1, x2, y2]}}`, not `{v}`")
+    })?;
+    curve.check()?;
+    Ok(curve)
 }
 
 impl WriteOp for Add {
@@ -362,7 +364,8 @@ impl WriteOp for AttributeAdd {
         let value = literal(a.value.0)?;
         let kind = a.kind.unwrap_or_else(|| AttributeKind::of(&value));
         fits(&kind, &value)?;
-        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), kind });
+        let curve = a.curve.map(parse_curve).transpose()?.unwrap_or_default();
+        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), kind, curve });
         set(tx, &a.machine, m)?;
         Ok(json!({ "name": a.name, "value": value }))
     }
@@ -376,11 +379,14 @@ impl WriteOp for AttributeEdit {
     fn run(tx: &mut Txn, a: AttributeEditArgs) -> Result<Value, String> {
         let mut m = machine_of(&tx.g, &a.machine)?;
         let attr = m.attributes.get_mut(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
-        if a.value.is_none() && a.kind.is_none() {
-            return Err("nothing to change — give a value or a kind".into());
+        if a.value.is_none() && a.kind.is_none() && a.curve.is_none() {
+            return Err("nothing to change — give a value, a kind or a curve".into());
         }
         if let Some(v) = a.value {
             attr.default = literal(v.0)?;
+        }
+        if let Some(c) = a.curve {
+            attr.curve = parse_curve(c)?;
         }
         let rekind = a.kind.is_some();
         if let Some(k) = a.kind {
@@ -591,7 +597,6 @@ impl WriteOp for TransitionAdd {
             to: a.to,
             condition: a.condition.unwrap_or_default(),
             duration: a.duration.unwrap_or(0.0),
-            curve: a.curve.as_deref().map(parse_curve).transpose()?.unwrap_or_default(),
         };
         m.transitions.insert(id.clone(), t);
         set(tx, &a.machine, m)?;
@@ -618,9 +623,6 @@ impl WriteOp for TransitionEdit {
         }
         if let Some(duration) = a.duration {
             t.duration = duration;
-        }
-        if let Some(curve) = &a.curve {
-            t.curve = parse_curve(curve)?;
         }
         set(tx, &a.machine, m)?;
         Ok(json!({ "id": a.id }))

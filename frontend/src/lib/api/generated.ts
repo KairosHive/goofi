@@ -32,7 +32,7 @@ expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
 export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, face: Face, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
-export type Attribute = { default: Literal, kind: AttributeKind, };
+export type Attribute = { default: Literal, kind: AttributeKind, curve: Curve, };
 export type Decision = "sequence" | "random" | "expression";
 export type State = { pos: [number, number], values?: Record<string, Literal>, 
 /**
@@ -64,7 +64,7 @@ weights: { [key in string]: number },
  * transition out to take; a negative one waits.
  */
 expression: string, };
-export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth";
+export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth" | { "bezier": [number, number, number, number] };
 export type Transition = { 
 /**
  * A state name, or `*` for any state.
@@ -78,9 +78,9 @@ from: string, to: string,
  */
 condition?: string, 
 /**
- * Seconds; 0 is instant.
+ * Seconds; 0 is instant. Each attribute eases over it by its own curve.
  */
-duration: number, curve: Curve, };
+duration: number, };
 export type Playhead = { color: string, start: string, };
 export type Machine = { attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
 /**

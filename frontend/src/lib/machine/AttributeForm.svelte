@@ -1,13 +1,13 @@
-<!-- An attribute of the machine, for every state: its name, kind, range or options, default, and
-     its removal. Shown in the inspector under a state's attribute row, dressed by the inspector's
-     `.fields` grid. -->
+<!-- An attribute of the machine, for every state: its name, kind, range or options, default, the
+     curve it eases by on a transition, and its removal. Opened from its row's cog in the score,
+     dressed by the inspector's `.fields` grid. -->
 <script lang="ts">
 	import type { Attribute } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { Button, Field, NumberInput, Select, TextInput, Toggle } from '$lib/ui';
+	import { Button, CurvePicker, Field, NumberInput, Select, TextInput, Toggle } from '$lib/ui';
 	import { FACES, descriptorFor, faceOf, literalOf, type Face } from './attributes';
 
 	let { name, attr, a }: { name: string; attr: string; a: Attribute } = $props();
@@ -44,6 +44,11 @@
 		<Field label="kind" row>
 			<Select data-testid="attribute-kind" aria-label="kind" value={faceOf(a)} options={FACES.map((f) => f.id)} onChange={setFace} />
 		</Field>
+		{#if a.kind.type === 'num'}
+			<Field label="curve" doc="How the value eases over a transition's duration, from wherever it stands to the next state's" row>
+				<CurvePicker value={a.curve} data-testid="attribute-curve" onChange={(curve) => call('machine attribute edit', { curve })} />
+			</Field>
+		{/if}
 		{#if a.kind.type === 'num' && a.kind.face === 'plain'}
 			<Field label="range" doc="The slider's bounds; a typed value may pass them" row>
 				<span class="pair">

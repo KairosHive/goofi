@@ -1,6 +1,6 @@
-<!-- One transition's settings, open inside its state's transition list: the buttons that fire it
-     by hand and delete it, the condition that takes it on its own, and how the move goes. Dressed
-     by the inspector's own rules (`.fields`). -->
+<!-- One transition's settings, open inside its state's transition list or in the arc's popover:
+     the buttons that fire it by hand and delete it, the condition that takes it on its own, and
+     how long the move takes; each attribute eases over it by its own curve. -->
 <script lang="ts">
 	import type { Machine } from '$lib/api/generated';
 	import { ContextMenu, type MenuItem } from 'panelty';
@@ -9,9 +9,8 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Button, Field, Icon, Select } from '$lib/ui';
+	import { Button, Field, Icon } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
-	import { CURVES } from './model';
 
 	let { name, m, id }: { name: string; m: Machine; id: string } = $props();
 
@@ -51,11 +50,6 @@
 		</Field>
 		<ParamField paramName="duration" descriptor={numberDescriptor(t.duration, 0, 10, 0)} literal viewKey={`${name}/${id}/duration`}
 			data-testid="transition-duration" onCommit={(v) => edit({ duration: Math.max(0, Number(v)) })} />
-		<div class="fields">
-			<Field label="curve" doc="How a value eases on the way, where no envelope carries it" row>
-				<Select aria-label="curve" value={t.curve} options={[...CURVES]} onChange={(v) => edit({ curve: v })} />
-			</Field>
-		</div>
 	</div>
 {/if}
 

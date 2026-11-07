@@ -9,7 +9,7 @@
 		Field,
 		Slider,
 		ColorPicker,
-		Envelope,
+		EnvelopePicker,
 		NumberInput,
 		Toggle,
 		Select,
@@ -203,7 +203,7 @@
 				{@render viewSwitch()}
 			{:else if num && plan.face === 'envelope'}
 				<!-- A range that admits -1 lets the release hold. -->
-				<Envelope
+				<EnvelopePicker
 					value={numValues(num)}
 					max={num.vmax}
 					hold={num.vmin < 0}

@@ -6,11 +6,9 @@ import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 import { history } from '$lib/stores/history.svelte';
 import { notify } from '$lib/stores/notify.svelte';
 
-/** What the machine panel's inspector shows: the selected states, and the transitions among
- * theirs whose rows start open — the selected ones. */
-export type Subject = { ids: string[]; open: string[] };
-
-export const CURVES = ['step', 'linear', 'in', 'out', 'in_out', 'smooth'] as const;
+/** What the canvas hands the score: the selected states, lit as columns and edited together, and
+ * the selected transitions, lit as arcs. */
+export type Subject = { selected: string[]; open: string[] };
 
 export const DECISIONS: { id: Decision; label: string; title: string }[] = [
 	{ id: 'sequence', label: 'seq', title: 'Each interval, the next transition out, in order' },
@@ -93,4 +91,104 @@ export function held(m: Machine, ids: string[], attr: string): { value: Literal;
 	const values = ids.map((id) => m.states[id]?.values?.[attr]);
 	const first = values.find((v) => v !== undefined);
 	return { value: first ?? m.attributes[attr].default, set: first !== undefined, mixed: mixed(values) };
+}
+
+/** Transitions `pairs` as ONE step, each `[from, to]`; a pair already wired is left alone. */
+export async function connect(machine: string, m: Machine, pairs: [string, string][], label = 'Connect states'): Promise<void> {
+	const wired = new Set(Object.values(m.transitions).map((t) => `${t.from}>${t.to}`));
+	const fresh = pairs.filter(([from, to]) => from !== to && !wired.has(`${from}>${to}`));
+	if (fresh.length === 0) return;
+	const g = graph();
+	try {
+		await history().transaction(label, async (step) => {
+			for (const [from, to] of fresh) await g.machine('machine transition add', { machine, from, to }, step);
+		});
+	} catch (e) {
+		notify().failure(label, e);
+	}
+}
+
+/** Every ordered pair among `states`. */
+export const allToAll = (states: string[]): [string, string][] => states.flatMap((a) => states.filter((b) => b !== a).map((b): [string, string] => [a, b]));
+
+/** Each state to the next; with `ring`, the last back to the first. */
+export const chained = (states: string[], ring = false): [string, string][] => {
+	const pairs = states.slice(1).map((to, i): [string, string] => [states[i], to]);
+	if (ring && states.length > 1) pairs.push([states[states.length - 1], states[0]]);
+	return pairs;
+};
+
+/** `states` in reading order on the canvas: by row of their boxes, then left to right. */
+export function byPosition(m: Machine, states: string[], rowHeight = 96): string[] {
+	const row = (s: string): number => Math.round(m.states[s].pos[1] / rowHeight);
+	return [...states].sort((a, b) => row(a) - row(b) || m.states[a].pos[0] - m.states[b].pos[0]);
+}
+
+/** `n` new states as ONE step, the manager placing each clear of the others; with `chain`, each
+ * wired to the next, and the first from `after` when one is given. Answers their names. */
+export async function addStates(machine: string, n: number, chain: boolean, after: string | null): Promise<string[]> {
+	const g = graph();
+	const names: string[] = [];
+	try {
+		await history().transaction(n === 1 ? 'Add state' : `Add ${n} states`, async (step) => {
+			for (let i = 0; i < n; i++) {
+				const r = await g.machine<{ name: string }>('machine state add', { machine }, step);
+				names.push(r.name);
+			}
+			if (chain) {
+				for (const [from, to] of chained(after ? [after, ...names] : names)) await g.machine('machine transition add', { machine, from, to }, step);
+			}
+		});
+	} catch (e) {
+		notify().failure('Add states', e);
+	}
+	return names;
+}
+
+/** What a copy of states carries: each state whole, and the transitions among them. */
+export interface Fragment {
+	kind: 'goofi-machine';
+	states: Record<string, State>;
+	transitions: Machine['transitions'][string][];
+}
+
+export function fragmentOf(m: Machine, states: string[]): Fragment {
+	const set = new Set(states);
+	return {
+		kind: 'goofi-machine',
+		states: Object.fromEntries(states.map((s) => [s, m.states[s]])),
+		transitions: Object.values(m.transitions).filter((t) => set.has(t.from) && set.has(t.to))
+	};
+}
+
+export function parseFragment(text: string): Fragment | null {
+	try {
+		const f = JSON.parse(text);
+		return f && f.kind === 'goofi-machine' && f.states && Array.isArray(f.transitions) ? (f as Fragment) : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The fragment into `machine` as ONE step, each state `offset` from where it was copied and
+ * named by the manager, the transitions among them rewired to the new names; the shares of a
+ * draw are left to its new transitions. Answers the new names. */
+export async function pasteFragment(machine: string, f: Fragment, offset: [number, number]): Promise<string[]> {
+	const g = graph();
+	const renamed = new Map<string, string>();
+	try {
+		await history().transaction('Paste states', async (step) => {
+			for (const [old, s] of Object.entries(f.states)) {
+				const r = await g.machine<{ name: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
+				renamed.set(old, r.name);
+				await g.machine('machine state edit', { machine, name: r.name, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
+			}
+			for (const t of f.transitions) {
+				await g.machine('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);
+			}
+		});
+	} catch (e) {
+		notify().failure('Paste', e);
+	}
+	return [...renamed.values()];
 }

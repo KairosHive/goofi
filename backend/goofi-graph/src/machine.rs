@@ -159,12 +159,15 @@ impl AttributeKind {
     }
 }
 
-/// An attribute: what it is, and the default every state starts from.
+/// An attribute: what it is, the default every state starts from, and the curve it eases by on
+/// a transition — the attribute's own, so one melody line glides and another steps.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Attribute {
     #[ts(type = "Literal")]
     pub default: Data,
     pub kind: AttributeKind,
+    #[serde(default)]
+    pub curve: Curve,
 }
 
 /// A state: where its card sits, the attributes it sets (one left out is kept on entry) and the
@@ -231,11 +234,9 @@ pub struct Transition {
     /// alone take it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub condition: String,
-    /// Seconds; 0 is instant.
+    /// Seconds; 0 is instant. Each attribute eases over it by its own curve.
     #[serde(default)]
     pub duration: f64,
-    #[serde(default)]
-    pub curve: Curve,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -1042,8 +1043,8 @@ fn reconcile(machine: &Machine, run: &mut Run, ctx: &Ctx) {
 }
 
 /// Take `t` out of the head's state at `ctx.now` — or out of its flight, which it redirects. Each
-/// attribute the next state sets eases from where it stands now, mid-envelope or not, by the
-/// transition's own duration and curve: to the value, or to nothing where the state's envelope
+/// attribute the next state sets eases from where it stands now, mid-envelope or not, over the
+/// transition's duration by its own curve: to the value, or to nothing where the state's envelope
 /// plays on it from arrival. One the next state leaves out goes on untouched.
 fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx) {
     let t = &machine.transitions[id];
@@ -1061,7 +1062,8 @@ fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx) {
             Some(_) => scale(target, 0.0).unwrap_or_else(|| target.clone()),
             None => target.clone(),
         };
-        head.attrs.insert(a, ramp(ctx.now, t.duration, &cur, &level, t.curve));
+        let curve = machine.attributes.get(&a).map_or(Curve::default(), |attr| attr.curve);
+        head.attrs.insert(a, ramp(ctx.now, t.duration, &cur, &level, curve));
     }
     if t.duration <= 0.0 {
         return arrive(head, machine, &t.to, ctx.now, ctx);

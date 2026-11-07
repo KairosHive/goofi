@@ -16,6 +16,10 @@ export const DOCK = { x: 20, step: 26 } as const;
 /** A dot's diameter in flow units. */
 export const DOT = 22;
 
+/** The score's geometry in px: the gutter its row heads sit in, the narrowest column, the head
+ * and lane above the rows, a row's height, and the column that adds a state. */
+export const SCORE = { gutter: 112, minColumn: 56, head: 54, lane: 56, row: 76, add: 36 } as const;
+
 /** Where a card sits and how big it is, from the flow node Svelte Flow holds for it. */
 export function cardBox(nodes: Node[], id: string): { x: number; y: number; w: number; h: number } | null {
 	const n = nodes.find((n) => n.id === id);
