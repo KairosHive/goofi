@@ -22,7 +22,7 @@ type Ws = tokio_tungstenite::WebSocketStream<
 /// `sh -c` puts it in a child, and the group signal then kills the outer shell, which holds no
 /// trap, so the harness that must refuse to leave leaves at once. On Windows `cmd /C` cannot read
 /// the syntax at all, so an inner shell is the only way in — and the trap is unobservable there
-/// regardless, because a stop is `taskkill` and never a signal.
+/// regardless, because a stop closes the pseudoconsole and sends no signal.
 ///
 /// The loop matters on both: a bare `sleep` is a child of the same group and dies of the signal.
 #[cfg(unix)]
@@ -413,6 +413,20 @@ async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it
     let inst = &roster["instances"][0];
     assert_eq!((&inst["id"], &inst["harness"], &inst["state"], &inst["exit_code"]),
                (&json!(id), &json!("_sh"), &json!("exited"), &json!(7)), "{roster}");
+
+    // A dismissal releases the instance whole, its terminal and its entry in the resource index
+    // included: ConPTY ends the stream the drain holds the instance by only when that terminal closes.
+    let held = format!("harness _sh (pid {})", inst["pid"]);
+    call(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    for probe in 10.. {
+        let status = call(&mut ctl, probe, "session status", json!({})).await;
+        if !status["resources"].to_string().contains(&held) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the dismissed harness is still held: {status}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     state.release_mount();
 }
 
@@ -516,25 +530,32 @@ async fn a_stop_asks_before_it_insists_and_reaps_a_harness_that_will_not_go() {
     read_until(&mut term, "armed").await;
     call(&mut ctl, 2, "agent stop", json!({ "instance": id })).await;
 
-    // Read BEFORE waiting on the trap: the ask is synchronous, and a slow echo can outlast
+    // On unix the harness traps the SIGTERM, so it is `stopping` for the whole grace and the kill
+    // ends it. Read BEFORE waiting on the trap: the ask is synchronous, and a slow echo can outlast
     // the grace — after which `stopping` has already moved on.
-    let roster = call(&mut ctl, 3, "agent list", json!({})).await;
-    assert_eq!(roster["instances"][0]["state"], json!("stopping"), "{roster}");
-
-    // The graceful ask is only OBSERVABLE where signals are; Windows refuses `taskkill` without `/F`.
     #[cfg(unix)]
-    read_until(&mut term, "GOT-TERM").await;
+    {
+        let roster = call(&mut ctl, 3, "agent list", json!({})).await;
+        assert_eq!(roster["instances"][0]["state"], json!("stopping"), "{roster}");
+        read_until(&mut term, "GOT-TERM").await;
+    }
 
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
+    let exited = loop {
         let ev = recv_text_by(&mut ctl, deadline).await;
         let inst = ev["payload"]["instances"][0].clone();
         if ev["event"] == json!("harness_changed") && inst["state"] == json!("exited") {
             assert_eq!(inst["id"], json!(id), "another instance exited: {ev}");
             assert!(inst["exit_code"].is_number(), "no exit code captured: {ev}");
-            break;
+            break inst;
         }
-    }
+    };
+    // On Windows the ask closes the pseudoconsole, which no console process outlives, so the
+    // harness leaves on the ask: its code is the close's `STATUS_CONTROL_C_EXIT`, not the kill's 1.
+    #[cfg(windows)]
+    assert_eq!(exited["exit_code"], json!(0xC000_013A_u32), "the ask never reached it: {exited}");
+    #[cfg(unix)]
+    let _ = exited;
 
     // A command that cannot launch fails ON its PTY — and the tail replays it to a socket
     // that arrives after the words, the race the panel always loses to a fast shell.

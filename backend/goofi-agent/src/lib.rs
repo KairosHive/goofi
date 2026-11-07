@@ -21,8 +21,8 @@ use serde_json::{json, Value};
 /// How long a stopped harness has to leave on its own before it is killed outright.
 pub const GRACE: Duration = Duration::from_secs(5);
 
-/// How long a view waits for the PTY's end-of-stream after the child is reaped: ConPTY keeps the
-/// pseudoconsole open past the exit, so there the exit frame goes after this settle instead.
+/// How long a view waits for the PTY's end-of-stream after the child is reaped: a process the
+/// harness left behind can hold the terminal open, and then the exit frame goes after this settle.
 const EXIT_SETTLE: Duration = Duration::from_millis(250);
 
 /// How many PTY chunks a view may fall behind before it loses bytes; blocking the drain instead
@@ -316,7 +316,7 @@ impl Agents {
             closing: AtomicBool::new(false),
             tree: child.process_id().and_then(|pid| child::Tree::by_pid(pid).ok()),
             writer: Mutex::new(writer),
-            master: Mutex::new(pty.master),
+            master: Mutex::new(Some(pty.master)),
             fanout: Mutex::default(),
             eof: goofi_supervisor::sync::Latch::default(),
             stopping: AtomicBool::new(false),
@@ -374,8 +374,10 @@ impl Agents {
                 record.exit_code = Some(code);
             }
             let _ = exited.publish();
+            // ConPTY ends the stream only when its terminal closes.
+            exited.hang_up();
             // The exit frame is the LAST thing a view gets: `wait` returns while a dying harness's
-            // final words are still in flight. Bounded, because ConPTY never closes the stream.
+            // final words are still in flight.
             exited.eof.wait_until(std::time::Instant::now() + EXIT_SETTLE);
             exited.fanout.lock().push(Out::Exit(code));
         });
@@ -429,7 +431,7 @@ impl Agents {
         for inst in &taken {
             inst.stopping.store(true, Ordering::Relaxed);
             inst.forget();
-            let _ = inst.signal(child::Tree::ask);
+            inst.ask();
         }
         Some(move || {
             let grace = timing::Deadline::within(GRACE);
@@ -499,7 +501,8 @@ struct Instance {
     /// Writing can block when the child stops reading, but it is bounded by what a person types,
     /// so it is taken inline.
     writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// The terminal, until it is hung up.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     /// The owner's list this instance is on, left on dismissal.
     registry: Weak<Mutex<Vec<Arc<Instance>>>>,
     port: u16,
@@ -656,7 +659,7 @@ impl Instance {
     fn begin_stop(self: &Arc<Self>) {
         self.stopping.store(true, Ordering::Relaxed);
         let _ = self.publish();
-        let _ = self.signal(child::Tree::ask);
+        self.ask();
         let stopped = self.clone();
         let stop = worker::spawn("goofi-agent-stop", move || {
             if !stopped.reaped_within(GRACE) {
@@ -701,7 +704,9 @@ impl Instance {
         if *size == now {
             return;
         }
-        let _ = self.master.lock().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        if let Some(master) = self.master.lock().as_ref() {
+            let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        }
         *size = now;
         self.fanout.lock().push(Out::Size(cols, rows));
     }
@@ -710,6 +715,24 @@ impl Instance {
     fn write(&self, bytes: &[u8]) {
         let mut w = self.writer.lock();
         let _ = w.write_all(bytes).and_then(|()| w.flush());
+    }
+
+    /// Ask the child to leave. On unix that is `SIGTERM` to its group. On Windows a signal from
+    /// outside the child's console never reaches it, so the ask is the hang-up of its terminal:
+    /// every process on the pseudoconsole gets `CTRL_CLOSE_EVENT`.
+    fn ask(&self) {
+        #[cfg(windows)]
+        self.hang_up();
+        #[cfg(not(windows))]
+        let _ = self.signal(child::Tree::ask);
+    }
+
+    /// Close the terminal. On Windows this closes the pseudoconsole, and only then does ConPTY end
+    /// the output stream the drain reads; the drain holds this instance, so without the hang-up
+    /// the instance, its console host and its lease live on. On unix the drain's own handle keeps
+    /// the terminal open, and the stream ends when the child's side closes.
+    fn hang_up(&self) {
+        drop(self.master.lock().take());
     }
 
     /// Reach the tree with its ask or its kill, skipped once the child has been reaped, since a
@@ -752,6 +775,8 @@ impl Instance {
         for stream in streams {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
+        // The reaper hangs up; this is for a child that outlived the deadline.
+        self.hang_up();
         for worker in std::mem::take(&mut *self.workers.lock()) {
             let _ = worker.join_within(deadline.left());
         }
