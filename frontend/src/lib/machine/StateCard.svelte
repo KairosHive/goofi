@@ -10,7 +10,7 @@
 	import { selection } from '$lib/stores/selection.svelte';
 	import { machineHover } from './hover.svelte';
 	import { DECISIONS, allToAll, byPosition, chained, connect, outgoing } from './model';
-	import { CARD_H, CARD_W } from './layout';
+	import { CARD_H, CARD_W, dotColor } from './layout';
 
 	let { id, data }: NodeProps = $props();
 	const g = graph();
@@ -42,6 +42,15 @@
 			y,
 			items: [
 				...patterns,
+				...(group
+					? []
+					: [
+							{
+								label: 'Add a playhead here',
+								icon: 'plus' as const,
+								action: () => void g.machine('machine playhead add', { machine, start: id, color: dotColor('', Object.keys(m?.playheads ?? {}).length) }).catch((e) => notify().failure('Add playhead', e))
+							}
+						]),
 				{
 					label: group ? `Delete ${group.length} states` : 'Delete state',
 					icon: 'x',

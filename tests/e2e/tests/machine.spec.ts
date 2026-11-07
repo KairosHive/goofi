@@ -528,6 +528,19 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		await name('b').click({ button: 'right' });
 		await page.locator('.context-menu .item', { hasText: 'Ring by position' }).click();
 		await expect.poll(wires).toEqual(['a>b', 'b>c', 'c>a']);
+		// A column is as wide as its interval: two seconds take twice the column one second does.
+		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'a', interval: 2 });
+		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'b', interval: 1 });
+		await expect.poll(async () => {
+			const [a, b] = await Promise.all([score.getByTestId('column-a').boundingBox(), score.getByTestId('column-b').boundingBox()]);
+			return a!.width / b!.width;
+		}).toBeCloseTo(2, 0);
+		// A box's menu, alone rather than in a group, births a playhead in it.
+		await name('c').click();
+		await expect(score).toHaveAttribute('data-count', '1');
+		await name('c').click({ button: 'right' });
+		await page.locator('.context-menu .item', { hasText: 'Add a playhead here' }).click();
+		await expect(page.getByTestId('playhead-dot')).toHaveAttribute('data-state', 'c');
 
 		// The chain tool: a line dragged across boxes wires each to the next it crosses.
 		await rawCall(page, 'session new');

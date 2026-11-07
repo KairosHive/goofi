@@ -39,7 +39,13 @@
 	const selected = $derived(subject.selected.filter((s) => s in m.states));
 	const picked = $derived(new Set(subject.open));
 	let scoreW = $state(0);
-	const cols = $derived(widths(order.map((s) => duration(m, s)), Math.max(0, scoreW - SCORE.gutter - SCORE.add), SCORE.minColumn));
+	// The columns fill the pane when it is wide enough, and keep their proportion past it.
+	const cols = $derived.by(() => {
+		const d = order.map((s) => duration(m, s));
+		const sum = d.reduce((a, b) => a + b, 0);
+		const room = Math.max(0, scoreW - SCORE.gutter - SCORE.add);
+		return widths(d, Math.max(room, sum * SCORE.second), SCORE.minColumn);
+	});
 	const lefts = $derived(cols.reduce<number[]>((acc, w, i) => [...acc, (acc[i - 1] ?? 0) + (cols[i - 1] ?? 0)], []).map((x) => x));
 	const centres = $derived(cols.map((w, i) => lefts[i] + w / 2));
 	const total = $derived(cols.reduce((a, b) => a + b, 0));
@@ -592,6 +598,8 @@
 	.cog-btn:focus-visible {
 		outline: var(--focus-width) solid var(--focus-ink);
 	}
+	/* A column's cog shows always: it is the door to the state's interval and playheads. */
+	.head-cog,
 	.head:hover .cog,
 	.cell:hover .cog,
 	.row-gutter:hover .cog,
