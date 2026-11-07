@@ -94,7 +94,7 @@ fn shade_lights_by_slope_and_writes_the_map_displace_reads() {
     g.set_param(shade, "shade", "gain", 40.0);
     g.set_param(shade, "shade", "angle", 0.0);
     drawn(&g, shade, "lit from the slope's side", |d| px(d, 32, 32)[0] > 0.6);
-    g.set_param(shade, "shade", "angle", 3.14159);
+    g.set_param(shade, "shade", "angle", std::f64::consts::PI);
     drawn(&g, shade, "dark from the other side", |d| px(d, 32, 32)[0] < 0.5);
 
     // Step: relief multiplies a wired input by that light, keeping the input's alpha.
