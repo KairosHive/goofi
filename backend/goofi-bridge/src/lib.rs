@@ -1602,7 +1602,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                         (_, None) => Ok(frame),
                     },
                     Ok(Some(goofi_node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
-                        (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0) }).map_err(|e| e.0),
+                        (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: None }).map_err(|e| e.0),
                         _ => Err("no expression evaluator available".to_string()),
                     },
                     Ok(None) => continue,

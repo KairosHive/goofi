@@ -1073,7 +1073,7 @@ impl<E: Executor> Runtime<E> {
                     (None, _) => Err("no expression evaluator available".to_string()),
                     (Some(ev), Inputs::Bare(frame)) => goofi_node::at(&*ev, &frame, self.time.now(), range).map_err(|e| e.0),
                     (Some(ev), Inputs::Computed(locals)) => {
-                        ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.now(), range }).map_err(|e| e.0)
+                        ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.now(), range, state: Some(&b.expr.state) }).map_err(|e| e.0)
                     }
                 };
                 let (param, whole) = (b.param, b.elem.is_none());

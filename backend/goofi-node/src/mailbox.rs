@@ -4,7 +4,9 @@
 use goofi_core::{Data, Param};
 use indexmap::IndexMap;
 
-use crate::{BindingId, Local};
+use std::sync::Arc;
+
+use crate::{BindingId, ExprState, Local};
 
 /// One variable's cell. It holds a [`Local`] because that is what the evaluator's locals channel
 /// takes: a `variables.*` term is a scalar, an `nd()` term a whole frame.
@@ -90,6 +92,9 @@ pub struct Expression {
     /// `None` for a BARE source — one target, an optional index — which needs no evaluator.
     pub id: Option<BindingId>,
     pub vars: IndexMap<String, Mailbox>,
+    /// What its stateful functions keep between evaluations; one cell per binding, kept across
+    /// a re-send of the same text.
+    pub state: Arc<ExprState>,
 }
 
 impl Expression {
@@ -105,13 +110,16 @@ impl Expression {
                 (name, mailbox)
             })
             .collect();
-        Expression { source: source.into(), id, vars }
+        Expression { source: source.into(), id, vars, state: Arc::new(ExprState::default()) }
     }
 
     /// Keep what a surviving variable already holds — for the variables `same` names, which is the
     /// caller's "still the same producer": a variable re-pointed at another stream starts empty,
-    /// or a silent producer would stand in for the one it replaced.
+    /// or a silent producer would stand in for the one it replaced. The same text keeps its state.
     pub fn carry(&mut self, previous: &Expression, same: impl Fn(&str) -> bool) {
+        if previous.source == self.source {
+            self.state = previous.state.clone();
+        }
         for (name, mailbox) in &mut self.vars {
             if mailbox.value().is_some() || mailbox.unresolved().is_some() || !same(name) {
                 continue;

@@ -242,6 +242,13 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "nse", kind: "function", scope: "all", signature: "nse(freq=1, src=t, vmin=…, vmax=…)", pick: None, args: &[
         RANGE[0], RANGE[1], RANGE[2], RANGE[3],
     ], doc: "Smooth noise between `vmin` and `vmax`, new every `1/freq` of `src`." },
+    Builtin { name: "gte", kind: "function", scope: "node", signature: "gte(x, attack=0, decay=0.1, sustain=1, release=0)", pick: None, args: &[
+        Arg { name: "x", kind: "number, text or array", default: None, options: &[], keyword: false, doc: "what is watched: a number turning positive, a text changing, an array with an element turning positive" },
+        Arg { name: "attack", kind: "number", default: Some("0"), options: &[], keyword: true, doc: "seconds from the edge up to 1" },
+        Arg { name: "decay", kind: "number", default: Some("0.1"), options: &[], keyword: true, doc: "seconds from 1 down to the sustain: with the defaults, how long the gate stays open" },
+        Arg { name: "sustain", kind: "number", default: Some("1"), options: &[], keyword: true, doc: "the level the decay lands on" },
+        Arg { name: "release", kind: "number", default: Some("0"), options: &[], keyword: true, doc: "seconds from the sustain down to 0" },
+    ], doc: "A one-shot envelope from each rising edge of `x`: 0 to 1 over the attack, to the sustain over the decay, to 0 over the release, in patch seconds from the edge. The defaults open a gate for the decay. The edge is read as the param's node runs; the binding keeps the last `x` and the edge's instant." },
     Builtin { name: "qtz", kind: "function", scope: "all", signature: "qtz(v, scale='major', root='C', mode='voct')", pick: None, args: &[
         Arg { name: "v", kind: "number or array", default: None, options: &[], keyword: false, doc: "the pitch to snap, elementwise over an array" },
         Arg { name: "scale", kind: "string", default: Some("'major'"), options: &goofi_core::scale::PRESET_NAMES, keyword: false, doc: "the scale whose degrees are kept" },

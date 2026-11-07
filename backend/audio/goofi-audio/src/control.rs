@@ -384,7 +384,7 @@ impl AudioHalf {
             let mut whole = true;
             for (i, v) in values.iter_mut().enumerate() {
                 let t = anchor.seconds(first + i as u64, epoch);
-                match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range }) {
+                match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range, state: None }) {
                     Ok(frame) => *v = goofi_core::control::number_of(&frame) as f32,
                     Err(_) => {
                         whole = false;

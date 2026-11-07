@@ -1,7 +1,7 @@
 //! Parameter modulation through the public expression interface.
 
 use goofi_core::{control, Param};
-use goofi_node::{EvalCtx, ExprEvaluator};
+use goofi_node::{EvalCtx, ExprEvaluator, ExprState, Local};
 use goofi_python::inproc::PyExprEvaluator;
 
 #[test]
@@ -9,7 +9,7 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     let evaluator = PyExprEvaluator::new().unwrap();
     let evaluate = |source: &str, t: f64, lo: f64, hi: f64| {
         let code = evaluator.compile(source).unwrap();
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t, range: (lo, hi) });
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t, range: (lo, hi), state: None });
         evaluator.release(code.id);
         result.map(|d| control::number_of(&d))
     };
@@ -43,7 +43,7 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     let code = evaluator.compile("lfo()").unwrap();
     for (lo, hi) in [(2, 6), (-10, 20)] {
         let target = Param::int(0, lo, hi);
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.25, range: (lo as f64, hi as f64) }).unwrap();
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.25, range: (lo as f64, hi as f64), state: None }).unwrap();
         let read = control::read(&result, &target);
         assert!(matches!(&read, Param::Num { value, int: true, .. } if value[0] == hi as f64), "{read:?}");
     }
@@ -56,9 +56,9 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     let (a, b) = (evaluator.compile("t + 1").unwrap(), evaluator.compile("t + 1").unwrap());
     assert_eq!(a.id, b.id, "one source, one compiled function");
     evaluator.release(a.id);
-    assert_eq!(control::number_of(&evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0) }).unwrap()), 3.0, "held by the other");
+    assert_eq!(control::number_of(&evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0), state: None }).unwrap()), 3.0, "held by the other");
     evaluator.release(b.id);
-    assert!(evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0) }).is_err(), "released");
+    assert!(evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0), state: None }).is_err(), "released");
 
     // A FUNCTIONAL is a compiled expression's code as a frame: it crosses the wire as bytes, equal
     // by those bytes, and whoever reads it runs it at their own time; a clamp is the code's own.
@@ -88,7 +88,7 @@ fn concurrent_compile_eval_and_collection_all_finish() {
     use std::sync::Arc;
     const ROUNDS: u64 = 300;
     let evaluator = Arc::new(PyExprEvaluator::new().unwrap());
-    let ctx = || EvalCtx { locals: &[], t: 0.5, range: (0.0, 1.0) };
+    let ctx = || EvalCtx { locals: &[], t: 0.5, range: (0.0, 1.0), state: None };
     let done: Arc<Vec<AtomicU64>> = Arc::new((0..9).map(|_| AtomicU64::new(0)).collect());
     for (i, counter) in (0..9).zip(0..) {
         let (ev, done) = (evaluator.clone(), done.clone());
@@ -130,7 +130,7 @@ fn qtz_snaps_volts_per_octave_onto_a_scale() {
     let evaluator = PyExprEvaluator::new().unwrap();
     let evaluate = |source: &str| {
         let code = evaluator.compile(source).unwrap();
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (-5.0, 5.0) });
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (-5.0, 5.0), state: None });
         evaluator.release(code.id);
         result
     };
@@ -173,7 +173,7 @@ fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_ru
     let evaluator = PyExprEvaluator::new().unwrap();
     let evaluate = |source: &str| {
         let code = evaluator.compile(source).unwrap();
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (0.0, 1.0) });
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (0.0, 1.0), state: None });
         evaluator.release(code.id);
         result
     };
@@ -222,4 +222,74 @@ fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_ru
     let frames = evaluate("qtz(np.array([440.0, 450.0]), mode='hz')").unwrap();
     let got: Vec<f64> = control::numbers(&frames).collect();
     assert!(got.iter().all(|v| (v - 440.0).abs() < 1e-2), "{got:?}");
+}
+
+/// `gte()` is the first function with state: the binding's cell keeps what each call site saw
+/// and when its edge was, through the evaluator's one state door. An evaluation without a cell
+/// keeps nothing, so it never sees an edge.
+#[test]
+fn a_stateful_function_keeps_its_state_in_the_bindings_cell_by_call_site() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let at = |id: goofi_node::BindingId, t: f64, x: goofi_core::Data, cell: Option<&ExprState>| {
+        let locals = vec![("__v0".to_string(), Local::Frame(x))];
+        evaluator.eval(id, &EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: cell }).map(|d| control::number_of(&d))
+    };
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-5;
+    let n = goofi_core::Data::number;
+
+    // The defaults: a gate, open from the edge for the decay, whatever the source does meanwhile.
+    let gate = evaluator.compile("gte(__v0, decay=0.5)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(gate.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(gate.id, 0.1, n(1.0), Some(&cell)).unwrap(), 1.0, "the edge opens the gate");
+    assert_eq!(at(gate.id, 0.3, n(1.0), Some(&cell)).unwrap(), 1.0, "open through the decay");
+    assert_eq!(at(gate.id, 0.7, n(1.0), Some(&cell)).unwrap(), 0.0, "closed after it");
+    assert_eq!(at(gate.id, 1.0, n(1.0), Some(&cell)).unwrap(), 0.0, "a level that never fell opens nothing");
+    assert_eq!(at(gate.id, 1.1, n(0.0), Some(&cell)).unwrap(), 0.0, "nor the fall");
+    assert_eq!(at(gate.id, 1.2, n(0.2), Some(&cell)).unwrap(), 1.0, "any positive is high");
+    assert_eq!(at(gate.id, 0.05, n(0.2), Some(&cell)).unwrap(), 0.0, "a clock that started over drops the envelope");
+    for (t, x) in [(0.0, 0.0), (0.1, 1.0), (0.2, 1.0)] {
+        assert_eq!(at(gate.id, t, n(x), None).unwrap(), 0.0, "no cell, no memory, no edge");
+    }
+    let other = ExprState::default();
+    assert_eq!(at(gate.id, 2.0, n(1.0), Some(&other)).unwrap(), 0.0, "another cell starts fresh: a high level is no edge");
+    evaluator.release(gate.id);
+
+    // The shape: up over the attack, down to the sustain over the decay, to nothing over the
+    // release; a second edge starts the attack from the level it stands at.
+    let gain = evaluator.compile("gte(__v0, attack=0.2, decay=0.2, sustain=0.5, release=0.2)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(gain.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    for (t, expected) in [(1.0, 0.0), (1.1, 0.5), (1.2, 1.0), (1.3, 0.75), (1.4, 0.5), (1.5, 0.25), (1.6, 0.0), (3.0, 0.0)] {
+        let got = at(gain.id, t, n(1.0), Some(&cell)).unwrap();
+        assert!(close(got, expected), "at {t}: {got}, not {expected}");
+    }
+    assert_eq!(at(gain.id, 4.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(gain.id, 4.1, n(1.0), Some(&cell)).unwrap(), 0.0, "the edge, the attack from nothing");
+    assert!(close(at(gain.id, 4.2, n(0.0), Some(&cell)).unwrap(), 0.5), "the attack runs on through the fall");
+    assert!(close(at(gain.id, 4.25, n(1.0), Some(&cell)).unwrap(), 0.75), "a second edge takes the level it finds");
+    assert!(close(at(gain.id, 4.35, n(1.0), Some(&cell)).unwrap(), 0.875), "and climbs from there");
+    evaluator.release(gain.id);
+
+    // Two call sites in one expression keep two states; a text's edge is its change; negative
+    // seconds are refused.
+    let two = evaluator.compile("gte(__v0, decay=0.05) + 10 * gte(1 - __v0, decay=0.05)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(two.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(two.id, 0.1, n(1.0), Some(&cell)).unwrap(), 1.0, "the first site's edge");
+    assert_eq!(at(two.id, 0.2, n(0.0), Some(&cell)).unwrap(), 10.0, "the second site's, on the fall");
+    evaluator.release(two.id);
+    let text = evaluator.compile("gte(__v0)").unwrap();
+    let cell = ExprState::default();
+    let s = goofi_core::Data::text;
+    assert_eq!(at(text.id, 0.0, s("A"), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(text.id, 0.01, s("A"), Some(&cell)).unwrap(), 0.0, "the same text is no edge");
+    assert_eq!(at(text.id, 0.02, s("B"), Some(&cell)).unwrap(), 1.0, "a change is");
+    assert_eq!(at(text.id, 0.05, s("B"), Some(&cell)).unwrap(), 1.0);
+    assert_eq!(at(text.id, 0.2, s("B"), Some(&cell)).unwrap(), 0.0);
+    evaluator.release(text.id);
+    let bad = evaluator.compile("gte(__v0, decay=-1)").unwrap();
+    let why = at(bad.id, 0.0, n(0.0), Some(&ExprState::default())).unwrap_err().0;
+    assert!(why.contains("at least 0"), "{why}");
+    evaluator.release(bad.id);
 }

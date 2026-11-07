@@ -182,6 +182,13 @@ export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [
 		{ name: 'vmin', kind: 'number', default: "the param's minimum", options: [], keyword: true, doc: "the value at the bottom of the cycle" },
 		{ name: 'vmax', kind: 'number', default: "the param's maximum", options: [], keyword: true, doc: "the value at the top of the cycle" },
 	] },
+	{ name: 'gte', kind: 'function', scope: 'node', signature: "gte(x, attack=0, decay=0.1, sustain=1, release=0)", doc: "A one-shot envelope from each rising edge of `x`: 0 to 1 over the attack, to the sustain over the decay, to 0 over the release, in patch seconds from the edge. The defaults open a gate for the decay. The edge is read as the param's node runs; the binding keeps the last `x` and the edge's instant.", pick: null, args: [
+		{ name: 'x', kind: 'number, text or array', default: null, options: [], keyword: false, doc: "what is watched: a number turning positive, a text changing, an array with an element turning positive" },
+		{ name: 'attack', kind: 'number', default: "0", options: [], keyword: true, doc: "seconds from the edge up to 1" },
+		{ name: 'decay', kind: 'number', default: "0.1", options: [], keyword: true, doc: "seconds from 1 down to the sustain: with the defaults, how long the gate stays open" },
+		{ name: 'sustain', kind: 'number', default: "1", options: [], keyword: true, doc: "the level the decay lands on" },
+		{ name: 'release', kind: 'number', default: "0", options: [], keyword: true, doc: "seconds from the sustain down to 0" },
+	] },
 	{ name: 'qtz', kind: 'function', scope: 'all', signature: "qtz(v, scale='major', root='C', mode='voct')", doc: "The nearest degree of `scale` from `root`, in the unit `v` came in.", pick: null, args: [
 		{ name: 'v', kind: 'number or array', default: null, options: [], keyword: false, doc: "the pitch to snap, elementwise over an array" },
 		{ name: 'scale', kind: 'string', default: "'major'", options: ['chromatic', 'major', 'minor', 'dorian', 'phrygian', 'lydian', 'mixolydian', 'locrian', 'pentatonic_major', 'pentatonic_minor', 'blues', 'harmonic_minor', 'whole_tone', 'harmonic'], keyword: false, doc: "the scale whose degrees are kept" },

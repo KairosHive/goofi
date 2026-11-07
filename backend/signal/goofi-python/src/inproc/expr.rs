@@ -17,16 +17,73 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 /// into a generated variable, so an expression compiles ONCE into a function of `t` and those
 /// variables, over a module scope with `np` and `math`'s whole namespace simply there. `lfo()` and
 /// `nse()` read the call's time and range off a thread local, so no namespace is rebuilt per call;
-/// `qtz()` snaps through [`qtz_core`], so its scales are `goofi_core::scale`'s.
+/// `qtz()` snaps through [`qtz_core`], so its scales are `goofi_core::scale`'s. A stateful
+/// function (`gte()`) keeps what it needs in the binding's state dict, by call site, through
+/// `__goofi_stateful`; the dict rides the same thread local and goes back to the binding's cell.
 /// A result leaves as a string, or as the shape and bytes of an f32 array.
 const EVAL_SRC: &str = r#"
+import functools
+import inspect
 import marshal
 import numpy as np
+import sys
 import threading
 import types
 from math import *
 
 __goofi_call = threading.local()
+
+def __goofi_stateful(fn):
+    # `fn(held, ...)` answers `(held, value)`: `held` is what this call site kept from the
+    # binding's last evaluation, None at first, and goes back to the binding for the next. A call
+    # site is its bytecode offset in the expression; an evaluation without a binding keeps nothing.
+    @functools.wraps(fn)
+    def call(*args, **kwargs):
+        state = __goofi_call.state
+        key = sys._getframe(1).f_lasti
+        held, out = fn(None if state is None else state.get(key), *args, **kwargs)
+        if state is not None:
+            state[key] = held
+        return out
+    call.__signature__ = inspect.Signature(list(inspect.signature(fn).parameters.values())[1:])
+    return call
+
+def __goofi_truth(x):
+    if isinstance(x, str):
+        return x != ""
+    if isinstance(x, (bool, int, float)):
+        return x > 0
+    return bool(np.any(np.asarray(x) > 0))
+
+def __goofi_adsr(dt, a, d, s, r, start):
+    if dt < a:
+        return start + (1 - start) * dt / a
+    dt -= a
+    if dt < d:
+        return 1 + (s - 1) * dt / d
+    dt -= d
+    if dt < r:
+        return s * (1 - dt / r)
+    return 0.0
+
+@__goofi_stateful
+def gte(held, x, *, attack=0, decay=0.1, sustain=1, release=0):
+    if min(attack, decay, release) < 0:
+        raise ValueError("gte: attack, decay and release are seconds of at least 0")
+    now = __goofi_call.t
+    text = isinstance(x, str)
+    seen = x if text else __goofi_truth(x)
+    if held is None:
+        held = {"last": seen, "at": None, "start": 0.0}
+    elif held["at"] is not None and now < held["at"]:
+        held["at"] = None
+    level = 0.0 if held["at"] is None else __goofi_adsr(now - held["at"], attack, decay, sustain, release, held["start"])
+    edge = seen != held["last"] if text else (seen and not held["last"])
+    held["last"] = seen
+    if edge:
+        held["at"], held["start"] = now, level
+        level = __goofi_adsr(0.0, attack, decay, sustain, release, level)
+    return held, level
 
 # One cycle of each waveform over the unit phase, spanning [0, 1].
 __goofi_waves = {
@@ -88,9 +145,9 @@ def __goofi_compile(source, names):
 def __goofi_load(code):
     return types.FunctionType(marshal.loads(code), globals())
 
-def __goofi_eval(fn, t, lo, hi, locals_):
+def __goofi_eval(fn, t, lo, hi, locals_, state):
     c = __goofi_call
-    c.t, c.lo, c.hi = t, lo, hi
+    c.t, c.lo, c.hi, c.state = t, lo, hi, state
     out = fn(t, **locals_)
     if isinstance(out, str):
         return out
@@ -198,6 +255,20 @@ fn data_to_py(py: Python<'_>, d: &Data) -> PyResult<Py<PyAny>> {
     }
 }
 
+/// The binding's state dict — minted into its cell on the first evaluation — or None for an
+/// evaluation that keeps nothing. The cell's lock is held for the lookup alone, by the binding's
+/// own thread: no Python runs under it.
+fn state_of(py: Python<'_>, ctx: &EvalCtx<'_>) -> Py<PyAny> {
+    let Some(cell) = ctx.state else { return py.None() };
+    if let Some(dict) = cell.0.lock().as_ref().and_then(|held| held.downcast_ref::<Py<PyDict>>()) {
+        return dict.clone_ref(py).into_any();
+    }
+    let dict = PyDict::new(py).unbind();
+    let out = dict.clone_ref(py).into_any();
+    *cell.0.lock() = Some(Box::new(dict));
+    out
+}
+
 /// A record as the expression reads it: a namespace with one attribute per field, a frame as
 /// [`data_to_py`] hands it and a list of names as a list of strings.
 fn record_to_py(py: Python<'_>, fields: &[(String, Field)]) -> PyResult<Py<PyAny>> {
@@ -256,7 +327,7 @@ impl PyExprEvaluator {
             let result = self
                 .eval_fn
                 .bind(py)
-                .call1((fn_, ctx.t, ctx.range.0, ctx.range.1, &locals))
+                .call1((fn_, ctx.t, ctx.range.0, ctx.range.1, &locals, state_of(py, ctx)))
                 .map_err(|e| ExprError(e.to_string()))?;
             if let Ok(text) = result.extract::<String>() {
                 return Ok(Data::text(text));

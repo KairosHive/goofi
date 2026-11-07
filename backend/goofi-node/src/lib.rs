@@ -306,6 +306,18 @@ pub enum Field {
     Names(Vec<String>),
 }
 
+/// What a binding's stateful functions (`gte()`) keep from one evaluation to the next: the
+/// evaluator's own object, which the binding holds and hands back on every call. Fresh with a
+/// binding whose text changed; none for an evaluation outside a binding, which keeps nothing.
+#[derive(Default)]
+pub struct ExprState(pub goofi_supervisor::sync::Mutex<Option<Box<dyn std::any::Any + Send + Sync>>>);
+
+impl fmt::Debug for ExprState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExprState")
+    }
+}
+
 /// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.
 pub struct EvalCtx<'a> {
     /// The expression's variables by the generated name the rewrite minted, in its order.
@@ -314,6 +326,8 @@ pub struct EvalCtx<'a> {
     pub t: f64,
     /// The driven param's declared range, which `lfo()` and `nse()` span by default.
     pub range: (f64, f64),
+    /// The binding's state cell, for the functions that keep one; none keeps nothing.
+    pub state: Option<&'a ExprState>,
 }
 
 /// Evaluates expressions; implemented in `goofi-python` and injected, so the engine core carries
@@ -331,7 +345,7 @@ pub trait ExprEvaluator: Send + Sync {
 /// A functional frame's value at `t`, and any other frame as it is.
 pub fn at(ev: &dyn ExprEvaluator, frame: &Data, t: f64, range: (f64, f64)) -> Result<Data, ExprError> {
     match frame.as_functional() {
-        Some(code) => ev.run(code, &EvalCtx { locals: &[], t, range }),
+        Some(code) => ev.run(code, &EvalCtx { locals: &[], t, range, state: None }),
         None => Ok(frame.clone()),
     }
 }

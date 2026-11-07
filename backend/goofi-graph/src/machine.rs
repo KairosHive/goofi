@@ -848,7 +848,7 @@ impl<'a> Ctx<'a> {
             return goofi_node::mailbox::pick(local, index);
         }
         match (self.evaluator, e.id) {
-            (Some(ev), Some(id)) => ev.eval(id, &EvalCtx { locals: &locals, t: self.now, range: (0.0, 1.0) }).map_err(|e| e.0),
+            (Some(ev), Some(id)) => ev.eval(id, &EvalCtx { locals: &locals, t: self.now, range: (0.0, 1.0), state: None }).map_err(|e| e.0),
             _ => Err("no expression evaluator available".to_string()),
         }
     }

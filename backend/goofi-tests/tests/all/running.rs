@@ -726,6 +726,48 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
 }
 
 #[test]
+fn a_gate_expression_opens_on_a_rising_edge_and_closes_after_its_decay() {
+    // `gte()` keeps its state in the binding: the edge it saw and when. So one rising edge opens
+    // the gate once, the decay closes it while the source stays high, and only the next edge
+    // opens it again — what a VST's gate param needs from a state change.
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    let src = g.add("_TestScalar");
+    let out = g.add("_TestScalar");
+    let src_name = g.doc()["nodes"][hex(src)]["name"].as_str().expect("a minted name").to_string();
+    for n in [src, out] {
+        g.set_param(n, "common", "max_frequency", 50.0);
+        g.ready(n);
+    }
+    let probe = g.probe(out, "out");
+    let level = || probe.latest().map(|d| f32s(&d)[0]);
+    let bound = g.call("node param edit",
+                       j!({ "node": hex(out), "param": "control/value",
+                            "expression": format!("gte(nd('{src_name}')[0], decay=0.5)") }));
+    assert!(bound["error"].is_null(), "{bound}");
+    g.until("a closed gate", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    g.set_param(src, "control", "value", 1.0);
+    g.until("the gate the rising edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
+    g.until("the gate the decay closed while the source stays high", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    assert!(g.stays(|_| level() == Some(0.0)), "a level that never fell opened the gate again");
+    g.set_param(src, "control", "value", 0.0);
+    assert!(g.stays(|_| level() == Some(0.0)), "the falling edge opened the gate");
+    g.set_param(src, "control", "value", 0.3);
+    g.until("the gate the second edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
+
+    // The same function shapes a gain: the level passes between 0 and 1 and comes to rest at 0.
+    let bound = g.call("node param edit",
+                       j!({ "node": hex(out), "param": "control/value",
+                            "expression": format!("gte(nd('{src_name}')[0], attack=0.3, decay=0.3, sustain=0.5, release=0.3)") }));
+    assert!(bound["error"].is_null(), "{bound}");
+    g.set_param(src, "control", "value", 0.0);
+    g.until("a closed gain", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    g.set_param(src, "control", "value", 1.0);
+    g.until("the gain on its way up", |_| level().filter(|v| *v > 0.0 && *v < 1.0).map(|_| ()));
+    g.until("the gain at rest again", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+}
+
+#[test]
 fn a_multi_slot_names_its_senders_in_wire_order_and_follows_a_rename() {
     // A frame on a multi slot arrives with the `node.slot` that sent it: the order is the wire
     // order, a rename reaches the consumer, and a removed wire takes its name with it.
