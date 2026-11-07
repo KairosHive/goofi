@@ -1,0 +1,6 @@
+# PromptMask and the prompt worker AdaptiveMask starts run on torch, which has no free-threaded wheel.
+# A CPU build works. A CUDA build makes SAM 2 live.
+torch>=2.6
+transformers>=4.45
+scipy>=1.11
+Pillow>=11

@@ -34,5 +34,6 @@ mod recording;
 mod running;
 mod session;
 mod subpatches;
+mod texture_graphics;
 mod timing;
 mod transport;
