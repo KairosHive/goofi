@@ -11,8 +11,11 @@ out here so only its weights are read, 1.7 GB from the hub on first use.
 A grid is drawn in one pass whatever its size: the decoder's position table, trained on a square,
 is interpolated to the grid, which draws a 768 x 768 picture without the seams of tiling. A grid
 that equals the last one drawn is answered with the last drawing, so a still picture costs no GPU
-time, and a run on a changed grid is one decode: 62 ms for 48 x 48 tokens on an RTX 4090 Laptop
-GPU at 1500 MHz, 29 ms for 32 x 32.
+time, and a run on a changed grid is one decode. In `fp8` the linears run on the fp8 tensor cores
+(Ada and newer): the three attention projections as one matmul, each input scaled by its own peak
+to the fp8 range on the GPU, the cast fused into the norm or GELU before it by `torch.compile`.
+On an RTX 4090 Laptop GPU at 1500 MHz, 48 x 48 tokens draw in 48 ms (fp16: 61), 42 x 75 in 73
+(fp16: 94); the drawings differ from fp16's by 4 of 255 per pixel on average, which does not show.
 """
 
 import math
@@ -27,6 +30,7 @@ import goofi
 MEAN = (0.485, 0.456, 0.406)
 STD = (0.229, 0.224, 0.225)
 PATCH = 16
+PRECISIONS = ["fp8", "fp16"]
 # Each space's decoder: its repo and file, and whether it draws ImageNet-normalised pixels
 # (RAE's) or 0..1 (RAEv2's).
 DECODERS = {
@@ -44,6 +48,11 @@ class DinoDecode(goofi.Node):
     INPUTS = {"tokens": goofi.InputSlot(goofi.DataType.ARRAY)}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {
+        "decode": {
+            "precision": goofi.StringParam(
+                "fp8", PRECISIONS, doc="`fp8` draws a third faster on the fp8 tensor cores of an Ada or newer GPU, and is fp16 elsewhere; `fp16` is the decoder as trained."
+            ),
+        },
         "common": {
             "max_frequency": goofi.NumParam(30.0, 0.1, 240.0, doc="Rate cap: drawings a second at most."),
         },
@@ -71,15 +80,16 @@ class DinoDecode(goofi.Node):
         x = np.asarray(tokens.data)
         if x.ndim != 3:
             raise ValueError(f"`tokens` is a `[rows, columns, dim]` grid; this frame is {x.shape}")
-        if space != self.built:
-            self.build(space)
+        want = (space, self.params.decode.precision)
+        if want != self.built:
+            self.build(want)
         with torch.inference_mode():
             z = torch.from_numpy(np.array(x, dtype=np.float32)).to(self.device, self.half)
             if self.drawn is None or self.drawn.shape != z.shape or not torch.equal(self.drawn, z):
                 picture = self.draw(z)
                 self.flat, self.shape = self.land(picture.reshape(-1)), tuple(picture.shape)
                 self.drawn = z
-        return self.flat.numpy().reshape(self.shape), {"channels": {"dim2": ["r", "g", "b"]}, "space": space}
+        return self.flat.numpy().reshape(self.shape), {"channels": {"dim2": ["r", "g", "b"]}, "space": space, "precision": self.precision}
 
     def draw(self, z):
         """A `[rows, cols, dim]` grid on the GPU -> `[rows*16, cols*16, 3]` pixels in 0..1, in one pass."""
@@ -113,11 +123,12 @@ class DinoDecode(goofi.Node):
         self.landing[self.turn].copy_(flat)
         return self.landing[self.turn]
 
-    def build(self, space):
-        """The decoder of `space` on the GPU, the old one released first: the GPU may hold little else."""
+    def build(self, want):
+        """The decoder of the space on the GPU in the precision asked, the old one released first: the GPU may hold little else."""
         from huggingface_hub import hf_hub_download
 
         self.stop()
+        space, precision = want
         repo, file, self.normalised = DECODERS[space]
         state = torch.load(hf_hub_download(repo, file), map_location="cpu", weights_only=True)
         for wrap in ("model", "ema", "state_dict"):
@@ -129,8 +140,13 @@ class DinoDecode(goofi.Node):
         missing, unexpected = decoder.load_state_dict(state, strict=False)
         if missing or unexpected:
             raise ValueError(f"{file} is not an RAE decoder: missing {missing[:4]}, unexpected {unexpected[:4]}")
-        self.decoder = decoder.to(self.device, self.half).eval().requires_grad_(False)
-        self.built = space
+        decoder = decoder.to(self.device, self.half).eval().requires_grad_(False)
+        self.precision = "fp8" if precision == "fp8" and self.device.type == "cuda" and torch.cuda.get_device_capability() >= (8, 9) else "fp16"
+        if self.precision == "fp8":
+            decoder.decoder_layers = nn.ModuleList(Layer8(layer) for layer in decoder.decoder_layers)
+            decoder = torch.compile(decoder, dynamic=False)
+        self.decoder = decoder
+        self.built = want
 
     def stop(self):
         self.decoder = None
@@ -171,6 +187,45 @@ class Layer(nn.Module):
         y = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(b, n, c)
         x = x + self.attention.output.dense(y)
         return x + self.output.dense(F.gelu(self.intermediate.dense(self.layernorm_after(x))))
+
+
+class Linear8(nn.Module):
+    """A linear on the fp8 tensor cores: the weight scaled once, each input by its own peak on the GPU."""
+
+    def __init__(self, weight, bias):
+        super().__init__()
+        scale = weight.float().abs().amax() / 448.0
+        self.weight = (weight.float() / scale).to(torch.float8_e4m3fn).t()
+        self.scale = scale
+        self.bias = bias.to(torch.float16)
+
+    def forward(self, x):
+        a = x.reshape(-1, x.shape[-1])
+        s = (a.abs().amax().float() / 448.0).clamp(min=1e-6)
+        q = (a * (1.0 / s)).to(torch.float8_e4m3fn)
+        y = torch._scaled_mm(q, self.weight, scale_a=s, scale_b=self.scale, out_dtype=torch.float16, bias=self.bias)
+        return y.view(*x.shape[:-1], -1)
+
+
+class Layer8(nn.Module):
+    """A `Layer` with its four linears in fp8, the query, key and value projections as one."""
+
+    def __init__(self, layer):
+        super().__init__()
+        self.heads = layer.heads
+        att = layer.attention.attention
+        self.qkv = Linear8(torch.cat([att.query.weight, att.key.weight, att.value.weight]), torch.cat([att.query.bias, att.key.bias, att.value.bias]))
+        self.out = Linear8(layer.attention.output.dense.weight, layer.attention.output.dense.bias)
+        self.up = Linear8(layer.intermediate.dense.weight, layer.intermediate.dense.bias)
+        self.down = Linear8(layer.output.dense.weight, layer.output.dense.bias)
+        self.layernorm_before, self.layernorm_after = layer.layernorm_before, layer.layernorm_after
+
+    def forward(self, x):
+        b, n, c = x.shape
+        q, k, v = self.qkv(self.layernorm_before(x)).view(b, n, 3, self.heads, c // self.heads).permute(2, 0, 3, 1, 4)
+        y = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(b, n, c)
+        x = x + self.out(y)
+        return x + self.down(F.gelu(self.up(self.layernorm_after(x))))
 
 
 class Decoder(nn.Module):

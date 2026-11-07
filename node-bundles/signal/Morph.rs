@@ -4,8 +4,14 @@
 use goofi_core::{Data, SlotType};
 use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
+/// A frame named by its sender's stamps: the run index and when that run ended.
+type Stamp = (Option<u64>, Option<f64>);
+
+/// What the last mix was made of: each frame by its stamp, and the point along them.
 #[derive(Default)]
-struct Morph;
+struct Morph {
+    made_of: Option<(Vec<Stamp>, f64, String)>,
+}
 
 fn floats(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
     bytes.chunks_exact(4).map(|x| f32::from_le_bytes(x.try_into().expect("four bytes")))
@@ -51,10 +57,16 @@ impl Node for Morph {
         if !position.is_finite() {
             return Err(format!("`position` is not a number: {position}").into());
         }
+        let curve = p.str("morph", "curve").unwrap_or("linear");
+        // The node runs on its own clock; the same frames at the same point are the mix already sent.
+        let frames: Vec<Stamp> = wires.iter().map(|(_, d)| (d.meta().index(), d.meta().procend())).collect();
+        if self.made_of.as_ref().is_some_and(|(held, at, how)| *at == position && how == curve && *held == frames) {
+            return Ok(());
+        }
         let n = wires.len();
         let x = position.rem_euclid(n as f64);
         let k = x.floor() as i64;
-        let weights = weights(p.str("morph", "curve").unwrap_or("linear"), (x - k as f64) as f32);
+        let weights = weights(curve, (x - k as f64) as f32);
 
         let mut mix = vec![0f32; shape.iter().product()];
         for (step, weight) in (-1i64..=2).zip(weights) {
@@ -68,6 +80,7 @@ impl Node for Morph {
         }
         let bytes = mix.iter().flat_map(|v| v.to_le_bytes()).collect();
         out.set("out", Data::array_f32(shape, bytes, wires[0].1.meta().clone()).map_err(|e| e.to_string())?);
+        self.made_of = Some((frames, position, curve.to_owned()));
         Ok(())
     }
 }

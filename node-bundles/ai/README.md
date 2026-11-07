@@ -67,7 +67,8 @@ drawn as a picture of `rows * 16` by `columns * 16` pixels by the decoder traine
 space the meta names: RAE's ViT-XL for `dinov2` (halfway between two pictures it draws one new
 surface, MIT) or RAEv2's for `dinov3-k23` and `dinov3-k7` (they keep the photographs, CC BY-NC
 4.0). The grid is drawn in one pass at any size, the decoder's position table interpolated to it,
-and a grid equal to the last one drawn is answered with the last drawing. Each decoder is 1.7 GB
-from the hub on first use. For a morph between pictures, hold each one's grid and wire them all
+and a grid equal to the last one drawn is answered with the last drawing. `precision` `fp8` runs
+the linears on the fp8 tensor cores of an Ada or newer GPU, a third faster than `fp16` and
+indistinguishable from it; elsewhere it is fp16. Each decoder is 1.7 GB from the hub on first use. For a morph between pictures, hold each one's grid and wire them all
 into a `Morph`, whose `position` glides between them, then into `DinoDecode`; an `Operation` or a
 `Math` between the two nodes mixes or moves the latent instead.
