@@ -453,13 +453,13 @@ pub fn wait_readable(socket: &impl std::os::windows::io::AsRawSocket, deadline: 
     let raw = socket.as_raw_socket() as usize;
     let left = deadline.saturating_duration_since(Instant::now());
     let micros = left.as_micros().min(i64::MAX as u128) as i64;
-    let mut tv = TIMEVAL { tv_sec: (micros / 1_000_000) as i32, tv_usec: (micros % 1_000_000) as i32 };
+    let tv = TIMEVAL { tv_sec: (micros / 1_000_000) as i32, tv_usec: (micros % 1_000_000) as i32 };
     // SAFETY: an FD_SET holding one socket, and a timeval, for the call's duration.
     unsafe {
         let mut set: FD_SET = std::mem::zeroed();
         set.fd_count = 1;
         set.fd_array[0] = raw;
-        let n = select(0, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), &mut tv);
+        let n = select(0, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), &tv);
         if n == SOCKET_ERROR {
             return Err(std::io::Error::last_os_error());
         }
