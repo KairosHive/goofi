@@ -44,26 +44,31 @@ by OpenAI, ElevenLabs or an OpenAI-compatible server.
 
 ## DINO
 
-DINOv3 on the GPU, over a texture on `image` (a camera, a video, a renderer): `embedding` is the
+DINO on the GPU, over a texture on `image` (a camera, a video, a renderer): `embedding` is the
 class token (384 to 4096 numbers by `size`), `patches` the normalized patch features as
 `[rows, columns, dim]`, both from the last layer. The frame is resized on its short side to
 `resolution` and run in bf16 through SDPA attention; `compile` adds CUDA graphs after a minute of
-warm-up. Meta's Hugging Face repos are gated: accept the DINOv3 license on the repo page and
-`hf auth login` once, or set `repo` to an ungated mirror in the transformers format. `segment`
-mode adds the picture on the front of the DINOv3 repo: `map` is the cosine similarity between the
-patch under `point` (a share of the width and height) and every other patch, a continuous field
-at the picture's own size that follows whatever the point sits on, and `mask` is that field above
-`threshold`. Drive `point` from a pose or a cursor and the map tracks what is pointed at; a higher
-`resolution` gives a finer field.
+warm-up. A picture is encoded only when its texels move, so a still picture costs no GPU time
+after its first frame. Meta's Hugging Face repos are gated: accept the DINOv3 license on the repo
+page and `hf auth login` once, or set `repo` to an ungated mirror in the transformers format.
+`segment` mode adds the picture on the front of the DINOv3 repo: `map` is the cosine similarity
+between the patch under `point` (a share of the width and height) and every other patch, a
+continuous field at the picture's own size that follows whatever the point sits on, and `mask` is
+that field above `threshold`. Drive `point` from a pose or a cursor and the map tracks what is
+pointed at; a higher `resolution` gives a finer field. `tokens` mode encodes the grid a
+`DinoDecode` draws, one token for each 16 x 16 pixels of a drawing `resolution` on its short
+side: `space` is `dinov2` (DINOv2-B with registers, its last layer, MIT) or `dinov3-k23` and
+`dinov3-k7` (DINOv3 ViT-L, the mean of 23 or 7 of its blocks).
 
-## DinoMorph
+## DinoDecode
 
-The morph on the front of `Kairos-Hive/latent-textures`: every texture wired into `images` is
-encoded once into a grid of DINO tokens, `position` picks a point along the list (in pictures,
-looping; `linear` mixes the two nearest, `spline` runs one smooth Catmull-Rom loop through all),
-and the representation autoencoder's decoder draws that grid as a picture of `resolution` on its
-long side, in the first picture's proportions. `space` is `dinov2` (DINOv2-B with registers under
-RAE's ViT-XL decoder, MIT: halfway between two pictures it draws one new surface) or `dinov3-k23`
-and `dinov3-k7` (DINOv3 ViT-L under RAEv2's decoders, CC BY-NC 4.0: they keep the photographs).
-The node runs on its own clock, so an expression on `position` glides between the held pictures.
-Each decoder is 1.7 GB from the hub on first use; DINOv3 is gated, as for `DINO`.
+The grid of tokens on `tokens` — a `DINO` node's `tokens`, or anything made from such grids — is
+drawn as a picture of `rows * 16` by `columns * 16` pixels by the decoder trained on the token
+space the meta names: RAE's ViT-XL for `dinov2` (halfway between two pictures it draws one new
+surface, MIT) or RAEv2's for `dinov3-k23` and `dinov3-k7` (they keep the photographs, CC BY-NC
+4.0). The grid is drawn in one pass at any size, the decoder's position table interpolated to it,
+and a grid equal to the last one drawn is answered with the last drawing. `precision` `fp8` runs
+the linears on the fp8 tensor cores of an Ada or newer GPU, a third faster than `fp16` and
+indistinguishable from it; elsewhere it is fp16. Each decoder is 1.7 GB from the hub on first use. For a morph between pictures, hold each one's grid and wire them all
+into a `Morph`, whose `position` glides between them, then into `DinoDecode`; an `Operation` or a
+`Math` between the two nodes mixes or moves the latent instead.

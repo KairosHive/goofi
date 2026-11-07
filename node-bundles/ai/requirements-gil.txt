@@ -8,5 +8,5 @@ elevenlabs
 # DINO runs DINOv3 through transformers on PyTorch; install a CUDA build of torch for the GPU path.
 torch>=2.6
 transformers>=4.56
-# DinoMorph fetches its decoders from the hub by file.
+# DinoDecode fetches its decoders from the hub by file.
 huggingface_hub

@@ -14,6 +14,16 @@ The source retains its oscillator phases between blocks. It emits the samples
 for the elapsed time, independent of the node update rate. This is a signal
 array; use an audio-engine bridge when an audio stream is needed.
 
+## Morph
+
+One frame picked along the frames wired into `input`, which must share a shape: `position`
+counts in frames and loops, so 1.5 is halfway from the second to the third. `linear` mixes the
+two nearest; `spline` runs one closed Catmull-Rom curve through all of them, which passes through
+every frame and stops at none. The node runs on its own clock, so an expression on `position`
+glides between held frames — the token grids of `DINO` nodes, say, on their way to `DinoDecode` —
+and it sends nothing while neither the frames nor the point move, the frames told apart by their
+senders' stamps.
+
 ## RandomMap
 
 Map any number of inputs to `map.outputs` values through a seeded random matrix.
