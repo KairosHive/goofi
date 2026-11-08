@@ -741,27 +741,42 @@ fn a_gate_expression_opens_on_a_rising_edge_and_closes_after_its_decay() {
     }
     let probe = g.probe(out, "out");
     let level = || probe.latest().map(|d| f32s(&d)[0]);
-    let bound = g.call("node param edit",
-                       j!({ "node": hex(out), "param": "control/value",
-                            "expression": format!("gte(nd('{src_name}')[0], decay=0.5)") }));
-    assert!(bound["error"].is_null(), "{bound}");
-    g.until("a closed gate", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    // An edge is a change the expression EVALUATED: a level of 0 is also the level before its first
+    // run, so a low source counts once `out` has run since `src` sent it, never by the level alone.
+    let fed = g.probe(src, "out");
+    let heard = |low: f32| {
+        let sent = g.until("the source's low frame", |_| {
+            fed.latest().filter(|d| f32s(d)[0] == low).and_then(|d| d.meta().procend())
+        });
+        g.until("a run of the gate since that frame", |_| {
+            probe.latest().and_then(|d| d.meta().procstart()).filter(|t| *t > sent).map(|_| ())
+        });
+    };
+    // A binding reaches the node's thread on its own clock, and its FIRST evaluation is the level it
+    // starts from. So each expression is bound over a constant while the source is low: once the
+    // level leaves that constant, the new binding has run, and it started from a low source.
+    let bind_low = |expression: String| {
+        g.set_param(src, "control", "value", 0.0);
+        heard(0.0);
+        g.set_param(out, "control", "value", 0.75);
+        g.until("the constant under the binding", |_| level().filter(|v| *v == 0.75).map(|_| ()));
+        let bound = g.call("node param edit", j!({ "node": hex(out), "param": "control/value", "expression": expression }));
+        assert!(bound["error"].is_null(), "{bound}");
+        g.until("the binding live over a low source", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    };
+    bind_low(format!("gte(nd('{src_name}')[0], decay=0.5)"));
     g.set_param(src, "control", "value", 1.0);
     g.until("the gate the rising edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
     g.until("the gate the decay closed while the source stays high", |_| level().filter(|v| *v == 0.0).map(|_| ()));
     assert!(g.stays(|_| level() == Some(0.0)), "a level that never fell opened the gate again");
     g.set_param(src, "control", "value", 0.0);
     assert!(g.stays(|_| level() == Some(0.0)), "the falling edge opened the gate");
+    heard(0.0);
     g.set_param(src, "control", "value", 0.3);
     g.until("the gate the second edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
 
     // The same function shapes a gain: the level passes between 0 and 1 and comes to rest at 0.
-    let bound = g.call("node param edit",
-                       j!({ "node": hex(out), "param": "control/value",
-                            "expression": format!("gte(nd('{src_name}')[0], attack=0.3, decay=0.3, sustain=0.5, release=0.3)") }));
-    assert!(bound["error"].is_null(), "{bound}");
-    g.set_param(src, "control", "value", 0.0);
-    g.until("a closed gain", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    bind_low(format!("gte(nd('{src_name}')[0], attack=0.3, decay=0.3, sustain=0.5, release=0.3)"));
     g.set_param(src, "control", "value", 1.0);
     g.until("the gain on its way up", |_| level().filter(|v| *v > 0.0 && *v < 1.0).map(|_| ()));
     g.until("the gain at rest again", |_| level().filter(|v| *v == 0.0).map(|_| ()));

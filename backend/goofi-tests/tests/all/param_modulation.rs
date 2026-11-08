@@ -293,3 +293,36 @@ fn a_stateful_function_keeps_its_state_in_the_bindings_cell_by_call_site() {
     assert!(why.contains("at least 0"), "{why}");
     evaluator.release(bad.id);
 }
+
+/// A param that leaves a computed expression for a constant keeps its binding, and the expression
+/// comes back to that binding: by a mode given alone, and by an undo of the constant. Each return
+/// compiles the retained text again, or it reaches the node with no handle and reads as a bare target.
+#[test]
+fn a_computed_expression_a_mode_or_an_undo_brings_back_runs_again() {
+    use goofi_tests::{f32s, hex, j, Goofi};
+    let g = Goofi::new();
+    g.graph().set_evaluator(std::sync::Arc::new(PyExprEvaluator::new().unwrap()));
+    let n = g.add("_TestScalar");
+    g.set_param(n, "common", "max_frequency", 50.0);
+    g.ready(n);
+    let probe = g.probe(n, "out");
+    let level = |want: f32| probe.latest().map(|d| f32s(&d)[0]).filter(|v| *v == want).map(|_| ());
+    let edit = |change: serde_json::Value| {
+        let mut payload = j!({ "node": hex(n), "param": "control/value" });
+        payload.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+        let answer = g.call("node param edit", payload);
+        assert!(answer["error"].is_null(), "{answer}");
+    };
+
+    edit(j!({ "expression": "3 + 4" }));
+    g.until("the expression's value", |_| level(7.0));
+    edit(j!({ "value": 1 }));
+    g.until("the constant", |_| level(1.0));
+    edit(j!({ "mode": "expression" }));
+    g.until("the retained expression, back by its mode, runs", |_| level(7.0));
+
+    edit(j!({ "value": 1 }));
+    g.until("the constant again", |_| level(1.0));
+    assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
+    g.until("the expression an undo brought back runs", |_| level(7.0));
+}

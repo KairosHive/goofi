@@ -7,16 +7,21 @@ provides the shader Upscale node with linear, FSR1, and NIS modes.
 
 ## Setup
 
-Run normal goofi setup first. FluxRT additionally needs an NVIDIA GPU, CUDA
-PyTorch, and the prepared source and model weights. Normal setup does not
-download these models. From the repository root on Windows:
+Run normal goofi setup first (`cargo run -p goofi-init`). FluxRT runs on the
+GIL interpreter that setup provisions in goofi's runtime. It additionally needs
+an NVIDIA GPU, CUDA PyTorch with the matching torchvision, and the prepared
+source and model weights. Normal setup installs the CPU build of PyTorch and
+downloads none of these models. From the repository root on Windows:
 
 ```powershell
-uv pip install --python .gfivenv/Scripts/python.exe "torch==2.11.0" "torchvision==0.26.0" --index-url https://download.pytorch.org/whl/cu128
-.gfivenv/Scripts/python.exe node-bundles/image-generation/tools/prepare.py --python .gfivenv/Scripts/python.exe --root .external/FluxRT
+$py = "$env:LOCALAPPDATA\goofi\3.0.0\python\gil\Scripts\python.exe"
+uv pip install --python $py "torch==2.15.0+cu132" "torchvision==0.29.2+cu132" --index-url https://download.pytorch.org/whl/cu132
+& $py node-bundles/image-generation/tools/prepare.py --python $py --root .external/FluxRT
 ```
 
-On Linux use `.gfivenv/bin/python`. The preparation script checks the pinned
+On Linux the interpreter is `~/.local/share/goofi/3.0.0/python/gil/bin/python`.
+The version folder follows the goofi version. Run these commands again after
+setup provisions a new runtime. The preparation script checks the pinned
 FluxRT revision, applies `tools/runtime.patch`, installs its requirements, and
 downloads the checkpoint components. The patch uses Safetensors pread loading
 and disables unused runtime integrations. Use only opencv-contrib-python in

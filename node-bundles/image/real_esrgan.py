@@ -1,10 +1,35 @@
 """Upscale new RGB frames with the optional Real-ESRGAN general-x4v3 model."""
+import hashlib
+import os
 from pathlib import Path
 import time
+import urllib.request
 
 import numpy as np
 import torch
 import goofi
+
+URL = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth'
+SHA256 = '8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292'
+
+
+def fetch():
+    """The published checkpoint, from goofi's models folder; downloaded and verified once."""
+    home = Path(os.environ.get('GOOFI_HOME') or Path.home()) / '.goofi' / 'models'
+    path = home / URL.rsplit('/', 1)[-1]
+    if not path.exists():
+        home.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(f'{path.name}.{os.getpid()}')
+        try:
+            urllib.request.urlretrieve(URL, part)
+            if hashlib.sha256(part.read_bytes()).hexdigest() != SHA256:
+                raise ValueError(f'The download from {URL} does not match the published checksum')
+            part.replace(path)
+        finally:
+            part.unlink(missing_ok=True)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != SHA256:
+        raise ValueError(f'{path} is not the published realesr-general-x4v3 checkpoint; delete it to download again')
+    return path
 
 
 class Model:
@@ -69,7 +94,7 @@ class RealESRGAN(goofi.Node):
     PARAMS = {
         'runtime': {'state': goofi.StringParam('stop', options=['start', 'pause', 'stop'],
                     doc='Start loads and accepts new frames. Pause retains the model. Stop releases it.')},
-        'model': {'weights': goofi.StringParam('', doc='Absolute path to realesr-general-x4v3.pth. Stop before changing.'),
+        'model': {'weights': goofi.StringParam('', doc='Absolute path to a realesr-general-x4v3.pth. Empty downloads the published checkpoint once into goofi\'s models folder. Stop before changing.'),
                   'precision': goofi.StringParam('fp16', options=['fp16', 'fp32'],
                     doc='FP16 is faster and uses less memory. Changes apply to the next new frame.')},
         'upscale': {'scale': goofi.NumParam(4, 2, 4, int=True, options=[2, 4],
@@ -99,9 +124,9 @@ class RealESRGAN(goofi.Node):
         if precision not in ('fp16', 'fp32') or scale not in (2, 4):
             raise ValueError('Use fp16 or fp32 precision and a scale of 2 or 4')
         if self.model is None:
-            if not weights or not Path(weights).is_absolute() or not Path(weights).is_file():
-                raise ValueError('Set model/weights to the absolute path of realesr-general-x4v3.pth')
-            self.model = Model(weights)
+            if weights and (not Path(weights).is_absolute() or not Path(weights).is_file()):
+                raise ValueError('Set model/weights to the absolute path of a realesr-general-x4v3.pth, or leave it empty')
+            self.model = Model(weights or fetch())
             self.weights = weights
         if image is None:
             return None

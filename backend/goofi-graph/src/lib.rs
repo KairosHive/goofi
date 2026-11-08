@@ -887,7 +887,7 @@ impl Graph {
             let state = SourceState { mode: Mode::Expression, expression };
             let prior = self.runtime.variable_binds.shift_remove(&name).unwrap_or_else(|| Binding::fresh(state.clone()));
             let derived = self.derive(Uid::VARIABLES, &ParamKey::new("variables", &name), &state);
-            let (id, error) = self.compiled(&prior, &derived);
+            let (id, error) = self.compiled(&prior, state.mode, &derived);
             self.runtime.binds_moved |= prior.bind_error != error;
             let record = Binding { state, id, rewritten: derived.rewritten, vars: derived.vars, refs: derived.refs, bind_error: error };
             self.runtime.variable_binds.insert(name, record);
@@ -1195,7 +1195,7 @@ impl Graph {
         if self.binding(uid, key).is_some() && prior.state == state && !self.moved(uid, prior, &derived, edited) {
             return false;
         }
-        let (id, error) = self.compiled(prior, &derived);
+        let (id, error) = self.compiled(prior, state.mode, &derived);
         let record = Binding {
             state,
             id,
@@ -1225,12 +1225,14 @@ impl Graph {
         })
     }
 
-    /// The handle for a derivation: the prior one where the rewritten text is the text it
+    /// The handle for a derivation in `mode`: the prior one where the rewritten text is the text it
     /// compiled, else a fresh compile, and the prior released. A refused compile is the error. A
-    /// BARE text compiles to nothing: the engine reads its one target in Rust.
-    fn compiled(&self, prior: &Binding, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
+    /// BARE text compiles to nothing: the engine reads its one target in Rust. The mode is the
+    /// derived one, never the prior's: an expression an undo or a mode brings back to a binding
+    /// that was constant compiles.
+    fn compiled(&self, prior: &Binding, mode: Mode, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
         let evaluator = self.runtime.evaluator.as_ref();
-        if prior.state.mode == Mode::Expression && next.error.is_none() && !expr_rewrite::is_bare(&next.rewritten) {
+        if mode == Mode::Expression && next.error.is_none() && !expr_rewrite::is_bare(&next.rewritten) {
             if prior.id.is_some() && prior.rewritten == next.rewritten {
                 return (prior.id, None);
             }
