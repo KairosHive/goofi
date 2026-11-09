@@ -1,6 +1,9 @@
-# PromptMask and the prompt worker AdaptiveMask starts run on torch, which has no free-threaded wheel.
-# A CPU build works. A CUDA build makes SAM 2 live.
+# PromptMask, the prompt worker AdaptiveMask starts, MaterialEncoder and SpaceDraw run on torch, which
+# has no free-threaded wheel. A CPU build works. A CUDA build makes SAM 2 live and SpaceDraw draw in
+# under a second.
 torch>=2.6
 transformers>=4.45
+diffusers>=0.30
+peft>=0.13
 scipy>=1.11
 Pillow>=11
