@@ -15,7 +15,6 @@ here on the CPU.
 | `MaterialSpace` | a space file, and optionally a place | photographs, one photograph, their weights, a place vector | `ip_space.py`, `flights.py` | inside goofi |
 | `MaterialEncoder` | a picture, or a folder to build a space from | a place vector, a status | `ip_space.py` | own process, torch |
 | `SpaceDraw` | a place vector | a texture drawn from that place by SD 1.5 and the IP-Adapter | `ip_space.py` | own process, torch |
-| `TokenMorph` | any number of pictures, and optionally weights, a picture and a mask | the pictures morphed in DINOv2's tokens | `rae.py` | own process, torch |
 
 ## One contract
 
@@ -39,7 +38,7 @@ or an EEG map feeds `AdaptiveMask.field`.
 goofi runs a Python node inside its own process when the node's imports leave the free-threaded
 interpreter free of the GIL, and in a Python process of its own otherwise. AdaptiveMask,
 TextureTransfer and MaterialSpace import only numpy, scipy and PIL (`requirements.txt`), so they run
-inside goofi at no memory cost of their own, and any number of them fit in a patch. The four model
+inside goofi at no memory cost of their own, and any number of them fit in a patch. The three model
 nodes import torch (`requirements-gil.txt`) and each takes a process. With the CUDA build of torch,
 measured on this laptop, a process commits about 1.6 GB on import, and a PromptMask about 5.5 to
 6.4 GB once its models have cut a picture. Windows has to hold that within its commit limit (RAM
@@ -52,8 +51,6 @@ Pretrained models load on first use, from the Hugging Face cache when they are t
 | `facebook/sam2.1-hiera-small` and `IDEA-Research/grounding-dino-tiny` | PromptMask by sam 2 | 0.9 GB |
 | `CIDAS/clipseg-rd64-refined` | PromptMask by clipseg | 0.6 GB |
 | `h94/IP-Adapter`, `models/image_encoder` (CLIP ViT-H) | MaterialEncoder | 2.5 GB |
-| `facebook/dinov2-with-registers-base` | TokenMorph | 0.3 GB |
-| `nyu-visionx/RAE-collections`, `decoders/dinov2/wReg_base/ViTXL_n08_i512/model.pt` (MIT) | TokenMorph | 1.7 GB |
 | `stable-diffusion-v1-5/stable-diffusion-v1-5`, `h94/IP-Adapter` `models/ip-adapter_sd15.safetensors`, `latent-consistency/lcm-lora-sdv1-5`, `madebyollin/taesd` | SpaceDraw | 5 GB |
 
 ### CUDA
@@ -68,8 +65,8 @@ since that brings back the CPU build.
 uv pip install --python "$env:LOCALAPPDATA\goofi\3.0.0\python\gil\Scripts\python.exe" "torch==2.15.0" --index-url https://download.pytorch.org/whl/cu132 --reinstall-package torch
 ```
 
-The model nodes pick CUDA when torch reports it and fall back to the CPU otherwise. On the CPU,
-TokenMorph takes 4.5 s a frame at 512 px and SAM 2 about 20 s a new picture.
+The model nodes pick CUDA when torch reports it and fall back to the CPU otherwise. On the CPU, SAM 2
+takes about 20 s a new picture.
 
 ## AdaptiveMask
 
@@ -220,8 +217,10 @@ the last frame into the next. `scale` sets how strongly the place steers, and `p
 beside it. A MaterialSpace on a map with `pace` and `wander` set, its `place` into a SpaceDraw,
 draws a texture that wanders through the archive's materials by itself.
 
-On the CPU a 256 px frame at 2 steps took 7 s, and loading the models 45 s. It needs the CUDA build
-of torch to run live.
+With CUDA a 512 px drawing at 4 steps takes about 0.9 s for a new place, after 78 s loading the
+models the first time. On the CPU a 256 px frame at 2 steps took 7 s. Three tour stops of the
+four-star archive drew three distinct materials (rock, wet pebbles, foliage), and the place half way
+between the first two drew a weathered stone that neither photograph shows.
 
 ## MaterialEncoder
 
@@ -230,25 +229,6 @@ centre square of the picture as one 1024-number vector, so a camera into a Mater
 `MaterialSpace.place` hands on the archive's photographs nearest what the camera sees. `folder`
 and the `build` pulse make a space from a folder of photographs (subfolders are categories),
 `crops` crops of each at `detail`, in the background with its progress on the status.
-
-## TokenMorph
-
-Pictures become DINOv2's token grids once, and each frame the grids are walked or mixed, put back on
-the encoder's shell and drawn by the RAE decoder. Two materials mixed in the grid stay one surface
-at every step, where a crossfade double-exposes them.
-
-- loop. A closed Catmull-Rom curve through the pictures in wire order, `at` going round once from
-  0 to 1. `even` re-times the curve by how far the picture moves, because a straight mix of two
-  grids changes most in its middle.
-- mix. The weighted mean of the grids, by the `weights` param or a wired `weights` vector.
-
-With a wired `image` and `mask`, the morph goes only inside the mask. `keep_outside` lays the
-picture's own pixels outside it, since the decoder draws every token with all the others and a
-kept token still comes back shifted. Grids above 32 tokens a side are drawn in overlapping windows.
-
-The `ai` bundle's `DINO` (in `tokens` mode) and `DinoDecode` encode and draw the same DINOv2 grids,
-and DINOv3's, with any goofi node between them. TokenMorph holds the loop, its even timing and the
-masked morph in one node.
 
 ## Patches
 
@@ -269,29 +249,15 @@ The picture and the material are `ImageFile` nodes, or `graphics:Camera` through
    `TextureTransfer.texture`.
 5. Any map as a mask. A depth map, a DINO similarity map or a shader through `GraphicsIn` into
    `AdaptiveMask.field`, with `coverage` setting how much of it is taken.
-6. The archive as one surface. `MaterialSpace` in tour mode, `pictures` into `TokenMorph.pictures`,
-   TokenMorph in loop mode with a slow LFO on `morph/at`.
-7. A signal steering through the archive. MaterialSpace in near mode with band powers on
-   `walk/axes`, `pictures` and `weights` into TokenMorph in mix mode.
-8. The morph inside a picture. A picture into `TokenMorph.image` and an AdaptiveMask's `mask` into
-   `TokenMorph.mask`.
+6. The archive as one surface. MaterialSpace's `pictures` through the `ai` bundle's `DINO` in
+   tokens mode, `signal:Morph` between the grids and `DinoDecode` drawing them back.
+7. A material no photograph holds. MaterialSpace on a map with `pace` and `wander`, its `place`
+   into SpaceDraw, the drawing into `TextureTransfer.texture`.
 
 ## Examples
 
-- `examples/archive-prompt-texture.gfi`. An AdaptiveMask cuts the leaves out of a sunflower
-  photograph by its own prompt ("leaf"), MaterialSpace tours the four-star archive it loads by
-  itself and hands stop 8 on, and Shade and Composite lay that photograph onto the leaves in relief
-  on the GPU. The material is stretched to the picture's frame, so a Transform before Shade sets
-  its crop.
-- `examples/masks-texture-morph.gfi` extends the first patch with shaders, a second mask, map and
-  morph, LFOs and RealESRGAN. It predates PromptMask, and its two prompted masks load without their
-  prompts.
-- `examples/masks-texture-morph-light.gfi` is that patch converted, each prompted mask fed by a
-  PromptMask of its own. Its five torch processes (two PromptMasks, two TokenMorphs, RealESRGAN)
-  need about 15 to 20 GB of commit. On this laptop, with 48 GB of the 59 GB limit held by other
-  programs, it does not fit.
-
-Their paths are this machine's. Point the ImageFile nodes and `space/space` elsewhere to use others.
+`examples/markov-blanket/04-material-blanket.gfi`, in the `inference` bundle's examples, runs
+AdaptiveMask, MaterialSpace and Composite together, steered by EEG.
 
 ## Measured
 
@@ -306,11 +272,9 @@ Against the lab's own code at its 384 px reference frame (`tests/`), on syntheti
 | PromptMask | SAM 2's cut of a drawn disc against the disc | 99.7% of pixels |
 | PromptMask | its mask into AdaptiveMask's region | 99.9% of pixels kept |
 | AdaptiveMask | two prompted masks in goofi's free-threaded Python, clipseg on the CPU | one worker, 1.8 GB, ready in 20 s, the disc on 98.8% of pixels |
-| TokenMorph | a photograph through the tokens, 16-token grid | PSNR 18.9 dB |
-| TokenMorph | outside a wired mask, against the picture's own pixels | mean gap 0.004 kept, 0.131 drawn whole |
-| TokenMorph | spread of step sizes round a three-picture loop | 0.50 straight, 0.24 even |
 | MaterialSpace | tour of 6 against the lab's `flights.photographs` | the same 6 photographs |
-| MaterialSpace | a photograph of the set placed by MaterialEncoder | found first, weight 0.90 |
+| MaterialSpace | a photograph of the set placed by MaterialEncoder | found first, weight 0.90 to 0.999 |
+| SpaceDraw | three archive stops and a place between two | four distinct drawings, mean gap 0.16 between stops |
 
 Times on this laptop (RTX 4090 Laptop GPU, Core Ultra 9 185H), 512 px working frame. The light
 nodes were timed in goofi's free-threaded Python, where they run. A live frame is a new picture
@@ -326,10 +290,10 @@ each time, as from a camera.
 | PromptMask by clipseg, a new prompt | 76 to 99 ms |
 | MaterialEncoder, a picture placed | 71 ms |
 | MaterialEncoder build, 40 photographs at 2 crops each, with the model load | 26 s |
-| TokenMorph, 256 px and 512 px | 20 ms and 26 ms |
+| SpaceDraw, 512 px, 4 steps, a new place | 0.9 s |
 
-First uses load models once per node, about 20 s for SAM 2 and Grounding DINO, and 27 s for
-TokenMorph's decoder.
+First uses load models once per node, about 20 s for SAM 2 and Grounding DINO, and 78 s for
+SpaceDraw's pipeline.
 
 ## Tests
 
@@ -342,7 +306,6 @@ $py = "$env:LOCALAPPDATA\goofi\3.0.0\python\gil\Scripts\python.exe"
 & $py tests/test_material_map.py
 & $py tests/test_prompt_mask.py
 & $py tests/test_material_space.py FOLDER_OF_PHOTOGRAPHS
-& $py tests/test_token_morph.py PICTURE_A PICTURE_B PICTURE_C STRIP.png
 & $py tests/look_mask.py PICTURE TEXTURE SHEET.png
 & "$env:LOCALAPPDATA\goofi\3.0.0\python\ft\Scripts\python.exe" tests/test_prompt_worker.py clipseg cpu
 ```
@@ -377,4 +340,3 @@ no nodes.
   The From TextureMap section names each difference.
 - A lab space names its photographs by the paths they had when it was built. `space/photos` looks
   them up by name in another folder.
-- The RAE decoder redraws a photograph rather than copying it (PSNR about 19 to 21 dB).
