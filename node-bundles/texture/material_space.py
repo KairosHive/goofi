@@ -73,7 +73,8 @@ FRAMES = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"]
 def data_dir():
     """goofi's persistent data for this bundle."""
     home = pathlib.Path(os.environ.get("GOOFI_HOME") or pathlib.Path.home()) / ".goofi"
-    return home / "plugin-data" / "texture" / "spaces"
+    here, before = home / "plugin-data" / "texture" / "spaces", home / "plugin-data" / "latent-texture" / "spaces"
+    return before if before.is_dir() and not here.is_dir() else here  # spaces built by the latent-texture plugin
 
 
 # The space this node loads by itself when none is named: the four-star archive's, with its photographs.

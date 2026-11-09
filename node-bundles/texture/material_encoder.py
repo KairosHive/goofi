@@ -33,7 +33,8 @@ SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 def data_dir():
     """goofi's persistent data for this bundle, where MaterialSpace looks for built spaces."""
     home = pathlib.Path(os.environ.get("GOOFI_HOME") or pathlib.Path.home()) / ".goofi"
-    return home / "plugin-data" / "texture" / "spaces"
+    here, before = home / "plugin-data" / "texture" / "spaces", home / "plugin-data" / "latent-texture" / "spaces"
+    return before if before.is_dir() and not here.is_dir() else here  # spaces built by the latent-texture plugin
 
 
 def built_path(folder):
