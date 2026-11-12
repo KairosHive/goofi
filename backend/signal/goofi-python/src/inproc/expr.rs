@@ -11,6 +11,7 @@ use goofi_core::{Data, Meta, Value};
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator, Field, Local};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyModule, PyString};
 
 /// The Python harness. The graph has already rewritten every `nd(..)`, `sm(..)` and `vars.*` term
@@ -195,14 +196,23 @@ pub struct PyExprEvaluator {
 
 impl PyExprEvaluator {
     pub fn new() -> PyResult<PyExprEvaluator> {
+        // The harness runs ONCE for the process. A module is one per name: a second run of the
+        // source rebinds the thread local in the scope an evaluation under way reads its call
+        // from, and that evaluation finds neither its time nor its state.
+        static HARNESS: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
         crate::attach(|py| {
-            let m = PyModule::from_code(
-                py,
-                CString::new(EVAL_SRC)?.as_c_str(),
-                c"goofi_expr.py",
-                c"goofi_expr",
-            )?;
-            m.add_function(wrap_pyfunction!(qtz_core, &m)?)?;
+            let m = HARNESS
+                .get_or_try_init(py, || -> PyResult<Py<PyModule>> {
+                    let m = PyModule::from_code(
+                        py,
+                        CString::new(EVAL_SRC)?.as_c_str(),
+                        c"goofi_expr.py",
+                        c"goofi_expr",
+                    )?;
+                    m.add_function(wrap_pyfunction!(qtz_core, &m)?)?;
+                    Ok(m.unbind())
+                })?
+                .bind(py);
             Ok(PyExprEvaluator {
                 compile_fn: m.getattr("__goofi_compile")?.unbind(),
                 load_fn: m.getattr("__goofi_load")?.unbind(),

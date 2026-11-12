@@ -326,3 +326,27 @@ fn a_computed_expression_a_mode_or_an_undo_brings_back_runs_again() {
     assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
     g.until("the expression an undo brought back runs", |_| level(7.0));
 }
+
+/// Every evaluator of a process shares the one harness module, and an evaluation reads its time,
+/// range and state off that module's thread local. One made while another evaluates leaves the
+/// evaluation the call it set.
+#[test]
+fn an_evaluator_made_meanwhile_leaves_a_running_evaluation_its_call() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let wave = evaluator.compile("lfo(vmin=0, vmax=1)").unwrap();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let refused = std::thread::scope(|s| {
+        s.spawn(|| {
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                PyExprEvaluator::new().unwrap();
+            }
+        });
+        let refused = (0..20_000).find_map(|_| {
+            let ctx = EvalCtx { locals: &[], t: 0.25, range: (2.0, 6.0), state: None };
+            evaluator.eval(wave.id, &ctx).map(|d| assert_eq!(control::number_of(&d), 1.0)).err()
+        });
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        refused
+    });
+    assert!(refused.is_none(), "an evaluation lost its call: {refused:?}");
+}
