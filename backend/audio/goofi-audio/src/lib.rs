@@ -559,13 +559,18 @@ impl AudioEngine {
     }
 
     /// Take each `process` of `uid`'s current occupant to cost `cost`, not the wall time it took, so
-    /// a test judges the watchdog without racing the scheduler; `None` measures again.
-    pub fn state_cost(&mut self, uid: Uid, cost: Option<Duration>) {
-        let Some(&Instance { idx, serial, .. }) = self.live.get(&uid) else { return };
+    /// a test judges the watchdog without racing the scheduler; `None` measures again. Answers
+    /// whether the occupant was there to take it: a node reports ready just before its slot lands.
+    pub fn state_cost(&mut self, uid: Uid, cost: Option<Duration>) -> bool {
+        let Some(&Instance { idx, serial, .. }) = self.live.get(&uid) else { return false };
         let mut rt = self.runtime.lock();
         rt.apply_pending();
-        if let Some(slot) = rt.slab[idx].as_mut().filter(|s| s.serial == serial) {
-            slot.cost = cost;
+        match rt.slab[idx].as_mut().filter(|s| s.serial == serial) {
+            Some(slot) => {
+                slot.cost = cost;
+                true
+            }
+            None => false,
         }
     }
 

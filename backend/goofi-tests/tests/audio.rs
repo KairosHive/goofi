@@ -1117,7 +1117,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // so the scheduler's noise can neither take the node nor hide an overrun.
     let cost = |g: &Goofi, ms: u64| {
         let ms = std::time::Duration::from_millis(ms);
-        goofi_bridge::audio_engine(&mut g.graph()).state_cost(trap, Some(ms));
+        assert!(goofi_bridge::audio_engine(&mut g.graph()).state_cost(trap, Some(ms)), "the trap is in the plan");
     };
     cost(&g, 2);
     for _ in 0..4 {
@@ -1690,11 +1690,12 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(half, "out", voices, "input");
     let heard_voices = g.probe(voices, "out");
     // `drive` moves the audio clock alone; the signal plane runs on wall time, so this waits on it.
-    let pitches = g.until("four voices to cross into the audio plane", |g| {
+    // On the VALUES, not the width: the output is four channels wide from the re-plan the first
+    // frame asks for, and that frame enters the ring minted for it a control tick later.
+    g.until("C4, F#4, C5 and F#5 to cross into the audio plane in volts", |g| {
         drive(g, TENTH);
-        shape_held(&heard_voices).filter(|v| v.len() == 4)
+        shape_held(&heard_voices).filter(|v| *v == [0.0, 0.5, 1.0, 1.5])
     });
-    assert_eq!(pitches, vec![0.0, 0.5, 1.0, 1.5], "C4, F#4, C5 and F#5 in volts");
 
     let tone = g.add("Osc");
     let chord_bank = g.add("BandFilter");
@@ -1740,11 +1741,10 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(chord, "out", shut, "input");
     g.link(shut, "out", gates, "input");
     let heard_gates = g.probe(gates, "out");
-    let levels = g.until("a gate per voice, the first one shut", |g| {
+    g.until("a gate per voice: one voice let go, three held", |g| {
         drive(g, TENTH);
-        shape_held(&heard_gates).filter(|v| v.len() == 4)
+        shape_held(&heard_gates).filter(|v| *v == [0.0, 1.0, 1.0, 1.0])
     });
-    assert_eq!(levels, vec![0.0, 1.0, 1.0, 1.0], "one voice let go, three held");
     let gates_name = g.doc()["nodes"][hex(gates)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
@@ -1893,12 +1893,17 @@ fn nodes_that_do_not_feed_each_other_render_at_once() {
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Meet"]));
     let out = g.add("AudioOut");
-    // Both land before a block renders: one rendered alone waits out its bound every block, and
-    // eight such blocks are an overrun fault.
+    // The wait is the rendezvous, not the node's cost: a helper the scheduler seats late keeps
+    // its partner waiting past the budget, and eight such blocks are an overrun fault that takes
+    // both out for good. Their cost is stated to the watchdog, so a late block is only a tenth
+    // that is asked again.
     for _ in 0..2 {
         let meet = g.add("Meet");
         g.link(meet, "out", out, "input");
         g.ready(meet);
+        g.until("the watchdog to take a rendezvous for free", |g| {
+            goofi_bridge::audio_engine(&mut g.graph()).state_cost(meet, Some(std::time::Duration::ZERO)).then_some(())
+        });
     }
     sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
     // The helpers sit on the performance cores where the machine has a slower kind too: the
