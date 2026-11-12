@@ -130,16 +130,16 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, th, "below: half-clear red", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 0.5]));
     g.call("node remove", j!({ "node": hex(th) }));
 
-    // Step: ColorMap runs one key of the texel through colour stops; the alpha key reads 1 here,
-    // the red key 0.25, and the stop's alpha rides on the texel's own.
+    // Step: ColorMap runs one channel of the texel through its colormap; alpha reads 1 here,
+    // red 0.25, and the stop's alpha rides on the texel's own.
     let map = g.add("graphics:ColorMap");
     g.ready(map);
     g.link(c, "out", map, "input");
     g.set_param(map, "map", "colour_0", j!([0.0, 1.0, 0.0, 1.0]));
     g.set_param(map, "map", "colour_1", j!([1.0, 0.0, 1.0, 0.5]));
-    g.set_param(map, "map", "key", "alpha");
+    g.set_param(map, "map", "channel", "alpha");
     drawn(&g, map, "alpha 1 lands on the last stop", |d| close(px(d, 0, 0), [1.0, 0.0, 1.0, 0.5]));
-    g.set_param(map, "map", "key", "red");
+    g.set_param(map, "map", "channel", "red");
     drawn(&g, map, "red 0.25 is a quarter of the way", |d| close(px(d, 0, 0), [0.25, 0.75, 0.25, 0.875]));
     g.call("node remove", j!({ "node": hex(map) }));
 
