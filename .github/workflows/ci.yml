@@ -34,17 +34,22 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
+      - id: setup
+        uses: ./.github/actions/setup
       - name: Zero warnings (clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
       # Every situation of the one test binary at four threads, the runner's cores, and the
       # situations that set process-wide state in binaries of their own. `--test-threads` as a
       # flag, not `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
+      # After a lint too: one run answers both gates.
       - name: Situations
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: >
           cargo test --workspace --no-fail-fast
           --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire
-          -- --test-threads=4
+          -- --test-threads=4 2>&1 | tee situations.log
+      - if: failure()
+        uses: ./.github/actions/report
 
   browser:
     runs-on: ubuntu-latest
@@ -82,7 +87,8 @@ jobs:
         working-directory: tests/e2e
         env:
           GOOFI_E2E_WORKERS: 4
-      # Where a browser test stopped: Playwright's error context for each failed test.
+      # Where a browser test stopped: Playwright's error context for each failed test, in the log
+      # and in the job summary. The `github` reporter has already annotated the run with each.
       - if: failure()
         run: |
           for context in tests/e2e/test-results/*/error-context.md; do
@@ -90,6 +96,7 @@ jobs:
             echo "::group::$context"
             cat "$context"
             echo "::endgroup::"
+            { echo "### \`$(basename "$(dirname "$context")")\`"; echo; cat "$context"; echo; } >> "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@v7
         if: failure()
@@ -117,7 +124,8 @@ jobs:
         run: echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
       # Windows only boots: the situations are not yet proven there (roadmap/windows-cleanup.md),
       # so it builds the binaries alone. Drop both once a watched run passes.
-      - uses: ./.github/actions/setup
+      - id: setup
+        uses: ./.github/actions/setup
         with:
           targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --example plugin_host --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire' }}
       # The situations a platform can answer differently: processes and PTYs (children, agent),
@@ -129,6 +137,10 @@ jobs:
         if: runner.os != 'Windows'
         run: >
           cargo test --workspace --no-fail-fast --test all -- --test-threads=4
-          children:: io:: nodes:: plugins:: python:: session:: transport::
-      - if: runner.os != 'Windows'
-        run: cargo test --workspace --no-fail-fast --test agent --test audio --test shipped
+          children:: io:: nodes:: plugins:: python:: session:: transport:: 2>&1 | tee situations.log
+      # After a failure above too: it does not hide what these binaries would say.
+      - name: Situations in binaries of their own
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Windows' }}
+        run: cargo test --workspace --no-fail-fast --test agent --test audio --test shipped 2>&1 | tee -a situations.log
+      - if: failure()
+        uses: ./.github/actions/report

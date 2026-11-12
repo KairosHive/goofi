@@ -76,7 +76,7 @@ impl OutputProbe {
             if let Some(frame) = self.frame(g) {
                 return frame;
             }
-            assert!(std::time::Instant::now() < deadline, "timed out waiting for a frame: {what}");
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for a frame: {what}; {}", crate::said());
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
