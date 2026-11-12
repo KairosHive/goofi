@@ -2,7 +2,7 @@
 
 Defects found in a Windows audit on 2026-09-24, repaired on 2026-10-11 as far as goofi's own
 code goes. What was iceoryx2's (the handle table, the `C:\Temp` root, the DACL on its files, the
-socket per wait) went with it (`data-layer.md`); what remains needs a Windows CI runner to prove.
+socket per wait) went with it; what remains needs a Windows CI runner to prove.
 Related: `windows-agent-quoting.md`.
 
 ## Open defects in goofi
