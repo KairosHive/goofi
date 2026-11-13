@@ -2,8 +2,8 @@
 
 goofi-data is a platform of its own for datasets: it keeps, labels, derives, records and shares
 them. It is an offline tool and a management system: a full data platform. Status: planning;
-nothing is built. This file records the product decisions of 2026-11-06, 2026-11-07, 2026-11-11
-and 2026-11-12. `goofi-build.md` holds the model builder.
+nothing is built. This file records the product decisions of 2026-11-06, 2026-11-07, 2026-11-11,
+2026-11-12 and 2026-11-13. `goofi-build.md` holds the model builder.
 
 goofi-pipe records; goofi-data keeps, labels, derives and shares what was recorded; goofi-build
 makes models from it. With the online node library, the three form one ecosystem: a meeting point
@@ -13,7 +13,7 @@ goofi-data has three cornerstones. A cornerstone is a core function that constit
 and is composed with the other cornerstones:
 
 - **Storage**: datasets, their layout, their adapters, and exchange between places and people.
-- **Recipes**: derivation as a graph of stations and queues, its scheduler, and its compute adapters.
+- **Recipes**: derivation as a graph of transforms and queues, its scheduler, and its compute adapters.
 - **Acquisition**: the studio, where data enters a dataset.
 
 Exploration is not a cornerstone: goofi-data relies on the existing dataset libraries on the
@@ -71,6 +71,16 @@ one for the interface. Each section holds its decisions, its remaining work and 
 - **Shared locations.** goofi-data integrates with goofi-pipe by sharing the home
   (`~/.goofi/recordings`, `config.toml`, the node roots). A goofi-pipe recording (its folder,
   manifest and sidecars) is one of goofi-data's native dataset formats. No second copy of the data.
+- **goofi-pipe and goofi-data are libraries too.** goofi-pipe is restructured so that it is used
+  natively as a library; the same principle holds for goofi-data. goofi-data invokes goofi-pipe as
+  a library and steps through a patch; it may not need the goofi-pipe ops for that.
+- **One node graph implementation.** goofi-data reuses the implementation of the goofi-pipe node
+  graph. The transport supports queued and unqueued modes: goofi-pipe runs unqueued, goofi-data
+  runs queued. The deterministic mode of goofi-pipe (no packet ever dropped, every pipe between
+  nodes queued) is a goofi-pipe graph whose nodes are transforms and whose pipes are queues,
+  scheduled by one node evoking the next in parallel as packets arrive. The per-slot triggering
+  modes this needs are `node-triggering.md`. Much of goofi-pipe is generalized to fit goofi-pipe
+  and goofi-data both; this is a substantial change to the goofi-pipe codebase.
 - **Accounts.** One goofi account serves the whole ecosystem, for goofi-pipe and goofi-data alike.
   goofi-pipe will have a node library hosted on the internet, in the spirit of VCV Rack and
   ComfyUI: users share nodes and features and integrate them seamlessly into the system. goofi-data
@@ -270,7 +280,7 @@ The layout is straightforward and deeply file based.
   file, or a chunk in a bigger file with a clear deterministic extent: the start and end time of
   an EEG epoch in a bigger file, an image crop, and so on. A chunk sample is a file that points to
   its source and defines the extent and the method of extraction (crop, epoch, cut, ...).
-- **A file is identified by its path relative to the dataset root.** When a station supplies a
+- **A file is identified by its path relative to the dataset root.** When a transform supplies a
   chunk of a bigger file, the file's id (its relative path) lets one file hold multiple samples.
 - **Grouping of sample files.** To reduce the number of files, the sample files within a folder
   are automatically grouped into a single file that points to the respective source files via
@@ -302,7 +312,19 @@ The layout is straightforward and deeply file based.
   shared data model and implements one shared abstract interface.
 - **Apache OpenDAL** is the backend layer under the storage adapters: one Rust API over S3 (and so
   Cloudflare R2), GCS, Azure, WebDAV, SFTP, Google Drive and more, each behind a Cargo feature.
-- **Several locations.** goofi-data keeps track of several data locations at the same time.
+- **Several locations.** goofi-data keeps track of several data locations at the same time. A
+  dataset may live in multiple locations, for example remotely and locally.
+- **The data directory.** goofi-data has one default (convention) data directory where all
+  datasets are kept; external datasets, at a path outside the convention directory, are allowed.
+- **Datasets are standalone and independent.** One dataset never depends on another. A derivative
+  dataset b from a source dataset a tells that it came from a by remembering the operations that
+  produced b from a, without naming paths or referencing a directly. Both exist side by side; if
+  a is deleted, b is unaffected and sound.
+- **The adapter interface supplies state in structured form.** Each remote storage module
+  implements the abstract interface, which requires certain functions that supply the storage's
+  state in structured form. Not every remote platform supports streaming or remote inspection, so
+  the information on the data may be limited; goofi-data enables and disables features from what
+  the adapter reports.
 - **Other formats.** goofi-data works with convention datasets and with other dataset formats: it
   tries its best to parse them, loads any dataset format, and converts common other frameworks'
   datasets to goofi-data. The abstract interfaces between the convention and other formats are
@@ -313,6 +335,16 @@ The layout is straightforward and deeply file based.
 ### Exchange
 
 Remote repositories and shared datasets between people are native to data storage.
+
+- **Offline first, synced when online.** goofi-data is primarily an offline tool, and supports
+  remote data hosts and the online account. When goofi-data is offline and records to a remote
+  data platform, the data is stored locally until it is back online, then synced automatically to
+  the remote storage; the same holds for updates on the remote. Data that is only remote needs no
+  sync: it is streamed or loaded on the fly when needed.
+- **The storage panel shows the unsynchronized state**, like `git status` and `git fetch`: local
+  data waiting to become remote, remote data waiting to become local, and updates to remote data
+  that are not synced yet. One click triggers the sync. Local data is removed only when it is
+  certain that it reached the remote correctly.
 
 - goofi-data and goofi-build talk to one remote data repository that hosts personal data in the
   goofi-data format, shares datasets between people and holds collective datasets. The service
@@ -352,7 +384,11 @@ Remote repositories and shared datasets between people are native to data storag
 
 - **The name of the convention** and of the archive format.
 - **The pointer file's extent and method vocabulary** (crop, epoch, cut, ...): which methods are
-  built in and how a station declares a new one.
+  built in and how a transform declares a new one.
+- **The file layout is under revision** (2026-11-13): a path as identity does not survive the
+  move of a source into the sources directory, and an initial path clashes after several
+  transformations. The intent stands: one file serves multiple samples, and a file is a sample
+  too. To decide: how the two are told apart, and how a chunk sample points to its source.
 - How suggestions weigh the community's existing properties against a new one, and what signal
   from the ecosystem feeds them.
 
@@ -364,15 +400,14 @@ declaration.
 
 ### The recipe
 
-- **A derivative pipeline is a recipe.** A recipe is a graph: nodes are operations, edges are
-  queues. It is shown node-based, with queue lines between the nodes, in the spirit of the Cooking
+- **A derivative pipeline is a recipe.** A recipe is a graph: nodes are transforms, edges are
+  queues. The words are *transform* and *queue* (a station is a transform, a conveyor belt is a
+  queue). It is shown node-based, with queue lines between the nodes, in the spirit of the Cooking
   for Engineers recipe layout (ingredients on the left, each step a column that spans the rows it
   combines) but more visually intuitive.
-- **Stations and conveyor belts.** A station implements an algorithm that defines a given input
-  and output format. A station may extract a sample into its own unit, or supply a chunk out of a
-  file. The word for a consumer of a queue is *station*, as in a kitchen's stations, each doing
-  one step, workers assigned to the station that needs them. "Transform" names what the station
-  does, not the station.
+- **A transform** implements an algorithm that defines a given input and output format. A
+  transform may extract a sample into its own unit, or supply a chunk out of a file. Workers are
+  assigned to the transform that needs them.
 - **Everything is transforms and queues.** This is the most general form and every step of the
   derivative process follows it. The initial queue holds the files the user selected, possibly as
   tuples (pairs, triples, ...) where one transformation needs several files, for example a merge
@@ -386,12 +421,23 @@ declaration.
 - **Acyclic, with repetition of blocks.** The graph must be acyclic. The interface supports
   repetition of blocks: n repetitions of the same subgraph on the same set of inputs, producing n
   random derivative samples (one-to-many; bootstrapping for statistical analysis), or the same
-  subgraph repeated n times taking its output back in as input (one-to-one repeated n times).
+  subgraph repeated n times taking its output back in as input (one-to-one repeated n times). A
+  repetition that feeds its output back is unrolled before scheduling: explicit in the backend,
+  visually collapsed in the frontend.
 - **A goofi-pipe patch is one transformation.** A goofi-pipe patch run deterministically (every
-  frame of the source through the patch, none dropped) is one transformation. It is a goofi-pipe
-  op; goofi-data invokes it over the transport and does not run patches itself.
+  frame of the source through the patch, none dropped) is one transformation. goofi-data invokes
+  goofi-pipe as a library and steps through the patch (see the ecosystem ground); it does not run
+  patches itself.
 - **A derivation can be several steps**, for example filter, then notch, then re-reference. An
-  intermediate is never saved to disk: it is kept in memory only as long as it is needed.
+  intermediate is kept in memory as long as it is needed, and not saved to disk as a sample.
+- **Checkpoints where the user says.** A queue has a setting to checkpoint data to disk as it
+  comes through. Checkpointing is not strict beyond that.
+- **Offloading to disk when RAM runs out.** When memory is out, given the constraints, the
+  scheduler writes the intermediate representations it holds in memory to disk. It tracks which
+  data is actively needed for an imminent transform and which can be unloaded because it is
+  finished or needed only at a later stage, and offloads where necessary to free RAM.
+- **A guard around every transform.** A transform that fails, by a crash or out of memory, fails
+  safely.
 - **The configurator.** A component where procedures are selected intuitively: moving files and
   regrouping, a transformation applied to one file, to a set of files, to all files of a certain
   kind.
@@ -405,7 +451,7 @@ declaration.
   transformation. For a dataset of 10k images this is a process pool applying the transformations,
   with parallel data-loading workers feeding a data queue; data workers are spawned automatically
   when a queue is consumed faster than it is produced, up to a configured maximum.
-- **Emergently intelligent allocation.** The pool is split across the stations on a continuous
+- **Emergently intelligent allocation.** The pool is split across the transforms on a continuous
   trade-off between memory and compute: it maximizes compute utilization of the hardware while
   limiting the memory footprint. By default memory is limited to the RAM free on the machine,
   configurable to a lower target; consumers fill the CPU cores by default and can be limited. The
@@ -416,9 +462,9 @@ declaration.
 - **Resource limits change on the fly.** The scheduler limits memory and CPU, and probably GPU.
   A limit can be changed while it runs: it constrains itself down or up and reconfigures its
   scheduling on the fly.
-- **Fully resumable.** Recipes and the scheduler are fully resumable. Data is written regularly,
-  so pause and resume, or a job's expiry and restart, go through seamlessly without losing
-  progress.
+- **Fully resumable.** Recipes and the scheduler are fully resumable. Checkpoints and offloaded
+  data on disk let pause and resume, or a job's expiry and restart, go through seamlessly without
+  losing progress.
 - **Self-similarity.** Storage and recipes have the same shape, and so do the workers and queues
   inside a recipe.
 
@@ -437,7 +483,9 @@ declaration.
   transforms, the cardinality modes, and the scheduler with its memory, CPU and GPU constraints,
   changed on the fly.
 - The inner workings of the scheduler that drives optimized recipe execution.
-- Resumability: the regular write, pause and resume, expiry and restart.
+- Resumability: queue checkpoints, offloading, the transform guard, pause and resume, expiry and
+  restart.
+- The unrolling of fed-back repetitions, collapsed in the frontend.
 - The compute adapters: local direct, local Slurm, remote direct, remote Slurm.
 - The run view: the flow chart with progress across edges.
 - The deterministic runtime mode in goofi-pipe; derivatives as a tree with tracked changes.
@@ -445,10 +493,11 @@ declaration.
 
 ### Open
 
-- **The scheduler's inner workings**: the cost inputs per station, the allocation algorithm, and
-  how the regular write for resumability relates to "an intermediate is never saved to disk".
-- **How a goofi-pipe-implemented recipe runs** over the transport: which program starts goofi-pipe,
-  and what crosses the transport.
+- **The scheduler's inner workings**: the cost inputs per transform, the allocation algorithm,
+  and the offloading policy.
+- **How a goofi-pipe-implemented recipe runs** as a library inside goofi-data: what of goofi-pipe
+  is linked, and how the patch's nodes map onto transforms and queues.
+- **The default for input slot coupling** in the queued mode (`node-triggering.md`).
 - **GPU** as a scheduler resource: whether and how.
 
 ## Cornerstone: acquisition
@@ -461,14 +510,20 @@ Acquisition is where data enters a dataset: the studio.
   recorded daily while writing and listening to music. goofi-data provides a UI to configure a
   recording studio that is opened each day and is linked to a dataset where the data accumulates.
 - A preset is a **studio routine**: the studio holds them.
-- Recording interfaces are modular. Common interfaces are supported directly: writing, audio
-  recording, drawing, and the like. New custom recording interfaces come through a standardized
-  abstract interface.
+- **The studio is a raw data recording studio**: it records multimodal data in sync, with
+  accurate timing across the modalities. goofi-data records without a running goofi-pipe patch.
+- **Modalities and recorder types are modular, and mixed and matched.** A recording modality
+  (the input module) follows a general abstract interface and supplies time-stamped chunks; the
+  recorder type (the file type) follows the same principle and puts the chunks into a file, with
+  the buffering, flushing and compression logic it needs. The input module does not know the
+  recorder type: the input modality can be audio and the recorder type mp3. Common modalities are
+  supported directly: writing, audio recording, drawing, and the like. New custom recording
+  interfaces come through the abstract interface.
 - One such path is goofi-pipe patches, which the recorder links up in two ways: an existing
   running goofi-pipe patch that goofi-data links up to, or a recording patch for goofi-pipe saved
   along goofi-data that the recording studio launches directly.
-- The studio records through the shared recorder crate, so what it writes is already a dataset
-  goofi-data reads natively (tags, annotations, metadata store).
+- The studio records through goofi-data's own recorder (one recorder per program), so what it
+  writes is already a dataset goofi-data reads natively (tags, annotations, metadata store).
 
 ### Remaining
 
@@ -487,7 +542,7 @@ Not a cornerstone: the one way every cornerstone is operated.
 - **A native built-in agent** operates the software. It can search the existing dataset libraries
   on the internet.
 - **Highly modular.** The software is composed of modules behind standardized interfaces: storage
-  adapters, compute adapters, recording interfaces, stations.
+  adapters, compute adapters, recording modalities and recorder types, transforms.
 - **The frontend** uses goofi's frontend stack (SvelteKit and the shared UI library) for offline
   data management. It does not use the panel layout engine in the same way as goofi-pipe.
 
