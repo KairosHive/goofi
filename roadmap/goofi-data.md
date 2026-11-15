@@ -3,7 +3,7 @@
 goofi-data is a platform of its own for datasets: it keeps, labels, derives, records and shares
 them. It is an offline tool and a management system: a full data platform. Status: planning;
 nothing is built. This file records the product decisions of 2026-11-06, 2026-11-07, 2026-11-11,
-2026-11-12 and 2026-11-13. `goofi-build.md` holds the model builder.
+2026-11-12, 2026-11-13, 2026-11-14 and 2026-11-15. `goofi-build.md` holds the model builder.
 
 goofi-pipe records; goofi-data keeps, labels, derives and shares what was recorded; goofi-build
 makes models from it. With the online node library, the three form one ecosystem: a meeting point
@@ -69,8 +69,9 @@ one for the interface. Each section holds its decisions, its remaining work and 
 - **The data transport is shared.** goofi-data incorporates the data transport crate as its direct
   means to communicate with goofi-pipe when it runs a recipe that goofi-pipe implements.
 - **Shared locations.** goofi-data integrates with goofi-pipe by sharing the home
-  (`~/.goofi/recordings`, `config.toml`, the node roots). A goofi-pipe recording (its folder,
-  manifest and sidecars) is one of goofi-data's native dataset formats. No second copy of the data.
+  (`~/.goofi/recordings`, `config.toml`, the node roots of `library.md`). goofi-data reads a
+  goofi-pipe recording (its folder, manifest and sidecars) in place through a format adapter: no
+  second copy of the data.
 - **goofi-pipe and goofi-data are libraries too.** goofi-pipe is restructured so that it is used
   natively as a library; the same principle holds for goofi-data. goofi-data invokes goofi-pipe as
   a library and steps through a patch; it may not need the goofi-pipe ops for that.
@@ -95,8 +96,9 @@ their robustness and their API. The first step is in the goofi repository, not i
 recorder needs this work also outside the scope of goofi-data.
 
 - **The recorder's purpose is high-robustness data recording.** It does not meet that purpose
-  now: it is regularly seen to drop frames under moderate load, and its dependency on ffmpeg for
-  video is a nuisance.
+  now: it is regularly seen to drop frames under moderate load (no fixture reproduces this yet;
+  `performance-audit.md` lists the measurement), and its dependency on ffmpeg for video is a
+  nuisance.
 - **The recorder is a standalone Rust crate**, semi-independent of goofi-pipe, in the goofi
   repository. It is a module a program imports and runs in a thread, or runs directly in a process
   of its own. The interface is the same in both forms.
@@ -191,23 +193,24 @@ Work in the goofi repository, needed by goofi-data and built with it.
   uses: node to node, backend to frontend, goofi-pipe to recorder.
 - The subprocess tiers as independent nodes: what of the node thread moves into the child, the
   control connection, and the management of the processes. Run the children, python, nodes and
-  recording situations on Windows and macOS after it; the shared-memory section and the wait
-  compile on Windows but have not run there.
+  recording situations on Windows and macOS after it (`windows-cleanup.md` records the children,
+  python and transport situations passing on Windows 11 on 2026-10-11 with `--test-threads=1`; the
+  Windows CI job runs no situation).
 - The recorder as a standalone crate on the transport: the communication interface (root folder,
   session, stream registration), the thread form and the process form, the cause of the dropped
   frames found and fixed, video without ffmpeg, and the tags, annotations and metadata store.
+- **The base crates hold what the shared crates need.** `goofi_supervisor` (timing, layout,
+  session, sync, worker, child) is base and stays. The payload types and `Meta` move out of
+  `goofi_core` into a base crate that does not pull `goofi_view`. The transport's `names.rs`
+  derives every name from the graph (`Uid`, `EventId`, `GraphView`, `Ringer`, `BoundVar`, `Var`
+  of `goofi_node`) and leaves the transport. The recorder's `layout::Tool::Ffmpeg` and
+  `child::run` go with "no ffmpeg"; its `replay::read_npy` moves with the payload types. Twelve
+  crates depend on transport or record today.
 - Account management and the online node library.
 - The goofi-data binary, serving its own app the way goofi-pipe does.
 
 ### Open
 
-- **How the shared crates leave their goofi-pipe dependencies.** Timing, session ownership and
-  the frame types are in `goofi_supervisor` and `goofi_core`. Either the shared crates own what
-  they need, or a smaller base crate holds it for both.
-- **How goofi-data finds the home.** `goofi_supervisor::layout` owns every path. The path rule
-  must be shared without a dependency on goofi-pipe.
-- **Where `Meta` and the payload types live.** The transport and its Python bindings need them
-  without a dependency on goofi-pipe; they are in `goofi_core` now.
 - **The Python package `goofi`.** Whether it stays the node API of goofi-pipe or splits into the
   shared transport bindings and the node API.
 - **Two binaries** (`goofi-pipe`, `goofi-data`) are assumed; one binary would link the engines
@@ -227,12 +230,13 @@ Work in the goofi repository, needed by goofi-data and built with it.
   applies each settle (slots, bells, bindings, armed outputs), stamps the frames, clears inputs
   and reports status. Besides `Process` the child is called for `Setup`, `ParamChanged`,
   `Refresh`, `Pulse` and `Stop`. Both children can link Rust (the hosted child is the goofi
-  binary, the Python child loads the `goofi-pymod` wheel), so the runtime loop can run in the
-  child. Decide that, and where an expression that reads another node (`nd('x')`) is evaluated.
+  binary, the Python child loads the `goofi` wheel built from `goofi-pymod`), so the runtime loop
+  can run in the child. Decide that, and where an expression that reads another node (`nd('x')`)
+  is evaluated.
 - **The control connection.** A settle, a param edit, a pulse, an options refresh and a stop go to
   the child, and status and errors come back. Without a request pattern these are messages on a
-  queued connection of the same transport; a refresh's options and a recording flush's
-  acknowledgement are answers today.
+  queued connection of the same transport; a refresh's options is an answer over the exchange
+  today, and a recording flush's acknowledgement is an in-process channel.
 - **Who sees a child die.** Today the death shows at the next call. With no calls, something
   must watch the process exit. A thread per node is not needed for it; decide the one place
   (the session already lists every child).
@@ -248,70 +252,88 @@ Work in the goofi repository, needed by goofi-data and built with it.
 ## Cornerstone: storage
 
 goofi-data organizes datasets and takes care of dataset file management, across modular storage
-adapters and several locations, and exchanges datasets between places and people.
+adapters and several locations, and exchanges datasets between places and people. It aims to be
+the standard for dataset handling across data management, data loading, machine and deep learning
+and archiving: an efficient native data store with a CLI-native manipulation system, which the
+agent operates. Everything operates through goofi-data; the dataset is not human readable, and the
+ops and the export utilities do the work.
 
-### The convention
+### The dataset file
 
-- goofi-data defines its own file system convention, with a name (not chosen yet) and a validator
-  that checks a dataset's adherence. The convention defines how metadata is stored for data and
-  how data is organized hierarchically with shared groups across the hierarchy. It must support
-  ANY data format, and generalize from complex and large datasets to small custom datasets without
-  deep structure.
-- **The hierarchy.** A generic hierarchy: the folder names decide the hierarchy level names. A root
-  holds, for example, subject folders, and each subject folder holds `eeg` and `audio` folders.
-  A group is defined by its name and its level in the hierarchy by default: the `eeg` folders of
-  every subject at that level are one group, and goofi-data understands them as the same. Groups
-  across levels of the hierarchy can be linked up easily, but goofi-data never links them
-  automatically.
+- **A dataset is one file.** It is memory mapped, append-only, and holds regions: a header; the
+  blob region; the sample store; per embedding space a vector table and an index; a footer with
+  the region offsets, a checksum and the blob index. Moving a dataset is moving one file. One
+  format serves local work and transfer.
+- **Compression is an op, not a mode.** Data is not compressed by default. `dataset compress` and
+  `dataset decompress` are CLI ops, and the compressed file may carry a different suffix.
+- **Two things, named differently: blob and sample.** A *blob* is a file's bytes: raw,
+  page-aligned in the blob region, immutable once written, identified by the hash of its content,
+  carrying a codec tag (none, or the codec of a compressed blob such as a video). A blob is never
+  a sample. A *sample* is a view on a blob: `(blob, method, extent)` with its metadata inline. A
+  whole file as a sample is the view with the full extent; an EEG epoch is `(blob, epoch, start
+  to end)`; an image crop is `(blob, crop, x y w h)`. One blob serves many samples, and a file is
+  a sample too, through the same rule.
+- **A sample** is an atomic segment of data that serves the downstream purpose: a single EEG
+  epoch, a single image, a video segment, an audio segment; but also a full EEG recording, a set
+  of images, or a full video file. A dataset holds multiple kinds of samples; the same dataset
+  holds a full audio recording as a sample and its chunks as samples, all views on one blob.
+- **One read per sample.** A sample is one row of the sample store: its id (a hash of blob,
+  method and extent), its blob (resolved through the footer's blob index to an offset), dtype,
+  shape, strides, extent, method, kind (eeg, image, audio, ...), and a `meta` dictionary with the
+  whole metadata of the sample inline, with mandatory fields per kind (`sfreq` for EEG, the
+  aspect ratio for an image, ...) validated against the kind's schema. No second lookup before the
+  bytes. The dtype decides the decoder. A sliding window over an uncompressed blob is offset
+  arithmetic on the mapping; nothing is materialised.
+- **The sample store is an embedded Arrow IPC file.** Columnar: filter millions of rows by kind
+  and extent without touching the blobs; readable by pyarrow, polars and DuckDB given the byte
+  range. A blob with codec `none` is `.npy`-compatible bytes: with offset, dtype and shape from the
+  store, `numpy.memmap` reads it with no goofi code.
+- **Append-only, tombstones, compact.** Nothing moves or is rewritten in place. A new blob is
+  appended, a new store batch is appended, a new footer is written last; the old footer stays valid
+  until the new one is complete, so a crash leaves a readable file. An edit is a new row plus a
+  tombstone of the old. Offsets never shift. `dataset compact` rewrites the file without the
+  tombstones and without blobs that no sample views.
+- **Reference counting is derived from the views.** A blob stays while any sample references it:
+  to delete "the recording as a sample" deletes a view, and the blob stays for the epochs that view
+  it. A blob that no view references is garbage at compaction.
+- **Hashes make content portable; offsets are file-local.** Two transforms that produce the same
+  bytes produce the same blob once; the same epoch cut twice is one sample. A Slurm run writes one
+  file per shard and the shards merge by concatenation with rebased offsets.
+- **The hierarchy and the groups** live in the sample store. A sample carries its path in the
+  dataset's hierarchy; the level names are the dataset's (a root of subjects, each with `eeg` and
+  `audio`, for example). A group is defined by its name and its level by default: the `eeg` level
+  of every subject is one group, and goofi-data understands them as the same. Groups across levels
+  can be linked explicitly; goofi-data never links them automatically. The convention generalizes
+  from complex and large datasets to small custom datasets without deep structure, and supports
+  ANY data format.
 - **Properties.** A dataset carries the properties a model is built from: the person it was
   recorded from, tags for modalities and other labels, and its lineage. A property is set once on
   the dataset and read from there; nothing mirrors it.
 - **History.** Each dataset contains its full history: the entire tree of recipes, each with its
   full declaration. Relatives are saved in a tree, and changes are tracked.
-
-### The data layout
-
-The layout is straightforward and deeply file based.
-
-- **A sample** is an atomic segment of data that serves the downstream purpose: a single EEG
-  epoch, a single image, a video segment, an audio segment; but also a full EEG recording, a set
-  of images, or a full video file.
-- **A sample is always a file, but the file may be a pointer.** A sample is either an individual
-  file, or a chunk in a bigger file with a clear deterministic extent: the start and end time of
-  an EEG epoch in a bigger file, an image crop, and so on. A chunk sample is a file that points to
-  its source and defines the extent and the method of extraction (crop, epoch, cut, ...).
-- **A file is identified by its path relative to the dataset root.** When a transform supplies a
-  chunk of a bigger file, the file's id (its relative path) lets one file hold multiple samples.
-- **Grouping of sample files.** To reduce the number of files, the sample files within a folder
-  are automatically grouped into a single file that points to the respective source files via
-  relative paths.
-- **Sources.** The source files may live in their own source folder, unless the full file itself
-  is also a sample. A dataset can hold multiple kinds of samples; the same dataset can hold a full
-  audio file as a sample and, at the same time, chunks of that same file as samples. Then the
-  audio file lives in its own regular sample directory, the chunk samples live in their respective
-  directories, and the chunk samples point to the source file.
-- **Reference counting.** goofi-data automatically recognizes when a source file is being pointed
-  to. When a recipe deletes a source file that is referenced, the file moves from its sample
-  location (its regular relative path in the dataset) into the dataset's special sources
-  directory: it is not deleted from the dataset, it no longer serves as a sample, and it still
-  serves as a source for the chunk samples.
 - **Epochs** are one derivative feature among many: derived samples in a group of the original
-  file. They are not the focus of inspection.
+  recording. They are not the focus of inspection.
+- **The spill is a dataset.** The scheduler's queue spill is a temporary goofi-data dataset
+  created on demand: intermediate and ephemeral data, the blob region alone, raw aligned appends,
+  written and mapped by the same code as every dataset.
+- **The validator** checks a dataset's adherence to the convention. The convention has a name
+  (not chosen yet).
 
-### Archives, storage modes and adapters
+### Storage adapters and locations
 
-- **Archives.** Packaging a dataset into one goofi-data archive for transfer is a central feature.
-  Archiving compresses a dataset heavily and places it in the goofi archive format, to conserve
-  space and to transfer between machines.
-- **Two storage modes.** Archival storage holds the compressed package. Streaming storage holds a
-  dataset in a way that supports direct access to its data. Not every storage interface supports
-  both: Google Drive takes an archival adapter but likely no streaming one.
 - **Storage adapters.** One dataset convention and model, implemented across modular storage
   interfaces: the local file system, Cloudflare, AWS, Hugging Face, Google Drive, SSH access to a
   remote machine's datasets, and more. Every adapter, the local file system included, follows the
   shared data model and implements one shared abstract interface.
 - **Apache OpenDAL** is the backend layer under the storage adapters: one Rust API over S3 (and so
   Cloudflare R2), GCS, Azure, WebDAV, SFTP, Google Drive and more, each behind a Cargo feature.
+- **A remote dataset streams.** The single file is read by range: the footer first, then the
+  store, then the blobs a reader needs; OpenDAL serves range reads on every backend.
+- **The adapter interface supplies state in structured form.** Each remote storage module
+  implements the abstract interface, which requires certain functions that supply the storage's
+  state in structured form. Not every remote platform supports streaming or remote inspection, so
+  the information on the data may be limited; goofi-data enables and disables features from what
+  the adapter reports.
 - **Several locations.** goofi-data keeps track of several data locations at the same time. A
   dataset may live in multiple locations, for example remotely and locally.
 - **The data directory.** goofi-data has one default (convention) data directory where all
@@ -319,18 +341,16 @@ The layout is straightforward and deeply file based.
 - **Datasets are standalone and independent.** One dataset never depends on another. A derivative
   dataset b from a source dataset a tells that it came from a by remembering the operations that
   produced b from a, without naming paths or referencing a directly. Both exist side by side; if
-  a is deleted, b is unaffected and sound.
-- **The adapter interface supplies state in structured form.** Each remote storage module
-  implements the abstract interface, which requires certain functions that supply the storage's
-  state in structured form. Not every remote platform supports streaming or remote inspection, so
-  the information on the data may be limited; goofi-data enables and disables features from what
-  the adapter reports.
+  a is deleted, b is unaffected and sound. A derivative holds its own copy of the blobs it views;
+  a local adapter may hardlink identical blobs between datasets, which changes nothing observable.
 - **Other formats.** goofi-data works with convention datasets and with other dataset formats: it
   tries its best to parse them, loads any dataset format, and converts common other frameworks'
-  datasets to goofi-data. The abstract interfaces between the convention and other formats are
+  datasets to goofi-data; import into the format from various other formats, and export into
+  various formats. The abstract interfaces between the convention and other formats are
   standardized, so conversion and transfer go through efficient channels: moving a dataset
   between locations (AWS to local, local to Drive, ...). **BIDS is an import and export utility**,
-  not at the core of goofi-data.
+  not at the core of goofi-data. A goofi-pipe recording is read in place through its format
+  adapter.
 
 ### Exchange
 
@@ -345,7 +365,6 @@ Remote repositories and shared datasets between people are native to data storag
   data waiting to become remote, remote data waiting to become local, and updates to remote data
   that are not synced yet. One click triggers the sync. Local data is removed only when it is
   certain that it reached the remote correctly.
-
 - goofi-data and goofi-build talk to one remote data repository that hosts personal data in the
   goofi-data format, shares datasets between people and holds collective datasets. The service
   is not chosen. Upload, download and sharing go through the goofi account.
@@ -355,24 +374,85 @@ Remote repositories and shared datasets between people are native to data storag
 - The suggestion must not constrain: the person expands the ecosystem's properties as freely as
   they adopt existing ones. Suggesting only what exists is the failure to design against.
 
+### Embeddings and search
+
+- **Embedding spaces.** A dataset declares embedding spaces by name (`clip`, `dino`), each with
+  its dimension, dtype, metric and the transform that produces it. A sample holds zero or more
+  vectors, each in one space: an image dataset carries CLIP vectors for text search and DINO
+  vectors at the same time. The recipe that embeds a dataset is an ordinary transform that writes
+  into a space; goofi-data stores vectors and does not own models.
+- **One vector table per space**, not a column of the sample row: append-only `(sample id,
+  vector)` with a contiguous, aligned matrix. Adding a space to ten million samples touches no
+  sample row; a space is dropped by dropping one table; a sample load does not read its vectors.
+- **Native vector search.** Every embedding is rotated by a seeded fast Walsh–Hadamard transform
+  (a sign flip per coordinate, nothing stored) and reduced to the sign of each coordinate: one bit
+  per dimension, d/8 bytes per vector (64 B at d = 512, 192 B at d = 1536). A query runs three
+  stages, each a filter for the next: a scan of the codes (XOR and popcount, threads over chunks)
+  keeps the best 4R; those 4R are rescored with the query at 4 bits per dimension and the best R
+  kept; those R are re-ranked exactly from the mapped vector table, and the top k returned.
+- **Two tiers, one scan.** While a space's code plane is under about 64 MB the scan is flat.
+  Above, the plane is partitioned into lists (256 per 200k vectors, scaled with N), every vector
+  routed by the same scan to its nearest centroid code; a query scans the centroid codes, takes
+  the nearest P lists, and scans those. The centroids are trained with e-means (Meta FAIR, 2026;
+  MIT; reimplemented): an exponential moving average of mass and position per centroid, a cosine
+  step schedule, batch and step derived from n, k and the epochs, split revival of unused
+  centroids, and an exact mean at the end. It needs no initialization scheme and no settings.
+- **The index is derived.** It lives in the file as the code plane in row order plus a list id per
+  row, is loaded as it is, and is rebuildable from the vector table in seconds. Append encodes,
+  routes and pushes one row. Delete is the sample's tombstone, which the scan skips. `compact`
+  regroups the plane and retrains the centroids when N has doubled since training.
+- **One knob.** `accuracy` ∈ {fast, default, high} sets the re-rank depth R ∈ {100, 200, 500} and
+  the lists probed P ∈ {4, 8, 16} per 256. It is calibrated at build on held-out vectors against
+  an exact scan, so it means a measured recall on this data.
+- **Measured** (2026-11-15, a probe on synthetic clustered data, 200k vectors at d = 512, 100
+  queries, one core of this sandbox; estimates beyond it): a flat scan takes 0.95 to 1.7 ms and a
+  partitioned query 0.1 ms, against 95 to 102 ms for the exact f32 scan. Recall@10 at R = 200 is
+  0.999 on low-intrinsic-dimension data and 0.92 on hard data (0.97 with the 4-bit rescoring, 0.999
+  at R = 500); 8 probes of 256 lists reach the flat scan's recall at 3 % of the work. The
+  per-vector correction factor of RaBitQ gave nothing and is dropped; a full asymmetric scan costs
+  4.5× and is used on candidates only. e-means reached the loss of 25 Lloyd iterations in 46 s
+  against 381 s, with no empty list where Lloyd left 4 to 5; partition quality did not change
+  recall at 8 probes. Isotropic data defeats one-bit codes (0.70 at R = 500), as it defeats every
+  method.
+- **Sizes.** Codes only, d/8 per vector: 1M × 512 is 64 MB, 1M × 1536 is 192 MB, 10M × 1536 is
+  1.9 GB; plus 2 B per row and the centroids when partitioned. The f32 vector table at 1M × 1536
+  is 6.1 GB and exists in any case.
+- **Lean implementation**, pure Rust, no C++ dependency: rotation, encoding, the scan, the
+  rescoring, the re-rank, e-means, the lists, the index region, the ops; about 325 lines plus
+  about 150 lines of situations, under 1k with room for a 2-bit plane and the calibration.
+- **The query op.** `sample search --space clip -k 10`, with the query vector from a file or
+  `--like <sample id>`. A text query against a CLIP space needs the text encoder: a transform run
+  on demand, not a storage feature.
+
 ### Management and inspection
 
-- **The dashboard.** Manage, view, inspect, archive and move datasets across adapters and between
+- **The dashboard.** Manage, view, inspect, compress and move datasets across adapters and between
   formats.
 - **Inspection.** Standard metrics and inspections, and arbitrary Python commands run over the
-  data: count certain files after a filter, list targeted information, and the like.
+  data: count certain samples after a filter, list targeted information, and the like.
 
 ### Remaining
 
 - Research (2026-11-07, done; the findings live in the planning page and its two reports, not
   here): storage platforms, external sources, and the structure of the convention.
-- Name the convention and define it: metadata per level, groups by name and level, explicit
-  links between groups across levels, the validator, the archive format, the streaming layout.
-- The data layout: the sample file, the pointer file (source, extent, method), the grouped file
-  per folder, the sources directory, reference counting, and the history inside the dataset.
-- The shared abstract storage interface on OpenDAL and its first adapters; which adapters support
-  archival, which streaming.
-- Parsers and converters for other formats and standards (BIDS first, as a utility).
+- Name the convention and define the file: the header, the regions, the footer and the blob index,
+  the sample store schema, the per-kind metadata schemas with their mandatory fields, the method
+  and extent vocabulary, the hierarchy fields, the history records, the validator.
+- Append, tombstone and `compact`; the footer protocol under a crash; the concatenation merge of
+  shard files.
+- The spill dataset.
+- `dataset compress` and `dataset decompress`, and the suffix.
+- The storage interface on OpenDAL and its first adapters; range reads for a remote dataset; what
+  each adapter reports.
+- Parsers and converters for other formats (BIDS first, as a utility; goofi-pipe recordings in
+  place).
+- Embedding spaces and the vector search: the code plane, the scan, the rescoring, the re-rank,
+  e-means and the lists, the tiers, the knob and its calibration; `sample search` and
+  `index rebuild`; situations for recall against an exact scan on a fixture, append then search,
+  a tombstoned sample skipped, and a rebuild after `compact`.
+- Experiments before the index is final: recall on real EEG, audio and image embeddings; scan rate
+  and thread scaling on Apple silicon and Windows; the flat-to-partitioned switch point from those
+  numbers; whether spaces at d ≤ 512 need a 2-bit plane.
 - The dashboard panels: overview across datasets, one dataset, a set of datasets compared,
   inspect history. Revise the Derive mock-up accordingly: epochs are one recipe among many, not
   the focus.
@@ -382,13 +462,14 @@ Remote repositories and shared datasets between people are native to data storag
 
 ### Open
 
-- **The name of the convention** and of the archive format.
-- **The pointer file's extent and method vocabulary** (crop, epoch, cut, ...): which methods are
-  built in and how a transform declares a new one.
-- **The file layout is under revision** (2026-11-13): a path as identity does not survive the
-  move of a source into the sources directory, and an initial path clashes after several
-  transformations. The intent stands: one file serves multiple samples, and a file is a sample
-  too. To decide: how the two are told apart, and how a chunk sample points to its source.
+- **The name of the convention**, and the file suffix, plain and compressed.
+- **The hash function** (BLAKE3 is the candidate), and whether the store's blob column holds the
+  hash, the offset, or both.
+- **The chunk methods** (crop, epoch, cut, ...): which are built in and how a transform declares
+  one.
+- **Annotations**: their time base and extent, and how a span survives a windowing transform.
+- **A search combined with a property filter**: post-filter with over-fetch is the opinionated
+  answer and fails on a very selective filter; decide when the filter language exists.
 - How suggestions weigh the community's existing properties against a new one, and what signal
   from the ecosystem feeds them.
 
@@ -401,19 +482,19 @@ declaration.
 ### The recipe
 
 - **A derivative pipeline is a recipe.** A recipe is a graph: nodes are transforms, edges are
-  queues. The words are *transform* and *queue* (a station is a transform, a conveyor belt is a
-  queue). It is shown node-based, with queue lines between the nodes, in the spirit of the Cooking
+  queues. The words are *transform* and *queue*. It is shown node-based, with queue lines between the nodes, in the spirit of the Cooking
   for Engineers recipe layout (ingredients on the left, each step a column that spans the rows it
   combines) but more visually intuitive.
 - **A transform** implements an algorithm that defines a given input and output format. A
-  transform may extract a sample into its own unit, or supply a chunk out of a file. Workers are
-  assigned to the transform that needs them.
+  transform may write a new blob, or supply a chunk sample out of an existing blob (a view, no
+  copy). Workers are assigned to the transform that needs them.
 - **Everything is transforms and queues.** This is the most general form and every step of the
-  derivative process follows it. The initial queue holds the files the user selected, possibly as
-  tuples (pairs, triples, ...) where one transformation needs several files, for example a merge
-  of two files into one. Its consumer is data loading, which feeds a queue of loaded data, again
+  derivative process follows it. The initial queue holds the samples the user selected, possibly
+  as tuples (pairs, triples, ...) where one transformation needs several samples, for example a
+  merge of two into one. Its consumer is data loading, which feeds a queue of loaded data, again
   possibly in tuples of paired samples. That queue is consumed by a transformation, followed by a
-  queue, and so on, all the way to writer transformations that write the data back into files.
+  queue, and so on, all the way to writer transformations that write the data back into a
+  dataset's blobs and samples.
 - **Cardinality modes.** One-to-one: one sample produces a new transformed sample (bandpass
   filtering). One-to-many: one sample produces multiple downstream samples (splitting a long
   recording into windows). Many-to-one: multiple samples merge into a single one (correlation of
@@ -435,12 +516,13 @@ declaration.
 - **Offloading to disk when RAM runs out.** When memory is out, given the constraints, the
   scheduler writes the intermediate representations it holds in memory to disk. It tracks which
   data is actively needed for an imminent transform and which can be unloaded because it is
-  finished or needed only at a later stage, and offloads where necessary to free RAM.
+  finished or needed only at a later stage, and offloads where necessary to free RAM. The spill
+  is a temporary dataset created on demand (storage).
 - **A guard around every transform.** A transform that fails, by a crash or out of memory, fails
   safely.
-- **The configurator.** A component where procedures are selected intuitively: moving files and
-  regrouping, a transformation applied to one file, to a set of files, to all files of a certain
-  kind.
+- **The configurator.** A component where procedures are selected intuitively: moving samples
+  and regrouping, a transformation applied to one sample, to a set of samples, to all samples of a
+  certain kind.
 - **The run view.** The frontend of a running recipe is a dependency graph of steps, like a flow
   chart, with the progress represented across the edges.
 
@@ -477,7 +559,7 @@ declaration.
 
 ### Remaining
 
-- The recipe configurator: selecting procedures over files, sets and kinds; multi-step recipes;
+- The recipe configurator: selecting procedures over samples, sets and kinds; multi-step recipes;
   the node-based recipe view with queue lines; repetition blocks.
 - The transform-and-queue runtime: the shared worker pool, tuple queues, loader and writer
   transforms, the cardinality modes, and the scheduler with its memory, CPU and GPU constraints,
@@ -523,7 +605,8 @@ Acquisition is where data enters a dataset: the studio.
   running goofi-pipe patch that goofi-data links up to, or a recording patch for goofi-pipe saved
   along goofi-data that the recording studio launches directly.
 - The studio records through goofi-data's own recorder (one recorder per program), so what it
-  writes is already a dataset goofi-data reads natively (tags, annotations, metadata store).
+  writes is already a dataset goofi-data reads natively (tags, annotations, metadata store): a
+  recorder type writes the dataset file directly, blobs and sample rows, with no conversion.
 
 ### Remaining
 
