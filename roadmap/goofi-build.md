@@ -1,8 +1,8 @@
 # goofi-build
 
 goofi-build is a program of the goofi repository, next to goofi-pipe and goofi-data
-(`goofi-data.md`, ecosystem ground). It makes models from goofi-data datasets. It is not a plugin: it runs on its own and is connected
-to the ecosystem through the home, the stack and the account. Status: planning; nothing is
+(`goofi-data.md`, ecosystem ground). It makes models from goofi-data datasets. It is not a plugin:
+it runs on its own and is connected to the ecosystem through the home, the stack and the account. Status: planning; nothing is
 built. goofi-data comes first (`goofi-data.md`); goofi-build is for a later session.
 
 ## Decisions

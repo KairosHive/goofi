@@ -482,9 +482,9 @@ declaration.
 ### The recipe
 
 - **A derivative pipeline is a recipe.** A recipe is a graph: nodes are transforms, edges are
-  queues. The words are *transform* and *queue*. It is shown node-based, with queue lines between the nodes, in the spirit of the Cooking
-  for Engineers recipe layout (ingredients on the left, each step a column that spans the rows it
-  combines) but more visually intuitive.
+  queues. The words are *transform* and *queue*. It is shown node-based, with queue lines between
+  the nodes, in the spirit of the Cooking for Engineers recipe layout (ingredients on the left,
+  each step a column that spans the rows it combines) but more visually intuitive.
 - **A transform** implements an algorithm that defines a given input and output format. A
   transform may write a new blob, or supply a chunk sample out of an existing blob (a view, no
   copy). Workers are assigned to the transform that needs them.
