@@ -13,7 +13,8 @@ goofi-data has three cornerstones. A cornerstone is a core function that constit
 and is composed with the other cornerstones:
 
 - **Storage**: datasets, their layout, their adapters, and exchange between places and people.
-- **Recipes**: derivation as a graph of transforms and queues, its scheduler, and its compute adapters.
+- **Recipes**: derivation as a graph of transforms and queues, its scheduler, and its compute
+  adapters.
 - **Acquisition**: the studio, where data enters a dataset.
 
 Exploration is not a cornerstone: goofi-data relies on the existing dataset libraries on the
@@ -36,8 +37,8 @@ one for the interface. Each section holds its decisions, its remaining work and 
 - **The present program is renamed goofi-pipe.** "goofi" names only what is shared: the
   repository, the home `~/.goofi`, the account, the shared crates and the shared frontend library.
 - **Three layers.** Shared base (timing, layout, session, payload types and `Meta`, transport,
-  recorder) → goofi-pipe (graph, runtime, engines, bridge, CLI) → goofi-data. goofi-data builds on
-  the base and never on goofi-pipe; neither application depends on the other. A situation in the
+  recorder) → goofi-pipe (graph, runtime, engines, bridge, CLI) → goofi-data. goofi-data builds
+  on the base and never on goofi-pipe; neither application depends on the other. A situation in the
   tests crate asserts the rule from the crate graph.
 - **Prefixes.** `goofi-` for shared ecosystem crates (the base crates keep their names), `gp-` for
   goofi-pipe crates, `gd-` for goofi-data crates. The present `goofi-build` crate (the node library
@@ -401,8 +402,8 @@ Remote repositories and shared datasets between people are native to data storag
   row, is loaded as it is, and is rebuildable from the vector table in seconds. Append encodes,
   routes and pushes one row. Delete is the sample's tombstone, which the scan skips. `compact`
   regroups the plane and retrains the centroids when N has doubled since training.
-- **One knob.** `accuracy` ∈ {fast, default, high} sets the re-rank depth R ∈ {100, 200, 500} and
-  the lists probed P ∈ {4, 8, 16} per 256. It is calibrated at build on held-out vectors against
+- **One knob.** `accuracy` ∈ {fast, default, high} sets the re-rank depth R ∈ {100, 200, 500}
+  and the lists probed P ∈ {4, 8, 16} per 256. It is calibrated at build on held-out vectors against
   an exact scan, so it means a measured recall on this data.
 - **Measured** (2026-11-15, a probe on synthetic clustered data, 200k vectors at d = 512, 100
   queries, one core of this sandbox; estimates beyond it): a flat scan takes 0.95 to 1.7 ms and a
