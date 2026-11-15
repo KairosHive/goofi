@@ -403,8 +403,8 @@ Remote repositories and shared datasets between people are native to data storag
   routes and pushes one row. Delete is the sample's tombstone, which the scan skips. `compact`
   regroups the plane and retrains the centroids when N has doubled since training.
 - **One knob.** `accuracy` ∈ {fast, default, high} sets the re-rank depth R ∈ {100, 200, 500}
-  and the lists probed P ∈ {4, 8, 16} per 256. It is calibrated at build on held-out vectors against
-  an exact scan, so it means a measured recall on this data.
+  and the lists probed P ∈ {4, 8, 16} per 256. It is calibrated at build on held-out vectors
+  against an exact scan, so it means a measured recall on this data.
 - **Measured** (2026-11-15, a probe on synthetic clustered data, 200k vectors at d = 512, 100
   queries, one core of this sandbox; estimates beyond it): a flat scan takes 0.95 to 1.7 ms and a
   partitioned query 0.1 ms, against 95 to 102 ms for the exact f32 scan. Recall@10 at R = 200 is
