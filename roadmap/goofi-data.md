@@ -308,6 +308,15 @@ ops and the export utilities do the work.
 - **Reference counting is derived from the views.** A blob stays while any sample references it:
   to delete "the recording as a sample" deletes a view, and the blob stays for the epochs that view
   it. A blob that no view references is garbage at compaction.
+- **Editing is native and costs no copy.** The unit of change is the sample row. To delete three
+  samples from a large dataset writes three tombstones; to change a property writes new rows and
+  tombstones; to replace a recording's data writes one new blob and the rows that view it. A
+  derivative applies in place when its target is the dataset it reads: it appends its outputs,
+  tombstones what it replaces, and records itself in the history like any other run. Until
+  `compact` reclaims them, the tombstoned rows and blobs are still there, so an in-place run is
+  reverted by one more append. Space is reclaimed by `compact` alone, on demand, before a transfer
+  or sync, or when dead bytes pass a fraction of the file; it needs twice the file's size while it
+  runs.
 - **Hashes make content portable; offsets are file-local.** Two transforms that produce the same
   bytes produce the same blob once; the same epoch cut twice is one sample. A Slurm run writes one
   file per shard and the shards merge by concatenation with rebased offsets.
