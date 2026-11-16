@@ -3,7 +3,8 @@
 goofi-data is a platform of its own for datasets: it keeps, labels, derives, records and shares
 them. It is an offline tool and a management system: a full data platform. Status: planning;
 nothing is built. This file records the product decisions of 2026-11-06, 2026-11-07, 2026-11-11,
-2026-11-12, 2026-11-13, 2026-11-14, 2026-11-15 and 2026-11-16. `goofi-build.md` holds the model builder.
+2026-11-12, 2026-11-13, 2026-11-14, 2026-11-15 and 2026-11-16. `goofi-build.md` holds the model
+builder.
 
 goofi-pipe records; goofi-data keeps, labels, derives and shares what was recorded; goofi-build
 makes models from it. With the online node library, the three form one ecosystem: a meeting point
@@ -312,9 +313,10 @@ ops and the export utilities do the work.
   file per shard and the shards merge by concatenation with rebased offsets.
 - **The hierarchy and the groups** live in the sample store. A sample carries its path, the
   levels separated by slashes (`sub-01/eeg/...`); the level names are the dataset's (a root of
-  subjects, each with `eeg` and `audio`, for example). A group is defined by its name and its level by default: the `eeg` level
-  of every subject is one group, and goofi-data understands them as the same. Groups across levels
-  can be linked explicitly; goofi-data never links them automatically. The convention generalizes
+  subjects, each with `eeg` and `audio`, for example). A group is defined by its name and its
+  level by default: the `eeg` level of every subject is one group, and goofi-data understands them
+  as the same. Groups across levels can be linked explicitly; goofi-data never links them
+  automatically. The convention generalizes
   from complex and large datasets to small custom datasets without deep structure, and supports
   ANY data format.
 - **Properties.** A dataset carries the properties a model is built from: the person it was
