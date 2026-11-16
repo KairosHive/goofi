@@ -79,11 +79,12 @@ one for the interface. Each section holds its decisions, its remaining work and 
   a library and steps through a patch; it may not need the goofi-pipe ops for that.
 - **One node graph implementation.** goofi-data reuses the implementation of the goofi-pipe node
   graph. The transport supports queued and unqueued modes: goofi-pipe runs unqueued, goofi-data
-  runs queued. The deterministic mode of goofi-pipe (no packet ever dropped, every pipe between
-  nodes queued) is a goofi-pipe graph whose nodes are transforms and whose pipes are queues,
-  scheduled by one node evoking the next in parallel as packets arrive. The per-slot triggering
-  modes this needs are `node-triggering.md`. Much of goofi-pipe is generalized to fit goofi-pipe
-  and goofi-data both; this is a substantial change to the goofi-pipe codebase.
+  runs queued. The lossless mode of goofi-pipe (no packet ever dropped, every pipe between nodes a
+  queue) is a Kahn network: a goofi-pipe graph whose nodes are transforms and whose pipes are
+  queues, scheduled by one node evoking the next in parallel as packets arrive, in data time, with
+  the audio and graphics engines as nodes of the same network so their effects apply over datasets
+  deterministically. The rules are `node-triggering.md`. Much of goofi-pipe is generalized to fit
+  goofi-pipe and goofi-data both; this is a substantial change to the goofi-pipe codebase.
 - **Accounts.** One goofi account serves the whole ecosystem, for goofi-pipe and goofi-data alike.
   goofi-pipe will have a node library hosted on the internet, in the spirit of VCV Rack and
   ComfyUI: users share nodes and features and integrate them seamlessly into the system. goofi-data
@@ -535,10 +536,10 @@ declaration.
   subgraph repeated n times taking its output back in as input (one-to-one repeated n times). A
   repetition that feeds its output back is unrolled before scheduling: explicit in the backend,
   visually collapsed in the frontend.
-- **A goofi-pipe patch is one transformation.** A goofi-pipe patch run deterministically (every
-  frame of the source through the patch, none dropped) is one transformation. goofi-data invokes
-  goofi-pipe as a library and steps through the patch (see the ecosystem ground); it does not run
-  patches itself.
+- **A goofi-pipe patch is one transformation.** A goofi-pipe patch run in the lossless mode
+  (every frame of the source through the patch, none dropped, in data time; `node-triggering.md`)
+  is one transformation. goofi-data invokes goofi-pipe as a library (see the ecosystem ground); it
+  does not run patches itself.
 - **A derivation can be several steps**, for example filter, then notch, then re-reference. An
   intermediate is kept in memory as long as it is needed, and not saved to disk as a sample.
 - **Checkpoints where the user says.** A queue has a setting to checkpoint data to disk as it
@@ -600,7 +601,8 @@ declaration.
 - The unrolling of fed-back repetitions, collapsed in the frontend.
 - The compute adapters: local direct, local Slurm, remote direct, remote Slurm.
 - The run view: the flow chart with progress across edges.
-- The deterministic runtime mode in goofi-pipe; derivatives as a tree with tracked changes.
+- The lossless mode in goofi-pipe (`node-triggering.md`); derivatives as a tree with tracked
+  changes.
 - The dashboard panel for the recipe configurator and the run view.
 
 ### Open
@@ -609,6 +611,10 @@ declaration.
   and the offloading policy.
 - **How a goofi-pipe-implemented recipe runs** as a library inside goofi-data: what of goofi-pipe
   is linked, and how the patch's nodes map onto transforms and queues.
+- **Whether every recipe is a goofi-pipe Kahn network**, a mode of the goofi-pipe engines, with
+  the dataset loader and writer as nodes, a sample as a delimited stretch of a stream, and
+  goofi-data's scheduler over network instances, replicas and queue depths; or whether goofi-data
+  keeps a transform-and-queue runtime of its own beside it.
 - **The default for input slot coupling** in the queued mode (`node-triggering.md`).
 - **GPU** as a scheduler resource: whether and how.
 
