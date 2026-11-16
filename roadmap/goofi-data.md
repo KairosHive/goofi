@@ -3,7 +3,7 @@
 goofi-data is a platform of its own for datasets: it keeps, labels, derives, records and shares
 them. It is an offline tool and a management system: a full data platform. Status: planning;
 nothing is built. This file records the product decisions of 2026-11-06, 2026-11-07, 2026-11-11,
-2026-11-12, 2026-11-13, 2026-11-14 and 2026-11-15. `goofi-build.md` holds the model builder.
+2026-11-12, 2026-11-13, 2026-11-14, 2026-11-15 and 2026-11-16. `goofi-build.md` holds the model builder.
 
 goofi-pipe records; goofi-data keeps, labels, derives and shares what was recorded; goofi-build
 makes models from it. With the online node library, the three form one ecosystem: a meeting point
@@ -263,8 +263,10 @@ ops and the export utilities do the work.
 
 - **A dataset is one file.** It is memory mapped, append-only, and holds regions: a header; the
   blob region; the sample store; per embedding space a vector table and an index; a footer with
-  the region offsets, a checksum and the blob index. Moving a dataset is moving one file. One
-  format serves local work and transfer.
+  the region offsets, a checksum and the blob index (per blob: hash, offset, length, codec, and
+  for an array blob its dtype and natural shape). A blob has no inline header, so its offset
+  points at the bytes. Moving a dataset is moving one file. One format serves local work and
+  transfer. The sample layout is flat.
 - **Compression is an op, not a mode.** Data is not compressed by default. `dataset compress` and
   `dataset decompress` are CLI ops, and the compressed file may carry a different suffix.
 - **Two things, named differently: blob and sample.** A *blob* is a file's bytes: raw,
@@ -278,6 +280,14 @@ ops and the export utilities do the work.
   epoch, a single image, a video segment, an audio segment; but also a full EEG recording, a set
   of images, or a full video file. A dataset holds multiple kinds of samples; the same dataset
   holds a full audio recording as a sample and its chunks as samples, all views on one blob.
+- **A sample may view several blobs**, one per stream, each with its own dtype, shape and rate,
+  under one time base. A studio recording of audio and EEG is one sample in the selected dataset:
+  an audio blob, an EEG blob, and one row that views both, paired and synchronized. The row's blob
+  column is a list of `(stream, blob, extent)`; a transform that epochs the EEG views the EEG blob
+  alone.
+- **Writers write whole.** A one-to-many transform whose outputs share a shape writes them as one
+  blob `[n, ...]`, each sample a view on index i: all epochs of a recording are one array on disk,
+  memory mapped as a whole, and one sample each.
 - **One read per sample.** A sample is one row of the sample store: its id (a hash of blob,
   method and extent), its blob (resolved through the footer's blob index to an offset), dtype,
   shape, strides, extent, method, kind (eeg, image, audio, ...), and a `meta` dictionary with the
@@ -300,9 +310,9 @@ ops and the export utilities do the work.
 - **Hashes make content portable; offsets are file-local.** Two transforms that produce the same
   bytes produce the same blob once; the same epoch cut twice is one sample. A Slurm run writes one
   file per shard and the shards merge by concatenation with rebased offsets.
-- **The hierarchy and the groups** live in the sample store. A sample carries its path in the
-  dataset's hierarchy; the level names are the dataset's (a root of subjects, each with `eeg` and
-  `audio`, for example). A group is defined by its name and its level by default: the `eeg` level
+- **The hierarchy and the groups** live in the sample store. A sample carries its path, the
+  levels separated by slashes (`sub-01/eeg/...`); the level names are the dataset's (a root of
+  subjects, each with `eeg` and `audio`, for example). A group is defined by its name and its level by default: the `eeg` level
   of every subject is one group, and goofi-data understands them as the same. Groups across levels
   can be linked explicitly; goofi-data never links them automatically. The convention generalizes
   from complex and large datasets to small custom datasets without deep structure, and supports
@@ -342,8 +352,8 @@ ops and the export utilities do the work.
 - **Datasets are standalone and independent.** One dataset never depends on another. A derivative
   dataset b from a source dataset a tells that it came from a by remembering the operations that
   produced b from a, without naming paths or referencing a directly. Both exist side by side; if
-  a is deleted, b is unaffected and sound. A derivative holds its own copy of the blobs it views;
-  a local adapter may hardlink identical blobs between datasets, which changes nothing observable.
+  a is deleted, b is unaffected and sound. A derivative holds a copy of only what it needs; blobs
+  are never linked between datasets, and every dataset file works when every other is deleted.
 - **Other formats.** goofi-data works with convention datasets and with other dataset formats: it
   tries its best to parse them, loads any dataset format, and converts common other frameworks'
   datasets to goofi-data; import into the format from various other formats, and export into
@@ -382,9 +392,17 @@ Remote repositories and shared datasets between people are native to data storag
   vectors, each in one space: an image dataset carries CLIP vectors for text search and DINO
   vectors at the same time. The recipe that embeds a dataset is an ordinary transform that writes
   into a space; goofi-data stores vectors and does not own models.
-- **One vector table per space**, not a column of the sample row: append-only `(sample id,
-  vector)` with a contiguous, aligned matrix. Adding a space to ten million samples touches no
-  sample row; a space is dropped by dropping one table; a sample load does not read its vectors.
+- **One vector table per space**, not a column of the sample row: two parallel arrays, `ids [N]`
+  (the sample hashes) and `vectors [N, d]` in the space's dtype, contiguous and page-aligned, so
+  the vectors are a plain matrix. Adding a space to ten million samples touches no sample row; a
+  space is dropped by dropping one table; a sample load does not read its vectors.
+- **The vectors are accessible directly**, as memory-mapped arrays: `space info <name>` gives the
+  offset, dtype and shape of the matrix and of the code plane, and the Python side returns the
+  memmap, so a UMAP fits on a dataset's embeddings with nothing of ours in between.
+- **Contiguity is a rule about writers.** The transform that embeds a dataset writes the space's
+  table whole, as one slab at the end of its run (the vectors accumulate in the spill until
+  then). A later append of single samples adds a tail slab; the footer lists the slabs; `compact`
+  merges them into one. Between compactions `space info` reports the slabs.
 - **Native vector search.** Every embedding is rotated by a seeded fast Walsh–Hadamard transform
   (a sign flip per coordinate, nothing stored) and reduced to the sign of each coordinate: one bit
   per dimension, d/8 bytes per vector (64 B at d = 512, 192 B at d = 1536). A query runs three
@@ -607,7 +625,8 @@ Acquisition is where data enters a dataset: the studio.
   along goofi-data that the recording studio launches directly.
 - The studio records through goofi-data's own recorder (one recorder per program), so what it
   writes is already a dataset goofi-data reads natively (tags, annotations, metadata store): a
-  recorder type writes the dataset file directly, blobs and sample rows, with no conversion.
+  recorder type writes the dataset file directly, one blob per stream and one sample for the
+  full recording, paired and synchronized across its modalities, with no conversion.
 
 ### Remaining
 
