@@ -12,8 +12,8 @@ Each as its own small change against the shipped model, in this order of value:
 
 1. An authored order of the transitions out of a state, editable on its card: `sequence` and an
    `expression`'s index read it. Today it is the transitions' authored order.
-2. `event {name}` and `always` triggers with a `machine event` op. A transition's `condition` is
-   the guard: one expression over `vars.*`, `nd()`, `me` and `sm()`, taken on the turn to true.
+2. `event {name}` and `always` triggers with a `machine event` op; a transition's `condition`
+   is the guard of each.
 3. Condition edge modes beyond the turn to true (`falling`, `change`, `level`).
 4. `exit_values` on a state and `values` on a transition; `internal` self-transitions.
 5. A random range `{min, max}` as a duration or an interval, sampled once from the machine's seed.
