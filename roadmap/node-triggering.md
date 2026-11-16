@@ -1,14 +1,15 @@
-# Node triggering and the lossless mode
+# Node triggering and the Kahn mode
 
 A signal node runs today on `autotrigger`, on a frame at a `trigger_process` input, or on the
 `common.trigger` pulse (`goofi_runtime::common`). A wire is a slot, latest wins; a node parks on
 its door and takes the newest frame on every wire; `cx.now`, the stamps and every `t` read the
 wall-based patch clock; audio and graphics run on clocks of their own, driven by hand under
 `Clock::External`; the machines thread reads `time.now()`. Every one of these lets the wall clock
-decide what a node sees, so a patch run twice over the same data is not the same run. goofi-pipe
-needs a lossless mode, where no packet is ever dropped and every pipe between nodes is a queue,
-and goofi-data reuses the same node graph for its recipes (`goofi-data.md`). Status: planning,
-decided 2026-11-13 and 2026-11-16. `triggers.md` is the separate item for events delivered once
+decide what a node sees, so a patch run twice over the same data is not the same run. The graph,
+the nodes and the engines are the goofi layer, a library that allows execution; the scheduling is
+the application's: the live mode is goofi-pipe's and the Kahn mode below is goofi-data's, in
+which every recipe is a goofi graph (`goofi-data.md`). Status: planning, decided 2026-11-13 and
+2026-11-16. `triggers.md` is the separate item for events delivered once
 to each listener.
 
 ## Decisions
@@ -23,7 +24,7 @@ to each listener.
   device, or an unseeded library is its author's non-determinism; the SDK offers `c.now` and a
   seeded `c.rng()` as the deterministic paths.
 
-### The rules of the lossless mode
+### The rules of the Kahn mode
 
 1. **Time is data time.** The patch clock does not advance by itself. `cx.now` of a run is the
    instant of the frame that caused it; `procstart`, `procend` and `t` in an expression carry that
@@ -31,7 +32,7 @@ to each listener.
    emits at data instants 0.1 s apart. A node that reads only the patch clock is therefore
    deterministic in this mode.
 2. **A wire is a queue that carries every frame, in order.** No overwrite; a producer ahead of
-   its consumer waits (back-pressure) and never drops. goofi-pipe's live mode keeps the slot.
+   its consumer waits (back-pressure) and never drops. The live mode keeps the slot.
 3. **A node runs once per trigger event, in instant order.** A setting per input slot says what
    an event is: `each` (every frame on this slot is an event), `zip` (one event when every slot of
    the group holds a fresh frame), `hold` (never an event; the slot is read). With several `each`
@@ -62,7 +63,9 @@ to each listener.
   with instants. Audio and graphics effects thus apply over datasets deterministically.
 - **The machines thread** is a node of the network too, stepped at its intervals in data time.
 - **Children.** A Python subprocess node or a hosted Rust node is the same node over the exchange;
-  the lossless mode holds whatever side of the exchange the loop runs on.
+  the Kahn mode holds whatever side of the exchange the loop runs on.
+- **Replication.** A stateless node may run as k threads over one queue, the outputs resequenced
+  by frame index before the next queue; goofi-data's scheduler sets k.
 
 ### The per-slot interface
 
@@ -78,7 +81,7 @@ to each listener.
 1. The coupling setting per slot in the manifest, the SDK and the ops; `trigger_process` removed
    with every reader; the left-side bar.
 2. The queued mode of the transport: a bounded queue whose sender parks, with the progress word.
-3. The data clock: `timing::Time` driven by the frames' instants in the lossless mode; the host
+3. The data clock: `timing::Time` driven by the frames' instants in the Kahn mode; the host
    executor's `next_wake` and rate cap in data time; instant-ordered delivery across `each`
    slots; the hold read by instant; the feedback delay.
 4. The engines as Kahn nodes: audio blocks and graphics frames at data instants, their inputs

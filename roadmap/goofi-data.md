@@ -37,13 +37,18 @@ one for the interface. Each section holds its decisions, its remaining work and 
   (`../goofi-data`) is withdrawn.
 - **The present program is renamed goofi-pipe.** "goofi" names only what is shared: the
   repository, the home `~/.goofi`, the account, the shared crates and the shared frontend library.
-- **Three layers.** Shared base (timing, layout, session, payload types and `Meta`, transport,
-  recorder) → goofi-pipe (graph, runtime, engines, bridge, CLI) → goofi-data. goofi-data builds
-  on the base and never on goofi-pipe; neither application depends on the other. A situation in the
-  tests crate asserts the rule from the crate graph.
-- **Prefixes.** `goofi-` for shared ecosystem crates (the base crates keep their names), `gp-` for
-  goofi-pipe crates, `gd-` for goofi-data crates. The present `goofi-build` crate (the node library
-  builder) becomes `gp-build`, so the name is free for the model builder.
+- **Three layers.** The goofi layer (timing, layout, session, payload types and `Meta`,
+  transport, recorder, the graph and the document, the node runtime and the SDK, the engines)
+  → goofi-pipe (the live runtime mode: slots, the wall clock, the bridge, its ops and frontend)
+  and goofi-data (the Kahn runtime mode: queues, progress, data time, the loader and writer
+  nodes, the scheduler). Graph and engine execution are goofi's: the nodes are a library that
+  allows execution, and the scheduling, when a node runs and what it is handed, is governed by
+  the application's mode. Neither application depends on the other. A situation in the tests crate
+  asserts the rule from the crate graph.
+- **Prefixes.** `goofi-` for the goofi layer (the base crates, the graph, the runtime, the SDK,
+  the engines keep their names), `gp-` for goofi-pipe crates (the live mode, the bridge), `gd-`
+  for goofi-data crates. The present `goofi-build` crate (the node library builder) becomes
+  `gp-build`, so the name is free for the model builder.
 - **Layout.** All Rust crates in one flat folder; the prefix is the one owner of the layer. One
   shared UI library and one folder per frontend:
 
@@ -74,17 +79,17 @@ one for the interface. Each section holds its decisions, its remaining work and 
   (`~/.goofi/recordings`, `config.toml`, the node roots of `library.md`). goofi-data reads a
   goofi-pipe recording (its folder, manifest and sidecars) in place through a format adapter: no
   second copy of the data.
-- **goofi-pipe and goofi-data are libraries too.** goofi-pipe is restructured so that it is used
-  natively as a library; the same principle holds for goofi-data. goofi-data invokes goofi-pipe as
-  a library and steps through a patch; it may not need the goofi-pipe ops for that.
-- **One node graph implementation.** goofi-data reuses the implementation of the goofi-pipe node
-  graph. The transport supports queued and unqueued modes: goofi-pipe runs unqueued, goofi-data
-  runs queued. The lossless mode of goofi-pipe (no packet ever dropped, every pipe between nodes a
-  queue) is a Kahn network: a goofi-pipe graph whose nodes are transforms and whose pipes are
-  queues, scheduled by one node evoking the next in parallel as packets arrive, in data time, with
-  the audio and graphics engines as nodes of the same network so their effects apply over datasets
-  deterministically. The rules are `node-triggering.md`. Much of goofi-pipe is generalized to fit
-  goofi-pipe and goofi-data both; this is a substantial change to the goofi-pipe codebase.
+- **goofi-pipe and goofi-data are libraries too.** Both are restructured so that they are used
+  natively as libraries, over the goofi layer.
+- **One node graph, two runtime modes.** The graph, the node runtime, the SDK and the engines are
+  the goofi layer; goofi-pipe runs them in the live mode and goofi-data in the Kahn mode. The
+  transport supports both: unqueued (a slot, latest wins) for the live mode, queued for the Kahn
+  mode. The Kahn mode (no packet ever dropped, every pipe between nodes a queue) is a Kahn
+  network: a goofi graph whose nodes are transforms and whose pipes are queues, scheduled by one
+  node evoking the next in parallel as packets arrive, in data time, with the audio and graphics
+  engines as nodes of the same network so their effects apply over datasets deterministically.
+  The rules are `node-triggering.md`. Much of the present program is generalized into the goofi
+  layer; this is a substantial change to its codebase.
 - **Accounts.** One goofi account serves the whole ecosystem, for goofi-pipe and goofi-data alike.
   goofi-pipe will have a node library hosted on the internet, in the spirit of VCV Rack and
   ComfyUI: users share nodes and features and integrate them seamlessly into the system. goofi-data
@@ -536,10 +541,21 @@ declaration.
   subgraph repeated n times taking its output back in as input (one-to-one repeated n times). A
   repetition that feeds its output back is unrolled before scheduling: explicit in the backend,
   visually collapsed in the frontend.
-- **A goofi-pipe patch is one transformation.** A goofi-pipe patch run in the lossless mode
-  (every frame of the source through the patch, none dropped, in data time; `node-triggering.md`)
-  is one transformation. goofi-data invokes goofi-pipe as a library (see the ecosystem ground); it
-  does not run patches itself.
+- **Every recipe is a goofi graph run in the Kahn mode.** A recipe is a patch: its transforms
+  are nodes written against the SDK, in Rust or Python, from the one library; its queues are the
+  wires in the queued transport; the recipe view with queue lines is the patch canvas with the
+  queues' fill and progress drawn on the edges; the audio and graphics engines are nodes of the
+  network. goofi-data runs the graph itself, in its mode (every frame of the source through the
+  patch, none dropped, in data time; `node-triggering.md`). A patch made in goofi-pipe runs
+  unchanged as a recipe.
+- **Samples are delimited stretches of a stream.** A loader node emits a sample's frames with
+  begin and end markers; a writer node closes a sample on the end marker. One-to-many is a node
+  that emits several delimited stretches per input stretch; many-to-one is a `zip` over streams
+  whose stretches are paired by index. A whole-sample operation accumulates until the end marker,
+  or the loader emits the sample as one frame; the loader's granularity is the recipe's choice.
+- **Replication.** A stateless node is replicated when a queue backs up: k threads read one queue
+  and the outputs are resequenced by frame index before the next queue, so order is kept. A
+  stateful node is not replicated.
 - **A derivation can be several steps**, for example filter, then notch, then re-reference. An
   intermediate is kept in memory as long as it is needed, and not saved to disk as a sample.
 - **Checkpoints where the user says.** A queue has a setting to checkpoint data to disk as it
@@ -563,7 +579,9 @@ declaration.
 - **One worker pool, shared across every queue.** Each consumer does one step of the
   transformation. For a dataset of 10k images this is a process pool applying the transformations,
   with parallel data-loading workers feeding a data queue; data workers are spawned automatically
-  when a queue is consumed faster than it is produced, up to a configured maximum.
+  when a queue is consumed faster than it is produced, up to a configured maximum. The
+  scheduler's levers are the replication factor per node, the depth per queue (its memory bound)
+  and the number of network instances running over different samples at once.
 - **Emergently intelligent allocation.** The pool is split across the transforms on a continuous
   trade-off between memory and compute: it maximizes compute utilization of the hardware while
   limiting the memory footprint. By default memory is limited to the RAM free on the machine,
@@ -592,29 +610,24 @@ declaration.
 
 - The recipe configurator: selecting procedures over samples, sets and kinds; multi-step recipes;
   the node-based recipe view with queue lines; repetition blocks.
-- The transform-and-queue runtime: the shared worker pool, tuple queues, loader and writer
-  transforms, the cardinality modes, and the scheduler with its memory, CPU and GPU constraints,
-  changed on the fly.
+- The Kahn mode over the goofi layer (`node-triggering.md`): the loader and writer nodes, the
+  sample markers, replication with resequencing, the worker pool, tuple queues, the cardinality
+  modes, and the scheduler with its memory, CPU and GPU constraints, changed on the fly.
 - The inner workings of the scheduler that drives optimized recipe execution.
 - Resumability: queue checkpoints, offloading, the transform guard, pause and resume, expiry and
   restart.
 - The unrolling of fed-back repetitions, collapsed in the frontend.
 - The compute adapters: local direct, local Slurm, remote direct, remote Slurm.
 - The run view: the flow chart with progress across edges.
-- The lossless mode in goofi-pipe (`node-triggering.md`); derivatives as a tree with tracked
-  changes.
+- Derivatives as a tree with tracked changes.
 - The dashboard panel for the recipe configurator and the run view.
 
 ### Open
 
 - **The scheduler's inner workings**: the cost inputs per transform, the allocation algorithm,
   and the offloading policy.
-- **How a goofi-pipe-implemented recipe runs** as a library inside goofi-data: what of goofi-pipe
-  is linked, and how the patch's nodes map onto transforms and queues.
-- **Whether every recipe is a goofi-pipe Kahn network**, a mode of the goofi-pipe engines, with
-  the dataset loader and writer as nodes, a sample as a delimited stretch of a stream, and
-  goofi-data's scheduler over network instances, replicas and queue depths; or whether goofi-data
-  keeps a transform-and-queue runtime of its own beside it.
+- **The sample markers**: how begin and end ride on a stream (meta, or frames of their own), and
+  how a `zip` pairs stretches by index when one side emits more stretches than the other.
 - **The default for input slot coupling** in the queued mode (`node-triggering.md`).
 - **GPU** as a scheduler resource: whether and how.
 
