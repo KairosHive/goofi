@@ -43,7 +43,7 @@
 	/** The seconds one mark of the ruler counts. */
 	const mark = $derived(unit(view.beats === true, clock('bpm')));
 	/** What a drag holds still, so its own previews move neither: the axis, and its lane's range. */
-	let frozen = $state<{ span: number; track: string; range: [number, number] } | null>(null);
+	let frozen = $state<{ span: number; track: string; lane: string; index: number; range: [number, number] } | null>(null);
 	/** The seconds the axis spans: the clock's length while it restarts there, else what the tracks hold. */
 	const span = $derived(frozen?.span ?? (clock('loop') > 0 && clock('length') > 0 ? clock('length') : Math.max(8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25)));
 	const steer = (to: { playing?: boolean; time?: number }): void => void g.op('clock set', to).catch(fail('Set clock'));
@@ -65,6 +65,9 @@
 	/** The track asked to be deleted, until the dialog answers or the track goes. */
 	let asked = $state('');
 	const doomed = $derived(g.timeline[asked]);
+	$effect(() => {
+		if (!doomed) asked = '';
+	});
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function trackMenu(id: string, x: number, y: number): void {
@@ -92,7 +95,7 @@
 		(document.activeElement as HTMLElement | null)?.blur();
 		picked = next;
 	}
-	const held = (t: Track, lane: string): (Note | Key)[] => (t.kind === 'note' ? t.notes : (t.attributes[lane]?.keys ?? []));
+	const held = (t: Track | undefined, lane: string): (Note | Key)[] => (t?.kind === 'note' ? t.notes : (t?.attributes[lane]?.keys ?? []));
 	const put = (t: Track, lane: string, items: unknown[]): Record<string, unknown> =>
 		t.kind === 'note' ? { notes: items } : { attributes: { [lane]: { ...t.attributes[lane], keys: items } } };
 	const range = (t: Track, lane: string): [number, number] => (t.kind === 'note' ? pitches(t.notes) : t.attributes[lane].range);
@@ -112,8 +115,9 @@
 		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: clamp(hi - Math.floor(fy * (hi - lo + 1)), lo, hi), velocity: 0.8 } : { at, value: fixed(clamp(hi - fy * (hi - lo), lo, hi)), curve: 'linear' };
 		edit(id, put(t, lane, [...held(t, lane), born]));
 	}
-	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane,
-	 * and the release sends the last of them as the edit. A press that does not move is a pick alone. */
+	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane
+	 * as it stands with that one moved, and the release sends the last of them as the edit. A press
+	 * that does not move is a pick alone. */
 	let drag: (() => void) | undefined;
 	function dragItem(e: PointerEvent, id: string, t: Track, lane: string, index: number): void {
 		e.stopPropagation();
@@ -121,33 +125,40 @@
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [x0, y0] = fraction(e, ground);
 		const [lo, hi] = range(t, lane);
-		const [all, per] = [held(t, lane), units(t)];
-		const o = all[index];
+		const [o, per] = [held(t, lane)[index], units(t)];
+		const now = (): (Note | Key)[] => held(g.timeline[id], lane);
+		/** The lane as it stands, with the dragged one where `to` puts it. */
+		const moved = (to: Partial<Note & Key>): Record<string, unknown> => put(g.timeline[id] ?? t, lane, now().map((it, k) => (k === index ? { ...it, ...to } : it)));
 		let patch: Record<string, unknown> | null = null;
 		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => {
 				if (!patch && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
-				frozen ??= { span, track: id, range: [lo, hi] };
+				frozen ??= { span, track: id, lane, index, range: [lo, hi] };
 				const [fx, fy] = fraction(p, ground);
 				const at = o.at + (fx - x0) * per;
 				// A keyframe stays between its neighbours and inside the attribute's range.
-				const next =
+				patch = moved(
 					'pitch' in o
-						? { ...o, at: fixed(Math.max(0, at)), pitch: clamp(o.pitch - Math.round((fy - y0) * (hi - lo + 1)), lo, hi) }
-						: { ...o, at: fixed(clamp(at, Math.max(0, (all[index - 1]?.at ?? -1) + 0.001), (all[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value - (fy - y0) * (hi - lo), lo, hi)) };
-				patch = put(t, lane, all.map((was, k) => (k === index ? next : was)));
+						? { at: fixed(Math.max(0, at)), pitch: clamp(o.pitch - Math.round((fy - y0) * (hi - lo + 1)), lo, hi) }
+						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value - (fy - y0) * (hi - lo), lo, hi)) }
+				);
 				g.previewTrack(id, patch);
 			},
 			commit: () => {
 				frozen = null;
 				if (patch) edit(id, patch);
 			},
+			// Put back, unless the dragged one left the lane under the drag.
 			cancel: () => {
 				frozen = null;
-				if (patch) g.previewTrack(id, put(t, lane, all));
+				if (patch && now()[index]) g.previewTrack(id, moved('pitch' in o ? { at: o.at, pitch: o.pitch } : { at: o.at, value: o.value }));
 			}
 		});
 	}
+	// A drag ends with the panel, and with the note or keyframe it holds.
+	$effect(() => {
+		if (frozen && !held(g.timeline[frozen.track], frozen.lane)[frozen.index]) drag?.();
+	});
 	$effect(() => () => {
 		press.cancel();
 		drag?.();
@@ -440,19 +451,20 @@
 		background: var(--danger);
 		pointer-events: none;
 	}
-	/* Under a finger a row is taller, and a note and a keyframe take a press a hit-size wide. */
+	/* Under a finger a row is taller, and a keyframe takes a press a hit-size wide, behind every
+	   keyframe's own dot. */
 	@media (hover: none) and (pointer: coarse) {
 		.timeline {
-			--row: var(--space-4);
+			--row: var(--space-5);
 		}
-		.key::after,
-		.note::after {
+		.ground {
+			isolation: isolate;
+		}
+		.key::after {
 			content: '';
 			position: absolute;
 			inset: calc((100% - var(--hit)) / 2);
-		}
-		.note::after {
-			inset-inline: 0;
+			z-index: -1;
 		}
 	}
 </style>

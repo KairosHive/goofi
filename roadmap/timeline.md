@@ -30,6 +30,10 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   scroll and no snap to a grid.
 - The panel edits one note or keyframe at a time: no selection of several, no copy.
 - The panel has no keyboard path to a note, a keyframe or a track's menu.
+- Under a finger a note is one row high: it takes no hit-size press, because the rows beside
+  it are notes too.
+- A drag writes its lane whole from the panel's replica, so an edit of that lane whose echo
+  has not come back when the drag begins is overwritten.
 - A name the manager refuses, or one that is no identifier, stays in the name field until the
   name next moves: the shared live value holds a commit as pending. The machine's attribute
   form has the same fault.

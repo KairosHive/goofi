@@ -48,10 +48,11 @@
 	// Each press is a complete gesture, so it commits at once, from the buffer and not the prop.
 	function stepBy(e: KeyboardEvent, dir: 1 | -1): void {
 		e.preventDefault();
-		const typed = Number(text.trim());
-		const base = text.trim() !== '' && Number.isFinite(typed) ? typed : live.value;
+		const held = Number(text.trim());
+		const base = text.trim() !== '' && Number.isFinite(held) ? held : live.value;
 		const v = clamp(onStep(base + dir * step, step));
 		text = fmt(v);
+		typed = false;
 		live.commit(v);
 	}
 

@@ -234,7 +234,8 @@ chain tool wires every box it crosses.
 ## The clock and the timeline
 
 A patch plays on one clock from the moment it loads, and by default it never ends. `t` in an
-expression is its position, and so are `vars.clock.time` and `vars.clock.progress`.
+expression is its position in seconds, and so is `vars.clock.time`; `vars.clock.progress` is the
+position along the length, 0 to 1.
 `goofi clock set --no-playing` pauses the position and `--time 12` puts it at a second; the
 engines run on through a pause, and a recording never stops. `vars.clock.bpm` is the tempo;
 with `vars.clock.loop` on, the position restarts at `vars.clock.length`.

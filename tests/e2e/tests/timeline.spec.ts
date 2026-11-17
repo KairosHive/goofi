@@ -124,11 +124,23 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// A press on another note picks it: the field that showed the first hands it nothing.
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
 		await expect(note).toHaveCount(2);
+		// A velocity typed and not entered lands on its note at the next press, and the drag that
+		// press begins keeps it: a note is drawn as strong as its velocity.
+		await note.nth(0).click();
+		await keys.getByLabel('Velocity').fill('0.6');
+		const grab = (await note.nth(0).boundingBox())!;
+		await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
+		await page.mouse.down();
+		await expect(note.nth(0)).toHaveCSS('opacity', '0.76');
+		await page.mouse.move(grab.x + grab.width / 2 + ground.width * 0.05, grab.y + grab.height / 2, { steps: 6 });
+		await page.mouse.up();
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(1);
+		expect((await trackNamed(page, 'track0')).notes[0].velocity).toBe(0.6);
 		await note.nth(0).click();
 		await keys.getByLabel('Velocity').click();
 		await note.nth(1).click();
 		await expect(keys.getByLabel('Velocity')).toHaveValue('0.9');
-		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.3, 0.9]);
+		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await keys.getByTestId('track-delete-picked').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// A name typed over the track's is a rename: the track is the same one.
@@ -167,6 +179,11 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.down();
 		await page.mouse.move(box.x + box.width * 0.9, dot.y + dot.height / 2, { steps: 12 });
 		for (let wiggle = 0; wiggle < 20; wiggle++) await page.mouse.move(box.x + box.width * 0.9 + (wiggle % 2), dot.y + dot.height / 2);
+		const off = async (): Promise<number> => {
+			const b = (await attr.locator('.key').nth(1).boundingBox())!;
+			return Math.abs(b.x + b.width / 2 - (box.x + box.width * 0.9));
+		};
+		await expect.poll(off, 'the keyframe is drawn under the pointer while it is held').toBeLessThan(4);
 		await page.mouse.up();
 		await expect.poll(async () => (await keysOf())[1].at).toBeGreaterThan(held.at);
 		expect((await keysOf())[1].at, 'nine tenths of an axis of 8 seconds').toBeCloseTo(7.2, 0);
@@ -184,7 +201,10 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(() => clock(page, 'time')).toBe(3);
 		// A focus that types nothing is no edit: the clock stays where another hand put it.
 		await time.click();
+		const playhead = panel.getByTestId('timeline-playhead');
+		const stood = (await playhead.boundingBox())!.x;
 		await rawCall(page, 'clock set', { time: 5 });
+		await expect.poll(async () => (await playhead.boundingBox())!.x, 'the new position reaches the page under the focus').not.toBe(stood);
 		await panel.getByTestId('clock-bpm').click();
 		await expect(time).toHaveValue('5');
 		expect(await clock(page, 'time')).toBe(5);
