@@ -12,6 +12,7 @@ pub mod midi;
 pub mod node;
 pub mod record;
 pub mod session;
+pub mod timeline;
 pub mod variable;
 
 use std::borrow::Cow;
@@ -479,6 +480,14 @@ pub static TREE: &[Entry] = &[
     ]),
     Group("clock", "the patch clock: the position every `t` reads, which plays from the load and can pause, jump and restart", &[
         Leaf(effect::<clock::Set>()),
+    ]),
+    Group("timeline", "the timeline: tracks of notes and of keyframed curves on the patch clock, each a group of variables", &[
+        Leaf(read::<timeline::List>()),
+        Group("track", "one track: its name, its unit, its notes or its curve attributes", &[
+            Leaf(write::<timeline::TrackAdd>()),
+            Leaf(write::<timeline::TrackEdit>()),
+            Leaf(write::<timeline::TrackRemove>()),
+        ]),
     ]),
     Group("midi", "the MIDI devices on the variable bus — a port the patch reads is a group, open while it is read", &[
         Leaf(read::<midi::List>()),

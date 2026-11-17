@@ -31,6 +31,8 @@ pub struct PatchDoc {
     pub variable_groups: IndexMap<String, Group>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub machines: IndexMap<String, crate::machine::Machine>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub timeline: IndexMap<String, crate::timeline::Track>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrangement: Option<Value>,
 }

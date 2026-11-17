@@ -87,6 +87,12 @@ export type Machine = { name: string, attributes: { [key in string]: Attribute }
  * What the random draws start from; absent is 0.
  */
 seed?: number, };
+export type Unit = "seconds" | "beats";
+export type Note = { at: number, length: number, pitch: number, velocity: number, };
+export type Key = { at: number, value: number, curve: Curve, };
+export type Lane = { name: string, range: [number, number], keys: Array<Key>, };
+export type Lanes = { "kind": "note", notes: Array<Note>, } | { "kind": "curve", attributes: { [key in string]: Lane }, };
+export type Track = { name: string, unit: Unit, } & ({ "kind": "note", notes: Array<Note>, } | { "kind": "curve", attributes: { [key in string]: Lane }, });
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.
@@ -95,7 +101,7 @@ nodes: { [key in string]: NodeRecord },
 /**
  * Keyed `out.slot>in.slot`, which is derived from the link and never read back.
  */
-links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, machines: { [key in string]: Machine }, arrangement?: JsonValue, };
+links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, machines: { [key in string]: Machine }, timeline: { [key in string]: Track }, arrangement?: JsonValue, };
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };

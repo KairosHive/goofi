@@ -267,12 +267,13 @@ pub struct Playhead {
 }
 
 macro_rules! named {
-    ($($t:ty),*) => {$(impl Named for $t {
+    ($($t:ty),*) => {$(impl $crate::machine::Named for $t {
         fn name(&self) -> &str {
             &self.name
         }
     })*};
 }
+pub(crate) use named;
 named!(Machine, Attribute, State, Playhead);
 
 impl Machine {
@@ -401,6 +402,12 @@ impl Machine {
         Ok(())
     }
 
+    /// The elements of a playhead's group, each by the key a rename is read off and its name.
+    pub fn elements(&self) -> Vec<(String, String)> {
+        let own = OWN.iter().map(|e| (e.to_string(), e.to_string()));
+        own.chain(self.attributes.iter().map(|(id, a)| (id.clone(), a.name.clone()))).collect()
+    }
+
     /// The variables the group of the playhead `id` holds: the machine's own two, then one per
     /// attribute, each born as the start state has it — at rest there, before the machine has moved it.
     pub fn playhead_entries(&self, id: &str) -> Entries {
@@ -433,19 +440,19 @@ struct Flight {
 }
 
 /// One leg of an attribute's motion: `from` toward `to` over `start..end`, by `curve`.
-struct Leg {
-    start: f64,
-    end: f64,
-    from: Data,
-    to: Data,
-    curve: Curve,
+pub(crate) struct Leg {
+    pub(crate) start: f64,
+    pub(crate) end: f64,
+    pub(crate) from: Data,
+    pub(crate) to: Data,
+    pub(crate) curve: Curve,
 }
 
 /// An attribute as a playhead carries it: its legs still to run, then what it rests at — the
 /// value held, once there is no leg.
-struct Motion {
-    legs: Vec<Leg>,
-    rest: Data,
+pub(crate) struct Motion {
+    pub(crate) legs: Vec<Leg>,
+    pub(crate) rest: Data,
 }
 
 impl Motion {
@@ -474,7 +481,7 @@ impl Motion {
 
     /// The whole motion as Python over `t`: each leg while it lasts, then the rest. None at rest,
     /// or where a leg switches instead of blending: a reader takes [`Self::at`] then.
-    fn source(&self) -> Option<String> {
+    pub(crate) fn source(&self) -> Option<String> {
         if self.legs.is_empty() || self.legs.iter().any(|l| lerp(&l.from, &l.to, 0.0).is_none()) {
             return None;
         }

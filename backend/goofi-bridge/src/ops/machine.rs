@@ -221,7 +221,7 @@ fn set(tx: &mut Txn, id: &str, mut next: Machine) -> Result<(), String> {
 }
 
 /// The name an op answered with: what its history label spells, whatever the caller named it by.
-fn named(o: &Value) -> &str {
+pub(super) fn named(o: &Value) -> &str {
     o["name"].as_str().unwrap_or_default()
 }
 

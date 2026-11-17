@@ -59,7 +59,7 @@ impl Cut {
         }
         self.links |= !Arc::ptr_eq(&p.links, &q.links);
         self.arrangement |= !Arc::ptr_eq(&p.arrangement, &q.arrangement);
-        self.machines |= !Arc::ptr_eq(&p.machines, &q.machines);
+        self.machines |= !Arc::ptr_eq(&p.stepped, &q.stepped);
         let (names, groups) = before.variables.differing(&after.variables);
         for name in names {
             if !self.variables.contains(&name) {
@@ -100,7 +100,7 @@ impl Cut {
             into.patch.arrangement = from.patch.arrangement.clone();
         }
         if self.machines {
-            into.patch.machines = from.patch.machines.clone();
+            into.patch.stepped = from.patch.stepped.clone();
         }
         into.variables.take(&from.variables, &self.variables, self.groups);
     }

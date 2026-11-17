@@ -657,20 +657,21 @@ impl Layout {
     /// Clear the node binding of every panel naming a uid in `gone`. A panel's `state` is opaque
     /// here save for this one key — a panel pointing at a deleted node is the one knowable wrong.
     pub fn unbind(&self, gone: &std::collections::HashSet<crate::Uid>) -> Vec<Write> {
-        let bound = |state: &Value| state.get("node").and_then(Value::as_str).and_then(crate::Uid::from_hex);
-        self.rekey_panels(|_, state| bound(state).is_some_and(|u| gone.contains(&u)), "node", Value::Null)
+        self.rewrite(|_, state| {
+            let bound = state.get("node").and_then(Value::as_str).and_then(crate::Uid::from_hex);
+            bound.is_some_and(|u| gone.contains(&u)) && state.insert("node".into(), Value::Null).is_some()
+        })
     }
 
-    /// Set `key` to `to` in the state of every panel `pick` takes.
-    fn rekey_panels(&self, pick: impl Fn(&str, &Value) -> bool, key: &str, to: Value) -> Vec<Write> {
+    /// The contents of every panel whose state `edit` wrote, handed its type and its state: what
+    /// follows a thing a panel names — a node, a group, a machine, a track — into every such panel.
+    pub fn rewrite(&self, edit: impl Fn(&str, &mut serde_json::Map<String, Value>) -> bool) -> Vec<Write> {
         self.nodes()
             .filter_map(|n| match n {
-                Node::Panel { id, panel_type, state, .. } if pick(panel_type, state) => {
+                Node::Panel { id, panel_type, state, .. } => {
                     let mut state = state.clone();
-                    if let Some(o) = state.as_object_mut() {
-                        o.insert(key.into(), to.clone());
-                    }
-                    Some((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }))
+                    let wrote = state.as_object_mut().is_some_and(|o| edit(panel_type, o));
+                    wrote.then(|| (id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }))
                 }
                 _ => None,
             })
@@ -692,8 +693,7 @@ impl Layout {
     /// Re-aim every `panel_type` panel whose state `key` names `from` at `to`: a renamed group,
     /// which a panel holds by its name, or the machine left when the one a panel held is removed.
     pub fn retarget(&self, panel_type: &str, key: &str, from: &str, to: &str) -> Vec<Write> {
-        let named = |t: &str, state: &Value| t == panel_type && state.get(key).and_then(Value::as_str) == Some(from);
-        self.rekey_panels(named, key, Value::String(to.to_string()))
+        self.rewrite(|t, state| t == panel_type && state.get(key).and_then(Value::as_str) == Some(from) && state.insert(key.into(), to.into()).is_some())
     }
 
     /// Set a panel's type and/or state. `panel_type` lands FIRST because changing it clears the old

@@ -63,6 +63,10 @@ export type OpName =
 	| 'machine jump'
 	| 'machine reset'
 	| 'clock set'
+	| 'timeline list'
+	| 'timeline track add'
+	| 'timeline track edit'
+	| 'timeline track remove'
 	| 'midi list'
 	| 'midi learn'
 	| 'control list'
@@ -164,6 +168,10 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'machine jump': 'effect',
 	'machine reset': 'effect',
 	'clock set': 'effect',
+	'timeline list': 'read',
+	'timeline track add': 'write',
+	'timeline track edit': 'write',
+	'timeline track remove': 'write',
 	'midi list': 'read',
 	'midi learn': 'effect',
 	'control list': 'read',

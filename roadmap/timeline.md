@@ -1,38 +1,12 @@
 # Timeline
 
 A timeline panel: tracks of notes and of keyframed curves, stacked on one time axis, each track
-a group of variables the patch reads. The clock it plays on shipped: the position of
-`goofi_supervisor::timing::Time`, the `clock` group and `clock set`. This file holds the
-decisions for what remains and the order of the work.
+a group of variables the patch reads. Shipped: the clock it plays on (the position of
+`goofi_supervisor::timing::Time`, the `clock` group, `clock set`) and the tracks themselves
+(`goofi_graph::timeline`, the `timeline` ops, a track's group, written by the machines' thread).
+This file holds the decisions for what remains and the order of the work.
 
 ## Decisions
-
-### Tracks
-
-- One timeline per patch, a document root. Every timeline panel shows the same tracks.
-- A track has an id and a name, as a machine's records have: a rename moves no key, and the
-  track's group, which its name names, moves with what it holds.
-- Two track kinds: `note` and `curve`.
-- A track's times are in its own unit, `seconds` or `beats` of `clock.bpm`. A panel picks the
-  unit of its ruler.
-- A `curve` track holds attributes, each a number in a range, each with keyframes. A keyframe
-  sets the value at its time and names the curve (`goofi_core::ease::Curve`) to the next
-  keyframe. The value holds before the first keyframe and after the last.
-- A `note` track holds notes: start, length, pitch, velocity.
-- A track is an owned group (`Owner::Track`): `vars.<track>.<attribute>` for a curve track,
-  `vars.<track>.notes` for a note track, in the shape a MIDI device's `notes` has
-  (`goofi_core::variables::MIDI_ENTRIES`, channel 1), so a reader of a device reads a track.
-- A curve attribute is ONE functional of `t` over the whole track, written again when the track
-  or the tempo moves. No thread wakes for a keyframe.
-- The ops are `timeline list` and `timeline track add`, `edit` and `remove`. An edit replaces a
-  track's notes, or an attribute's keyframes, whole.
-
-### Shared with the state machine
-
-- The timeline builds its curves from the machine's blend (`Motion`, `Leg`, the functional's
-  source).
-- The thread that parks toward the next instant owed, takes its inbox and drives the store
-  (`goofi_bridge::machines`) serves both. No second copy of the loop.
 
 ### Notes as events
 
@@ -64,12 +38,11 @@ decisions for what remains and the order of the work.
 
 In this order, each a tested commit:
 
-1. The timeline root, the `timeline` ops, the track groups, the curve functionals, the thread.
-2. Note tracks: the store's `notes`, the queue, the `MidiIn` port.
-3. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
+1. Note tracks as events: the queue, the `MidiIn` port. (`vars.<track>.notes` shipped.)
+2. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
    the clock controls.
-4. The words: the architecture lines of AGENTS.md (time, queues, the timeline), a README
-   section, the orientation.
+3. The words: the architecture lines of AGENTS.md (queues, the timeline), a README section,
+   the orientation.
 
 ## Open
 

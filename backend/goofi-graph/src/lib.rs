@@ -27,6 +27,7 @@ pub use history::{Flip, History, Snapshot, Step};
 
 pub mod expr_rewrite;
 pub mod machine;
+pub mod timeline;
 
 pub use goofi_node::Uid;
 
@@ -538,6 +539,12 @@ struct Greyed {
     last: Option<(&'static str, &'static NodeManifest)>,
 }
 
+/// Each variable of a group that both records hold, by its element's key, where its name moved.
+fn moved(was: (&str, &[(String, String)]), now: (&str, &[(String, String)])) -> Vec<(String, String)> {
+    let pairs = was.1.iter().filter_map(|(key, e)| Some((format!("{}.{e}", was.0), format!("{}.{}", now.0, now.1.iter().find(|(k, _)| k == key)?.1))));
+    pairs.filter(|(from, to)| from != to).collect()
+}
+
 /// Where a scanned type came from: the open patch's workspace, the user's own private library, a
 /// node root by directory name, or an engine's own find — a plugin, which belongs to no tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -563,9 +570,16 @@ struct Patch {
     /// Patch-scoped variables, system ones seeded and re-asserted by every `clear`/load. Under a
     /// lock of its own: a value write is the store's and the plane's, never the graph's.
     variables: Arc<goofi_supervisor::sync::Mutex<goofi_core::variables::VariableStore>>,
-    /// The state machines, the sixth doc root. Each playhead is a group of variables the machine
-    /// owns, held in step with this model by [`Graph::sync_playheads`].
-    machines: Arc<IndexMap<String, machine::Machine>>,
+    /// What steps on the clock's position: the doc roots `machines` and `timeline`. Each playhead
+    /// and each track is a group of variables its owner writes, held in step with this model by
+    /// [`Graph::sync_owned`].
+    stepped: Arc<Stepped>,
+}
+
+#[derive(Clone, Default)]
+struct Stepped {
+    machines: IndexMap<String, machine::Machine>,
+    tracks: IndexMap<String, timeline::Track>,
 }
 
 /// What runs the patch: the engines, the catalog, the mint and the live instances.
@@ -694,7 +708,7 @@ impl Graph {
             links: Arc::new(IndexMap::new()),
             arrangement: Arc::new(layout::Layout::default()),
             variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
-            machines: Arc::new(IndexMap::new()),
+            stepped: Arc::default(),
         };
         Graph {
             patch: patch.clone(),
@@ -718,7 +732,7 @@ impl Graph {
                     links: Arc::new(IndexMap::new()),
                     arrangement: Arc::new(layout::Layout::default()),
                     variables: patch.variables.clone(),
-                    machines: Arc::new(IndexMap::new()),
+                    stepped: Arc::default(),
                 },
                 projected_vars: 0,
                 binds_moved: false,
@@ -751,7 +765,7 @@ impl Graph {
     }
 
     fn machines_mut(&mut self) -> &mut IndexMap<String, machine::Machine> {
-        Arc::make_mut(&mut self.patch.machines)
+        &mut Arc::make_mut(&mut self.patch.stepped).machines
     }
 
     /// Stop every node and WAIT for each to release its shared memory. The waiting is why this is
@@ -935,15 +949,19 @@ impl Graph {
     }
 
     pub fn machines(&self) -> &IndexMap<String, machine::Machine> {
-        &self.patch.machines
+        &self.patch.stepped.machines
     }
 
-    /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, so none
-    /// is handed out twice, and clear of every machine's id and every id `taken` answers for.
+    pub fn timeline(&self) -> &IndexMap<String, timeline::Track> {
+        &self.patch.stepped.tracks
+    }
+
+    /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, so none is
+    /// handed out twice, and clear of every machine's and track's id and every id `taken` answers for.
     pub fn mint_id(&mut self, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
         loop {
             let id = format!("{prefix}-{}", self.mint().0);
-            if !taken(&id) && !self.patch.machines.contains_key(&id) {
+            if !taken(&id) && !self.patch.stepped.machines.contains_key(&id) && !self.patch.stepped.tracks.contains_key(&id) {
                 return id;
             }
         }
@@ -955,13 +973,13 @@ impl Graph {
     pub fn set_machine(&mut self, id: &str, record: Option<machine::Machine>) -> Result<Vec<Uid>, String> {
         let Some(mut record) = record else {
             self.machines_mut().shift_remove(id);
-            self.sync_playheads();
+            self.sync_owned();
             return Ok(Vec::new());
         };
         if !goofi_core::variables::is_valid_identifier(&record.name) || goofi_core::variables::is_valid_identifier(id) {
             return Err(format!("invalid machine name `{}`, or its id `{id}` is a name: {}", record.name, machine::NAME_RULE));
         }
-        if self.patch.machines.iter().any(|(other, m)| other != id && m.name == record.name) {
+        if self.patch.stepped.machines.iter().any(|(other, m)| other != id && m.name == record.name) {
             return Err(format!("machine `{}` already exists", record.name));
         }
         fn renamed<V: machine::Named>(old: Option<&IndexMap<String, V>>, new: &IndexMap<String, V>) -> Vec<(String, String)> {
@@ -969,18 +987,14 @@ impl Graph {
             pairs.filter(|(from, to)| from != to).collect()
         }
         let to = |pairs: &[(String, String)], name: &str| pairs.iter().find(|(from, _)| from == name).map(|(_, to)| to.clone());
-        let old = self.patch.machines.get(id);
+        let old = self.patch.stepped.machines.get(id);
         let named: Vec<(String, String)> =
             renamed(old.map(|o| &o.states), &record.states).into_iter().chain(renamed(old.map(|o| &o.playheads), &record.playheads)).collect();
         let attributes = renamed(old.map(|o| &o.attributes), &record.attributes);
         // Every variable of a playhead both records hold, where its name moved.
-        let mut moved: Vec<(String, String)> = Vec::new();
-        for (o, ph, was) in old.iter().flat_map(|o| o.playheads.iter().map(move |(ph, was)| (*o, ph, was))) {
-            let Some(now) = record.playheads.get(ph) else { continue };
-            let own = machine::OWN.iter().map(|e| (*e, *e));
-            let attrs = o.attributes.iter().filter_map(|(a, attr)| Some((attr.name.as_str(), record.attributes.get(a)?.name.as_str())));
-            moved.extend(own.chain(attrs).map(|(e, f)| (format!("{}.{e}", was.name), format!("{}.{f}", now.name))).filter(|(from, to)| from != to));
-        }
+        let playheads = old.iter().flat_map(|o| o.playheads.iter().map(move |(ph, was)| (*o, ph, was)));
+        let moved: Vec<(String, String)> =
+            playheads.filter_map(|(o, ph, was)| Some(moved((&was.name, &o.elements()), (&record.playheads.get(ph)?.name, &record.elements())))).flatten().collect();
         // The variable reads first: they spell the playhead and the attribute as they were.
         record.rewrite_expressions(|e| expr_rewrite::rename_variables(e, |n| to(&moved, n)));
         record.rewrite_expressions(|e| expr_rewrite::rename_states(e, |n| to(&named, n)));
@@ -994,22 +1008,49 @@ impl Graph {
         }
         self.variables().move_owned(&moved);
         self.machines_mut().insert(id.to_string(), record);
-        self.sync_playheads();
+        self.sync_owned();
         Ok(self.rewrite_variable_reads(&moved))
     }
 
-    /// Hold every playhead's group in step with the machines: one group per playhead, under its
-    /// name and owned by its machine, with the machine's two elements and one entry per
-    /// attribute; nothing else.
-    fn sync_playheads(&mut self) {
+    /// Set, replace or remove (`None`) the track `id` whole. A name that moved is followed as a
+    /// machine's is; a removed track leaves every timeline panel that hid it.
+    pub fn set_track(&mut self, id: &str, record: Option<timeline::Track>) -> Result<Vec<Uid>, String> {
+        let old = self.patch.stepped.tracks.get(id);
+        let mut moved = Vec::new();
+        match record {
+            None => {
+                let writes = self.patch.arrangement.rewrite(|ty, state| {
+                    let hidden = state.get_mut("hidden").and_then(serde_json::Value::as_array_mut).filter(|_| ty == "timeline");
+                    hidden.is_some_and(|h| h.len() != { h.retain(|v| v != id); h.len() })
+                });
+                self.arrangement_mut().set_contents(&writes);
+                Arc::make_mut(&mut self.patch.stepped).tracks.shift_remove(id);
+            }
+            Some(record) => {
+                record.check()?;
+                let valid = goofi_core::variables::is_valid_identifier;
+                if valid(id) || !valid(&record.name) || (old.is_none_or(|o| o.name != record.name) && self.group_taken(&record.name)) {
+                    return Err(format!("invalid track name `{}`, or a variable group already: {}", record.name, machine::NAME_RULE));
+                }
+                moved = old.map_or(moved, |o| self::moved((&o.name, &o.elements()), (&record.name, &record.elements())));
+                self.variables().move_owned(&moved);
+                Arc::make_mut(&mut self.patch.stepped).tracks.insert(id.to_string(), record);
+            }
+        }
+        self.sync_owned();
+        Ok(self.rewrite_variable_reads(&moved))
+    }
+
+    /// Hold every owned group in step with what steps on the clock: one group per playhead, under
+    /// its name and owned by its machine, with the machine's two elements and one entry per
+    /// attribute; one per track, under its name, with what the track holds; nothing else.
+    fn sync_owned(&mut self) {
         use goofi_core::variables::{Entries, Group, Owner};
         let mut store = self.variables();
-        let wanted: Vec<(String, Owner, Entries)> = self
-            .patch
-            .machines
-            .iter()
-            .flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), Owner::Machine(m.clone()), record.playhead_entries(ph))))
-            .collect();
+        let stepped = &self.patch.stepped;
+        let playheads = stepped.machines.iter().flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), Owner::Machine(m.clone()), record.playhead_entries(ph))));
+        let tracks = stepped.tracks.iter().map(|(id, track)| (track.name.clone(), Owner::Track(id.clone()), track.entries()));
+        let wanted: Vec<(String, Owner, Entries)> = playheads.chain(tracks).collect();
         let held = |g: &str, owner: &Owner| wanted.iter().any(|(name, o, _)| name == g && o == owner);
         let gone: Vec<String> =
             store.groups().filter(|(g, rec)| matches!(&rec.owner, Some(o) if !matches!(o, Owner::Midi(_)) && !held(g, o))).map(|(g, _)| g.to_string()).collect();
@@ -2999,7 +3040,7 @@ impl Graph {
     /// Every node reference the machines' expressions make, in the order the texts come.
     fn machine_node_refs(&self) -> Vec<expr_rewrite::Target> {
         let mut out = Vec::new();
-        for m in self.patch.machines.values() {
+        for m in self.patch.stepped.machines.values() {
             for text in m.expressions() {
                 let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
                 out.extend(refs.into_iter().map(|r| r.target).filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })));
@@ -3266,7 +3307,7 @@ impl Graph {
         }
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         self.runtime.revision += 1;
-        self.runtime.marks.machines |= diff.machines;
+        self.runtime.marks.machines |= diff.machines || (redeliver && !self.patch.stepped.tracks.is_empty());
         // Every arming the batch left unnumbered gets its serial, before the snapshot is kept.
         for uid in &diff.rearmed {
             self.mint_serials(*uid);
@@ -3443,7 +3484,7 @@ impl Graph {
             }
         }
         d.relinked = !Arc::ptr_eq(&prev.links, &next.links);
-        d.machines = !Arc::ptr_eq(&prev.machines, &next.machines);
+        d.machines = !Arc::ptr_eq(&prev.stepped, &next.stepped);
         d.arrangement = !Arc::ptr_eq(&prev.arrangement, &next.arrangement);
         if d.relinked || !d.changed.is_empty() || !d.removed.is_empty() {
             // A port's wires resolve to leaves, so a wire that moved shows as a resolved edge
@@ -3585,8 +3626,8 @@ impl Graph {
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
-        // Variables and machines are patch CONTENT, so a load starts from a fresh seeded store.
-        self.machines_mut().clear();
+        // Variables, machines and tracks are patch CONTENT, so a load starts from a fresh seeded store.
+        self.patch.stepped = Arc::default();
         self.variables().reset();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
@@ -3722,7 +3763,7 @@ impl Graph {
         let p = &s.patch;
         self.patch.nodes.len() != p.nodes.len()
             || !Arc::ptr_eq(&self.patch.links, &p.links)
-            || !Arc::ptr_eq(&self.patch.machines, &p.machines)
+            || !Arc::ptr_eq(&self.patch.stepped, &p.stepped)
             || !Arc::ptr_eq(&self.patch.arrangement, &p.arrangement)
             || self.patch.nodes.iter().any(|(u, e)| !p.nodes.get(u).is_some_and(|q| Arc::ptr_eq(q, e)))
             || self.variables().version() != s.variables.version
@@ -3757,8 +3798,9 @@ impl Graph {
             out.roots.push(("variables", self.variables_root(&records)));
             out.roots.push(("variable_groups", serde_json::to_value(groups).expect("a plain record")));
         }
-        if !Arc::ptr_eq(&prev.machines, &self.patch.machines) {
-            out.roots.push(("machines", serde_json::to_value(&*self.patch.machines).expect("a plain record")));
+        if !Arc::ptr_eq(&prev.stepped, &self.patch.stepped) {
+            out.roots.push(("machines", serde_json::to_value(&self.patch.stepped.machines).expect("a plain record")));
+            out.roots.push(("timeline", serde_json::to_value(&self.patch.stepped.tracks).expect("a plain record")));
         }
         if !Arc::ptr_eq(&prev.arrangement, &self.patch.arrangement) {
             out.roots.push(("arrangement", self.patch.arrangement.to_json()));
@@ -3918,7 +3960,8 @@ impl Graph {
     fn document(&self) -> doc::PatchDoc {
         let mut patch = self.fragment(&self.all_uids());
         (patch.variables, patch.variable_groups) = self.variable_records();
-        patch.machines = (*self.patch.machines).clone();
+        patch.machines = self.patch.stepped.machines.clone();
+        patch.timeline = self.patch.stepped.tracks.clone();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
         patch
@@ -3930,7 +3973,7 @@ impl Graph {
         let document = self.document();
         let variables = self.variables_root(&document.variables);
         let mut doc = serde_json::to_value(document).expect("a plain record");
-        for root in ["nodes", "links", "variables", "variable_groups", "machines"] {
+        for root in ["nodes", "links", "variables", "variable_groups", "machines", "timeline"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
         doc["variables"] = variables;
@@ -4012,6 +4055,11 @@ impl Graph {
         for (id, m) in &doc.machines {
             if let Err(e) = self.set_machine(id, Some(m.clone())) {
                 warnings.push(format!("machine `{}` dropped: {e}", m.name));
+            }
+        }
+        for (id, track) in &doc.timeline {
+            if let Err(e) = self.set_track(id, Some(track.clone())) {
+                warnings.push(format!("track `{}` dropped: {e}", track.name));
             }
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
