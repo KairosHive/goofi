@@ -62,14 +62,16 @@ export function createExprEditor(host: HTMLElement, opts: ExprEditorOptions): Ex
 	/* Tab takes the completion, the moment the list shows; while the list still catches up with the
 	   last keystroke it takes the option the list settles on, through `acceptWhenSettled`, rather
 	   than falling through and moving the focus. Escape falls THROUGH once the window is closed:
-	   it is the app's then, and dismisses the pane. */
+	   it is the app's then, and dismisses the pane. Typing behind a closed window still starts a
+	   completion, which nobody sees; it is closed on the way, or it would take the key. */
 	const keys: KeyBinding[] = [
 		{
 			key: 'Escape',
 			run: (view) => {
+				const closed = closeCompletion(view);
 				if (rule.dismissed) return false;
 				rule.dismissed = true;
-				if (!closeCompletion(view)) view.dispatch({});
+				if (!closed) view.dispatch({});
 				return true;
 			}
 		},
