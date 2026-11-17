@@ -1,5 +1,10 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag, BLOCK};
+
+const SECONDS: Show = Show { param: "predelay_unit", any_of: &["seconds"] };
+const BEATS: Show = Show { param: "predelay_unit", any_of: &["beats"] };
+const DIVISION: Show = Show { param: "predelay_unit", any_of: &["division"] };
+const TEMPO: Show = Show { param: "predelay_unit", any_of: &["beats", "division"] };
 
 goofi_audio_sdk::params! {
     MIX = ParamDecl {
@@ -42,16 +47,11 @@ goofi_audio_sdk::params! {
         show: &[],
         role: None,
     },
-    PREDELAY = ParamDecl {
-        group: "reverb",
-        name: "predelay",
-        spec: ParamSpec::Num { default: &[0.02], min: 0.0, max: 0.25, int: false, options: &[], face: Face::Plain },
-        expression: None,
-        doc: Some("seconds of silence before the room answers, which is what sets the listener back from the source"),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    PREDELAY_UNIT = timing::unit("reverb", "predelay_unit"),
+    PREDELAY = timing::in_seconds("reverb", "predelay", &SECONDS, &[0.02], 1.0, "seconds of silence before the room answers, which is what sets the listener back from the source"),
+    PREDELAY_BEATS = timing::in_beats("reverb", "predelay_beats", &BEATS, &[0.125], 4.0),
+    PREDELAY_DIVISION = timing::in_division("reverb", "predelay_division", &DIVISION, "1/16"),
+    TEMPO = timing::tempo("reverb", &TEMPO),
     MODULATION = ParamDecl {
         group: "reverb",
         name: "modulation",
@@ -78,7 +78,8 @@ static MANIFEST: Manifest = Manifest {
 };
 
 const LINES: usize = 8;
-const MAX_PREDELAY: f32 = 0.25;
+/// The longest silence before the room answers, whatever unit it is told in.
+const MAX_PREDELAY: f32 = 1.0;
 const MAX_SIZE: f32 = 1.8;
 /// Coprime lengths at 48 kHz, so no two lines ever line up and ring together.
 static LENGTHS: [f32; LINES] = [1153.0, 1319.0, 1531.0, 1693.0, 1889.0, 2053.0, 2251.0, 2399.0];
@@ -148,6 +149,8 @@ impl AudioNode for Reverb {
         let (mix, decay) = (b.params[P::MIX].chan(0), b.params[P::DECAY].chan(0));
         let (size, damping) = (b.params[P::SIZE].chan(0), b.params[P::DAMPING].chan(0));
         let (predelay, modulation) = (b.params[P::PREDELAY].chan(0), b.params[P::MODULATION].chan(0));
+        let (unit, division) = (b.params[P::PREDELAY_UNIT].chan(0)[0], b.params[P::PREDELAY_DIVISION].chan(0)[0]);
+        let (beats, tempo) = (b.params[P::PREDELAY_BEATS].chan(0), b.params[P::TEMPO].chan(0));
         let voices = b.ins[0].channels() as usize;
 
         let mut wet = [[0.0f32; BLOCK]; 2];
@@ -157,7 +160,8 @@ impl AudioNode for Reverb {
             dry[i] = x;
 
             self.predelay.push(x);
-            let mut through = self.predelay.read((predelay[i] * self.rate).max(1.0));
+            let silence = timing::seconds(unit, predelay[i], beats[i], division, tempo[i]).min(MAX_PREDELAY);
+            let mut through = self.predelay.read((silence * self.rate).max(1.0));
             for (d, len) in self.diffusers.iter_mut().zip(DIFFUSERS) {
                 let back = d.read(len * scale);
                 let into = through + back * 0.6;

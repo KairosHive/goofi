@@ -6,6 +6,7 @@ pub use goofi_core;
 pub use goofi_node::{ExprDecl, ExprMode, Face, OutputDecl, ParamDecl, ParamSpec, Role, Show, SlotDecl, Tag};
 
 pub mod abi;
+pub mod timing;
 #[cfg(feature = "host")]
 pub mod host;
 
