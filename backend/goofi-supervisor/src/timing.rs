@@ -40,12 +40,20 @@ fn since_base() -> u64 {
     BASE.elapsed().as_nanos() as u64
 }
 
-/// The patch's time. Every engine, every node and every stamp reads THIS object; nothing copies
-/// what it says. A load restarts it, because a patch loaded an hour in begins at zero.
+/// The patch's time, in two readings off one object that every engine holds. The RUN time counts
+/// from the load and never stops: every stamp, recording, tie and wait reads it. The POSITION is
+/// where the patch stands: it plays from the load, and it can pause, jump and restart at a
+/// length; an expression's `t`, a node's `now`, a machine and the timeline read it. A load
+/// restarts both, because a patch loaded an hour in begins at zero.
 #[derive(Debug)]
 pub struct Time {
     origin: AtomicU64,
     wall: Mutex<SystemTime>,
+    /// The position, as three `f64`s a reader takes with no lock: it is `run - shift` while it
+    /// plays and `held` while it is paused (NaN while it plays), folded into `length` unless 0.
+    shift: AtomicU64,
+    held: AtomicU64,
+    length: AtomicU64,
 }
 
 impl Default for Time {
@@ -56,18 +64,51 @@ impl Default for Time {
 
 impl Time {
     pub fn new() -> Time {
-        Time { origin: AtomicU64::new(since_base()), wall: Mutex::new(SystemTime::now()) }
+        let (zero, playing) = (AtomicU64::new(0f64.to_bits()), AtomicU64::new(f64::NAN.to_bits()));
+        Time { origin: AtomicU64::new(since_base()), wall: Mutex::new(SystemTime::now()), shift: zero, held: playing, length: AtomicU64::new(0f64.to_bits()) }
     }
 
-    /// Seconds since the patch began.
+    /// The run time: seconds since the patch began.
     pub fn now(&self) -> f64 {
         since_base().saturating_sub(self.origin.load(Ordering::Relaxed)) as f64 / 1e9
     }
 
-    /// The instant a patch second falls on: what a wait toward a patch-time deadline parks until.
-    pub fn instant_at(&self, seconds: f64) -> Instant {
-        let origin = *BASE + Duration::from_nanos(self.origin.load(Ordering::Relaxed));
-        origin + Duration::from_secs_f64(seconds.max(0.0))
+    /// The position at the run second `run`.
+    pub fn position_at(&self, run: f64) -> f64 {
+        let read = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
+        let (held, length) = (read(&self.held), read(&self.length));
+        let at = if held.is_nan() { run - read(&self.shift) } else { held };
+        if length > 0.0 { at.rem_euclid(length) } else { at }
+    }
+
+    /// The position now.
+    pub fn position(&self) -> f64 {
+        self.position_at(self.now())
+    }
+
+    pub fn playing(&self) -> bool {
+        f64::from_bits(self.held.load(Ordering::Relaxed)).is_nan()
+    }
+
+    /// Play or pause the position, from `to` where one is given and from where it stands otherwise.
+    pub fn steer(&self, playing: bool, to: Option<f64>) {
+        let at = to.unwrap_or_else(|| self.position());
+        self.shift.store((self.now() - at).to_bits(), Ordering::Relaxed);
+        self.held.store(if playing { f64::NAN } else { at }.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The seconds at which the position restarts; 0 is never.
+    pub fn set_length(&self, length: f64) {
+        self.length.store(length.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The instant the position next stands at `at`, or restarts, where that is sooner: what a
+    /// wait toward a deadline of the position parks until. None while it is paused, and for a
+    /// position it never reaches.
+    pub fn instant_at(&self, at: f64) -> Option<Instant> {
+        let length = f64::from_bits(self.length.load(Ordering::Relaxed));
+        let at = if length > 0.0 { at.min(length) } else { at };
+        (self.playing() && at.is_finite()).then(|| Instant::now() + Duration::from_secs_f64((at - self.position()).max(0.0)))
     }
 
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing
@@ -87,10 +128,11 @@ impl Time {
         self.wall() + Duration::from_secs_f64(seconds.max(0.0))
     }
 
-    /// Begin again from now.
+    /// Begin again from now, playing from zero.
     pub fn restart(&self) {
         self.origin.store(since_base(), Ordering::Relaxed);
         *self.wall.lock() = SystemTime::now();
+        self.steer(true, Some(0.0));
     }
 }
 

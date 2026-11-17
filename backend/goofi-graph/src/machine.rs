@@ -260,11 +260,9 @@ pub struct Transition {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Playhead {
-    /// Its variable group's name too.
     pub name: String,
     #[serde(default)]
     pub color: String,
-    /// The id of the state it starts in.
     pub start: String,
 }
 
@@ -501,7 +499,6 @@ struct Due {
 /// One playhead's run: at rest in `state` since `arrived`, or in flight toward it; what each
 /// attribute is doing; and what is armed. Every key is an id, so a rename moves nothing here.
 struct Head {
-    /// The playhead's id.
     id: String,
     state: String,
     arrived: f64,
@@ -753,7 +750,7 @@ impl Machines {
 
 /// The code of a functional over `source`, compiled through the evaluator; with none, an empty
 /// one that any reader reports.
-fn functional_code(evaluator: &Option<Arc<dyn ExprEvaluator>>, source: &str) -> Arc<[u8]> {
+pub(crate) fn functional_code(evaluator: &Option<Arc<dyn ExprEvaluator>>, source: &str) -> Arc<[u8]> {
     match evaluator {
         Some(ev) => match ev.compile(source) {
             Ok(c) => {

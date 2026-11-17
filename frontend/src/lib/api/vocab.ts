@@ -122,6 +122,8 @@ export const STATE_FIELDS = ['residents', 'playheads', 'arrivals', 'departures']
 export const ME_FIELDS = ['name', 'state', 'arrived'] as const;
 /** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */
 export const PLAYHEAD_FIELDS = ['state', 'progress'] as const;
+/** The variable groups goofi owns: each named for life, and no control panel draws one. */
+export const OWN_GROUPS = ['system', 'signal', 'graphics', 'audio', 'clock'] as const;
 
 export interface ExprArgInfo {
 	readonly name: string;

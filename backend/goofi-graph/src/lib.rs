@@ -939,28 +939,27 @@ impl Graph {
     }
 
     /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, so none
-    /// is handed out twice, and clear of every id `taken` answers for.
+    /// is handed out twice, and clear of every machine's id and every id `taken` answers for.
     pub fn mint_id(&mut self, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
         loop {
             let id = format!("{prefix}-{}", self.mint().0);
-            if !taken(&id) {
+            if !taken(&id) && !self.patch.machines.contains_key(&id) {
                 return id;
             }
         }
     }
 
-    /// Set, replace or remove (`None`) the machine `id` whole. A new one lands at `at`. A name
-    /// that moved is read off the two records, by id, and followed: a playhead's group moves with
-    /// its values, and every expression that spells the old name is rewritten. Answers the nodes
-    /// whose source text changed.
-    pub fn set_machine(&mut self, id: &str, record: Option<machine::Machine>, at: Option<usize>) -> Result<Vec<Uid>, String> {
+    /// Set, replace or remove (`None`) the machine `id` whole. A name that moved is read off the
+    /// two records, by id, and followed: a playhead's group moves with its values, and every
+    /// expression that spells the old name is rewritten. Answers the nodes whose source text changed.
+    pub fn set_machine(&mut self, id: &str, record: Option<machine::Machine>) -> Result<Vec<Uid>, String> {
         let Some(mut record) = record else {
             self.machines_mut().shift_remove(id);
             self.sync_playheads();
             return Ok(Vec::new());
         };
-        if !goofi_core::variables::is_valid_identifier(&record.name) {
-            return Err(format!("invalid machine name `{}`: {}", record.name, machine::NAME_RULE));
+        if !goofi_core::variables::is_valid_identifier(&record.name) || goofi_core::variables::is_valid_identifier(id) {
+            return Err(format!("invalid machine name `{}`, or its id `{id}` is a name: {}", record.name, machine::NAME_RULE));
         }
         if self.patch.machines.iter().any(|(other, m)| other != id && m.name == record.name) {
             return Err(format!("machine `{}` already exists", record.name));
@@ -976,7 +975,7 @@ impl Graph {
         let attributes = renamed(old.map(|o| &o.attributes), &record.attributes);
         // Every variable of a playhead both records hold, where its name moved.
         let mut moved: Vec<(String, String)> = Vec::new();
-        for (o, (ph, was)) in old.iter().flat_map(|o| o.playheads.iter().map(move |p| (*o, p))) {
+        for (o, ph, was) in old.iter().flat_map(|o| o.playheads.iter().map(move |(ph, was)| (*o, ph, was))) {
             let Some(now) = record.playheads.get(ph) else { continue };
             let own = machine::OWN.iter().map(|e| (*e, *e));
             let attrs = o.attributes.iter().filter_map(|(a, attr)| Some((attr.name.as_str(), record.attributes.get(a)?.name.as_str())));
@@ -994,15 +993,7 @@ impl Graph {
             }
         }
         self.variables().move_owned(&moved);
-        match self.patch.machines.get_index_of(id) {
-            Some(_) => {
-                self.machines_mut().insert(id.to_string(), record);
-            }
-            None => {
-                let at = at.unwrap_or(usize::MAX).min(self.patch.machines.len());
-                self.machines_mut().shift_insert(at, id.to_string(), record);
-            }
-        }
+        self.machines_mut().insert(id.to_string(), record);
         self.sync_playheads();
         Ok(self.rewrite_variable_reads(&moved))
     }
@@ -1251,6 +1242,7 @@ impl Graph {
         }
         // Every binding reads through the new evaluator: the next settle re-derives and re-sends.
         self.runtime.redeliver = true;
+        self.sync_clock();
     }
 
     /// Register an engine, signal first by convention. Its library joins the merged view, and its
@@ -3225,6 +3217,26 @@ impl Graph {
     pub fn time(&self) -> Arc<goofi_supervisor::timing::Time> {
         self.runtime.time.clone()
     }
+
+    /// Play or pause the clock's position, and put it at `to`.
+    pub fn steer_clock(&self, playing: Option<bool>, to: Option<f64>) {
+        let time = &self.runtime.time;
+        time.steer(playing.unwrap_or(time.playing()), to);
+        self.variables().publish("clock.playing", Data::number(f64::from(u8::from(time.playing()))));
+    }
+
+    /// The clock as the store says it: the length its position restarts at, and the readings a
+    /// patch takes as variables. Both are functionals of `t`, so nothing publishes as it runs.
+    fn sync_clock(&self) {
+        let mut store = self.variables();
+        let number = |name: &str| store.get(name).map_or(0.0, goofi_core::control::number_of);
+        let length = if number("clock.loop") != 0.0 { number("clock.length").max(0.0) } else { 0.0 };
+        self.runtime.time.set_length(length);
+        let progress = if length > 0.0 { format!("t / {length:?}") } else { "0.0".to_string() };
+        for (name, source) in [("clock.time", "t"), ("clock.progress", progress.as_str())] {
+            store.publish(name, Data::functional(machine::functional_code(&self.runtime.evaluator, source), goofi_core::Meta::default()));
+        }
+    }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than
     /// the last for every rebirth.
     fn bump_generation(&mut self, uid: Uid) -> u64 {
@@ -3249,6 +3261,9 @@ impl Graph {
             return;
         }
         self.runtime.settled_vars = vars_version;
+        if redeliver {
+            self.sync_clock();
+        }
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         self.runtime.revision += 1;
         self.runtime.marks.machines |= diff.machines;
@@ -3995,7 +4010,7 @@ impl Graph {
         // Machines after the variables and before the nodes: a playhead's variables are born here,
         // and a node's expression may read one at instantiation.
         for (id, m) in &doc.machines {
-            if let Err(e) = self.set_machine(id, Some(m.clone()), None) {
+            if let Err(e) = self.set_machine(id, Some(m.clone())) {
                 warnings.push(format!("machine `{}` dropped: {e}", m.name));
             }
         }

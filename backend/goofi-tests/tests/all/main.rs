@@ -10,6 +10,7 @@ pub fn situation(module_path: &str) -> &str {
 mod audio_priority;
 mod browser;
 mod children;
+mod clock;
 mod codec_golden;
 mod contracts;
 mod demo;

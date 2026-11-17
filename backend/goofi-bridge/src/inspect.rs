@@ -262,7 +262,7 @@ pub fn node(
 pub(crate) fn variable_json(g: &Graph, store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
     // A functional is read at this instant, as every reader reads it.
     let value = match (v.value.as_functional().is_some(), g.evaluator()) {
-        (true, Some(ev)) => goofi_node::at(&*ev, &v.value, g.time().now(), (0.0, 1.0)).unwrap_or_else(|_| v.value.clone()),
+        (true, Some(ev)) => goofi_node::at(&*ev, &v.value, g.time().position(), (0.0, 1.0)).unwrap_or_else(|_| v.value.clone()),
         _ => v.value.clone(),
     };
     let mut e = json!({ "name": name, "value": value });

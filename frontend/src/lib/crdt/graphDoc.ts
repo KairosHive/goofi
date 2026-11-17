@@ -2,7 +2,7 @@
  * The browser replica of goofi's control-plane document, as `goofi_bridge::projection` builds it.
  * Every reader is total: an absent or wrongly-typed leaf answers a default rather than throwing.
  */
-import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
+import { EMPTY_PANEL_TYPE, OWN_GROUPS, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
 import type { Link, Literal, Lock, Machine } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
@@ -147,7 +147,7 @@ export function ownedGroups(doc: Doc, kind: 'midi' | 'machine' | 'track'): Recor
 /** The groups a control panel may draw, in document order: every plain group — not a device's,
  * not a playhead's, not goofi's own — and every group a control panel names, held or not. */
 export function controlGroups(doc: Doc): string[] {
-	const owned = new Set(['system', 'signal', 'graphics', 'audio', ...Object.entries(obj(doc.variable_groups)).filter(([, r]) => obj(r).owner).map(([g]) => g)]);
+	const owned = new Set<string>([...OWN_GROUPS, ...Object.entries(obj(doc.variable_groups)).filter(([, r]) => obj(r).owner).map(([g]) => g)]);
 	const out = new Set<string>();
 	for (const group of Object.keys(obj(doc.variable_groups))) if (!owned.has(group)) out.add(group);
 	for (const name of Object.keys(obj(doc.variables))) {

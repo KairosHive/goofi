@@ -1,6 +1,7 @@
 //! The op registry: a phrase TREE, and the single place the op SET is declared. An op is a type;
 //! its typed `Args` are the validation on every transport, and its row is built from it once.
 
+pub mod clock;
 pub mod guide;
 pub mod history;
 pub mod host;
@@ -450,20 +451,17 @@ pub static TREE: &[Entry] = &[
         Leaf(read::<machine::List>()),
         Leaf(write::<machine::Add>()),
         Leaf(write::<machine::Remove>()),
-        Leaf(write::<machine::Rename>()),
         Leaf(write::<machine::Edit>()),
         Leaf(write::<machine::Arrange>()),
         Group("attribute", "one attribute — a value every state may set, carried by every playhead as `vars.<playhead>.<attribute>`", &[
             Leaf(write::<machine::AttributeAdd>()),
             Leaf(write::<machine::AttributeEdit>()),
             Leaf(write::<machine::AttributeRemove>()),
-            Leaf(write::<machine::AttributeRename>()),
         ]),
         Group("state", "one state — a card on the canvas and the attributes it sets", &[
             Leaf(write::<machine::StateAdd>()),
             Leaf(write::<machine::StateEdit>()),
             Leaf(write::<machine::StateRemove>()),
-            Leaf(write::<machine::StateRename>()),
         ]),
         Group("transition", "one transition, addressed by the id the manager minted", &[
             Leaf(write::<machine::TransitionAdd>()),
@@ -474,11 +472,13 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<machine::PlayheadAdd>()),
             Leaf(write::<machine::PlayheadEdit>()),
             Leaf(write::<machine::PlayheadRemove>()),
-            Leaf(write::<machine::PlayheadRename>()),
         ]),
         Leaf(effect::<machine::Fire>()),
         Leaf(effect::<machine::Jump>()),
         Leaf(effect::<machine::Reset>()),
+    ]),
+    Group("clock", "the patch clock: the position every `t` reads, which plays from the load and can pause, jump and restart", &[
+        Leaf(effect::<clock::Set>()),
     ]),
     Group("midi", "the MIDI devices on the variable bus — a port the patch reads is a group, open while it is read", &[
         Leaf(read::<midi::List>()),

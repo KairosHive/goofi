@@ -1592,7 +1592,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             touched.extend(held.iter().filter(|(_, e)| e.holds_functional() || e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
             touched.sort();
             touched.dedup();
-            let t = time.now();
+            let t = time.position();
             for name in touched {
                 let Some(expr) = held.get(&name) else { continue };
                 let value = match expr.inputs() {

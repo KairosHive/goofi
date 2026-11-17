@@ -183,6 +183,7 @@ pub fn typescript() -> String {
     let state_fields = quoted(&goofi_graph::machine::STATE_FIELDS);
     let me_fields = quoted(&goofi_graph::machine::ME_FIELDS);
     let playhead_fields = quoted(&goofi_graph::machine::OWN);
+    let own_groups = quoted(&goofi_core::variables::OWN_GROUPS);
     let expr_args = |args: &[goofi_node::expr::Arg]| {
         args.iter()
             .map(|a| {
@@ -293,6 +294,8 @@ pub fn typescript() -> String {
          export const ME_FIELDS = [{me_fields}] as const;\n\
          /** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */\n\
          export const PLAYHEAD_FIELDS = [{playhead_fields}] as const;\n\
+         /** The variable groups goofi owns: each named for life, and no control panel draws one. */\n\
+         export const OWN_GROUPS = [{own_groups}] as const;\n\
          \n\
          export interface ExprArgInfo {{\n\
          \treadonly name: string;\n\

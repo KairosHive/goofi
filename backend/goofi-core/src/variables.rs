@@ -341,6 +341,12 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
         doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
         ephemeral: true,
     },
+    VariableDef { name: "clock.bpm", value: || Data::number(120.0), doc: "The tempo, in beats a minute: what a time in beats is read by.", ephemeral: false },
+    VariableDef { name: "clock.length", value: || Data::number(0.0), doc: "The seconds at which the clock's position restarts, while `clock.loop` is on.", ephemeral: false },
+    VariableDef { name: "clock.loop", value: || Data::number(0.0), doc: "Whether the clock's position restarts at `clock.length`: 0 is endless, the position counts up from the load.", ephemeral: false },
+    VariableDef { name: "clock.time", value: || Data::number(0.0), doc: "The clock's position in seconds: what `t` is. `clock set` pauses and places it.", ephemeral: true },
+    VariableDef { name: "clock.progress", value: || Data::number(0.0), doc: "The clock's position along `clock.length`, 0..1; 0 while the clock is endless.", ephemeral: true },
+    VariableDef { name: "clock.playing", value: || Data::number(1.0), doc: "Whether the clock's position plays: 0 while it is paused.", ephemeral: true },
 ];
 
 /// Python's keywords, plus goofi's own namespace token `variables`. A regex reads each as an
@@ -407,8 +413,9 @@ pub fn is_valid_name(name: &str) -> bool {
 }
 
 /// The groups goofi owns: each born config-locked, named for life, and no lock of theirs is a
-/// caller's to set. `system` is the machine's, the other three are one engine's each.
-pub const OWN_GROUPS: [&str; 4] = ["system", "signal", "graphics", "audio"];
+/// caller's to set. `system` is the machine's, `clock` the patch clock's, the other three are
+/// one engine's each.
+pub const OWN_GROUPS: [&str; 5] = ["system", "signal", "graphics", "audio", "clock"];
 
 pub fn is_own_group(group: &str) -> bool {
     OWN_GROUPS.contains(&group)
@@ -774,11 +781,11 @@ impl VariableStore {
         self.groups.shift_remove(group);
     }
 
-    /// An owner's rename: each `(from, to)` entry it holds moves with its value, and a group whose
-    /// entries all left follows them, in its place. Not a command: the owner answers for the names.
+    /// An owner's rename: each `(from, to)` entry it holds moves with its value, to a name that is
+    /// free, and a group whose entries all left follows them, in its place. Not a command.
     pub fn move_owned(&mut self, moved: &[(String, String)]) {
         self.version += 1;
-        for (from, to) in moved.iter().filter(|(from, _)| self.entries.contains_key(from.as_str())).cloned().collect::<Vec<_>>() {
+        for (from, to) in moved.iter().filter(|(from, to)| self.entries.contains_key(from.as_str()) && !self.entries.contains_key(to.as_str())).cloned().collect::<Vec<_>>() {
             self.move_entry(&from, &to);
             let (was, now) = (group_of(&from), group_of(&to));
             if was != now && !self.entries.keys().any(|n| group_of(n) == was) {

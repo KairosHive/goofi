@@ -215,7 +215,7 @@ impl HostExecutor {
             return None;
         }
         self.ctx.take_cleared_inputs();
-        self.ctx.now = cx.now;
+        self.ctx.now = cx.time.position();
         let multis = self.materialize_multis();
         let mut outputs = self.manifest.output_buffer();
         let node = self.node.as_mut()?;

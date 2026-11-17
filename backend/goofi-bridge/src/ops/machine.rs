@@ -32,18 +32,12 @@ op!(Remove, "machine remove", 1, RemoveArgs {
     "Delete a machine, its playheads and their variable groups. A panel showing it shows the first machine left.",
     "{removed: true, name}");
 
-op!(Rename, "machine rename", 2, RenameArgs {
-    pub machine: String,
-    pub to: String,
-},
-    "Rename a machine. The name is a label: its id, its playheads and their runs stay as they are.",
-    "{id, name, was} — the name as stored, and the name it had");
-
 op!(Edit, "machine edit", 1, EditArgs {
     pub machine: String,
+    pub to: Option<String>,
     pub seed: Option<u64>,
 },
-    "Change a machine's own settings: `seed` starts its random draws — a `random` state's decisions — so a run repeats.",
+    "Change a machine's own settings: `to` renames it — the name is a label, so its id, its playheads and their runs stay as they are; `seed` starts its random draws — a `random` state's decisions — so a run repeats.",
     "{seed, name}");
 
 op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
@@ -60,12 +54,13 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
     pub machine: String,
     pub name: String,
+    pub to: Option<String>,
     pub value: Option<Any>,
     #[schemars(with = "Option<Value>")]
     pub kind: Option<AttributeKind>,
     pub curve: Option<Value>,
 },
-    "Change an attribute's default, its kind and/or its curve (see `machine attribute add`); the kind must hold the default. A new kind reads every state's value as a param reads a frame: a text parses to numbers, a number prints as a text, a bool is its truth, a vector fills or cuts to the default's length; a value the kind still cannot hold, such as a text outside the options, becomes the default.",
+    "Change an attribute: `to` renames it, and every expression that reads it on a playhead is rewritten, each playhead keeping the value it holds. Or change its default, its kind and/or its curve (see `machine attribute add`); the kind must hold the default. A new kind reads every state's value as a param reads a frame: a text parses to numbers, a number prints as a text, a bool is its truth, a vector fills or cuts to the default's length; a value the kind still cannot hold, such as a text outside the options, becomes the default.",
     "{name}");
 
 op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
@@ -74,14 +69,6 @@ op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
 },
     "Delete an attribute, from every state and every playhead with it.",
     "{removed: true, name}");
-
-op!(AttributeRename, "machine attribute rename", 2, AttributeRenameArgs {
-    pub machine: String,
-    pub name: String,
-    pub to: String,
-},
-    "Rename an attribute, and rewrite every expression that reads it on a playhead. Every playhead keeps the value it holds.",
-    "{id, name, was} — the name as stored, and the name it had");
 
 op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub machine: String,
@@ -96,6 +83,7 @@ op!(StateAdd, "machine state add", 2, StateAddArgs {
 op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub machine: String,
     pub name: String,
+    pub to: Option<String>,
     pub pos: Option<[f64; 2]>,
     pub values: Option<Value>,
     pub envelopes: Option<Value>,
@@ -107,7 +95,7 @@ op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub weights: Option<std::collections::BTreeMap<String, f64>>,
     pub expression: Option<String>,
 },
-    "Change a state's place, what it sets, and how it decides. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds; an attribute no state sets any more leaves the machine. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) — or every `interval_expression` seconds, an expression read for the playhead as each beat is armed, a negative value being never; empty, `interval` holds — which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` to the index of the transition out to take, a negative index waiting (see `machine transition add` for what an expression reads). A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
+    "Change a state's name, its place, what it sets, and how it decides. `to` renames it and rewrites every `sm('<name>')` of the machine that reads it; a playhead resting in it or flying to it goes on as it was. `values` keys set an attribute each, and a key set to `null` clears that attribute from the state, so a playhead entering it keeps what it holds; an attribute no state sets any more leaves the machine. `envelopes` keys give an attribute an envelope each (see `machine state add`), and a key set to `null` takes it away; clearing a value clears its envelope. A playhead resting in a state decides every `interval` seconds from its arrival (0: once, on arrival; -1: never) — or every `interval_expression` seconds, an expression read for the playhead as each beat is armed, a negative value being never; empty, `interval` holds — which transition out of it to take, by `mode`: `sequence` takes the next transition out in authored order, each playhead remembering its place per state across visits; `random` draws by weight among `noop` (wait one more interval) and `weights` `{transition id: weight}`, which replaces the whole map and in which a transition left out weighs 1; `expression` evaluates `expression` to the index of the transition out to take, a negative index waiting (see `machine transition add` for what an expression reads). A new state draws evenly among its transitions out: `random` with `noop` 0 and no weights, every second. A state with no transition out lands its values again and plays its envelopes every `interval` seconds instead. Previewable: a card drag sends `pos` as a preview.",
     "{name}");
 
 op!(Arrange, "machine arrange", 1, ArrangeArgs {
@@ -122,14 +110,6 @@ op!(StateRemove, "machine state remove", 2, StateRemoveArgs {
 },
     "Delete a state and every transition into or out of it, and every attribute no other state sets. A state a playhead starts in refuses: move the playhead first.",
     "{removed: true, name}");
-
-op!(StateRename, "machine state rename", 2, StateRenameArgs {
-    pub machine: String,
-    pub name: String,
-    pub to: String,
-},
-    "Rename a state, and rewrite every `sm('<name>')` of the machine that reads it. A playhead resting in it or flying to it goes on as it was.",
-    "{id, name, was} — the name as stored, and the name it had");
 
 op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub machine: String,
@@ -171,10 +151,11 @@ op!(PlayheadAdd, "machine playhead add", 2, PlayheadAddArgs {
 op!(PlayheadEdit, "machine playhead edit", 2, PlayheadEditArgs {
     pub machine: String,
     pub name: String,
+    pub to: Option<String>,
     pub color: Option<String>,
     pub start: Option<String>,
 },
-    "Change a playhead's colour and/or start state. The start is where a reset and a load put it.",
+    "Change a playhead's name, colour and/or start state. `to` renames it: its variable group moves with the values it holds, every expression that reads it is rewritten, and its run goes on as it was. The start is where a reset and a load put it.",
     "{name}");
 
 op!(PlayheadRemove, "machine playhead remove", 2, PlayheadRemoveArgs {
@@ -183,14 +164,6 @@ op!(PlayheadRemove, "machine playhead remove", 2, PlayheadRemoveArgs {
 },
     "Delete a playhead and its variable group.",
     "{removed: true, name}");
-
-op!(PlayheadRename, "machine playhead rename", 2, PlayheadRenameArgs {
-    pub machine: String,
-    pub name: String,
-    pub to: String,
-},
-    "Rename a playhead — its variable group, which moves with the values it holds — and rewrite every expression that reads it. Its run goes on as it was.",
-    "{id, name, was} — the name as stored, and the name it had");
 
 op!(Fire, "machine fire", 1, FireArgs {
     pub machine: String,
@@ -241,7 +214,7 @@ fn id_of<V: Named>(kind: &str, map: &IndexMap<String, V>, given: &str) -> Result
 fn set(tx: &mut Txn, id: &str, mut next: Machine) -> Result<(), String> {
     next.prune();
     tx.key(format!("machine {id}"));
-    for touched in tx.g.set_machine(id, Some(next), None)? {
+    for touched in tx.g.set_machine(id, Some(next))? {
         tx.echo(touched);
     }
     Ok(())
@@ -252,9 +225,9 @@ fn named(o: &Value) -> &str {
     o["name"].as_str().unwrap_or_default()
 }
 
-/// A rename's history label, off what the op answered: the name it had and the name it has.
-fn renamed(kind: &str, o: &Value) -> String {
-    format!("Rename {kind} {} → {}", o["was"].as_str().unwrap_or_default(), named(o))
+/// An edit's history label, by the name the op answered: a rename where it gave one.
+fn edited(kind: &str, to: &Option<String>, o: &Value) -> String {
+    format!("{} {kind} {}", if to.is_some() { "Rename" } else { "Edit" }, named(o))
 }
 
 /// Per attribute id an op names, what it sets or, for a `null`, clears.
@@ -333,7 +306,7 @@ impl WriteOp for Add {
 impl WriteOp for Remove {
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
         let (id, m) = machine_of(&tx.g, &a.machine)?;
-        tx.g.set_machine(&id, None, None)?;
+        tx.g.set_machine(&id, None)?;
         // A panel over the removed machine shows the next one the patch has.
         if let Some(next) = tx.g.machines().keys().next().cloned() {
             let writes = tx.g.arrangement().retarget("machine", "machine", &id, &next);
@@ -349,30 +322,18 @@ impl WriteOp for Remove {
     }
 }
 
-impl WriteOp for Rename {
-    fn run(tx: &mut Txn, a: RenameArgs) -> Result<Value, String> {
-        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
-        let was = std::mem::replace(&mut m.name, a.to.clone());
-        set(tx, &id, m)?;
-        Ok(json!({ "id": id, "name": a.to, "was": was }))
-    }
-
-    fn label(_: &RenameArgs, o: &Value) -> String {
-        renamed("machine", o)
-    }
-}
-
 impl WriteOp for Edit {
     fn run(tx: &mut Txn, a: EditArgs) -> Result<Value, String> {
         let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        m.name = a.to.unwrap_or(m.name);
         m.seed = a.seed.or(m.seed);
         let out = json!({ "seed": m.seed, "name": m.name });
         set(tx, &id, m)?;
         Ok(out)
     }
 
-    fn label(_: &EditArgs, o: &Value) -> String {
-        format!("Edit machine {}", named(o))
+    fn label(a: &EditArgs, o: &Value) -> String {
+        edited("machine", &a.to, o)
     }
 }
 
@@ -398,10 +359,11 @@ impl WriteOp for AttributeEdit {
     fn run(tx: &mut Txn, a: AttributeEditArgs) -> Result<Value, String> {
         let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let aid = id_of("attribute", &m.attributes, &a.name)?;
-        if a.value.is_none() && a.kind.is_none() && a.curve.is_none() {
-            return Err("nothing to change — give a value, a kind or a curve".into());
+        if a.to.is_none() && a.value.is_none() && a.kind.is_none() && a.curve.is_none() {
+            return Err("nothing to change — give a name, a value, a kind or a curve".into());
         }
         let attr = &mut m.attributes[&aid];
+        attr.name = a.to.unwrap_or(std::mem::take(&mut attr.name));
         if let Some(v) = a.value {
             attr.default = literal(v.0)?;
         }
@@ -429,8 +391,8 @@ impl WriteOp for AttributeEdit {
         Ok(out)
     }
 
-    fn label(_: &AttributeEditArgs, o: &Value) -> String {
-        format!("Edit attribute {}", named(o))
+    fn label(a: &AttributeEditArgs, o: &Value) -> String {
+        edited("attribute", &a.to, o)
     }
 }
 
@@ -449,20 +411,6 @@ impl WriteOp for AttributeRemove {
 
     fn label(_: &AttributeRemoveArgs, o: &Value) -> String {
         format!("Remove attribute {}", named(o))
-    }
-}
-
-impl WriteOp for AttributeRename {
-    fn run(tx: &mut Txn, a: AttributeRenameArgs) -> Result<Value, String> {
-        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
-        let aid = id_of("attribute", &m.attributes, &a.name)?;
-        let was = std::mem::replace(&mut m.attributes[&aid].name, a.to.clone());
-        set(tx, &id, m)?;
-        Ok(json!({ "id": aid, "name": a.to, "was": was }))
-    }
-
-    fn label(_: &AttributeRenameArgs, o: &Value) -> String {
-        renamed("attribute", o)
     }
 }
 
@@ -488,8 +436,8 @@ impl WriteOp for StateEdit {
     fn run(tx: &mut Txn, a: StateEditArgs) -> Result<Value, String> {
         let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let sid = id_of("state", &m.states, &a.name)?;
-        if a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
-            return Err("nothing to change — give a pos, values, envelopes, interval, interval_expression, mode, noop, weights or expression".into());
+        if a.to.is_none() && a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
+            return Err("nothing to change — give a name, a pos, values, envelopes, interval, interval_expression, mode, noop, weights or expression".into());
         }
         let values = values_of(&m, a.values)?;
         let envelopes = envelopes_of(&m, a.envelopes)?;
@@ -497,6 +445,7 @@ impl WriteOp for StateEdit {
             return Err(format!("state `{}` weighs `{t}`, which is no transition out of it", m.states[&sid].name));
         }
         let s = &mut m.states[&sid];
+        s.name = a.to.unwrap_or(std::mem::take(&mut s.name));
         if let Some(pos) = a.pos {
             s.pos = pos;
         }
@@ -540,7 +489,7 @@ impl WriteOp for StateEdit {
     fn label(a: &StateEditArgs, o: &Value) -> String {
         match (&a.pos, &a.values) {
             (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", named(o)),
-            _ => format!("Edit state {}", named(o)),
+            _ => edited("state", &a.to, o),
         }
     }
 }
@@ -574,20 +523,6 @@ impl WriteOp for StateRemove {
 
     fn label(_: &StateRemoveArgs, o: &Value) -> String {
         format!("Remove state {}", named(o))
-    }
-}
-
-impl WriteOp for StateRename {
-    fn run(tx: &mut Txn, a: StateRenameArgs) -> Result<Value, String> {
-        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
-        let sid = id_of("state", &m.states, &a.name)?;
-        let was = std::mem::replace(&mut m.states[&sid].name, a.to.clone());
-        set(tx, &id, m)?;
-        Ok(json!({ "id": sid, "name": a.to, "was": was }))
-    }
-
-    fn label(_: &StateRenameArgs, o: &Value) -> String {
-        renamed("state", o)
     }
 }
 
@@ -676,11 +611,12 @@ impl WriteOp for PlayheadEdit {
     fn run(tx: &mut Txn, a: PlayheadEditArgs) -> Result<Value, String> {
         let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let pid = id_of("playhead", &m.playheads, &a.name)?;
-        if a.color.is_none() && a.start.is_none() {
-            return Err("nothing to change — give a color or a start".into());
+        if a.to.is_none() && a.color.is_none() && a.start.is_none() {
+            return Err("nothing to change — give a name, a color or a start".into());
         }
         let start = a.start.map(|s| id_of("state", &m.states, &s)).transpose()?;
         let p = &mut m.playheads[&pid];
+        p.name = a.to.unwrap_or(std::mem::take(&mut p.name));
         if let Some(color) = a.color {
             p.color = color;
         }
@@ -692,8 +628,8 @@ impl WriteOp for PlayheadEdit {
         Ok(out)
     }
 
-    fn label(_: &PlayheadEditArgs, o: &Value) -> String {
-        format!("Edit playhead {}", named(o))
+    fn label(a: &PlayheadEditArgs, o: &Value) -> String {
+        edited("playhead", &a.to, o)
     }
 }
 
@@ -711,27 +647,13 @@ impl WriteOp for PlayheadRemove {
     }
 }
 
-impl WriteOp for PlayheadRename {
-    fn run(tx: &mut Txn, a: PlayheadRenameArgs) -> Result<Value, String> {
-        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
-        let pid = id_of("playhead", &m.playheads, &a.name)?;
-        let was = std::mem::replace(&mut m.playheads[&pid].name, a.to.clone());
-        set(tx, &id, m)?;
-        Ok(json!({ "id": pid, "name": a.to, "was": was }))
-    }
-
-    fn label(_: &PlayheadRenameArgs, o: &Value) -> String {
-        renamed("playhead", o)
-    }
-}
-
 /// The ids of the machine and the playhead an effect addresses, and the patch second it is
 /// stamped with, read off the settled model before the thread is told.
 fn addressed(state: &AppState, machine: &str, playhead: &str) -> Result<(String, Machine, String, f64), String> {
     let g = state.graph.lock();
     let (id, m) = machine_of(&g, machine)?;
     let pid = id_of("playhead", &m.playheads, playhead)?;
-    Ok((id, m, pid, g.time().now()))
+    Ok((id, m, pid, g.time().position()))
 }
 
 impl EffectOp for Fire {
@@ -758,7 +680,7 @@ impl EffectOp for Reset {
     fn run(state: &AppState, a: ResetArgs, _: &Caller) -> Result<Value, String> {
         let (machine, at) = {
             let g = state.graph.lock();
-            (a.machine.map(|m| machine_of(&g, &m).map(|(id, _)| id)).transpose()?, g.time().now())
+            (a.machine.map(|m| machine_of(&g, &m).map(|(id, _)| id)).transpose()?, g.time().position())
         };
         state.machines.send(Msg::Reset { at, machine });
         Ok(json!({ "ok": true }))

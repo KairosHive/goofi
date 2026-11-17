@@ -509,7 +509,7 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		await count.press('Enter');
 		await page.getByTestId('add-states-go').click();
 		await expect(score).toHaveAttribute('data-order', /state0 state1 state2 state3/);
-		expect(await wires()).toEqual(['state0>state1', 'state1>state2', 'state2>state3']);
+		await expect.poll(wires).toEqual(['state0>state1', 'state1>state2', 'state2>state3']);
 		await page.getByTestId('topbar-undo').click();
 		await expect(score).toHaveAttribute('data-order', '');
 		await page.getByTestId('topbar-redo').click();

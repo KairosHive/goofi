@@ -26,7 +26,7 @@
 			const flight = variableFrame(`${p}.progress`)?.meta ?? {};
 			const prev = String(flight.prev ?? '');
 			const arrived = Math.max(Number(flight.arrived ?? 0), Number(variableFrame(`${p}.state`)?.meta.arrived ?? 0));
-			return { p, color: dotColor(color, i), state, prev, progress, arrived, flying: prev !== '' && progress < 1 };
+			return { id, p, color: dotColor(color, i), state, prev, progress, arrived, flying: prev !== '' && progress < 1 };
 		})
 	);
 
@@ -54,7 +54,7 @@
 </script>
 
 <div class="dots" data-testid="playhead-dots">
-	{#each where as w (`${w.p}:${w.flying ? `${w.prev}>${w.state}` : `rest:${w.state}`}`)}
+	{#each where as w (`${w.id}:${w.flying ? `${w.prev}>${w.state}` : `rest:${w.state}`}`)}
 		{@const p = at(w)}
 		{#if p}
 			<div

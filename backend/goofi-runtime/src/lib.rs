@@ -270,9 +270,10 @@ pub struct Cx<'a> {
     pub readers: &'a [bool],
     /// Per output: whether the recorder holds this slot armed.
     pub recorded: &'a [bool],
-    /// The patch's time at this run.
+    /// The patch's run time at this run: its `procstart` stamp.
     pub now: f64,
-    /// The patch's clock, read again as a frame leaves, for its `procend` stamp.
+    /// The patch's clock: its position is the node's `now`, and its run time, read again as a
+    /// frame leaves, the `procend` stamp.
     pub time: &'a goofi_supervisor::timing::Time,
     /// The node this run is, as its frames' `source` names it.
     pub uid: Uid,
@@ -1071,9 +1072,9 @@ impl<E: Executor> Runtime<E> {
                 let b = &self.binds[i];
                 let evaluated = match (self.shared.evaluator.lock().clone(), inputs) {
                     (None, _) => Err("no expression evaluator available".to_string()),
-                    (Some(ev), Inputs::Bare(frame)) => goofi_node::at(&*ev, &frame, self.time.now(), range).map_err(|e| e.0),
+                    (Some(ev), Inputs::Bare(frame)) => goofi_node::at(&*ev, &frame, self.time.position(), range).map_err(|e| e.0),
                     (Some(ev), Inputs::Computed(locals)) => {
-                        ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.now(), range, state: Some(&b.expr.state) }).map_err(|e| e.0)
+                        ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.position(), range, state: Some(&b.expr.state) }).map_err(|e| e.0)
                     }
                 };
                 let (param, whole) = (b.param, b.elem.is_none());

@@ -140,13 +140,12 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
         let mut reads = NodeReads::default();
         let mut streams = Streams::default();
         let mut logged: HashSet<String> = HashSet::new();
+        let mut last = 0.0;
         loop {
             // Park toward the next instant owed; a ring — a frame read, or the inbox — is the other
             // reason to wake.
-            let wait = match machines.next_deadline() {
-                Some(at) => goofi_supervisor::timing::Deadline::at(time.instant_at(at)).left().min(IDLE),
-                None => IDLE,
-            };
+            let owed = time.instant_at(machines.next_deadline().unwrap_or(f64::INFINITY));
+            let wait = owed.map_or(IDLE, |at| goofi_supervisor::timing::Deadline::at(at).left().min(IDLE));
             let mut woken = door.wait_until(Instant::now() + wait).has(MACHINES_FRAME_ID);
             loop {
                 match rx.try_recv() {
@@ -161,8 +160,10 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             if machines.is_empty() {
                 continue;
             }
-            let now = time.now();
-            if !woken && machines.next_deadline().is_none_or(|at| at > now) {
+            // The position went back — a jump, a restart at the length — and that is owed too.
+            let now = time.position();
+            let back = now < std::mem::replace(&mut last, now);
+            if !woken && !back && machines.next_deadline().is_none_or(|at| at > now) {
                 continue;
             }
             // The frames the expressions read, taken in one look; the step runs off every lock.

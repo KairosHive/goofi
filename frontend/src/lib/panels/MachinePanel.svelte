@@ -79,7 +79,7 @@
 		}
 	}
 	function rename(machine: string, to: string): void {
-		if (to !== g.machines[machine]?.name && isValidIdentifier(to)) void call('machine rename', { machine, to });
+		if (to !== g.machines[machine]?.name && isValidIdentifier(to)) void call('machine edit', { machine, to });
 	}
 	/** ONE step: the last machine's successor is born first, so the removal re-aims this panel at it
 	 * and one undo brings the old one back whole. The manager, never a reaction here, picks the next. */

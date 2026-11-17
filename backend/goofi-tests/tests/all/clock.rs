@@ -1,0 +1,105 @@
+//! The patch clock: its position pauses, jumps and restarts at a length, an expression's `t` and
+//! the machines stand with it, and the run time that stamps a frame never stops.
+
+use std::sync::Arc;
+
+use goofi_python::inproc::PyExprEvaluator;
+use goofi_tests::{f32s, hex, j, Goofi};
+
+fn number(g: &Goofi, name: &str) -> f64 {
+    g.variable(name).as_f64().unwrap_or(f64::NAN)
+}
+
+fn time(g: &Goofi) -> f64 {
+    number(g, "clock.time")
+}
+
+#[test]
+fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
+    // The position plays from the load, and `t` is the position.
+    let began = time(&g);
+    g.until("the position to play", |g| (time(g) > began).then_some(()));
+    assert_eq!(number(&g, "clock.playing"), 1.0);
+    let reader = g.add("_TestScalar");
+    g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "t" }));
+    let probe = g.probe(reader, "out");
+    let read = |_: &Goofi| probe.latest().map(|d| (f64::from(f32s(&d)[0]), d.meta().procstart().unwrap_or(f64::NAN)));
+    g.until("the node to read the position", |g| read(g).filter(|(t, _)| *t > 0.0));
+
+    // A pause holds the position, and with it `t`; the node runs on, and its stamps go on.
+    assert_eq!(g.call("clock set", j!({ "playing": false }))["playing"], j!(false));
+    let held = time(&g);
+    assert_eq!(number(&g, "clock.playing"), 0.0);
+    let (_, stamped) = g.until("the node to read the held position", |g| read(g).filter(|(t, _)| (*t - held).abs() < 1e-3));
+    g.until("a later stamp on the held position", |g| read(g).filter(|(t, at)| (*t - held).abs() < 1e-3 && *at > stamped));
+    assert!(g.stays(|g| time(g) == held), "a paused position stands");
+
+    // A jump puts it anywhere, paused or not; a resume plays from there; a stop is both at once.
+    g.call("clock set", j!({ "time": 100.0 }));
+    assert_eq!(time(&g), 100.0);
+    g.call("clock set", j!({ "playing": true }));
+    g.until("the position to play from the jump", |g| (time(g) > 100.0).then_some(()));
+    assert!(time(&g) < 160.0, "it plays from where it was put");
+    assert_eq!(g.call("clock set", j!({ "playing": false, "time": 0.0 })), j!({ "playing": false, "time": 0.0 }));
+    assert!(g.refuse("clock set", j!({ "time": -1.0 })).contains("at least 0"));
+
+    // With a length and the loop on, the position restarts at the length; progress is its share.
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.2 }));
+    g.call("variable entry edit", j!({ "name": "clock.loop", "value": 1.0 }));
+    g.call("clock set", j!({ "playing": true }));
+    let mut last = time(&g);
+    g.until("the position to restart at the length", |g| {
+        let now = time(g);
+        (now < std::mem::replace(&mut last, now)).then_some(())
+    });
+    let progress = |g: &Goofi| number(g, "clock.progress");
+    assert!(g.stays(|g| time(g) < 0.2 && (0.0..1.0).contains(&progress(g))), "the position stays under its length");
+    // Endless again, it counts up past the length.
+    g.call("variable entry edit", j!({ "name": "clock.loop", "value": 0.0 }));
+    g.until("the endless position to pass the length", |g| (time(g) > 0.2).then_some(()));
+    assert_eq!(progress(&g), 0.0);
+
+    // A paused clock plays again from zero on a load: the clock is the patch's.
+    g.call("clock set", j!({ "playing": false, "time": 50.0 }));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("clock.gfi");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    assert_eq!(number(&g, "clock.playing"), 1.0);
+    assert!(time(&g) < 50.0, "the position began again");
+}
+
+#[test]
+fn a_machine_steps_by_the_position() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
+    for (op, payload) in [
+        ("machine add", j!({ "name": "pulse" })),
+        ("machine state add", j!({ "machine": "pulse", "name": "a" })),
+        ("machine state add", j!({ "machine": "pulse", "name": "b" })),
+        ("machine transition add", j!({ "machine": "pulse", "from": "a", "to": "b" })),
+        ("machine transition add", j!({ "machine": "pulse", "from": "b", "to": "a" })),
+        ("machine state edit", j!({ "machine": "pulse", "name": "a", "mode": "sequence", "interval": 0.1 })),
+        ("machine state edit", j!({ "machine": "pulse", "name": "b", "mode": "sequence", "interval": 0.1 })),
+        ("machine playhead add", j!({ "machine": "pulse", "name": "p", "start": "a" })),
+    ] {
+        g.call(op, payload);
+    }
+    let state = |g: &Goofi| g.variable("p.state").as_str().unwrap_or_default().to_string();
+    g.until("the playhead to move", |g| (state(g) == "b").then_some(()));
+    // Paused, no beat comes due: the playhead rests where it is for longer than its interval.
+    g.call("clock set", j!({ "playing": false }));
+    let rests = state(&g);
+    assert!(g.stays(|g| state(g) == rests), "a paused clock holds the machine");
+    // Played again, the beat comes due.
+    g.call("clock set", j!({ "playing": true }));
+    g.until("the playhead to move on", |g| (state(g) != rests).then_some(()));
+    // A position that went back starts every run over, as a load does.
+    g.call("machine state edit", j!({ "machine": "pulse", "name": "b", "interval": -1.0 }));
+    g.until("the playhead to rest in b", |g| (state(g) == "b").then_some(()));
+    g.call("machine state edit", j!({ "machine": "pulse", "name": "a", "interval": -1.0 }));
+    g.call("clock set", j!({ "time": 0.0 }));
+    g.until("the run to start over", |g| (state(g) == "a").then_some(()));
+}

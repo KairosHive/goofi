@@ -353,9 +353,9 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     g.call("machine jump", j!({ "machine": "seq", "playhead": "head", "state": "C" }));
     at_rest_in(&g, "head", "A");
     write("machine state edit", j!({ "machine": "seq", "name": "C", "values": { "gain": 0.0 }, "envelopes": { "gain": null } }));
-    write("machine state rename", j!({ "machine": "seq", "name": "C", "to": "Mid" }));
+    write("machine state edit", j!({ "machine": "seq", "name": "C", "to": "Mid" }));
     assert_eq!(named(&g)["seq"]["transitions"][alone.as_str().unwrap()]["condition"], j!("me.gain > 0.5 and sm('Mid').residents == 1"));
-    write("machine state rename", j!({ "machine": "seq", "name": "Mid", "to": "C" }));
+    write("machine state edit", j!({ "machine": "seq", "name": "Mid", "to": "C" }));
     write("machine transition remove", j!({ "machine": "seq", "id": alone }));
     write("machine transition remove", j!({ "machine": "seq", "id": meet }));
 
@@ -363,16 +363,16 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // in a param's expression and in the machine's own.
     let follows = write("machine transition add", j!({ "machine": "seq", "from": "C", "to": "A", "condition": "vars.head.gain + me.gain > 9" }))["id"].clone();
     let condition = |g: &Goofi| named(g)["seq"]["transitions"][follows.as_str().unwrap()]["condition"].clone();
-    write("machine playhead rename", j!({ "machine": "seq", "name": "head", "to": "lead" }));
+    write("machine playhead edit", j!({ "machine": "seq", "name": "head", "to": "lead" }));
     assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("vars.lead.gain"));
     assert_eq!(condition(&g), j!("vars.lead.gain + me.gain > 9"));
     assert!(g.doc()["variables"]["head.gain"].is_null() && g.doc()["variables"]["lead.gain"].is_object());
-    write("machine attribute rename", j!({ "machine": "seq", "name": "gain", "to": "level" }));
+    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "to": "level" }));
     assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("vars.lead.level"));
     assert_eq!(condition(&g), j!("vars.lead.level + me.level > 9"));
     write("machine transition remove", j!({ "machine": "seq", "id": follows }));
     assert_eq!(named(&g)["seq"]["states"]["A"]["values"]["level"].as_f64(), Some(0.2));
-    write("machine state rename", j!({ "machine": "seq", "name": "A", "to": "Start" }));
+    write("machine state edit", j!({ "machine": "seq", "name": "A", "to": "Start" }));
     assert_eq!(named(&g)["seq"]["playheads"]["lead"]["start"], j!("Start"));
     assert_eq!(named(&g)["seq"]["transitions"]["t1"]["from"], j!("Start"));
     at_rest_in(&g, "lead", "Start");
@@ -491,16 +491,16 @@ fn a_rename_moves_a_name_and_nothing_of_the_run() {
     let since = arrived(&g, "h.state");
     assert!(since.is_number(), "the arrival rides the frame: {since}");
 
-    g.call("machine state rename", j!({ "machine": "amp", "name": "high", "to": "top" }));
+    g.call("machine state edit", j!({ "machine": "amp", "name": "high", "to": "top" }));
     at_rest_in(&g, "h", "top");
     assert!(g.stays(|g| text(g, "h.state") == "top" && number(g, "h.level") == 1.0), "the playhead stays in the renamed state");
-    g.call("machine playhead rename", j!({ "machine": "amp", "name": "h", "to": "lead" }));
+    g.call("machine playhead edit", j!({ "machine": "amp", "name": "h", "to": "lead" }));
     at_rest_in(&g, "lead", "top");
     assert!(g.stays(|g| text(g, "lead.state") == "top" && number(g, "lead.level") == 1.0), "the renamed playhead stays where it rests");
-    g.call("machine attribute rename", j!({ "machine": "amp", "name": "level", "to": "gain" }));
+    g.call("machine attribute edit", j!({ "machine": "amp", "name": "level", "to": "gain" }));
     g.until("the renamed attribute's variable", |g| (number(g, "lead.gain") == 1.0).then_some(()));
     assert!(g.stays(|g| number(g, "lead.gain") == 1.0), "the renamed attribute keeps the value the playhead holds");
-    g.call("machine rename", j!({ "machine": "amp", "to": "voice" }));
+    g.call("machine edit", j!({ "machine": "amp", "to": "voice" }));
     assert!(g.stays(|g| text(g, "lead.state") == "top" && number(g, "lead.gain") == 1.0), "the renamed machine's run goes on");
     assert_eq!(arrived(&g, "lead.state"), since, "no rename is an arrival");
 
@@ -518,15 +518,31 @@ fn a_rename_moves_a_name_and_nothing_of_the_run() {
     };
     let left = flight(&g, "lead");
     assert_eq!(left.0, j!(top), "the flight left the state the playhead rested in");
-    g.call("machine state rename", j!({ "machine": m, "name": "top", "to": "peak" }));
-    g.call("machine state rename", j!({ "machine": m, "name": "low", "to": "floor" }));
-    g.call("machine playhead rename", j!({ "machine": m, "name": "lead", "to": "solo" }));
+    g.call("machine state edit", j!({ "machine": m, "name": "top", "to": "peak" }));
+    g.call("machine state edit", j!({ "machine": m, "name": "low", "to": "floor" }));
+    g.call("machine playhead edit", j!({ "machine": m, "name": "lead", "to": "solo" }));
     g.until("the flight under its new names", |g| (text(g, "solo.state") == "floor" && flight(g, "solo") == left).then_some(()));
     assert!(g.stays(|g| number(g, "solo.progress") != 1.0 && flight(g, "solo") == left), "the flight goes on, from the state it left");
 
     // Named by id, an op answers the name, and its step in the history says the name.
     assert_eq!(g.call("machine state edit", j!({ "machine": m, "name": top, "pos": [48.0, 0.0] }))["name"], j!("peak"));
     assert_eq!(g.call("undo", j!({}))["redo"], j!("Move state peak"));
+}
+
+/// An id that a load brought is not minted again: a machine added after a load is one more.
+#[test]
+fn a_machine_added_after_a_load_takes_an_id_of_its_own() {
+    let g = Goofi::new();
+    g.call("machine add", j!({ "name": "first" }));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.gfi");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    let other = Goofi::new();
+    other.call("session load", j!({ "path": path.to_string_lossy() }));
+    other.call("machine add", j!({ "name": "second" }));
+    let doc = other.doc();
+    let names: Vec<&str> = doc["machines"].as_object().unwrap().values().filter_map(|m| m["name"].as_str()).collect();
+    assert_eq!(names, ["first", "second"]);
 }
 
 /// A stepper's model written by hand: each record's key is its name too.

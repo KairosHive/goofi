@@ -81,15 +81,7 @@ condition?: string,
  * Seconds; 0 is instant. Each attribute eases over it by its own curve.
  */
 duration: number, };
-export type Playhead = { 
-/**
- * Its variable group's name too.
- */
-name: string, color: string, 
-/**
- * The id of the state it starts in.
- */
-start: string, };
+export type Playhead = { name: string, color: string, start: string, };
 export type Machine = { name: string, attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
 /**
  * What the random draws start from; absent is 0.

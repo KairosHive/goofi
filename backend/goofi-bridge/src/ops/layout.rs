@@ -218,8 +218,7 @@ impl WriteOp for PanelEdit {
         match born {
             Some(Born::Group(group)) => tx.g.add_variable_group(&group, None)?,
             Some(Born::Machine(id)) => {
-                let name = goofi_core::fresh_name("machine", 0, |n| tx.g.machines().values().any(|m| m.name == n));
-                tx.g.set_machine(&id, Some(Machine { name, ..Machine::default() }), None)?;
+                tx.g.set_machine(&id, Some(Machine { name: "machine0".into(), ..Machine::default() }))?;
             }
             None => {}
         }

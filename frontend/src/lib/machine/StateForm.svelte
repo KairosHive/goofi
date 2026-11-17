@@ -119,7 +119,7 @@
 <div class="state-form" data-testid="state-form" data-count={ids.length}>
 	<div class="head">
 		{#if one}
-			<span class="name"><RenameField value={s?.name ?? ''} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => call('machine state rename', { name: one, to })} /></span>
+			<span class="name"><RenameField value={s?.name ?? ''} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => call('machine state edit', { name: one, to })} /></span>
 			<Badge tone={resting.length > 0 ? 'accent' : 'neutral'} title={resting.length > 0 ? `Resting here now: ${resting.join(', ')}` : 'No playhead rests here now'}>
 				{resting.length > 0 ? `${resting.length} here` : 'empty'}
 			</Badge>
@@ -157,7 +157,7 @@
 				{@const ph = m.playheads[p]}
 				<div class="row" data-testid={`playhead-${ph.name}`}>
 					<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${ph.name} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
-					<span class="mono"><RenameField value={ph.name} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
+					<span class="mono"><RenameField value={ph.name} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead edit', { name: p, to })} /></span>
 					<span class="hint" title="Where it is now">in <span class="mono" data-testid="playhead-state">{m.states[stateOf(m, p)]?.name}</span></span>
 					<span class="hint" title="Where a reset and a load put it">starts</span>
 					<Select data-testid="playhead-start" aria-label="start state" density="chrome" value={ph.start} options={Object.keys(m.states)} labels={Object.fromEntries(Object.entries(m.states).map(([id, s]) => [id, s.name]))} onChange={(v) => call('machine playhead edit', { name: p, start: v })} />

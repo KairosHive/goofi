@@ -548,7 +548,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             let held = match (&made, latest.lock().clone()) {
                 (Some(_), _) | (None, None) => None,
                 (None, Some(d)) if d.as_functional().is_none() => Some(d),
-                (None, Some(d)) => match graph.lock().evaluator().map(|ev| goofi_node::at(&*ev, &d, time.now(), (0.0, 1.0))) {
+                (None, Some(d)) => match graph.lock().evaluator().map(|ev| goofi_node::at(&*ev, &d, time.position(), (0.0, 1.0))) {
                     Some(Ok(v)) => Some(v),
                     Some(Err(e)) => {
                         goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: {}", e.0));

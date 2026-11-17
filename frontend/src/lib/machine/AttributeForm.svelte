@@ -39,7 +39,7 @@
 	<div class="fields">
 		<Field label="name" row>
 			<TextInput inputmode="search" value={a.name} aria-label="Attribute name" data-testid="attribute-name" autocomplete="off"
-				onChange={(to) => { if (to.trim() !== a.name && isValidIdentifier(to.trim())) call('machine attribute rename', { to: to.trim() }); }} />
+				onChange={(to) => { if (to.trim() !== a.name && isValidIdentifier(to.trim())) call('machine attribute edit', { to: to.trim() }); }} />
 		</Field>
 		<Field label="kind" row>
 			<Select data-testid="attribute-kind" aria-label="kind" value={faceOf(a)} options={FACES.map((f) => f.id)} onChange={setFace} />
