@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from './model';
+import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from './model';
 
-const notes: Track = { name: 'keys', order: 0, kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
+const notes: Track = { name: 'keys', order: 0, kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, kind: 'curve', range: [0, 2], keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
 
 describe('the timeline model', () => {
 	it('reads a beat by the tempo, and finds where the tracks end', () => {
-		expect(unit(true, 120)).toBe(0.5);
-		expect(unit(false, 120)).toBe(1);
+		expect(beatSeconds(120)).toBe(0.5);
 		expect(contentEnd([notes, curve])).toBe(4);
 		expect(contentEnd([])).toBe(0);
 	});

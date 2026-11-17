@@ -18,6 +18,20 @@ use crate::machine::{functional_code, AttributeKind, Keyed, Leg, Motion};
 /// The one element of a note track's group, and its width: each held note's velocity, where a
 /// MIDI device's `notes` has its channel 1, so a reader of a device reads a track.
 const NOTES: (&str, usize) = MIDI_ENTRIES[1];
+/// The grids a note track's notes snap to in a panel, by name: how many seconds or beats lie
+/// between two of its lines, and which of the two they are.
+pub const GRIDS: [(&str, f64, bool); 10] = [
+    ("1 s", 1.0, false),
+    ("1/2 s", 0.5, false),
+    ("1/4 s", 0.25, false),
+    ("1/10 s", 0.1, false),
+    ("1 beat", 1.0, true),
+    ("1/2 beat", 0.5, true),
+    ("1/3 beat", 1.0 / 3.0, true),
+    ("1/4 beat", 0.25, true),
+    ("1/8 beat", 0.125, true),
+    ("1/16 beat", 0.0625, true),
+];
 /// The one element of a curve track's group.
 const VALUE: &str = "value";
 
@@ -27,14 +41,13 @@ const VALUE: &str = "value";
 pub struct Track {
     pub name: String,
     /// Its place among the tracks, the lowest first: the order a panel draws them in.
-    #[serde(default)]
     pub order: u32,
     #[serde(flatten)]
     pub lanes: Lanes,
 }
 
 /// What a track holds: notes, with the keyboard a panel draws them on — its lowest and highest
-/// pitch, and the scale and root whose notes it marks — or one curve through its keyframes, in
+/// pitch, the scale and root whose notes it marks, and the grid a gesture snaps to — or one curve through its keyframes, in
 /// time order, over a range. The curve's value holds outside the keyframes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -46,6 +59,8 @@ pub enum Lanes {
         scale: String,
         #[serde(default = "c")]
         root: String,
+        #[serde(default = "quarter")]
+        grid: String,
         #[serde(default)]
         notes: Vec<Note>,
     },
@@ -83,6 +98,10 @@ fn c() -> String {
     scale::NOTES[0].into()
 }
 
+fn quarter() -> String {
+    GRIDS[7].0.into()
+}
+
 /// A keyframe: the value at `at`, and the curve from it to the next one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Key {
@@ -99,10 +118,11 @@ impl Track {
     pub fn check(&self) -> Result<(), String> {
         let time = |at: f64| at.is_finite() && at >= 0.0;
         let (ok, why) = match &self.lanes {
-            Lanes::Note { range, scale, root, notes } => {
+            Lanes::Note { range, scale, root, grid, notes } => {
                 let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
                 let keyboard = range[0] < range[1] && range[1] <= 127 && scale::PRESET_NAMES.contains(&scale.as_str()) && scale::NOTES.contains(&root.as_str());
-                (keyboard && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
+                let gridded = GRIDS.iter().any(|(name, ..)| name == grid);
+                (keyboard && gridded && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; its grid is one a panel offers; a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
             Lanes::Curve { range, keys } => {
                 let whole = keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && keys.windows(2).all(|k| k[0].at < k[1].at);

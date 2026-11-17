@@ -66,6 +66,7 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     assert!(g.stays(|g| (1.0..1.2).contains(&time(g)) && (0.1..0.12).contains(&progress(g))), "the position stays in the section");
     assert!(g.call("clock set", j!({ "section": [0.0, 0.0] }))["section"].is_null(), "a section of no length is none");
     assert!(g.refuse("clock set", j!({ "section": [-1.0, 2.0] })).contains("at least 0"));
+    assert!(g.refuse("clock set", j!({ "section": [1.0, 1.0001] })).contains("a millisecond"));
     // Endless again, it goes on from where it stands, past the length; it does not jump to the
     // run time, which is a thousand seconds on after the restart below.
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 2000.0 }));
@@ -77,13 +78,14 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
 
     // A paused clock plays again from zero on a load: the clock is the patch's.
     g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 90.0 }));
-    g.call("clock set", j!({ "playing": false, "time": 50.0 }));
+    g.call("clock set", j!({ "playing": false, "time": 50.0, "section": [40.0, 60.0] }));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("clock.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     g.call("session load", j!({ "path": path.to_string_lossy() }));
     assert_eq!((number(&g, "clock.playing"), number(&g, "clock.bpm")), (1.0, 90.0), "the clock plays, and its tempo rode the file");
     assert!(time(&g) < 50.0, "the position began again");
+    assert!(g.call("clock set", j!({}))["section"].is_null(), "a section is of the patch that was");
 }
 
 #[test]

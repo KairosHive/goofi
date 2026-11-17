@@ -94,15 +94,23 @@
 		draft = fitted(draft.map((q, i) => (i === index ? p : q)));
 		onInput?.({ custom: draft });
 	}
-	function up(e: PointerEvent): void {
+	/** The drag is over: a release sends what it made, and a cancel drops it. The draft stands
+	 * until the value answers, so the curve does not show its old shape between the two. */
+	function up(e: PointerEvent, cancelled = false): void {
 		if (!held) return;
 		square?.releasePointerCapture(e.pointerId);
-		const [next, changed] = [draft!, held.changed];
+		const [next, send] = [draft!, held.changed && !cancelled];
 		held = null;
-		draft = null;
 		// A press that changed nothing is a pick alone: a preset stays the preset.
-		if (changed) onChange({ custom: next });
+		if (send) onChange({ custom: next });
+		else draft = null;
 	}
+	$effect(() => {
+		void value;
+		if (!held) draft = null;
+		// A point picked is one the curve still has.
+		if (picked !== null && picked >= pointsOf(value).length) picked = null;
+	});
 	/** Take the picked point out; the ends stay. */
 	function remove(): void {
 		if (!removable) return;
@@ -127,7 +135,7 @@
 			onpointerdown={add}
 			onpointermove={move}
 			onpointerup={up}
-			onpointercancel={up}
+			onpointercancel={(e) => up(e, true)}
 			onkeydown={(e) => {
 				if (e.key !== 'Delete' && e.key !== 'Backspace') return;
 				e.preventDefault();

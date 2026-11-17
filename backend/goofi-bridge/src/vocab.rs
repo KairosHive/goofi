@@ -67,7 +67,7 @@ pub static PANEL_TYPES: &[PanelType] = &[
     PanelType { id: "machine", title: "State machine", icon: "waypoints", accepts_node: false,
                 doc: "one state machine: its states, transitions and playheads on a canvas" },
     PanelType { id: "timeline", title: "Timeline", icon: "chart-no-axes-gantt", accepts_node: false,
-                doc: "every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id, `state.grid` names the grid its notes snap to" },
+                doc: "every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,
@@ -187,6 +187,7 @@ pub fn typescript() -> String {
     let playhead_fields = quoted(&goofi_graph::machine::OWN);
     let own_groups = quoted(&goofi_core::variables::OWN_GROUPS);
     let note_names = quoted(goofi_core::scale::NOTES);
+    let grids: String = goofi_graph::timeline::GRIDS.iter().map(|(name, count, beats)| format!("\t'{name}': [{count}, {beats}],\n")).collect();
     // Each named scale as the semitones above its root nearest its degrees: what a keyboard marks.
     let scales: String = goofi_core::scale::PRESET_NAMES
         .iter()
@@ -313,6 +314,8 @@ pub fn typescript() -> String {
          export const OWN_GROUPS = [{own_groups}] as const;\n\
          /** The twelve notes by name, from C: what a root is one of. */\n\
          export const NOTE_NAMES = [{note_names}] as const;\n\
+         /** The grids a note track's notes snap to, by name: how many seconds or beats lie between two lines, and whether they are beats. */\n\
+         export const GRIDS: Record<string, readonly [number, boolean]> = {{\n{grids}}};\n\
          /** The named scales, each as the semitones above its root nearest its degrees. */\n\
          export const SCALES: Record<string, readonly number[]> = {{\n{scales}}};\n\
          \n\

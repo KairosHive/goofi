@@ -1,9 +1,9 @@
 // The timeline panel: tracks stacked on one time axis, hidden per panel and shown again from the
 // bar's list, a track's menu with its five entries, a delete that asks first, a note and a keyframe
-// made by a click and a double click and moved by a drag, the clock steered from the bar and looped in a
+// made by a click and moved by a drag, the clock steered from the bar and looped in a
 // section dragged on the ruler, the view zoomed by its range bar, a track resized, and the whole
 // stood on its side in a panel taller than wide. On a phone, a
-// held finger is the door onto the menu and a double tap makes the note.
+// held finger is the door onto the menu and a tap makes the note.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -69,7 +69,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const names = async (): Promise<string[]> => panel.locator('section.track').evaluateAll((all) => all.map((t) => t.querySelector<HTMLInputElement>('.name input, input.name')?.value ?? ''));
 		expect(await names()).toEqual(['track0', 'track1', 'track2']);
 		const [from, onto] = [(await keys.locator('.info').boundingBox())!, (await bass.locator('.info').boundingBox())!];
-		await page.mouse.move(from.x + 20, from.y + from.height - 6);
+		// By the column's own edge: the rest of it is fields and buttons, which a press goes into.
+		await page.mouse.move(from.x + 1.5, from.y + from.height / 2);
 		await page.mouse.down();
 		await page.mouse.move(onto.x + 20, onto.y + onto.height / 2, { steps: 8 });
 		await page.mouse.up();
@@ -129,7 +130,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await panel.getByTestId('timeline-hidden').click();
 		await menuItem('track0').click();
 
-		// A double click on a note lane makes a note; a drag moves it in time; picked, its length
+		// A click on a note lane makes a note; a drag moves it in time; picked, its length
 		// and its velocity are in the track's bar, and the ✕ there removes it.
 		// The keyboard beside a note lane has a key for every pitch of its range; a scale and a
 		// root dim the keys outside them, and a note made on the lane lands on the scale.
@@ -164,6 +165,15 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// A note's end dragged makes it longer, by whole cells.
 		await dragBy(page, note.locator('.end'), ground.width * 0.1, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].length).toBeGreaterThan(born.length);
+		// With Shift body a drag leaves the grid: the note goes where the pointer is.
+		const body = (await note.boundingBox())!;
+		await page.mouse.move(body.x + 10, body.y + body.height / 2);
+		await page.mouse.down();
+		await page.keyboard.down('Shift');
+		await page.mouse.move(body.x + 10 + ground.width * 0.01, body.y + body.height / 2, { steps: 4 });
+		await page.mouse.up();
+		await page.keyboard.up('Shift');
+		await expect.poll(async () => ((await trackNamed(page, 'track0')).notes[0].at * 4) % 1).not.toBe(0);
 		for (const [field, value] of [['Length', 2], ['Velocity', 0.5]] as const) {
 			await keys.getByLabel(field).fill(String(value));
 			await keys.getByLabel(field).press('Enter');
@@ -190,10 +200,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await keys.getByTestId('track-delete-picked').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// One click on a note takes it out; one on an empty cell puts a note on the line of the
-		// grid before it, and the grid is the bar's to choose.
+		// grid before it, and the grid is the track's to choose.
 		await note.first().click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
-		await panel.getByTestId('timeline-grid').locator('select').selectOption('1 s');
+		await keys.locator('[aria-label="Grid"] select').selectOption('1 s');
+		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
+		expect((await trackNamed(page, 'track2')).grid, 'another note track keeps its own grid').toBe('1/4 beat');
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		expect((await trackNamed(page, 'track0')).notes[0]).toMatchObject({ at: 2, length: 1 });

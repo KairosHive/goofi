@@ -50,7 +50,8 @@ pub struct Time {
     origin: AtomicU64,
     wall: Mutex<SystemTime>,
     /// The position, as three `f64`s a reader takes with no lock: it is `run - shift` while it
-    /// plays and `held` while it is paused (NaN while it plays), folded into the loop where there is one.
+    /// plays and `held` while it is paused (NaN while it plays), folded into the section or the
+    /// length where there is one.
     shift: AtomicU64,
     held: AtomicU64,
     /// The seconds at which the position restarts from 0; 0 is never.
@@ -141,9 +142,16 @@ impl Time {
     pub fn until(&self, at: f64) -> Option<Duration> {
         let read = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
         let (total, start, length) = (read(&self.total), read(&self.start), read(&self.length));
-        let at = if length > 0.0 { at.min(start + length) } else { at };
-        let at = if total > 0.0 { at.min(total) } else { at };
-        (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - self.position()).max(0.0)))
+        let now = self.position();
+        // Inside the section the position restarts at its end and never at the length.
+        let at = match (length > 0.0, total > 0.0) {
+            (true, _) if now >= start => at.min(start + length),
+            (true, true) => at.min(start + length).min(total),
+            (true, false) => at.min(start + length),
+            (false, true) => at.min(total),
+            (false, false) => at,
+        };
+        (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - now).max(0.0)))
     }
 
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing
@@ -166,6 +174,8 @@ impl Time {
     /// Begin again from now, playing from zero. The position is put on the run time first, so no
     /// reader between the two stores sees a time before zero.
     pub fn restart(&self) {
+        // A section is of the patch that was: the next one loops in none.
+        self.length.store(0, Ordering::Relaxed);
         self.steer(true, Some(self.now()));
         self.origin.store(since_base(), Ordering::Relaxed);
         *self.wall.lock() = SystemTime::now();

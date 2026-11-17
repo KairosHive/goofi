@@ -2,22 +2,22 @@
      beside its lane — a note track as a piano roll, a curve track as one line through its
      keyframes — under the clock they play on. A panel wider than tall stacks the tracks as rows
      and runs the time to the right; a panel taller than wide stands them as columns and runs the
-     time down. The tracks are the patch's; what a panel hides, how large it draws a track and the
-     unit of its ruler are its own state; what part of the axis it looks at is no state at all.
+     time down. The tracks are the patch's; what a panel hides and how large it draws a track
+     are its own state; what part of the axis it looks at is no state at all.
      Every change is a `timeline` or a `clock` op or a clock variable, so the manager owns the
      model and this panel the drawing and the gesture. -->
 <script lang="ts">
 	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
 	import { untrack } from 'svelte';
 	import type { Key, Note, Track } from '$lib/api/generated';
-	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
+	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { draggable, type DragSource, type Outcome } from '$lib/drag';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
+	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, Select, TextInput } from '$lib/ui';
 
@@ -26,8 +26,6 @@
 		hidden?: string[];
 		/** How large this panel draws a track across the axis, in pixels, by the track's id. */
 		sizes?: Record<string, number>;
-		/** The grid a note snaps to, by its name. */
-		grid?: string;
 	}
 
 	let { state: panelState, setState }: PanelProps = $props();
@@ -39,6 +37,8 @@
 	const stowed = $derived(hidden.filter((id) => id in g.timeline));
 	const fail = (what: string) => (e: unknown) => notify().failure(what, e);
 	const fixed = (v: number): number => Number(v.toFixed(3));
+	/** A time as it is stored: free, to the millionth of a beat, so a line of a fine grid is itself. */
+	const exact = (v: number): number => Number(v.toFixed(6));
 	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 	const share = (f: number): string => `${100 * f}%`;
 	let [wide, tall] = $state([0, 0]);
@@ -53,7 +53,7 @@
 	}
 	const playing = $derived(clock('playing') > 0);
 	/** The seconds a beat lasts: the axis counts beats, the clock seconds. */
-	const spb = $derived(unit(true, clock('bpm')));
+	const spb = $derived(beatSeconds(clock('bpm')));
 	/** The clock's position, in beats. */
 	const beat = $derived(clock('time') / spb);
 	/** The section the clock loops in, in seconds as the clock holds it: the clock's own, and no
@@ -73,7 +73,7 @@
 		.then((r) => (looped = r.section))
 		.catch(() => {});
 
-	// ---- the view: the seconds of the axis this panel looks at. It stays where it is put: the
+	// ---- the view: the beats of the axis this panel looks at. It stays where it is put: the
 	// clock runs out of it, and a double click on the ruler brings back everything there is.
 	/** Where everything there is ends, in beats: the timeline's length, or without one the tracks'
 	 * content with room after it. */
@@ -125,24 +125,10 @@
 		view = loop && within(at, loop) ? [loop[0], loop[1]] : [0, reach()];
 	};
 
-	/** The lines a note snaps to, by name: how many seconds or beats lie between two. */
-	const GRIDS: Record<string, [number, boolean]> = {
-		'1 s': [1, false],
-		'1/2 s': [0.5, false],
-		'1/4 s': [0.25, false],
-		'1/10 s': [0.1, false],
-		'1 beat': [1, true],
-		'1/2 beat': [0.5, true],
-		'1/3 beat': [1 / 3, true],
-		'1/4 beat': [0.25, true],
-		'1/8 beat': [0.125, true],
-		'1/16 beat': [0.0625, true]
-	};
-	const gridName = $derived(own.grid && own.grid in GRIDS ? own.grid : '1/4 beat');
-	/** The beats between two lines of the grid. */
-	const grid = $derived(GRIDS[gridName][1] ? GRIDS[gridName][0] : GRIDS[gridName][0] / spb);
-	/** A time in beats on the nearest line of the grid, as `round` rounds. */
-	const onGrid = (beats: number, round = Math.round): number => round(beats / grid + 1e-9) * grid;
+	/** The beats between two lines of a note track's grid. */
+	const gridOf = (t: Extract<Track, { kind: 'note' }>): number => Math.max(0.001, GRIDS[t.grid][1] ? GRIDS[t.grid][0] : GRIDS[t.grid][0] / spb);
+	/** A time in beats on the nearest line of a grid, as `round` rounds. */
+	const onGrid = (beats: number, grid: number, round = Math.round): number => round(beats / grid + 1e-9) * grid;
 
 	// ---- the tracks: an edit is one op on the track; what a panel hides and how large it draws a
 	// track are the panel's state.
@@ -236,7 +222,7 @@
 		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(t, p));
 		return notes.reduce((best, p) => (Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best), notes[0] ?? clamp(pitch, lo, hi));
 	}
-	/** The note or keyframe a drag holds: the view does not follow the clock under it. */
+	/** The note or keyframe a drag holds: the drag ends when that one leaves its lane. */
 	let dragged = $state<{ track: string; index: number } | null>(null);
 	/** Change every note or keyframe picked in a track, or with null remove them. */
 	function change(id: string, t: Track, to: Partial<Note & Key> | null): void {
@@ -248,7 +234,7 @@
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
 		const [f, v] = point(p, ground);
 		const [lo, hi] = t.range;
-		return { at: fixed(onGrid(Math.max(0, view[0] + f * width), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
+		return { at: exact(onGrid(Math.max(0, view[0] + f * width), gridOf(t), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
 	}
 	/** The cell the pointer is over, to light it. */
 	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
@@ -258,14 +244,15 @@
 		if (e.target !== e.currentTarget) return;
 		const [f, v] = point(e, e.currentTarget as Element);
 		const [lo, hi] = t.range;
-		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: fixed(grid), velocity: 0.8 } : { at: fixed(Math.max(0, view[0] + f * width)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: exact(gridOf(t)), velocity: 0.8 } : { at: exact(Math.max(0, view[0] + f * width)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
 		if (t.kind === 'note') picked = [{ track: id, index: t.notes.length }];
 		edit(id, put(t, [...held(t), born]));
 	}
 	/** A drag of a note or a keyframe, and with it of everything picked, by as much as the pointer
 	 * moves, a note onto the grid: each move previews every lane it touches as it stands with those
 	 * moved, and the release sends the last of them as the edit. `stretch` drags one note's end and
-	 * not the note. A press that does not move picks a keyframe, and takes a note out. */
+	 * not the note. A press that does not move picks a keyframe, and takes a note out. Shift lets a
+	 * note go off its grid, and Ctrl off its scale. */
 	let drag: (() => void) | undefined;
 	function dragItem(e: PointerEvent, id: string, t: Track, index: number, stretch = false): void {
 		e.stopPropagation();
@@ -276,29 +263,34 @@
 		// Every track the drag moves something of, with what its lane held at the press and what
 		// of it moves. The lane is taken now: a preview puts a new one in the track's record.
 		const tracks = [...new Set(picked.map((p) => p.track))].map((track) => ({ track, was: g.timeline[track], all: held(g.timeline[track]), indices: pickedIn(track) }));
-		// Keyframes keep their order: the drag goes no further than the nearest one it leaves.
+		// What is picked moves as one: none of it goes before 0, and a keyframe goes no further
+		// than the nearest keyframe the drag leaves, so keyframes keep their order.
 		let [least, most] = [-Infinity, Infinity];
 		for (const { was, all, indices } of tracks) {
-			if (was.kind !== 'curve') continue;
 			for (const k of indices) {
-				const [before, after] = [all[k - 1], all[k + 1]];
+				const [before, after] = was.kind === 'curve' ? [all[k - 1], all[k + 1]] : [];
 				least = Math.max(least, (before && !indices.includes(k - 1) ? before.at + 0.001 : 0) - all[k].at);
 				if (after && !indices.includes(k + 1)) most = Math.min(most, after.at - 0.001 - all[k].at);
 			}
 		}
-		/** Each lane as it stands, with what the drag holds moved `by` beats and `dv` of its lane across. */
-		const moved = (by: number, dv: number): [string, Record<string, unknown>][] =>
+		/** Each lane as it stands, with what the drag holds moved `by` beats and `dv` of the pressed
+		 * lane across. A note lands on its grid in time and on its scale in pitch, unless `free`
+		 * says a key is held that lets it go where the pointer is; a note the drag does not move in
+		 * time or in pitch keeps the one it has, on the grid or off it. Across, only what is of the
+		 * pressed lane's kind moves: a pitch is no value. */
+		const moved = (by: number, dv: number, free: { time: boolean; pitch: boolean }): [string, Record<string, unknown>][] =>
 			tracks.map(({ track, was, all, indices }) => [
 				track,
 				put(was, held(g.timeline[track]).map((it, k) => {
 					const o = all[k];
 					if (!indices.includes(k) || !o) return it;
-					if (was.kind === 'note') {
-						const n = o as Note;
-						return stretch ? { ...it, length: fixed(Math.max(grid, onGrid(n.at + n.length + by) - n.at)) } : { ...it, at: fixed(Math.max(0, onGrid(n.at + by))), pitch: snap(was, n.pitch + Math.round(dv * rows)) };
-					}
-					const [lo, hi] = was.range;
-					return { ...it, at: fixed(o.at + clamp(by, least, most)), value: fixed(clamp((o as Key).value + dv * (hi - lo), lo, hi)) };
+					const shift = clamp(by, least, most);
+					if (was.kind === 'curve') return { ...it, at: exact(o.at + shift), value: t.kind === 'curve' ? fixed(clamp((o as Key).value + dv * (was.range[1] - was.range[0]), ...was.range)) : (o as Key).value };
+					const [n, grid] = [o as Note, gridOf(was)];
+					const on = (at: number): number => (free.time || onGrid(shift, grid) === 0 ? at : onGrid(at, grid));
+					if (stretch) return { ...it, length: exact(Math.max(free.time ? 0.01 : grid, on(n.at + n.length + by) - n.at)) };
+					const semitones = t.kind === 'note' ? Math.round(dv * rows) : 0;
+					return { ...it, at: exact(free.time ? n.at + shift : on(n.at + shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...was.range) : snap(was, n.pitch + semitones) };
 				}))
 			]);
 		let patches: [string, Record<string, unknown>][] | null = null;
@@ -307,7 +299,10 @@
 				if (!patches && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
 				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
-				patches = moved((f - f0) * width, v - v0);
+				// Shift lets a note go off the grid in time, Ctrl off the scale in pitch; either lets
+				// a note's end go off the grid.
+				const ctrl = p.ctrlKey || p.metaKey;
+				patches = moved((f - f0) * width, v - v0, { time: p.shiftKey || (stretch && ctrl), pitch: ctrl });
 				for (const [track, patch] of patches) g.previewTrack(track, patch);
 			},
 			commit: () => {
@@ -317,7 +312,7 @@
 				else if (all) void history().transaction('Move notes and keyframes', async (step) => {
 					for (const [track, patch] of all) await g.op('timeline track edit', { track, ...patch }, step);
 				}).catch(fail('Edit track'));
-				else if (t.kind === 'note' && !stretch) {
+				else if (t.kind === 'note') {
 					picked = [{ track: id, index }];
 					change(id, g.timeline[id] ?? t, null);
 				}
@@ -332,7 +327,10 @@
 	/** A drag with Shift held draws a box: every note and keyframe it touches is picked. */
 	let box = $state<{ left: number; top: number; width: number; height: number } | null>(null);
 	function boxPick(e: PointerEvent): void {
-		if (!e.shiftKey || !stack) return;
+		// On a lane's own ground alone: Shift on a note is a drag off the grid, and Shift anywhere
+		// else is not this panel's.
+		const on = e.target as Element;
+		if (!e.shiftKey || !stack || !on.closest('.ground') || on.closest('[data-item]')) return;
 		e.stopPropagation();
 		const home = stack;
 		const origin = home.getBoundingClientRect();
@@ -372,7 +370,6 @@
 			<IconButton variant="ghost" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
 			<IconButton variant="ghost" label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
 			<NumberInput class="position" aria-label="Position" title="The clock's position, in beats" data-testid="clock-time" value={beat} digits={1} min={0} onChange={(v) => steer({ time: v * spb })} />
-			<label class="labeled">grid <Select title="The lines a note snaps to when it is made or dragged" data-testid="timeline-grid" value={gridName} options={Object.keys(GRIDS)} onChange={(grid) => setState({ grid }, 'authored', 'Set grid')} /></label>
 			<label class="labeled">bpm <NumberInput title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => void g.setVariableValue('clock.bpm', v).catch(fail('Set tempo'))} /></label>
 			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
 			{#if loop}
@@ -438,6 +435,7 @@
 							{#if t.kind === 'note'}
 								<Select aria-label="Scale" title="The scale whose notes the keyboard marks and a note lands on" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit(id, { scale })} />
 								<Select aria-label="Root" title="The note the scale starts on" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit(id, { root })} />
+								<Select aria-label="Grid" title="The lines a note of this track snaps to when it is made or dragged" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => edit(id, { grid })} />
 							{/if}
 							{#if mine}
 								{#if 'pitch' in mine}
@@ -474,10 +472,10 @@
 										{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)}></span>{/each}
 									</div>
 									<svg class="grid" viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
-										<path d={gridPath(view[0], view[1], grid, vertical)} vector-effect="non-scaling-stroke" />
+										<path d={gridPath(view[0], view[1], gridOf(t), vertical)} vector-effect="non-scaling-stroke" />
 									</svg>
 									{#if over?.track === id}
-										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(grid / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(gridOf(t) / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
 									{/if}
 									{#each t.notes as n, i}
 										<div
@@ -569,7 +567,7 @@
 		height: 100%;
 		min-height: 0;
 	}
-	/* Room for an hour of seconds, to the hundredth. */
+	/* Room for some thousands of beats, to the tenth. */
 	.timeline :global(.position) {
 		--number-width: calc(var(--space-8) * 4);
 	}

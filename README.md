@@ -252,7 +252,7 @@ outside them, and is `vars.<track>.value`. `goofi timeline track add note` and
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, a click on a note
-takes it out, and a drag moves one; a note snaps to the grid the bar chooses. A press on the
+takes it out, and a drag moves one; a note snaps to its track's grid. A press on the
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
 view: drag it to move along the axis, drag either end of it to zoom, as far out as you like; a

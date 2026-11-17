@@ -39,6 +39,8 @@ pub enum Msg {
     Changed(String),
     /// The clock's position was put somewhere: every run starts over there.
     Jumped,
+    /// The section the clock loops in moved: what the thread waits for is another instant.
+    Section,
 }
 
 /// The manager's hand on the thread: a message in its inbox, and a ring on its door for it.
@@ -234,6 +236,7 @@ fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, h
         // A pause and a resume are a pass too: the notes that sound stop, and start again.
         Msg::Changed(name) => return name == "clock.playing" || machines.keys().contains(&name),
         Msg::Jumped => machines.restart(),
+        Msg::Section => return false,
     }
     true
 }

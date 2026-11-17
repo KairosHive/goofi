@@ -483,7 +483,7 @@ pub static TREE: &[Entry] = &[
     ]),
     Group("timeline", "the timeline: tracks of notes and of keyframed curves on the patch clock, each a group of variables", &[
         Leaf(read::<timeline::List>()),
-        Group("track", "one track: its name, its unit, its notes or its curve attributes", &[
+        Group("track", "one track: its name, its place, its notes or its curve", &[
             Leaf(write::<timeline::TrackAdd>()),
             Leaf(write::<timeline::TrackEdit>()),
             Leaf(write::<timeline::TrackMove>()),

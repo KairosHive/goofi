@@ -54,3 +54,13 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A click on a note takes it out, so a note is picked for its fields by a drag alone.
 - A track dragged onto a param writes the expression that reads it; no test drops one there.
 - A track dragged over the others shows no line where it will land.
+- A panel learns the clock's section when it opens and when it sets one: a section set by
+  another panel or by the CLI is not drawn, and is not cleared by a click, until the panel opens
+  again. The section has no way to every client that is not a variable.
+- A section that lies past the timeline's length is taken as it is: the position leaves the
+  length for it.
+- What a box picks moves in time as one; in pitch each note lands on its own scale and keyboard,
+  so a pick pushed past the keyboard's edge closes up. A box has no door under a finger.
+- A track is lifted by the free edge of what it says about itself; under a finger the browser
+  may take the press for a scroll. Not tried on a device.
+- `in_out` made custom is one bezier near the preset's shape, not the shape itself.

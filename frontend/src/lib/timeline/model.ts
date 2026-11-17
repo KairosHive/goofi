@@ -2,8 +2,8 @@
 import type { Key, Track } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
 
-/** The seconds one time unit lasts: a beat of the tempo, or a second. */
-export const unit = (beats: boolean, bpm: number): number => (beats ? 60 / Math.max(bpm, 1e-9) : 1);
+/** The seconds a beat of the tempo lasts; a tempo of nothing has the longest beat there is. */
+export const beatSeconds = (bpm: number): number => 60 / Math.max(bpm, 1e-9);
 
 /** Where the last note or keyframe of every track ends, in beats. */
 export function contentEnd(tracks: Track[]): number {
@@ -42,7 +42,7 @@ export function lanePath(keys: Key[], [lo, hi]: [number, number], along: (at: nu
 	return `${points.join(' ')} L${at(Math.max(1, along(last.at)), last.value)}`;
 }
 
-/** The lines between a lane's cells, `cell` seconds apart, over the seconds in view, as a path in
+/** The lines between a lane's cells, `cell` beats apart, over the beats in view, as a path in
  * the box `lanePath` draws in. Cells too many to tell apart are drawn by the two, the four, and on. */
 export function gridPath(from: number, to: number, cell: number, flip = false): string {
 	let step = cell;

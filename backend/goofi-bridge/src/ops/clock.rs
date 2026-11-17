@@ -26,7 +26,12 @@ impl EffectOp for Set {
             if !(from.is_finite() && to.is_finite() && from >= 0.0) {
                 return Err("`section` is `[from, to]` in seconds of at least 0".into());
             }
-            time.set_section(from, (to - from).max(0.0));
+            let length = (to - from).max(0.0);
+            if length > 0.0 && length < 1e-3 {
+                return Err("a `section` lasts a millisecond or more, or nothing".into());
+            }
+            time.set_section(from, length);
+            state.machines.send(Msg::Section);
         }
         time.steer(a.playing.unwrap_or(time.playing()), a.time);
         g.variables().publish("clock.playing", Data::number(f64::from(u8::from(time.playing()))));

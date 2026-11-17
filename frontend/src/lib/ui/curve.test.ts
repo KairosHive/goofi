@@ -26,7 +26,7 @@ describe('curveAt', () => {
 		expect(curveAt({ custom: bent }, 0.25)).toBeGreaterThan(0.25);
 	});
 	it('seeds an edited curve with the shape of the preset it leaves', () => {
-		// A step has no bezier: its seed is the steepest corner, checked at its ends alone.
+		// A step is no curve: its seed is the steepest corner, checked at its ends alone.
 		for (const p of PRESETS) {
 			const custom = pointsOf(p);
 			for (let i = 0; i <= 10; i++) {
@@ -43,6 +43,6 @@ describe('curveAt', () => {
 	it('draws a path that starts at the bottom left and ends at the top right', () => {
 		expect(curvePath('linear', 10, 10, 2)).toBe('M0 10 L5 5 L10 0');
 		expect(curvePath('step', 10, 10)).toBe('M0 10 L10 10 L10 0');
-		expect(curvePath({ custom: pointsOf('in') }, 10, 10)).toBe('M0 10 C4.2 10 10 0 10 0');
+		expect(curvePath({ custom: pointsOf('in') }, 10, 10)).toBe('M0 10 C3.33 10 6.67 6.67 10 0');
 	});
 });

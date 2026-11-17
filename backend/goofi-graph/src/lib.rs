@@ -1034,6 +1034,9 @@ impl Graph {
 
     /// Put the track `id` before the track `before`, or last, and number every track by its place.
     pub fn move_track(&mut self, id: &str, before: Option<&str>) {
+        if before == Some(id) {
+            return;
+        }
         let tracks = &mut Arc::make_mut(&mut self.patch.stepped).tracks;
         let mut ids: Vec<String> = tracks.keys().filter(|k| *k != id).cloned().collect();
         ids.sort_by_key(|k| tracks[k].order);

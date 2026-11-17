@@ -21,8 +21,9 @@ export const curveName = (c: Curve): string => (isCustom(c) ? 'custom' : c);
 const HANDLES: Record<Preset, [number, number, number, number]> = {
 	step: [1, 0, 1, 0],
 	linear: [0.33, 0.33, 0.67, 0.67],
-	in: [0.42, 0, 1, 1],
-	out: [0, 0, 0.58, 1],
+	// A square of the progress is one bezier exactly.
+	in: [1 / 3, 0, 2 / 3, 1 / 3],
+	out: [1 / 3, 2 / 3, 2 / 3, 1],
 	in_out: [0.42, 0, 0.58, 1]
 };
 
