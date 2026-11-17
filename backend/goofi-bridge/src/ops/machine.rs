@@ -1,4 +1,6 @@
-//! The state machines: build one through ops, and drive its playheads.
+//! The state machines: build one through ops, and drive its playheads. A machine, a state, an
+//! attribute and a playhead each have an id the manager mints; an op names one by its id or by
+//! its name, and a rename moves the name alone.
 
 use serde_json::{json, Value};
 
@@ -7,42 +9,42 @@ use crate::machines::Msg;
 use crate::{AppState, Caller, Txn};
 use goofi_core::ease::Curve;
 use goofi_core::Data;
-use goofi_graph::expr_rewrite;
-use goofi_graph::machine::{Attribute, AttributeKind, Machine, Decision, Playhead, State, Transition, OWN};
-use goofi_graph::{Graph};
+use goofi_graph::machine::{self, Attribute, AttributeKind, Decision, Machine, Named, Playhead, State, Transition};
+use goofi_graph::Graph;
+use goofi_core::indexmap::IndexMap;
 
 const VALUES: &str = "`values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it";
 const ENVELOPES: &str = "`envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: on a playhead's arrival the attribute plays the envelope times the value — up from 0 over `attack` seconds, down over `decay` seconds to `sustain` (0..1), then down to 0 over `release` seconds; a release of -1 holds the sustain. A transition out eases the attribute from wherever the envelope stands to the next state's value, or to 0 where that state's own envelope plays on it";
 
 op!(List, "machine list", 0, NoArgs,
-    "Every state machine, whole: its attributes, states, transitions (by id), playheads and seed. Where a playhead IS right now is its variables: `vars.<playhead>.state` and `.progress`, read through `variable list` like its attributes.",
-    "{machines: {name: {attributes: {name: {default, kind, curve}}, states: {name: {pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration}}, playheads: {name: {color, start}}, seed?}}}");
+    "Every state machine, whole, each record under its id: its name, attributes, states, transitions, playheads and seed. A state's `values` and `envelopes` are keyed by attribute id; a transition's `from` and `to` and a playhead's `start` are state ids. Every other `machine` op names a machine, a state, an attribute or a playhead by its id or by its name. Where a playhead IS right now is its variables: `vars.<playhead>.state` and `.progress`, read through `variable list` like its attributes.",
+    "{machines: {id: {name, attributes: {id: {name, default, kind, curve}}, states: {id: {name, pos, values, envelopes, interval, interval_expression?, mode, noop, weights, expression}}, transitions: {id: {from, to, condition?, duration}}, playheads: {id: {name, color, start}}, seed?}}}");
 
 op!(Add, "machine add", 1, AddArgs {
     pub name: Option<String>,
 },
     "Create an empty state machine. Without a name, use the first free machine0/machine1/... name. A machine is a set of states, the transitions between them, and the playheads that travel through them; a playhead writes the values its states hold into the variables `vars.<playhead>.<attribute>`, which any param reads as it reads a control panel's.",
-    "{name} — the machine as stored");
+    "{id, name} — the machine as stored");
 
 op!(Remove, "machine remove", 1, RemoveArgs {
     pub machine: String,
 },
     "Delete a machine, its playheads and their variable groups. A panel showing it shows the first machine left.",
-    "{removed: true}");
+    "{removed: true, name}");
 
 op!(Rename, "machine rename", 2, RenameArgs {
     pub machine: String,
     pub to: String,
 },
-    "Rename a machine. Its playheads keep their names, so nothing that reads them moves.",
-    "{name} — the name as stored");
+    "Rename a machine. The name is a label: its id, its playheads and their runs stay as they are.",
+    "{id, name, was} — the name as stored, and the name it had");
 
 op!(Edit, "machine edit", 1, EditArgs {
     pub machine: String,
     pub seed: Option<u64>,
 },
     "Change a machine's own settings: `seed` starts its random draws — a `random` state's decisions — so a run repeats.",
-    "{seed}");
+    "{seed, name}");
 
 op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     pub machine: String,
@@ -53,7 +55,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     pub curve: Option<Value>,
 },
     "Add an attribute: a value every state may set and every playhead carries as `vars.<playhead>.<name>`, or `sm('<playhead>').<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. `curve` is how the attribute eases over a transition's duration: `step`, `linear` (the default), `in`, `out`, `in_out`, `smooth`, or `{bezier: [x1, y1, x2, y2]}`, a cubic from (0, 0) through two handles to (1, 1) as CSS writes one, the handles' x in 0..1. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
-    "{name, value} — the attribute and its default as stored");
+    "{id, name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
     pub machine: String,
@@ -71,15 +73,15 @@ op!(AttributeRemove, "machine attribute remove", 2, AttributeRemoveArgs {
     pub name: String,
 },
     "Delete an attribute, from every state and every playhead with it.",
-    "{removed: true}");
+    "{removed: true, name}");
 
 op!(AttributeRename, "machine attribute rename", 2, AttributeRenameArgs {
     pub machine: String,
     pub name: String,
     pub to: String,
 },
-    "Rename an attribute in every state, and rewrite every expression that reads it on a playhead.",
-    "{name} — the name as stored");
+    "Rename an attribute, and rewrite every expression that reads it on a playhead. Every playhead keeps the value it holds.",
+    "{id, name, was} — the name as stored, and the name it had");
 
 op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub machine: String,
@@ -89,7 +91,7 @@ op!(StateAdd, "machine state add", 2, StateAddArgs {
     pub envelopes: Option<Value>,
 },
     "Add a state. Without a name, use the first free state0/state1/... name. `pos` is where its card sits on the canvas, in flow px on its 24 px grid; leave it out and the card goes to the clear cells nearest the machine's others. `values` is `{attribute: literal}`, each a number, a list of numbers (nested for a wider array), a bool or a string; an attribute a state leaves out is kept by a playhead entering it. `envelopes` is `{attribute: [attack, decay, sustain, release]}` over number attributes the state sets: on a playhead's arrival the attribute plays the envelope times the value — up from 0 over `attack` seconds, down over `decay` seconds to `sustain` (0..1), then down to 0 over `release` seconds; a release of -1 holds the sustain. A transition out eases the attribute from wherever the envelope stands to the next state's value, or to 0 where that state's own envelope plays on it.",
-    "{name} — the state as stored");
+    "{id, name} — the state as stored");
 
 op!(StateEdit, "machine state edit", 2, StateEditArgs {
     pub machine: String,
@@ -119,15 +121,15 @@ op!(StateRemove, "machine state remove", 2, StateRemoveArgs {
     pub name: String,
 },
     "Delete a state and every transition into or out of it, and every attribute no other state sets. A state a playhead starts in refuses: move the playhead first.",
-    "{removed: true}");
+    "{removed: true, name}");
 
 op!(StateRename, "machine state rename", 2, StateRenameArgs {
     pub machine: String,
     pub name: String,
     pub to: String,
 },
-    "Rename a state; every transition and playhead start that names it follows.",
-    "{name} — the name as stored");
+    "Rename a state, and rewrite every `sm('<name>')` of the machine that reads it. A playhead resting in it or flying to it goes on as it was.",
+    "{id, name, was} — the name as stored, and the name it had");
 
 op!(TransitionAdd, "machine transition add", 1, TransitionAddArgs {
     pub machine: String,
@@ -164,7 +166,7 @@ op!(PlayheadAdd, "machine playhead add", 2, PlayheadAddArgs {
     pub start: String,
 },
     "Add a playhead, starting in state `start`. Its name is its variable group: `vars.<name>.<attribute>`, or `sm('<name>').<attribute>` for every attribute, and the machine's own `vars.<name>.state` (the state it is in, or is moving to) and `.progress` (0..1 along the transition, 1 at rest); the state a flight left and the second it arrived ride those frames as metadata, for the canvas, not as variables. The group is the machine's: locked whole, written by the machine alone, removed with the playhead. Without a name, use the first free playhead0/playhead1/... name. `color` is what the canvas draws it as.",
-    "{name} — the playhead as stored");
+    "{id, name} — the playhead as stored");
 
 op!(PlayheadEdit, "machine playhead edit", 2, PlayheadEditArgs {
     pub machine: String,
@@ -180,15 +182,15 @@ op!(PlayheadRemove, "machine playhead remove", 2, PlayheadRemoveArgs {
     pub name: String,
 },
     "Delete a playhead and its variable group.",
-    "{removed: true}");
+    "{removed: true, name}");
 
 op!(PlayheadRename, "machine playhead rename", 2, PlayheadRenameArgs {
     pub machine: String,
     pub name: String,
     pub to: String,
 },
-    "Rename a playhead — its variable group — and rewrite every expression that reads it.",
-    "{name} — the name as stored");
+    "Rename a playhead — its variable group, which moves with the values it holds — and rewrite every expression that reads it. Its run goes on as it was.",
+    "{id, name, was} — the name as stored, and the name it had");
 
 op!(Fire, "machine fire", 1, FireArgs {
     pub machine: String,
@@ -223,27 +225,52 @@ fn literal(v: Value) -> Result<Data, String> {
     serde_json::from_value(v.clone()).map_err(|e| format!("`{v}` is not a number, a list, a bool or a string: {e}"))
 }
 
-fn machine_of(g: &Graph, name: &str) -> Result<Machine, String> {
-    g.machines().get(name).cloned().ok_or_else(|| format!("no machine `{name}` — `machine add` creates one"))
+/// The machine `given` names, with its id.
+fn machine_of(g: &Graph, given: &str) -> Result<(String, Machine), String> {
+    let id = id_of("machine", g.machines(), given).map_err(|why| format!("{why} — `machine add` creates one"))?;
+    Ok((id.clone(), g.machines()[&id].clone()))
 }
 
-/// Replace `name` whole with `next`, as one undo step; a weight on a transition that no longer
-/// leaves its state goes with it.
-fn set(tx: &mut Txn, name: &str, mut next: Machine) -> Result<(), String> {
+/// The id of the `kind` that `given` names in `map`.
+fn id_of<V: Named>(kind: &str, map: &IndexMap<String, V>, given: &str) -> Result<String, String> {
+    machine::find(map, given).map(str::to_string).ok_or_else(|| format!("no {kind} `{given}`"))
+}
+
+/// Replace the machine `id` whole with `next`, as one undo step; a weight on a transition that
+/// no longer leaves its state goes with it. The graph follows every name that moved.
+fn set(tx: &mut Txn, id: &str, mut next: Machine) -> Result<(), String> {
     next.prune();
-    tx.key(format!("machine {name}"));
-    tx.g.set_machine(name, Some(next), None)?;
+    tx.key(format!("machine {id}"));
+    for touched in tx.g.set_machine(id, Some(next), None)? {
+        tx.echo(touched);
+    }
     Ok(())
 }
 
+/// The name an op answered with: what its history label spells, whatever the caller named it by.
+fn named(o: &Value) -> &str {
+    o["name"].as_str().unwrap_or_default()
+}
+
+/// A rename's history label, off what the op answered: the name it had and the name it has.
+fn renamed(kind: &str, o: &Value) -> String {
+    format!("Rename {kind} {} → {}", o["was"].as_str().unwrap_or_default(), named(o))
+}
+
+/// Per attribute id an op names, what it sets or, for a `null`, clears.
+type Edits<T> = Vec<(String, Option<T>)>;
+
 /// The envelopes an op names, each four numbers; a `null` clears, as `values_of` answers one.
-fn envelopes_of(values: Option<Value>) -> Result<Edits<[f64; 4]>, String> {
+fn envelopes_of(m: &Machine, values: Option<Value>) -> Result<Edits<[f64; 4]>, String> {
     let Some(values) = values else { return Ok(Vec::new()) };
     let map = values.as_object().ok_or(ENVELOPES)?;
     map.iter()
-        .map(|(attr, v)| match v {
-            Value::Null => Ok((attr.clone(), None)),
-            v => serde_json::from_value::<[f64; 4]>(v.clone()).map(|e| (attr.clone(), Some(e))).map_err(|_| format!("attribute `{attr}`: {ENVELOPES}")),
+        .map(|(attr, v)| {
+            let id = id_of("attribute", &m.attributes, attr)?;
+            match v {
+                Value::Null => Ok((id, None)),
+                v => serde_json::from_value::<[f64; 4]>(v.clone()).map(|e| (id, Some(e))).map_err(|_| format!("attribute `{attr}`: {ENVELOPES}")),
+            }
         })
         .collect()
 }
@@ -262,9 +289,6 @@ fn fits(kind: &AttributeKind, value: &Data) -> Result<(), String> {
     if kind.fits(value) { Ok(()) } else { Err(kind.mismatch(value)) }
 }
 
-/// Per attribute an op names, what it sets or, for a `null`, clears.
-type Edits<T> = Vec<(String, Option<T>)>;
-
 /// The attribute values an op names, each checked against the attribute and its widget. A `null`
 /// is answered as `None`: the caller decides whether that clears or is refused.
 fn values_of(m: &Machine, values: Option<Value>) -> Result<Edits<Data>, String> {
@@ -272,14 +296,14 @@ fn values_of(m: &Machine, values: Option<Value>) -> Result<Edits<Data>, String> 
     let map = values.as_object().ok_or(VALUES)?;
     let mut out = Vec::with_capacity(map.len());
     for (attr, v) in map {
-        let a = m.attributes.get(attr).ok_or_else(|| format!("no attribute `{attr}` in the machine"))?;
+        let id = id_of("attribute", &m.attributes, attr)?;
         if v.is_null() {
-            out.push((attr.clone(), None));
+            out.push((id, None));
             continue;
         }
         let value = literal(v.clone())?;
-        fits(&a.kind, &value).map_err(|why| format!("attribute `{attr}`: {why}"))?;
-        out.push((attr.clone(), Some(value)));
+        fits(&m.attributes[&id].kind, &value).map_err(|why| format!("attribute `{attr}`: {why}"))?;
+        out.push((id, Some(value)));
     }
     Ok(out)
 }
@@ -295,93 +319,89 @@ fn parse_curve(v: Value) -> Result<Curve, String> {
 
 impl WriteOp for Add {
     fn run(tx: &mut Txn, a: AddArgs) -> Result<Value, String> {
-        let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("machine", 0, |n| tx.g.machines().contains_key(n)));
-        if tx.g.machines().contains_key(&name) {
-            return Err(format!("machine `{name}` already exists"));
-        }
-        set(tx, &name, Machine::default())?;
-        Ok(json!({ "name": name }))
+        let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("machine", 0, |n| tx.g.machines().values().any(|m| m.name == n)));
+        let id = tx.g.mint_id("m", |_| false);
+        set(tx, &id, Machine { name: name.clone(), ..Machine::default() })?;
+        Ok(json!({ "id": id, "name": name }))
     }
 
     fn label(_: &AddArgs, o: &Value) -> String {
-        format!("Add machine {}", o["name"].as_str().unwrap_or_default())
+        format!("Add machine {}", named(o))
     }
 }
 
 impl WriteOp for Remove {
     fn run(tx: &mut Txn, a: RemoveArgs) -> Result<Value, String> {
-        machine_of(&tx.g, &a.machine)?;
-        tx.g.set_machine(&a.machine, None, None)?;
+        let (id, m) = machine_of(&tx.g, &a.machine)?;
+        tx.g.set_machine(&id, None, None)?;
         // A panel over the removed machine shows the next one the patch has.
         if let Some(next) = tx.g.machines().keys().next().cloned() {
-            let writes = tx.g.arrangement().retarget("machine", "machine", &a.machine, &next);
+            let writes = tx.g.arrangement().retarget("machine", "machine", &id, &next);
             if !writes.is_empty() {
                 tx.g.arrangement_mut().set_contents(&writes);
             }
         }
-        Ok(json!({ "removed": true }))
+        Ok(json!({ "removed": true, "name": m.name }))
     }
 
-    fn label(a: &RemoveArgs, _: &Value) -> String {
-        format!("Remove machine {}", a.machine)
+    fn label(_: &RemoveArgs, o: &Value) -> String {
+        format!("Remove machine {}", named(o))
     }
 }
 
 impl WriteOp for Rename {
     fn run(tx: &mut Txn, a: RenameArgs) -> Result<Value, String> {
-        tx.g.rename_machine(&a.machine, &a.to)?;
-        Ok(json!({ "name": a.to }))
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let was = std::mem::replace(&mut m.name, a.to.clone());
+        set(tx, &id, m)?;
+        Ok(json!({ "id": id, "name": a.to, "was": was }))
     }
 
-    fn label(a: &RenameArgs, _: &Value) -> String {
-        format!("Rename machine {} → {}", a.machine, a.to)
+    fn label(_: &RenameArgs, o: &Value) -> String {
+        renamed("machine", o)
     }
 }
 
 impl WriteOp for Edit {
     fn run(tx: &mut Txn, a: EditArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         m.seed = a.seed.or(m.seed);
-        let seed = m.seed;
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "seed": seed }))
+        let out = json!({ "seed": m.seed, "name": m.name });
+        set(tx, &id, m)?;
+        Ok(out)
     }
 
-    fn label(a: &EditArgs, _: &Value) -> String {
-        format!("Edit machine {}", a.machine)
+    fn label(_: &EditArgs, o: &Value) -> String {
+        format!("Edit machine {}", named(o))
     }
 }
 
 impl WriteOp for AttributeAdd {
     fn run(tx: &mut Txn, a: AttributeAddArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        if m.attributes.contains_key(&a.name) {
-            return Err(format!("attribute `{}` already exists — `machine attribute edit` changes it", a.name));
-        }
-        if OWN.contains(&a.name.as_str()) {
-            return Err(format!("`{}` is the machine's own element of a playhead; an attribute cannot take it", a.name));
-        }
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let value = literal(a.value.0)?;
         let kind = a.kind.unwrap_or_else(|| AttributeKind::of(&value));
         fits(&kind, &value)?;
         let curve = a.curve.map(parse_curve).transpose()?.unwrap_or_default();
-        m.attributes.insert(a.name.clone(), Attribute { default: value.clone(), kind, curve });
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": a.name, "value": value }))
+        let attr = tx.g.mint_id("a", |id| m.attributes.contains_key(id));
+        m.attributes.insert(attr.clone(), Attribute { name: a.name.clone(), default: value.clone(), kind, curve });
+        set(tx, &id, m)?;
+        Ok(json!({ "id": attr, "name": a.name, "value": value }))
     }
 
     fn label(a: &AttributeAddArgs, _: &Value) -> String {
-        format!("Add attribute {} to {}", a.name, a.machine)
+        format!("Add attribute {}", a.name)
     }
 }
 
 impl WriteOp for AttributeEdit {
     fn run(tx: &mut Txn, a: AttributeEditArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        let attr = m.attributes.get_mut(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let aid = id_of("attribute", &m.attributes, &a.name)?;
         if a.value.is_none() && a.kind.is_none() && a.curve.is_none() {
             return Err("nothing to change — give a value, a kind or a curve".into());
         }
+        let attr = &mut m.attributes[&aid];
         if let Some(v) = a.value {
             attr.default = literal(v.0)?;
         }
@@ -396,88 +416,87 @@ impl WriteOp for AttributeEdit {
         let (kind, default) = (attr.kind.clone(), attr.default.clone());
         if rekind {
             for s in m.states.values_mut() {
-                if let Some(v) = s.values.get_mut(&a.name) {
+                if let Some(v) = s.values.get_mut(&aid) {
                     *v = kind.read(v, &default);
                 }
                 if !matches!(kind, AttributeKind::Num { .. }) {
-                    s.envelopes.shift_remove(&a.name);
+                    s.envelopes.shift_remove(&aid);
                 }
             }
         }
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": a.name }))
+        let out = json!({ "name": m.attributes[&aid].name });
+        set(tx, &id, m)?;
+        Ok(out)
     }
 
-    fn label(a: &AttributeEditArgs, _: &Value) -> String {
-        format!("Edit attribute {}.{}", a.machine, a.name)
+    fn label(_: &AttributeEditArgs, o: &Value) -> String {
+        format!("Edit attribute {}", named(o))
     }
 }
 
 impl WriteOp for AttributeRemove {
     fn run(tx: &mut Txn, a: AttributeRemoveArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        m.attributes.shift_remove(&a.name).ok_or_else(|| format!("no attribute `{}` in machine `{}`", a.name, a.machine))?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let aid = id_of("attribute", &m.attributes, &a.name)?;
+        let gone = m.attributes.shift_remove(&aid).expect("resolved");
         for s in m.states.values_mut() {
-            s.values.shift_remove(&a.name);
-            s.envelopes.shift_remove(&a.name);
+            s.values.shift_remove(&aid);
+            s.envelopes.shift_remove(&aid);
         }
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "removed": true }))
+        set(tx, &id, m)?;
+        Ok(json!({ "removed": true, "name": gone.name }))
     }
 
-    fn label(a: &AttributeRemoveArgs, _: &Value) -> String {
-        format!("Remove attribute {}.{}", a.machine, a.name)
+    fn label(_: &AttributeRemoveArgs, o: &Value) -> String {
+        format!("Remove attribute {}", named(o))
     }
 }
 
 impl WriteOp for AttributeRename {
     fn run(tx: &mut Txn, a: AttributeRenameArgs) -> Result<Value, String> {
-        if OWN.contains(&a.to.as_str()) {
-            return Err(format!("`{}` is the machine's own element of a playhead; an attribute cannot take it", a.to));
-        }
-        for r in tx.g.rename_attribute(&a.machine, &a.name, &a.to)? {
-            tx.echo(r);
-        }
-        Ok(json!({ "name": a.to }))
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let aid = id_of("attribute", &m.attributes, &a.name)?;
+        let was = std::mem::replace(&mut m.attributes[&aid].name, a.to.clone());
+        set(tx, &id, m)?;
+        Ok(json!({ "id": aid, "name": a.to, "was": was }))
     }
 
-    fn label(a: &AttributeRenameArgs, _: &Value) -> String {
-        format!("Rename attribute {} → {}", a.name, a.to)
+    fn label(_: &AttributeRenameArgs, o: &Value) -> String {
+        renamed("attribute", o)
     }
 }
 
 impl WriteOp for StateAdd {
     fn run(tx: &mut Txn, a: StateAddArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("state", 0, |n| m.states.contains_key(n)));
-        if m.states.contains_key(&name) {
-            return Err(format!("state `{name}` already exists — `machine state edit` changes it"));
-        }
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("state", 0, |n| m.states.values().any(|s| s.name == n)));
         let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
-        let envelopes = envelopes_of(a.envelopes)?.into_iter().filter_map(|(k, e)| Some((k, e?))).collect();
+        let envelopes = envelopes_of(&m, a.envelopes)?.into_iter().filter_map(|(k, e)| Some((k, e?))).collect();
         let pos = a.pos.unwrap_or_else(|| goofi_graph::canvas::place_state(&m));
-        m.states.insert(name.clone(), State { pos, values, envelopes, ..State::default() });
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": name }))
+        let state = tx.g.mint_id("s", |id| m.states.contains_key(id));
+        m.states.insert(state.clone(), State { name: name.clone(), pos, values, envelopes, ..State::default() });
+        set(tx, &id, m)?;
+        Ok(json!({ "id": state, "name": name }))
     }
 
     fn label(_: &StateAddArgs, o: &Value) -> String {
-        format!("Add state {}", o["name"].as_str().unwrap_or_default())
+        format!("Add state {}", named(o))
     }
 }
 
 impl WriteOp for StateEdit {
     fn run(tx: &mut Txn, a: StateEditArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let sid = id_of("state", &m.states, &a.name)?;
         if a.pos.is_none() && a.values.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() {
             return Err("nothing to change — give a pos, values, envelopes, interval, interval_expression, mode, noop, weights or expression".into());
         }
         let values = values_of(&m, a.values)?;
-        let envelopes = envelopes_of(a.envelopes)?;
-        if let Some(id) = a.weights.iter().flat_map(|w| w.keys()).find(|id| !m.outgoing(&a.name).any(|o| o == *id)) {
-            return Err(format!("state `{}` weighs `{id}`, which is no transition out of it", a.name));
+        let envelopes = envelopes_of(&m, a.envelopes)?;
+        if let Some(t) = a.weights.iter().flat_map(|w| w.keys()).find(|t| !m.outgoing(&sid).any(|o| o == *t)) {
+            return Err(format!("state `{}` weighs `{t}`, which is no transition out of it", m.states[&sid].name));
         }
-        let s = m.states.get_mut(&a.name).ok_or_else(|| format!("no state `{}` in machine `{}`", a.name, a.machine))?;
+        let s = &mut m.states[&sid];
         if let Some(pos) = a.pos {
             s.pos = pos;
         }
@@ -513,14 +532,15 @@ impl WriteOp for StateEdit {
             }
         }
         drop_unset(&mut m, cleared);
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": a.name }))
+        let out = json!({ "name": m.states[&sid].name });
+        set(tx, &id, m)?;
+        Ok(out)
     }
 
-    fn label(a: &StateEditArgs, _: &Value) -> String {
+    fn label(a: &StateEditArgs, o: &Value) -> String {
         match (&a.pos, &a.values) {
-            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", a.name),
-            _ => format!("Edit state {}", a.name),
+            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", named(o)),
+            _ => format!("Edit state {}", named(o)),
         }
     }
 }
@@ -528,11 +548,11 @@ impl WriteOp for StateEdit {
 impl WriteOp for Arrange {
     const LABEL: &str = "Arrange";
     fn run(tx: &mut Txn, a: ArrangeArgs) -> Result<Value, String> {
-        let m = machine_of(&tx.g, &a.machine)?;
+        let (id, m) = machine_of(&tx.g, &a.machine)?;
         let next = goofi_graph::canvas::arrange_machine(&m);
         let moved = next.states.iter().filter(|(k, s)| m.states.get(*k).map(|o| o.pos) != Some(s.pos)).count();
         if moved > 0 {
-            set(tx, &a.machine, next)?;
+            set(tx, &id, next)?;
         }
         Ok(json!({ "moved": moved }))
     }
@@ -540,82 +560,72 @@ impl WriteOp for Arrange {
 
 impl WriteOp for StateRemove {
     fn run(tx: &mut Txn, a: StateRemoveArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        if !m.states.contains_key(&a.name) {
-            return Err(format!("no state `{}` in machine `{}`", a.name, a.machine));
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let sid = id_of("state", &m.states, &a.name)?;
+        if let Some(p) = m.playheads.values().find(|p| p.start == sid) {
+            return Err(format!("playhead `{}` starts in `{}` — move it first", p.name, m.states[&sid].name));
         }
-        if let Some((ph, _)) = m.playheads.iter().find(|(_, p)| p.start == a.name) {
-            return Err(format!("playhead `{ph}` starts in `{}` — move it first", a.name));
-        }
-        let set_here: Vec<String> = m.states.shift_remove(&a.name).map(|s| s.values.into_keys().collect()).unwrap_or_default();
-        m.transitions.retain(|_, t| t.from != a.name && t.to != a.name);
-        drop_unset(&mut m, set_here);
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "removed": true }))
+        let gone = m.states.shift_remove(&sid).expect("resolved");
+        m.transitions.retain(|_, t| t.from != sid && t.to != sid);
+        drop_unset(&mut m, gone.values.into_keys());
+        set(tx, &id, m)?;
+        Ok(json!({ "removed": true, "name": gone.name }))
     }
 
-    fn label(a: &StateRemoveArgs, _: &Value) -> String {
-        format!("Remove state {}", a.name)
+    fn label(_: &StateRemoveArgs, o: &Value) -> String {
+        format!("Remove state {}", named(o))
     }
 }
 
 impl WriteOp for StateRename {
     fn run(tx: &mut Txn, a: StateRenameArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        if m.states.contains_key(&a.to) {
-            return Err(format!("state `{}` already exists", a.to));
-        }
-        let at = m.states.get_index_of(&a.name).ok_or_else(|| format!("no state `{}` in machine `{}`", a.name, a.machine))?;
-        let s = m.states.shift_remove(&a.name).expect("the index answered");
-        m.states.shift_insert(at, a.to.clone(), s);
-        for t in m.transitions.values_mut() {
-            for end in [&mut t.from, &mut t.to] {
-                if *end == a.name {
-                    *end = a.to.clone();
-                }
-            }
-        }
-        for p in m.playheads.values_mut().filter(|p| p.start == a.name) {
-            p.start = a.to.clone();
-        }
-        m.rewrite_expressions(|e| expr_rewrite::rename_states(e, |s| (s == a.name).then(|| a.to.clone())));
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": a.to }))
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let sid = id_of("state", &m.states, &a.name)?;
+        let was = std::mem::replace(&mut m.states[&sid].name, a.to.clone());
+        set(tx, &id, m)?;
+        Ok(json!({ "id": sid, "name": a.to, "was": was }))
     }
 
-    fn label(a: &StateRenameArgs, _: &Value) -> String {
-        format!("Rename state {} → {}", a.name, a.to)
+    fn label(_: &StateRenameArgs, o: &Value) -> String {
+        renamed("state", o)
     }
+}
+
+/// The state a transition's end names: `*`, any state, where `any` allows it.
+fn end_of(m: &Machine, given: &str, any: bool) -> Result<String, String> {
+    if any && given == "*" { Ok(given.to_string()) } else { id_of("state", &m.states, given) }
 }
 
 impl WriteOp for TransitionAdd {
     fn run(tx: &mut Txn, a: TransitionAddArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        let id = goofi_core::fresh_name("t", 1, |n| m.transitions.contains_key(n));
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let transition = goofi_core::fresh_name("t", 1, |n| m.transitions.contains_key(n));
         let t = Transition {
-            from: a.from,
-            to: a.to,
+            from: end_of(&m, &a.from, true)?,
+            to: end_of(&m, &a.to, false)?,
             condition: a.condition.unwrap_or_default(),
             duration: a.duration.unwrap_or(0.0),
         };
-        m.transitions.insert(id.clone(), t);
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "id": id }))
+        m.transitions.insert(transition.clone(), t);
+        set(tx, &id, m)?;
+        Ok(json!({ "id": transition }))
     }
 
-    fn label(a: &TransitionAddArgs, _: &Value) -> String {
-        format!("Add transition {} → {}", a.from, a.to)
+    fn label(_: &TransitionAddArgs, o: &Value) -> String {
+        format!("Add transition {}", o["id"].as_str().unwrap_or_default())
     }
 }
 
 impl WriteOp for TransitionEdit {
     fn run(tx: &mut Txn, a: TransitionEditArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        let t = m.transitions.get_mut(&a.id).ok_or_else(|| format!("no transition `{}` in machine `{}`", a.id, a.machine))?;
-        if let Some(from) = a.from {
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let from = a.from.map(|s| end_of(&m, &s, true)).transpose()?;
+        let to = a.to.map(|s| end_of(&m, &s, false)).transpose()?;
+        let t = m.transitions.get_mut(&a.id).ok_or_else(|| format!("no transition `{}`", a.id))?;
+        if let Some(from) = from {
             t.from = from;
         }
-        if let Some(to) = a.to {
+        if let Some(to) = to {
             t.to = to;
         }
         if let Some(condition) = a.condition {
@@ -624,7 +634,7 @@ impl WriteOp for TransitionEdit {
         if let Some(duration) = a.duration {
             t.duration = duration;
         }
-        set(tx, &a.machine, m)?;
+        set(tx, &id, m)?;
         Ok(json!({ "id": a.id }))
     }
 
@@ -635,9 +645,9 @@ impl WriteOp for TransitionEdit {
 
 impl WriteOp for TransitionRemove {
     fn run(tx: &mut Txn, a: TransitionRemoveArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        m.transitions.shift_remove(&a.id).ok_or_else(|| format!("no transition `{}` in machine `{}`", a.id, a.machine))?;
-        set(tx, &a.machine, m)?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        m.transitions.shift_remove(&a.id).ok_or_else(|| format!("no transition `{}`", a.id))?;
+        set(tx, &id, m)?;
         Ok(json!({ "removed": true }))
     }
 
@@ -648,114 +658,109 @@ impl WriteOp for TransitionRemove {
 
 impl WriteOp for PlayheadAdd {
     fn run(tx: &mut Txn, a: PlayheadAddArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("playhead", 0, |n| tx.g.group_taken(n)));
-        if m.playheads.contains_key(&name) {
-            return Err(format!("playhead `{name}` already exists — `machine playhead edit` changes it"));
-        }
-        m.playheads.insert(name.clone(), Playhead { color: a.color.unwrap_or_default(), start: a.start });
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": name }))
+        let start = id_of("state", &m.states, &a.start)?;
+        let playhead = tx.g.mint_id("p", |id| m.playheads.contains_key(id));
+        m.playheads.insert(playhead.clone(), Playhead { name: name.clone(), color: a.color.unwrap_or_default(), start });
+        set(tx, &id, m)?;
+        Ok(json!({ "id": playhead, "name": name }))
     }
 
     fn label(_: &PlayheadAddArgs, o: &Value) -> String {
-        format!("Add playhead {}", o["name"].as_str().unwrap_or_default())
+        format!("Add playhead {}", named(o))
     }
 }
 
 impl WriteOp for PlayheadEdit {
     fn run(tx: &mut Txn, a: PlayheadEditArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        let p = m.playheads.get_mut(&a.name).ok_or_else(|| format!("no playhead `{}` in machine `{}`", a.name, a.machine))?;
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let pid = id_of("playhead", &m.playheads, &a.name)?;
         if a.color.is_none() && a.start.is_none() {
             return Err("nothing to change — give a color or a start".into());
         }
+        let start = a.start.map(|s| id_of("state", &m.states, &s)).transpose()?;
+        let p = &mut m.playheads[&pid];
         if let Some(color) = a.color {
             p.color = color;
         }
-        if let Some(start) = a.start {
+        if let Some(start) = start {
             p.start = start;
         }
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "name": a.name }))
+        let out = json!({ "name": m.playheads[&pid].name });
+        set(tx, &id, m)?;
+        Ok(out)
     }
 
-    fn label(a: &PlayheadEditArgs, _: &Value) -> String {
-        format!("Edit playhead {}", a.name)
+    fn label(_: &PlayheadEditArgs, o: &Value) -> String {
+        format!("Edit playhead {}", named(o))
     }
 }
 
 impl WriteOp for PlayheadRemove {
     fn run(tx: &mut Txn, a: PlayheadRemoveArgs) -> Result<Value, String> {
-        let mut m = machine_of(&tx.g, &a.machine)?;
-        m.playheads.shift_remove(&a.name).ok_or_else(|| format!("no playhead `{}` in machine `{}`", a.name, a.machine))?;
-        set(tx, &a.machine, m)?;
-        Ok(json!({ "removed": true }))
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let pid = id_of("playhead", &m.playheads, &a.name)?;
+        let gone = m.playheads.shift_remove(&pid).expect("resolved");
+        set(tx, &id, m)?;
+        Ok(json!({ "removed": true, "name": gone.name }))
     }
 
-    fn label(a: &PlayheadRemoveArgs, _: &Value) -> String {
-        format!("Remove playhead {}", a.name)
+    fn label(_: &PlayheadRemoveArgs, o: &Value) -> String {
+        format!("Remove playhead {}", named(o))
     }
 }
 
 impl WriteOp for PlayheadRename {
     fn run(tx: &mut Txn, a: PlayheadRenameArgs) -> Result<Value, String> {
-        for r in tx.g.rename_playhead(&a.machine, &a.name, &a.to)? {
-            tx.echo(r);
-        }
-        Ok(json!({ "name": a.to }))
+        let (id, mut m) = machine_of(&tx.g, &a.machine)?;
+        let pid = id_of("playhead", &m.playheads, &a.name)?;
+        let was = std::mem::replace(&mut m.playheads[&pid].name, a.to.clone());
+        set(tx, &id, m)?;
+        Ok(json!({ "id": pid, "name": a.to, "was": was }))
     }
 
-    fn label(a: &PlayheadRenameArgs, _: &Value) -> String {
-        format!("Rename playhead {} → {}", a.name, a.to)
+    fn label(_: &PlayheadRenameArgs, o: &Value) -> String {
+        renamed("playhead", o)
     }
 }
 
-/// The machine, playhead and (when named) transition or state an effect addresses, checked
-/// against the settled model before the thread is told.
-fn addressed(state: &AppState, machine: &str, playhead: &str, transition: Option<&str>, target: Option<&str>) -> Result<(), String> {
+/// The ids of the machine and the playhead an effect addresses, and the patch second it is
+/// stamped with, read off the settled model before the thread is told.
+fn addressed(state: &AppState, machine: &str, playhead: &str) -> Result<(String, Machine, String, f64), String> {
     let g = state.graph.lock();
-    let m = machine_of(&g, machine)?;
-    if !m.playheads.contains_key(playhead) {
-        return Err(format!("no playhead `{playhead}` in machine `{machine}`"));
-    }
-    if let Some(id) = transition.filter(|id| !m.transitions.contains_key(*id)) {
-        return Err(format!("no transition `{id}` in machine `{machine}`"));
-    }
-    if let Some(s) = target.filter(|s| !m.states.contains_key(*s)) {
-        return Err(format!("no state `{s}` in machine `{machine}`"));
-    }
-    Ok(())
+    let (id, m) = machine_of(&g, machine)?;
+    let pid = id_of("playhead", &m.playheads, playhead)?;
+    Ok((id, m, pid, g.time().now()))
 }
 
 impl EffectOp for Fire {
     fn run(state: &AppState, a: FireArgs, _: &Caller) -> Result<Value, String> {
-        addressed(state, &a.machine, &a.playhead, Some(&a.transition), None)?;
-        let at = state.graph.lock().time().now();
-        state.machines.send(Msg::Fire { at, machine: a.machine, playhead: a.playhead, transition: a.transition });
+        let (machine, m, playhead, at) = addressed(state, &a.machine, &a.playhead)?;
+        if !m.transitions.contains_key(&a.transition) {
+            return Err(format!("no transition `{}`", a.transition));
+        }
+        state.machines.send(Msg::Fire { at, machine, playhead, transition: a.transition });
         Ok(json!({ "ok": true }))
     }
 }
 
 impl EffectOp for Jump {
     fn run(state: &AppState, a: JumpArgs, _: &Caller) -> Result<Value, String> {
-        addressed(state, &a.machine, &a.playhead, None, Some(&a.state))?;
-        let at = state.graph.lock().time().now();
-        state.machines.send(Msg::Jump { at, machine: a.machine, playhead: a.playhead, state: a.state });
+        let (machine, m, playhead, at) = addressed(state, &a.machine, &a.playhead)?;
+        let target = id_of("state", &m.states, &a.state)?;
+        state.machines.send(Msg::Jump { at, machine, playhead, state: target });
         Ok(json!({ "ok": true }))
     }
 }
 
 impl EffectOp for Reset {
     fn run(state: &AppState, a: ResetArgs, _: &Caller) -> Result<Value, String> {
-        let at = {
+        let (machine, at) = {
             let g = state.graph.lock();
-            if let Some(m) = &a.machine {
-                machine_of(&g, m)?;
-            }
-            g.time().now()
+            (a.machine.map(|m| machine_of(&g, &m).map(|(id, _)| id)).transpose()?, g.time().now())
         };
-        state.machines.send(Msg::Reset { at, machine: a.machine });
+        state.machines.send(Msg::Reset { at, machine });
         Ok(json!({ "ok": true }))
     }
 }

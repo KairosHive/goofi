@@ -60,9 +60,9 @@ export interface ExprCatalogue {
 export function machineCatalogue(machine: string, g: GraphStore = graph()): CatalogueMachine {
 	const m = g.machines[machine];
 	return {
-		states: Object.keys(m?.states ?? {}),
-		playheads: Object.keys(m?.playheads ?? {}),
-		fields: [...ME_FIELDS, ...Object.keys(m?.attributes ?? {})]
+		states: Object.values(m?.states ?? {}).map((s) => s.name),
+		playheads: Object.values(m?.playheads ?? {}).map((p) => p.name),
+		fields: [...ME_FIELDS, ...Object.values(m?.attributes ?? {}).map((a) => a.name)]
 	};
 }
 
@@ -90,8 +90,8 @@ export function liveCatalogue(g: GraphStore = graph()): ExprCatalogue {
 		}),
 		playheads: Object.entries(g.machineGroups).map(([name, machine]) => ({
 			name,
-			machine,
-			fields: [...PLAYHEAD_FIELDS, ...Object.keys(g.machines[machine]?.attributes ?? {})]
+			machine: g.machines[machine]?.name ?? machine,
+			fields: [...PLAYHEAD_FIELDS, ...Object.values(g.machines[machine]?.attributes ?? {}).map((a) => a.name)]
 		}))
 	};
 }

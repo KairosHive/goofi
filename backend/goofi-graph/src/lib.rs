@@ -938,106 +938,85 @@ impl Graph {
         &self.patch.machines
     }
 
-    /// Set, replace or remove (`None`) a machine whole, answering the record it replaced. A new one
-    /// lands at `at`. Every playhead's group follows.
-    pub fn set_machine(&mut self, name: &str, record: Option<machine::Machine>, at: Option<usize>) -> Result<Option<machine::Machine>, String> {
-        if !goofi_core::variables::is_valid_identifier(name) {
-            return Err(format!("invalid machine name `{name}`: {}", machine::NAME_RULE));
-        }
-        let old = match record {
-            None => self.machines_mut().shift_remove(name),
-            Some(record) => {
-                record.check()?;
-                for ph in record.playheads.keys() {
-                    let mine = self.variables().machine(ph) == Some(name);
-                    if !mine && self.group_taken(ph) {
-                        return Err(format!("`{ph}` is a variable group already; a playhead's name is its group"));
-                    }
-                }
-                match self.patch.machines.get_index_of(name) {
-                    Some(_) => self.machines_mut().insert(name.to_string(), record),
-                    None => {
-                        let at = at.unwrap_or(usize::MAX).min(self.patch.machines.len());
-                        self.machines_mut().shift_insert(at, name.to_string(), record);
-                        None
-                    }
-                }
+    /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, so none
+    /// is handed out twice, and clear of every id `taken` answers for.
+    pub fn mint_id(&mut self, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
+        loop {
+            let id = format!("{prefix}-{}", self.mint().0);
+            if !taken(&id) {
+                return id;
             }
+        }
+    }
+
+    /// Set, replace or remove (`None`) the machine `id` whole. A new one lands at `at`. A name
+    /// that moved is read off the two records, by id, and followed: a playhead's group moves with
+    /// its values, and every expression that spells the old name is rewritten. Answers the nodes
+    /// whose source text changed.
+    pub fn set_machine(&mut self, id: &str, record: Option<machine::Machine>, at: Option<usize>) -> Result<Vec<Uid>, String> {
+        let Some(mut record) = record else {
+            self.machines_mut().shift_remove(id);
+            self.sync_playheads();
+            return Ok(Vec::new());
         };
-        self.sync_playheads();
-        Ok(old)
-    }
-
-    /// Rename a machine, keeping its place. Its playheads' groups are the playheads' own names.
-    pub fn rename_machine(&mut self, from: &str, to: &str) -> Result<(), String> {
-        if !goofi_core::variables::is_valid_identifier(to) {
-            return Err(format!("invalid machine name `{to}`: {}", machine::NAME_RULE));
+        if !goofi_core::variables::is_valid_identifier(&record.name) {
+            return Err(format!("invalid machine name `{}`: {}", record.name, machine::NAME_RULE));
         }
-        if self.patch.machines.contains_key(to) {
-            return Err(format!("machine `{to}` already exists"));
+        if self.patch.machines.iter().any(|(other, m)| other != id && m.name == record.name) {
+            return Err(format!("machine `{}` already exists", record.name));
         }
-        let at = self.patch.machines.get_index_of(from).ok_or_else(|| format!("no machine `{from}`"))?;
-        let record = self.machines_mut().shift_remove(from).expect("the index answered");
-        self.machines_mut().shift_insert(at, to.to_string(), record);
-        let writes = self.patch.arrangement.retarget("machine", "machine", from, to);
-        self.arrangement_mut().set_contents(&writes);
-        self.sync_playheads();
-        Ok(())
-    }
-
-    /// Rename a playhead, and rewrite every expression that reads its variables.
-    pub fn rename_playhead(&mut self, machine: &str, from: &str, to: &str) -> Result<Vec<Uid>, String> {
-        let m = self.patch.machines.get(machine).ok_or_else(|| format!("no machine `{machine}`"))?;
-        if !m.playheads.contains_key(from) {
-            return Err(format!("no playhead `{from}` in machine `{machine}`"));
+        fn renamed<V: machine::Named>(old: Option<&IndexMap<String, V>>, new: &IndexMap<String, V>) -> Vec<(String, String)> {
+            let pairs = new.iter().filter_map(|(id, v)| Some((old?.get(id)?.name().to_string(), v.name().to_string())));
+            pairs.filter(|(from, to)| from != to).collect()
         }
-        let mut next = m.clone();
-        let at = next.playheads.get_index_of(from).expect("checked");
-        let record = next.playheads.shift_remove(from).expect("checked");
-        next.playheads.shift_insert(at, to.to_string(), record);
-        next.rewrite_expressions(|e| expr_rewrite::rename_states(e, |n| (n == from).then(|| to.to_string())));
-        let moved: Vec<(String, String)> =
-            m.playhead_entries(from).into_iter().map(|(name, ..)| (name.clone(), name.replacen(from, to, 1))).collect();
-        self.set_machine(machine, Some(next), None)?;
-        Ok(self.rewrite_variable_reads(&moved))
-    }
-
-    /// Rename an attribute in every state and playhead, and rewrite every expression that reads it.
-    pub fn rename_attribute(&mut self, machine: &str, from: &str, to: &str) -> Result<Vec<Uid>, String> {
-        let m = self.patch.machines.get(machine).ok_or_else(|| format!("no machine `{machine}`"))?;
-        if !m.attributes.contains_key(from) {
-            return Err(format!("no attribute `{from}` in machine `{machine}`"));
+        let to = |pairs: &[(String, String)], name: &str| pairs.iter().find(|(from, _)| from == name).map(|(_, to)| to.clone());
+        let old = self.patch.machines.get(id);
+        let named: Vec<(String, String)> =
+            renamed(old.map(|o| &o.states), &record.states).into_iter().chain(renamed(old.map(|o| &o.playheads), &record.playheads)).collect();
+        let attributes = renamed(old.map(|o| &o.attributes), &record.attributes);
+        // Every variable of a playhead both records hold, where its name moved.
+        let mut moved: Vec<(String, String)> = Vec::new();
+        for (o, (ph, was)) in old.iter().flat_map(|o| o.playheads.iter().map(move |p| (*o, p))) {
+            let Some(now) = record.playheads.get(ph) else { continue };
+            let own = machine::OWN.iter().map(|e| (*e, *e));
+            let attrs = o.attributes.iter().filter_map(|(a, attr)| Some((attr.name.as_str(), record.attributes.get(a)?.name.as_str())));
+            moved.extend(own.chain(attrs).map(|(e, f)| (format!("{}.{e}", was.name), format!("{}.{f}", now.name))).filter(|(from, to)| from != to));
         }
-        if m.attributes.contains_key(to) {
-            return Err(format!("attribute `{to}` already exists in machine `{machine}`"));
-        }
-        let mut next = m.clone();
-        fn rekey<V>(map: &mut IndexMap<String, V>, from: &str, to: &str) {
-            if let Some(at) = map.get_index_of(from) {
-                let v = map.shift_remove(from).expect("the index answered");
-                map.shift_insert(at, to.to_string(), v);
+        // The variable reads first: they spell the playhead and the attribute as they were.
+        record.rewrite_expressions(|e| expr_rewrite::rename_variables(e, |n| to(&moved, n)));
+        record.rewrite_expressions(|e| expr_rewrite::rename_states(e, |n| to(&named, n)));
+        record.rewrite_expressions(|e| expr_rewrite::rename_me_fields(e, |f| to(&attributes, f)));
+        record.check()?;
+        for (ph, p) in &record.playheads {
+            let held = old.and_then(|o| o.playheads.get(ph)).is_some_and(|q| q.name == p.name);
+            if !held && self.group_taken(&p.name) {
+                return Err(format!("`{}` is a variable group already; a playhead's name is its group", p.name));
             }
         }
-        rekey(&mut next.attributes, from, to);
-        for s in next.states.values_mut() {
-            rekey(&mut s.values, from, to);
-            rekey(&mut s.envelopes, from, to);
+        self.variables().move_owned(&moved);
+        match self.patch.machines.get_index_of(id) {
+            Some(_) => {
+                self.machines_mut().insert(id.to_string(), record);
+            }
+            None => {
+                let at = at.unwrap_or(usize::MAX).min(self.patch.machines.len());
+                self.machines_mut().shift_insert(at, id.to_string(), record);
+            }
         }
-        next.rewrite_expressions(|e| expr_rewrite::rename_me_fields(e, |f| (f == from).then(|| to.to_string())));
-        let moved: Vec<(String, String)> = m.playheads.keys().map(|ph| (format!("{ph}.{from}"), format!("{ph}.{to}"))).collect();
-        self.set_machine(machine, Some(next), None)?;
+        self.sync_playheads();
         Ok(self.rewrite_variable_reads(&moved))
     }
 
-    /// Hold every playhead's group in step with the machines: one group per playhead, owned by its
-    /// machine, with the machine's three elements and one entry per attribute; nothing else.
+    /// Hold every playhead's group in step with the machines: one group per playhead, under its
+    /// name and owned by its machine, with the machine's two elements and one entry per
+    /// attribute; nothing else.
     fn sync_playheads(&mut self) {
         let mut store = self.variables();
         let wanted: Vec<(String, String, goofi_core::variables::Entries)> = self
             .patch
             .machines
             .iter()
-            .flat_map(|(m, record)| record.playheads.keys().map(move |ph| (ph.clone(), m.clone(), record.playhead_entries(ph))))
+            .flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), m.clone(), record.playhead_entries(ph))))
             .collect();
         let gone: Vec<String> =
             store.groups().filter(|(g, rec)| rec.machine.is_some() && !wanted.iter().any(|(ph, m, _)| ph == g && Some(m.as_str()) == rec.machine.as_deref())).map(|(g, _)| g.to_string()).collect();
@@ -4014,9 +3993,9 @@ impl Graph {
         }
         // Machines after the variables and before the nodes: a playhead's variables are born here,
         // and a node's expression may read one at instantiation.
-        for (name, m) in &doc.machines {
-            if let Err(e) = self.set_machine(name, Some(m.clone()), None) {
-                warnings.push(format!("machine `{name}` dropped: {e}"));
+        for (id, m) in &doc.machines {
+            if let Err(e) = self.set_machine(id, Some(m.clone()), None) {
+                warnings.push(format!("machine `{}` dropped: {e}", m.name));
             }
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing

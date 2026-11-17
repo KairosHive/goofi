@@ -689,8 +689,8 @@ impl Layout {
             .collect()
     }
 
-    /// Re-aim every `panel_type` panel whose state `key` names `from` at `to`: a group's or a
-    /// machine's identity is its name, so a panel holds it as an expression does, and one rename moves both.
+    /// Re-aim every `panel_type` panel whose state `key` names `from` at `to`: a renamed group,
+    /// which a panel holds by its name, or the machine left when the one a panel held is removed.
     pub fn retarget(&self, panel_type: &str, key: &str, from: &str, to: &str) -> Vec<Write> {
         let named = |t: &str, state: &Value| t == panel_type && state.get(key).and_then(Value::as_str) == Some(from);
         self.rekey_panels(named, key, Value::String(to.to_string()))

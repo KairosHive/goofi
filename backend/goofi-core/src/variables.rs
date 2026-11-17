@@ -777,6 +777,21 @@ impl VariableStore {
         self.groups.shift_remove(group);
     }
 
+    /// An owner's rename: each `(from, to)` entry it holds moves with its value, and a group whose
+    /// entries all left follows them, in its place. Not a command: the owner answers for the names.
+    pub fn move_owned(&mut self, moved: &[(String, String)]) {
+        self.version += 1;
+        for (from, to) in moved.iter().filter(|(from, _)| self.entries.contains_key(from.as_str())).cloned().collect::<Vec<_>>() {
+            self.move_entry(&from, &to);
+            let (was, now) = (group_of(&from), group_of(&to));
+            if was != now && !self.entries.keys().any(|n| group_of(n) == was) {
+                if let Some((at, _, record)) = self.groups.shift_remove_full(was) {
+                    self.groups.shift_insert(at, now.to_string(), record);
+                }
+            }
+        }
+    }
+
     /// An owner's write: lands only on an owned group's entry, under no lock, with no undo.
     pub fn drive(&mut self, name: &str, value: Data) -> bool {
         self.owned(group_of(name)) && self.move_value(name, value)

@@ -59,10 +59,10 @@
 
 	const name = $derived((asStateObject(panelState) as MachineState).machine ?? '');
 	const machine = $derived(name ? g.machines[name] : undefined);
-	const tabs = $derived(Object.keys(g.machines).map((id) => ({ id, label: id })));
+	const tabs = $derived(Object.entries(g.machines).map(([id, m]) => ({ id, label: m.name })));
 
 	function choose(machine: string): void {
-		setState({ machine }, 'authored', `Show machine ${machine}`);
+		setState({ machine }, 'authored', `Show machine ${g.machines[machine]?.name}`);
 	}
 	function call(op: MachineOp, payload: Record<string, unknown>): Promise<unknown> {
 		return g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
@@ -71,21 +71,21 @@
 	async function create(): Promise<void> {
 		try {
 			await history().transaction('Add machine', async (step) => {
-				const r = await g.machine<{ name: string }>('machine add', {}, step);
-				await g.setPanelState(panelId, { machine: r.name }, step);
+				const r = await g.machine<{ id: string }>('machine add', {}, step);
+				await g.setPanelState(panelId, { machine: r.id }, step);
 			});
 		} catch (e) {
 			notify().failure('Add machine', e);
 		}
 	}
 	function rename(machine: string, to: string): void {
-		if (to !== machine && isValidIdentifier(to)) void call('machine rename', { machine, to });
+		if (to !== g.machines[machine]?.name && isValidIdentifier(to)) void call('machine rename', { machine, to });
 	}
 	/** ONE step: the last machine's successor is born first, so the removal re-aims this panel at it
 	 * and one undo brings the old one back whole. The manager, never a reaction here, picks the next. */
 	async function remove(machine: string): Promise<void> {
 		try {
-			await history().transaction(`Remove machine ${machine}`, async (step) => {
+			await history().transaction(`Remove machine ${g.machines[machine]?.name}`, async (step) => {
 				if (tabs.length === 1) await g.machine('machine add', {}, step);
 				await g.machine('machine remove', { machine }, step);
 			});
@@ -276,9 +276,9 @@
 		} else if (group && picked.includes(c.source) && picked.includes(c.target)) {
 			void askAllToAll(c.source, c.target, picked);
 		} else if (group && picked.includes(c.source)) {
-			void connect(name, m, picked.map((s): [string, string] => [s, c.target!]), `Connect ${picked.length} states to ${c.target}`);
+			void connect(name, m, picked.map((s): [string, string] => [s, c.target!]), `Connect ${picked.length} states to ${m.states[c.target].name}`);
 		} else if (group && picked.includes(c.target)) {
-			void connect(name, m, picked.map((s): [string, string] => [c.source!, s]), `Connect ${c.source} to ${picked.length} states`);
+			void connect(name, m, picked.map((s): [string, string] => [c.source!, s]), `Connect ${m.states[c.source].name} to ${picked.length} states`);
 		} else {
 			void addTransition(c.source, c.target);
 		}
@@ -288,7 +288,7 @@
 	async function askAllToAll(from: string, to: string, picked: string[]): Promise<void> {
 		const choice = await quickPick().ask(pointer, [
 			{ id: 'all', label: `All to all among the ${picked.length} selected` },
-			{ id: 'one', label: `${from} → ${to} only` }
+			{ id: 'one', label: `${machine!.states[from].name} → ${machine!.states[to].name} only` }
 		], 'Connect');
 		if (choice === 'all') await connect(name, machine!, allToAll(picked), 'Connect all to all');
 		else if (choice === 'one') await addTransition(from, to);
@@ -348,12 +348,12 @@
 	// The state the engine carries, while it does.
 	let lifted: string | null = null;
 
-	/** The attributes `state` sets, or all of them: those a target of `tag` reads. */
+	/** The names of the attributes `state` sets, or of all of them: those a target of `tag` reads. */
 	function attrsFor(state: string, tag: DragTag): string[] {
 		const m = machine;
 		if (!m) return [];
 		const set = Object.keys(m.states[state]?.values ?? {});
-		return (set.length > 0 ? set : Object.keys(m.attributes)).filter((a) => (m.attributes[a]?.kind.type === 'string') === (tag === 'text'));
+		return (set.length > 0 ? set : Object.keys(m.attributes)).filter((a) => (m.attributes[a]?.kind.type === 'string') === (tag === 'text')).map((a) => m.attributes[a]?.name ?? a);
 	}
 	function stateSource(state: string): DragSource {
 		const tags: DragTag[] = [];
@@ -362,7 +362,7 @@
 		return {
 			key: state,
 			tags,
-			label: `sm('⟨playhead⟩').${state}…`,
+			label: `sm('⟨playhead⟩').${machine?.states[state]?.name}…`,
 			home: rootEl?.querySelector('.svelte-flow') ?? rootEl,
 			expression: (tag, at) => offer(state, tag, at)
 		};
@@ -372,7 +372,7 @@
 	function offer(state: string, tag: DragTag, at: { x: number; y: number }): string | null | Promise<string | null> {
 		const m = machine;
 		if (!m) return null;
-		const playheads = Object.keys(m.playheads);
+		const playheads = Object.values(m.playheads).map((p) => p.name);
 		const attrs = attrsFor(state, tag);
 		if (playheads.length === 0) {
 			notify().failure('Map state', 'no playhead travels this machine; add one in the state inspector');
@@ -381,7 +381,7 @@
 		const choices = playheads.flatMap((ph) => attrs.map((a) => ({ ph, a })));
 		const name = (c: { ph: string; a: string }): string => `sm('${c.ph}').${c.a}`;
 		if (choices.length === 1) return name(choices[0]);
-		return quickPick().ask(at, choices.map((c) => ({ id: name(c), label: playheads.length > 1 ? `${c.ph}.${c.a}` : c.a })), `Attribute of ${state}`);
+		return quickPick().ask(at, choices.map((c) => ({ id: name(c), label: playheads.length > 1 ? `${c.ph}.${c.a}` : c.a })), `Attribute of ${m.states[state]?.name}`);
 	}
 	/** The box back where its drag began, the preview with it. */
 	function revert(n: Node): void {
@@ -508,7 +508,7 @@
 </script>
 
 
-<div class="wrap" data-testid="machine-panel" data-machine={name}>
+<div class="wrap" data-testid="machine-panel" data-machine={machine?.name ?? ''}>
 	<InstanceBar testid="machine-tabs" items={tabs} active={name} onSelect={choose} onAdd={() => void create()} onRename={rename}
 		onClose={(m) => void remove(m)}>
 		{#snippet end()}

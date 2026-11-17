@@ -27,11 +27,9 @@ Each as its own small change against the shipped model, in this order of value:
   lands on the newborn read that functional instead (CI 2026-10-23, run 277, once; five local runs
   passed). Decide whether the fixture waits the flight out before it asserts, or reads through an
   evaluator that runs motions; the assertion itself must not widen.
-- **A rename restarts the renamed thing's run.** The machine thread keys its runs by playhead
-  and state name, so `machine playhead rename` births the new name at its start and
-  `machine state rename` sends a playhead resting in the state back to its start. Decided: every
-  named thing of a machine gets an id and keys by it, as a node does (`roadmap/timeline.md`,
-  Identity), so a rename moves no key.
+- **A rename reads a rewritten condition's gate again.** A state or playhead rename rewrites the
+  conditions that spell it, and a gate is kept only while its text is the same. A condition
+  that turns true in the wake that carries the rename is stored as true, and its edge is lost.
 
 - **Exact step onsets in audio.** A functional lands one wire hop after its event, so a `Step`
   curve sounds up to one block late and is ramped across that block. The branch's 10 ms

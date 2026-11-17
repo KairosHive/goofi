@@ -78,7 +78,7 @@
 	</svg>
 	{#each arcs as a (a.id)}
 		<button type="button" class="chip" class:picked={selected.has(a.id)} class:lit={hover.litTransition(name, a.id)} class:any={a.any}
-			style={`left: ${a.x}px; top: ${a.y}px`} title={`${m.transitions[a.id].from} → ${m.transitions[a.id].to}: its settings`} data-testid={`arc-${a.id}`}
+			style={`left: ${a.x}px; top: ${a.y}px`} title={`${m.states[m.transitions[a.id].from]?.name ?? '*'} → ${m.states[m.transitions[a.id].to]?.name}: its settings`} data-testid={`arc-${a.id}`}
 			onpointerenter={() => hover.overTransition(name, a.id)} onpointerleave={() => hover.clear()}
 			onclick={(e) => onPick(a.id, e)}>{a.any ? 'any' : summary(m, a.id)}</button>
 	{/each}

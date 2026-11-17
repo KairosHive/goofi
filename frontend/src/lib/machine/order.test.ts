@@ -4,13 +4,13 @@ import { columnOrder, joined, widths } from './order';
 
 /** A machine of `states`, wired by `edges` written `A>B`. */
 function machine(states: string[], edges: string[], start?: string): Machine {
-	const m: Machine = { attributes: {}, states: {}, transitions: {}, playheads: {} };
-	for (const s of states) m.states[s] = { pos: [0, 0], interval: 1, mode: 'random', noop: 0, weights: {}, expression: '' };
+	const m: Machine = { name: 'machine0', attributes: {}, states: {}, transitions: {}, playheads: {} };
+	for (const s of states) m.states[s] = { name: s.toLowerCase(), pos: [0, 0], interval: 1, mode: 'random', noop: 0, weights: {}, expression: '' };
 	edges.forEach((e, i) => {
 		const [from, to] = e.split('>');
 		m.transitions[`t${i + 1}`] = { from, to, duration: 0 };
 	});
-	if (start) m.playheads.p = { color: '', start };
+	if (start) m.playheads.p = { name: 'playhead0', color: '', start };
 	return m;
 }
 

@@ -151,7 +151,7 @@
 						{/if}
 						<span class="grp-tags">
 							{#if g.machineGroups[grp.group]}
-								<span class="grp-control" role="img" aria-label="State machine" title={`Playhead of ${g.machineGroups[grp.group]}`}><Icon name="waypoints" /></span>
+								<span class="grp-control" role="img" aria-label="State machine" title={`Playhead of ${g.machines[g.machineGroups[grp.group]]?.name}`}><Icon name="waypoints" /></span>
 							{:else if controlled}
 								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
 							{/if}

@@ -49,6 +49,24 @@ async function paint(page: Page, hasTouch: boolean, cell: Locator, fraction: num
 	await dragPoints(page, hasTouch, start, { x: b.x + b.width / 2, y: b.y + b.height * (1 - fraction) });
 }
 
+/** The manager's machine named `name`, keyed the way the test spells it: its states and attributes
+ * by name, a state's values and envelopes by attribute name, a transition's ends by state name. The
+ * document keys each by an id the manager mints; the machine's own is `id` here. */
+async function machineNamed(page: Page, name: string): Promise<any> {
+	const [id, m] = Object.entries<any>((await backendDoc(page)).machines).find(([, m]) => m.name === name)!;
+	const attr = (a: string): string => m.attributes?.[a]?.name ?? a;
+	const state = (s: string): string => m.states?.[s]?.name ?? s;
+	const by = (map: Record<string, any> | undefined, key: (k: string) => string, value = (v: any): any => v): Record<string, any> | undefined =>
+		map && Object.fromEntries(Object.entries(map).map(([k, v]) => [key(k), value(v)]));
+	return {
+		...m,
+		id,
+		attributes: by(m.attributes, attr),
+		states: by(m.states, state, (s) => ({ ...s, values: by(s.values, attr), envelopes: by(s.envelopes, attr) })),
+		transitions: by(m.transitions, (t) => t, (t) => ({ ...t, from: state(t.from), to: state(t.to) }))
+	};
+}
+
 test('a machine is built by gesture, scored as columns and rows, and its playhead crosses on a tap', async ({ page, hasTouch }, testInfo) => {
 	await page.goto('/');
 	await waitForApp(page);
@@ -185,7 +203,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		// A name typed at the score's foot is a new attribute: a row, set in the selected state and
 		// unset in the other. A press on a cell sets its value where the pointer is; a drag across
 		// the columns paints each; unset in its last state, the attribute leaves the machine.
-		const machineState = async (): Promise<any> => (await rawCall(page, 'session state')).result.machines.machine0;
+		const machineState = (): Promise<any> => machineNamed(page, 'machine0');
 		await press(name1);
 		const newName = score.getByTestId('attribute-name-new');
 		await newName.fill('gain');
@@ -305,7 +323,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		// The interval is typed, and dragged on the column's edge; the mode toggle switches to a
 		// sequence, and the card's line, the row and the chip say so.
 		const decision = async (): Promise<{ noop: number; weights: Record<string, number>; interval: number; mode: string }> =>
-			(await rawCall(page, 'session state')).result.machines.machine0.states.state0;
+			(await machineState()).states.state0;
 		await expect(card0).toHaveAttribute('data-mode', 'random');
 		await press(column0.getByTestId('column-settings'));
 		await expect(popover).toHaveAttribute('data-kind', 'state');
@@ -324,9 +342,9 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		// The interval is a param: its source switch seeds an expression from the value, and back.
 		await press(popover.getByTestId('state-interval').getByRole('button', { name: 'interval', exact: true }));
 		await press(popover.getByTestId('state-interval').getByTestId('param-mode-expression'));
-		await expect.poll(async () => (await rawCall(page, 'session state')).result.machines.machine0.states.state0.interval_expression).toBe('1.05');
+		await expect.poll(async () => (await machineState()).states.state0.interval_expression).toBe('1.05');
 		await press(popover.getByTestId('state-interval').getByTestId('param-mode-constant'));
-		await expect.poll(async () => (await rawCall(page, 'session state')).result.machines.machine0.states.state0.interval_expression).toBeUndefined();
+		await expect.poll(async () => (await machineState()).states.state0.interval_expression).toBeUndefined();
 		await press(popover.getByTestId('state-mode-sequence'));
 		await expect(card0).toHaveAttribute('data-mode', 'sequence');
 		await expect(card0.getByTestId('state-card-summary')).toContainText('seq');
@@ -417,7 +435,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		expect(c!.x + c!.width <= p!.x || c!.y + c!.height <= p!.y, `the cluster sits clear of the pane: ${JSON.stringify(c)} ${JSON.stringify(p)}`).toBe(true);
 		// Its ◇ is `machine arrange`: every card lands on the grid, clear of the others, as one step.
 		const states = async (): Promise<Record<string, { pos: [number, number] }>> =>
-			(await rawCall(page, 'session state')).result.machines.machine0.states;
+			(await machineState()).states;
 		const placed = await states();
 		await press(cluster.getByTestId('arrange'));
 		await expect.poll(async () => Object.values(await states()).every((s) => s.pos[0] % 24 === 0 && s.pos[1] % 24 === 0)).toBe(true);
@@ -428,7 +446,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 
 		// The playhead's group is the machine's: listed locked whole, like a device's.
 		const groups = (await rawCall(page, 'session state')).result.variable_groups;
-		expect(groups.playhead0.machine).toBe('machine0');
+		expect(groups.playhead0.machine).toBe((await machineState()).id);
 
 		// The tabs' ＋ starts a second machine and shows it; its ✕ removes it and the first comes back.
 		// The last tab's ✕ leaves a fresh empty machine, as a new panel on a new patch gets one.
@@ -477,7 +495,7 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		const panel = page.getByTestId('machine-panel');
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		const score = page.getByTestId('machine-inspector');
-		const machineState = async (): Promise<any> => (await rawCall(page, 'session state')).result.machines.machine0;
+		const machineState = (): Promise<any> => machineNamed(page, 'machine0');
 		const wires = async (): Promise<string[]> => Object.values((await machineState()).transitions ?? {}).map((t: any) => `${t.from}>${t.to}`).sort();
 		const card = (s: string): Locator => page.getByTestId(`state-card-${s}`);
 		const name = (s: string): Locator => card(s).getByTestId('state-card-name');
@@ -607,7 +625,7 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await rawCall(page, 'machine playhead add', { machine: 'machine0', name: 'beat', start: 'state0' });
 		const card = page.getByTestId('state-card-state0');
 		await expect(card).toBeVisible();
-		const placed = async (): Promise<number[]> => (await backendDoc(page)).machines.machine0.states.state0.pos;
+		const placed = async (): Promise<number[]> => (await machineNamed(page, 'machine0')).states.state0.pos;
 		const before = await placed();
 
 		osc = await addNode(page, 'LFO');

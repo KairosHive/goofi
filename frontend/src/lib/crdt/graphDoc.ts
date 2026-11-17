@@ -143,7 +143,7 @@ export function midiGroups(doc: Doc): Record<string, Midi> {
 	return out;
 }
 
-/** Every group a machine's playhead owns, by name, with the machine it belongs to. */
+/** Every group a machine's playhead owns, by name, with the id of the machine it belongs to. */
 export function machineGroups(doc: Doc): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
@@ -171,12 +171,12 @@ export function controlGroups(doc: Doc): string[] {
 	return [...out];
 }
 
-/** Every state machine, by name. The wire leaves an empty map out; a view always has the four. */
+/** Every state machine, by id. The wire leaves an empty map out; a view always has the four. */
 export function machineViews(doc: Doc): Record<string, Machine> {
 	const out: Record<string, Machine> = {};
-	for (const [name, raw] of Object.entries(obj(doc.machines))) {
-		const m = obj(raw) as Partial<Machine>;
-		out[name] = {
+	for (const [id, raw] of Object.entries(obj(doc.machines))) {
+		const m = obj(raw) as Pick<Machine, 'name'> & Partial<Machine>;
+		out[id] = {
 			...m,
 			attributes: m.attributes ?? {},
 			states: m.states ?? {},

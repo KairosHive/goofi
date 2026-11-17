@@ -22,7 +22,7 @@
 	const s = $derived(m?.states[id]);
 	const out = $derived(m ? outgoing(m, id).length : 0);
 	const mode = $derived(DECISIONS.find((d) => d.id === s?.mode)?.label ?? '');
-	const set = $derived(Object.keys(s?.values ?? {}));
+	const set = $derived(Object.keys(s?.values ?? {}).map((a) => m.attributes[a]?.name ?? a));
 	const beat = $derived(s ? (s.interval_expression ? 'ƒ' : s.interval < 0 ? 'no beat' : `${s.interval.toFixed(2)}s`) : '');
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
@@ -64,7 +64,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="card" class:lit={hover.litState(machine, id)} style={`width: ${CARD_W}px; height: ${CARD_H}px`} data-testid={`state-card-${id}`} data-state={id} data-mode={s?.mode}
+<div class="card" class:lit={hover.litState(machine, id)} style={`width: ${CARD_W}px; height: ${CARD_H}px`} data-testid={`state-card-${s?.name}`} data-state={s?.name} data-mode={s?.mode}
 	onpointerenter={() => hover.overState(machine, id)} onpointerleave={() => hover.clear()}>
 	<Handle type="source" position={Position.Top} class="port" />
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -83,7 +83,7 @@
 	>
 		<div class="main">
 			<div class="title">
-				<span class="name" data-testid="state-card-name">{id}</span>
+				<span class="name" data-testid="state-card-name">{s?.name}</span>
 			</div>
 			<!-- What the state sets, by name, in the room under the name; the rest is an ellipsis. -->
 			{#if set.length > 0}

@@ -10,12 +10,12 @@
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
+	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { Badge, Button, ColorPicker, Field, Icon, IconButton, Segmented, Select } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
-	import { DECISIONS, editEach, mixed, outgoing as outgoingOf, relink, shares, summary as transitionSummary, weightsOf } from './model';
+	import { DECISIONS, editEach, mixed, outgoing as outgoingOf, relink, shares, stateOf, summary as transitionSummary, weightsOf } from './model';
 	import TransitionForm from './TransitionForm.svelte';
 
 	let { name, m, ids, open = [] }: { name: string; m: Machine; ids: string[]; open?: string[] } = $props();
@@ -29,7 +29,7 @@
 	const transitions = $derived(Object.entries(m.transitions));
 	const incoming = $derived(one ? transitions.filter(([, t]) => t.to === one) : []);
 	const outgoing = $derived(one ? transitions.filter(([, t]) => t.from === one || t.from === '*') : []);
-	const arrow = (t: Machine['transitions'][string]): string => `${t.from === '*' ? 'any' : t.from} → ${t.to}`;
+	const arrow = (t: Machine['transitions'][string]): string => `${t.from === '*' ? 'any' : m.states[t.from]?.name} → ${m.states[t.to]?.name}`;
 
 	// ---- the states, edited as one.
 	const states = $derived(ids.map((id) => m.states[id]));
@@ -67,16 +67,15 @@
 	// ---- the playheads: those that start in the one state, and those resting in it now.
 	const playheads = $derived(Object.keys(m.playheads));
 	const here = $derived(one ? playheads.filter((p) => m.playheads[p].start === one) : []);
-	watchVariables(() => playheads.map((p) => `${p}.state`));
-	const whereNow = (p: string): string => String(variableValue(`${p}.state`) ?? m.playheads[p].start);
-	const resting = $derived(one ? playheads.filter((p) => whereNow(p) === one) : []);
+	watchVariables(() => playheads.map((p) => `${m.playheads[p].name}.state`));
+	const resting = $derived(one ? playheads.filter((p) => stateOf(m, p) === one).map((p) => m.playheads[p].name) : []);
 
 	// ---- a transition out, added here rather than dragged: to a state picked from a menu under the +.
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function pickTransition(e: MouseEvent): void {
 		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		const add = (to: string): void => void g.machine('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
-		picker = { x: r.left, y: r.bottom, items: Object.keys(m.states).map((to) => ({ label: to, action: () => add(to) })) };
+		picker = { x: r.left, y: r.bottom, items: Object.entries(m.states).map(([to, s]) => ({ label: s.name, action: () => add(to) })) };
 	}
 	/** The one delete path: a playhead starting here refuses it, as the manager says. */
 	const remove = (): void => ids.forEach((id) => call('machine state remove', { name: id }));
@@ -120,7 +119,7 @@
 <div class="state-form" data-testid="state-form" data-count={ids.length}>
 	<div class="head">
 		{#if one}
-			<span class="name"><RenameField value={one} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => call('machine state rename', { name: one, to })} /></span>
+			<span class="name"><RenameField value={s?.name ?? ''} valid={isValidIdentifier} label="State name" testid="state-name" onRename={(to) => call('machine state rename', { name: one, to })} /></span>
 			<Badge tone={resting.length > 0 ? 'accent' : 'neutral'} title={resting.length > 0 ? `Resting here now: ${resting.join(', ')}` : 'No playhead rests here now'}>
 				{resting.length > 0 ? `${resting.length} here` : 'empty'}
 			</Badge>
@@ -156,14 +155,14 @@
 			</header>
 			{#each here as p (p)}
 				{@const ph = m.playheads[p]}
-				<div class="row" data-testid={`playhead-${p}`}>
-					<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${p} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
-					<span class="mono"><RenameField value={p} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
-					<span class="hint" title="Where it is now">in <span class="mono" data-testid="playhead-state">{whereNow(p)}</span></span>
+				<div class="row" data-testid={`playhead-${ph.name}`}>
+					<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${ph.name} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
+					<span class="mono"><RenameField value={ph.name} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead rename', { name: p, to })} /></span>
+					<span class="hint" title="Where it is now">in <span class="mono" data-testid="playhead-state">{m.states[stateOf(m, p)]?.name}</span></span>
 					<span class="hint" title="Where a reset and a load put it">starts</span>
-					<Select data-testid="playhead-start" aria-label="start state" density="chrome" value={ph.start} options={Object.keys(m.states)} onChange={(v) => call('machine playhead edit', { name: p, start: v })} />
+					<Select data-testid="playhead-start" aria-label="start state" density="chrome" value={ph.start} options={Object.keys(m.states)} labels={Object.fromEntries(Object.entries(m.states).map(([id, s]) => [id, s.name]))} onChange={(v) => call('machine playhead edit', { name: p, start: v })} />
 					<span class="tools">
-						<IconButton variant="ghost" size="sm" label={`Remove ${p}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
+						<IconButton variant="ghost" size="sm" label={`Remove ${ph.name}`} title="Remove the playhead and its variables" data-testid="playhead-remove" onclick={() => call('machine playhead remove', { name: p })}><Icon name="x" /></IconButton>
 					</span>
 				</div>
 			{/each}

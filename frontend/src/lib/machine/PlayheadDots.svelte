@@ -11,21 +11,22 @@
 	import { variableFrame, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { course } from './geometry';
 	import { DOCK, DOT, cardBox, dotColor } from './layout';
+	import { stateOf } from './model';
 
 	let { m, nodes }: { m: Machine; nodes: Node[] } = $props();
-	const names = $derived(Object.keys(m.playheads));
+	const names = $derived(Object.values(m.playheads).map((p) => p.name));
 	watchVariables(() => names.flatMap((p) => [`${p}.state`, `${p}.progress`]));
 
 	const where = $derived(
-		names.map((p, i) => {
-			const state = String(variableValue(`${p}.state`) ?? m.playheads[p].start);
+		Object.entries(m.playheads).map(([id, { name: p, color }], i) => {
+			const state = stateOf(m, id);
 			const progress = Number(variableValue(`${p}.progress`) ?? 1);
 			// The flight's own frame says where it left from; a jump moves the state frame alone and
 			// a landing the progress frame alone, so the later arrival of the two is the one that holds.
 			const flight = variableFrame(`${p}.progress`)?.meta ?? {};
 			const prev = String(flight.prev ?? '');
 			const arrived = Math.max(Number(flight.arrived ?? 0), Number(variableFrame(`${p}.state`)?.meta.arrived ?? 0));
-			return { p, color: dotColor(m.playheads[p].color, i), state, prev, progress, arrived, flying: prev !== '' && progress < 1 };
+			return { p, color: dotColor(color, i), state, prev, progress, arrived, flying: prev !== '' && progress < 1 };
 		})
 	);
 
@@ -63,7 +64,7 @@
 				title={w.p}
 				data-testid="playhead-dot"
 				data-playhead={w.p}
-				data-state={w.state}
+				data-state={m.states[w.state]?.name}
 				data-flying={w.flying}
 			></div>
 		{/if}

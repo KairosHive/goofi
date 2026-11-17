@@ -32,9 +32,9 @@ expression?: string, lock?: Lock, };
 export type Midi = { port: string, };
 export type Group = { lock: Lock, midi?: Midi, machine?: string, };
 export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, face: Face, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
-export type Attribute = { default: Literal, kind: AttributeKind, curve: Curve, };
+export type Attribute = { name: string, default: Literal, kind: AttributeKind, curve: Curve, };
 export type Decision = "sequence" | "random" | "expression";
-export type State = { pos: [number, number], values?: Record<string, Literal>, 
+export type State = { name: string, pos: [number, number], values?: Record<string, Literal>, 
 /**
  * Per attribute set here, the ADSR that scales its value from a playhead's arrival: attack, decay
  * and release in seconds, sustain in 0..1; a release of -1 holds the sustain.
@@ -67,7 +67,7 @@ expression: string, };
 export type Curve = "step" | "linear" | "in" | "out" | "in_out" | "smooth" | { "bezier": [number, number, number, number] };
 export type Transition = { 
 /**
- * A state name, or `*` for any state.
+ * A state's id, or `*` for any state.
  */
 from: string, to: string, 
 /**
@@ -81,8 +81,16 @@ condition?: string,
  * Seconds; 0 is instant. Each attribute eases over it by its own curve.
  */
 duration: number, };
-export type Playhead = { color: string, start: string, };
-export type Machine = { attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
+export type Playhead = { 
+/**
+ * Its variable group's name too.
+ */
+name: string, color: string, 
+/**
+ * The id of the state it starts in.
+ */
+start: string, };
+export type Machine = { name: string, attributes: { [key in string]: Attribute }, states: { [key in string]: State }, transitions: { [key in string]: Transition }, playheads: { [key in string]: Playhead }, 
 /**
  * What the random draws start from; absent is 0.
  */

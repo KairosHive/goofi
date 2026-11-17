@@ -152,7 +152,7 @@ export class GraphStore {
 	/** Every group that reads a MIDI device, by name. */
 	midiGroups: Record<string, Midi> = $derived(midiGroups(this.doc));
 	machineGroups: Record<string, string> = $derived(machineGroups(this.doc));
-	/** Every state machine, by name, doc-authoritative. */
+	/** Every state machine, by id, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */

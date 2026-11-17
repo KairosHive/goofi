@@ -20,7 +20,7 @@
 	import { FACES, brief, descriptorFor, envelopeDescriptor, faceOf, fractionOf, literalOf, valueAt } from './attributes';
 	import { machineHover } from './hover.svelte';
 	import { SCORE, dotColor } from './layout';
-	import { editEach, type Subject } from './model';
+	import { editEach, stateOf, type Subject } from './model';
 	import { columnOrder, duration, joined, widths } from './order';
 	import StateForm from './StateForm.svelte';
 	import TransitionForm from './TransitionForm.svelte';
@@ -100,7 +100,7 @@
 		paint = null;
 		if (!done || done.touched.size === 0) return;
 		try {
-			await history().transaction(`Paint ${done.attr}`, async (step) => {
+			await history().transaction(`Paint ${m.attributes[done.attr]?.name}`, async (step) => {
 				for (const [state, v] of done.touched) await g.machine('machine state edit', { machine: name, name: state, values: { [done.attr]: v } }, step);
 			});
 		} catch (e) {
@@ -138,24 +138,24 @@
 
 	// ---- the playheads: a dot at the head of the column each rests in, and a line sweeping the
 	// column from its arrival to its next beat, timed from the frame that told of the arrival.
-	const playheads = $derived(Object.keys(m.playheads));
+	const playheads = $derived(Object.values(m.playheads).map((p) => p.name));
 	watchVariables(() => playheads.flatMap((p) => [`${p}.state`, `${p}.progress`]));
 	const heads = $derived(
-		playheads.map((p, i) => {
-			const state = String(variableValue(`${p}.state`) ?? m.playheads[p].start);
+		Object.entries(m.playheads).map(([id, { name: p, color }], i) => {
+			const state = stateOf(m, id);
 			const progress = Number(variableValue(`${p}.progress`) ?? 1);
 			const meta = variableFrame(`${p}.progress`)?.meta ?? {};
 			const prev = String(meta.prev ?? '');
 			const arrived = Math.max(Number(meta.arrived ?? 0), Number(variableFrame(`${p}.state`)?.meta.arrived ?? 0));
-			return { p, color: dotColor(m.playheads[p].color, i), state, flying: prev !== '' && progress < 1, arrived };
+			return { id, p, color: dotColor(color, i), state, flying: prev !== '' && progress < 1, arrived };
 		})
 	);
 	const landed = new Map<string, { arrived: number; at: number }>();
 	let clock = $state(0);
 	$effect(() => {
 		for (const h of heads) {
-			const was = landed.get(h.p);
-			if (!was || was.arrived !== h.arrived) landed.set(h.p, { arrived: h.arrived, at: performance.now() });
+			const was = landed.get(h.id);
+			if (!was || was.arrived !== h.arrived) landed.set(h.id, { arrived: h.arrived, at: performance.now() });
 		}
 	});
 	$effect(() => {
@@ -171,7 +171,7 @@
 	/** Where a resting head's sweep stands across its column, 0..1; null with no beat to sweep to. */
 	function sweep(h: (typeof heads)[number]): number | null {
 		const s = m.states[h.state];
-		const at = landed.get(h.p)?.at;
+		const at = landed.get(h.id)?.at;
 		if (h.flying || !s || !(s.interval > 0) || at === undefined) return null;
 		return Math.min(1, (clock - at) / 1000 / s.interval);
 	}
@@ -211,7 +211,7 @@
 
 	// ---- a new attribute, named at the foot: set in the selected states, as ONE step.
 	let fresh = $state('');
-	const creatable = $derived(isValidIdentifier(fresh.trim()) && !(fresh.trim() in m.attributes));
+	const creatable = $derived(isValidIdentifier(fresh.trim()) && !Object.values(m.attributes).some((a) => a.name === fresh.trim()));
 	async function createAttribute(): Promise<void> {
 		const attr = fresh.trim();
 		if (!creatable) return;
@@ -230,9 +230,9 @@
 		const last = order[order.length - 1];
 		try {
 			await history().transaction('Add state', async (step) => {
-				const r = await g.machine<{ name: string }>('machine state add', { machine: name }, step);
-				if (last) await g.machine('machine transition add', { machine: name, from: last, to: r.name }, step);
-				sel.setSelection(panelId, [r.name], []);
+				const r = await g.machine<{ id: string }>('machine state add', { machine: name }, step);
+				if (last) await g.machine('machine transition add', { machine: name, from: last, to: r.id }, step);
+				sel.setSelection(panelId, [r.id], []);
 			});
 		} catch (e) {
 			notify().failure('Add state', e);
@@ -252,7 +252,7 @@
 	{@const env = envelopeOf(state, attr)}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class={`cell face-${face}`} class:unset={!set} class:paintable={paintable(a)} bind:this={cells[key(attr, state)]} data-anchor
-		data-testid={`cell-${attr}-${state}`} data-set={set} data-envelope={env !== null} title={`${state}.${attr} = ${brief(v)}`}
+		data-testid={`cell-${a.name}-${m.states[state].name}`} data-set={set} data-envelope={env !== null} title={`${m.states[state].name}.${a.name} = ${brief(v)}`}
 		onpointerdown={(e) => paintDown(e, attr)} onpointermove={paintAt} onpointerup={paintUp} onpointercancel={paintUp}>
 		{#if face === 'number' || face === 'toggle' || face === 'select'}
 			<div class="fill" style={`height: ${(fractionOf(a, v) ?? 0) * 100}%`}></div>
@@ -279,13 +279,13 @@
 			<span class="env" title="Plays an envelope on arrival">adsr</span>
 		{/if}
 		<span class="cog" onpointerdown={(e) => e.stopPropagation()}>
-			<button type="button" class="cog-btn" aria-label={`${state} ${attr} settings`} title="The value with its own widget, its envelope, and unset" data-testid="cell-settings"
+			<button type="button" class="cog-btn" aria-label={`${m.states[state].name} ${a.name} settings`} title="The value with its own widget, its envelope, and unset" data-testid="cell-settings"
 				onclick={(e) => show({ kind: 'cell', attr, state }, e)}><Icon name="settings" /></button>
 		</span>
 	</div>
 {/snippet}
 
-<div class="score" data-testid="machine-inspector" data-count={selected.length} data-open={subject.open.join(' ')} data-order={order.join(' ')} bind:clientWidth={scoreW}>
+<div class="score" data-testid="machine-inspector" data-count={selected.length} data-open={subject.open.join(' ')} data-order={order.map((s) => m.states[s].name).join(' ')} bind:clientWidth={scoreW}>
 	{#if order.length === 0}
 		<div class="empty">
 			<EmptyState>
@@ -310,19 +310,19 @@
 					{@const s = m.states[state]}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div class="head" class:selected={selected.includes(state)} class:lit={lit(state)} class:bold={bold(i)} style={`width: ${cols[i]}px`} data-anchor
-						data-testid={`column-${state}`} data-selected={selected.includes(state)}
+						data-testid={`column-${s.name}`} data-selected={selected.includes(state)}
 						onpointerenter={() => hover.overState(name, state)} onpointerleave={() => hover.clear()}>
 						<button type="button" class="pick" title="Select the state; shift adds it to the selection" data-testid="column-pick" onclick={(e) => pickState(e, state)}>
-							<span class="name">{state}</span>
+							<span class="name">{s.name}</span>
 							<span class="facts">{beat(s)} · {MODE[s.mode]}</span>
 						</button>
 						<span class="dots">
-							{#each heads.filter((h) => h.state === state) as h (h.p)}
+							{#each heads.filter((h) => h.state === state) as h (h.id)}
 								<span class="dot" class:flying={h.flying} style={`background: ${h.color}`} title={h.p} data-testid="score-dot" data-playhead={h.p} data-flying={h.flying}></span>
 							{/each}
 						</span>
 						<span class="cog head-cog">
-							<button type="button" class="cog-btn" aria-label={`${state} settings`} title="How it decides and how often, its playheads and transitions" data-testid="column-settings"
+							<button type="button" class="cog-btn" aria-label={`${s.name} settings`} title="How it decides and how often, its playheads and transitions" data-testid="column-settings"
 								onclick={(e) => show({ kind: 'state', ids: selected.includes(state) && selected.length > 1 ? selected : [state] }, e)}><Icon name="settings" /></button>
 						</span>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -336,12 +336,12 @@
 			<!-- The rows: one per attribute, its head in the gutter and a cell per column. -->
 			{#each attrs as attr (attr)}
 				{@const a = m.attributes[attr]}
-				<div class="line row-line" style={`height: ${SCORE.row}px`} data-testid={`row-${attr}`}>
+				<div class="line row-line" style={`height: ${SCORE.row}px`} data-testid={`row-${a.name}`}>
 					<div class="gutter row-gutter" data-anchor>
-						<span class="row-name" title={attr}>{attr}</span>
+						<span class="row-name" title={a.name}>{a.name}</span>
 						<svg class="curve-glyph" viewBox="-1 -1 26 18" aria-hidden="true"><path d={curvePath(a.curve, 24, 16, 24)} vector-effect="non-scaling-stroke" /></svg>
 						<span class="cog">
-							<button type="button" class="cog-btn" aria-label={`${attr} definition`} title="Its name, kind, range, default and curve, for every state" data-testid="row-settings"
+							<button type="button" class="cog-btn" aria-label={`${a.name} definition`} title="Its name, kind, range, default and curve, for every state" data-testid="row-settings"
 								onclick={(e) => show({ kind: 'attribute', attr }, e)}><Icon name="settings" /></button>
 						</span>
 					</div>
@@ -365,7 +365,7 @@
 			</div>
 			<!-- The sweeps: a line per resting playhead, over the rows of its column. -->
 			<div class="sweeps" style={`left: ${SCORE.gutter}px; top: ${SCORE.lane + SCORE.head}px; height: ${attrs.length * SCORE.row}px`}>
-				{#each heads as h (h.p)}
+				{#each heads as h (h.id)}
 					{@const x = sweepX(h)}
 					{#if x !== null}
 						<div class="sweep" style={`left: ${x}px; background: ${h.color}`} data-testid="score-sweep" data-playhead={h.p}></div>
@@ -386,13 +386,13 @@
 				{@const v = valueOf(w.state, w.attr)}
 				{@const env = envelopeOf(w.state, w.attr)}
 				<div class="pop-head">
-					<span class="mono">{targets.length > 1 ? `${targets.length} states` : w.state}</span>
+					<span class="mono">{targets.length > 1 ? `${targets.length} states` : m.states[w.state].name}</span>
 					<span class="muted">·</span>
-					<span class="mono">{w.attr}</span>
+					<span class="mono">{a.name}</span>
 					<Button variant="ghost" size="sm" title="Unset: a playhead entering keeps what it holds" disabled={!isSet(w.state, w.attr)} data-testid="cell-unset"
 						onclick={() => editCell(w.state, w.attr, { values: { [w.attr]: null } })}>unset</Button>
 				</div>
-				<ParamField paramName={w.attr} descriptor={descriptorFor(a, v)} literal viewKey={`${name}/cell/${w.attr}`}
+				<ParamField paramName={a.name} descriptor={descriptorFor(a, v)} literal viewKey={`${name}/cell/${w.attr}`}
 					onCommit={(x) => editCell(w.state, w.attr, { values: { [w.attr]: literalOf(x) } })}
 					onPreview={(x) => targets.forEach((t) => g.previewState(name, t, { values: { [w.attr]: x } }))} />
 				{#if a.kind.type === 'num'}
@@ -403,7 +403,7 @@
 						</Field>
 					</div>
 					{#if env}
-						<ParamField paramName={`${w.attr} envelope`} label="shape" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/cell/${w.attr}/envelope`}
+						<ParamField paramName={`${a.name} envelope`} label="shape" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/cell/${w.attr}/envelope`}
 							data-testid="state-attribute-envelope"
 							onCommit={(x) => editCell(w.state, w.attr, { envelopes: { [w.attr]: x } })}
 							onPreview={(x) => targets.forEach((t) => g.previewState(name, t, { envelopes: { [w.attr]: x as number[] } }))} />
@@ -416,7 +416,7 @@
 			{:else}
 				{@const t = m.transitions[w.id]}
 				<div class="pop-head">
-					<span class="mono">{t.from === '*' ? 'any' : t.from} → {t.to}</span>
+					<span class="mono">{t.from === '*' ? 'any' : m.states[t.from]?.name} → {m.states[t.to]?.name}</span>
 				</div>
 				<TransitionForm {name} {m} id={w.id} />
 			{/if}

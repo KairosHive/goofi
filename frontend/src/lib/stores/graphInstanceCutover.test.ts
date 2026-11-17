@@ -6,7 +6,8 @@ import { SCOPE_TYPE, BOUNDARY_SLOT, boundaryType } from '$lib/api/vocab';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
-import { liveCatalogue } from '$lib/inspector/expr/catalogue';
+import { liveCatalogue, machineCatalogue } from '$lib/inspector/expr/catalogue';
+import { fragmentOf, stateOf } from '$lib/machine/model';
 import { typeInfo } from '$lib/test/typeInfo';
 
 /** Minimal catalog — its presence flips the store to doc-authoritative identity. */
@@ -225,5 +226,45 @@ describe('the expression catalogue — what nd() can name', () => {
 		// what is offered — a uid would complete to an expression the resolver refuses.
 		const facade = liveCatalogue(g).nodes.find((n) => n.name === 'subpatch0');
 		expect(facade?.slots.map((s) => s.name)).toEqual(['wave']);
+	});
+});
+
+describe('a machine — keyed by id in the document, spelled by name', () => {
+	it('offers names to sm() and me, finds a state by its name, and copies values by attribute name', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const state = { pos: [0, 0], interval: 1, mode: 'random', noop: 0, weights: {}, expression: '' };
+		seed(fc).patch({
+			machines: {
+				'm-1': {
+					name: 'sweep',
+					attributes: { 'a-1': { name: 'gain', default: 0.5, kind: { type: 'num', vmin: 0, vmax: 1, int: false, face: 'plain' }, curve: 'linear' } },
+					states: { 's-1': { ...state, name: 'rest', values: { 'a-1': 0.2 }, envelopes: { 'a-1': [0, 0.1, 1, 0.3] } }, 's-2': { ...state, name: 'peak' } },
+					transitions: { t1: { from: 's-1', to: 's-2', duration: 0 } },
+					playheads: { 'p-1': { name: 'walker', color: '', start: 's-1' } }
+				}
+			},
+			variable_groups: { walker: { lock: { config: true, value: true }, machine: 'm-1' } }
+		});
+		const m = g.machines['m-1'];
+		expect(m.name).toBe('sweep');
+
+		const own = machineCatalogue('m-1', g);
+		expect([own.states, own.playheads]).toEqual([['rest', 'peak'], ['walker']]);
+		expect(own.fields).toContain('gain');
+		expect(own.fields).not.toContain('a-1');
+		const [walker] = liveCatalogue(g).playheads;
+		expect([walker.name, walker.machine]).toEqual(['walker', 'sweep']);
+		expect(walker.fields).toContain('gain');
+		expect(walker.fields).not.toContain('a-1');
+
+		// Before its `state` variable has a frame, a playhead is in the state it starts in.
+		expect(stateOf(m, 'p-1')).toBe('s-1');
+
+		// A copy leaves the machine, where an attribute id means nothing: it carries names.
+		const copy = fragmentOf(m, ['s-1', 's-2']);
+		expect(copy.states['s-1'].values).toEqual({ gain: 0.2 });
+		expect(copy.states['s-1'].envelopes).toEqual({ gain: [0, 0.1, 1, 0.3] });
+		expect(copy.transitions).toEqual([{ from: 's-1', to: 's-2', duration: 0 }]);
 	});
 });

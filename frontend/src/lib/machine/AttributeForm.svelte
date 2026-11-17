@@ -31,15 +31,15 @@
 	}
 </script>
 
-<div class="attribute-form" data-testid={`attribute-${attr}`} data-face={faceOf(a)}>
+<div class="attribute-form" data-testid={`attribute-${a.name}`} data-face={faceOf(a)}>
 	<div class="form-head">
 		<span class="form-name">definition</span>
 		<Button variant="danger" size="sm" title="Remove the attribute from every state and every playhead" data-testid="attribute-remove" onclick={() => call('machine attribute remove', {})}>remove</Button>
 	</div>
 	<div class="fields">
 		<Field label="name" row>
-			<TextInput inputmode="search" value={attr} aria-label="Attribute name" data-testid="attribute-name" autocomplete="off"
-				onChange={(to) => { if (to.trim() !== attr && isValidIdentifier(to.trim())) call('machine attribute rename', { to: to.trim() }); }} />
+			<TextInput inputmode="search" value={a.name} aria-label="Attribute name" data-testid="attribute-name" autocomplete="off"
+				onChange={(to) => { if (to.trim() !== a.name && isValidIdentifier(to.trim())) call('machine attribute rename', { to: to.trim() }); }} />
 		</Field>
 		<Field label="kind" row>
 			<Select data-testid="attribute-kind" aria-label="kind" value={faceOf(a)} options={FACES.map((f) => f.id)} onChange={setFace} />
@@ -69,7 +69,7 @@
 			</Field>
 		{/if}
 	</div>
-	<ParamField paramName={attr} label="default" descriptor={descriptorFor(a, a.default)} literal viewKey={`${name}/${attr}`}
+	<ParamField paramName={a.name} label="default" descriptor={descriptorFor(a, a.default)} literal viewKey={`${name}/${attr}`}
 		onCommit={(v) => call('machine attribute edit', { value: literalOf(v) })} />
 </div>
 

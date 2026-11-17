@@ -5,6 +5,7 @@ import type { Decision, Literal, Machine, State } from '$lib/api/generated';
 import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 import { history } from '$lib/stores/history.svelte';
 import { notify } from '$lib/stores/notify.svelte';
+import { variableValue } from '$lib/stores/variableValues.svelte';
 
 /** What the canvas hands the score: the selected states, lit as columns and edited together, and
  * the selected transitions, lit as arcs. */
@@ -82,6 +83,13 @@ export async function editEach(machine: string, op: MachineOp, key: 'name' | 'id
 	}
 }
 
+/** The id of the state the playhead `p` is in, or is moving to: its `state` variable spells the
+ * name; before its first frame, the state it starts in. */
+export function stateOf(m: Machine, p: string): string {
+	const name = variableValue(`${m.playheads[p].name}.state`);
+	return name === null ? m.playheads[p].start : (Object.keys(m.states).find((id) => m.states[id].name === name) ?? '');
+}
+
 /** Whether `values` hold more than one value. */
 export const mixed = (values: unknown[]): boolean => new Set(values.map((v) => JSON.stringify(v))).size > 1;
 
@@ -125,15 +133,15 @@ export function byPosition(m: Machine, states: string[], rowHeight = 96): string
 }
 
 /** `n` new states as ONE step, the manager placing each clear of the others; with `chain`, each
- * wired to the next, and the first from `after` when one is given. Answers their names. */
+ * wired to the next, and the first from `after` when one is given. Answers their ids. */
 export async function addStates(machine: string, n: number, chain: boolean, after: string | null): Promise<string[]> {
 	const g = graph();
 	const names: string[] = [];
 	try {
 		await history().transaction(n === 1 ? 'Add state' : `Add ${n} states`, async (step) => {
 			for (let i = 0; i < n; i++) {
-				const r = await g.machine<{ name: string }>('machine state add', { machine }, step);
-				names.push(r.name);
+				const r = await g.machine<{ id: string }>('machine state add', { machine }, step);
+				names.push(r.id);
 			}
 			if (chain) {
 				for (const [from, to] of chained(after ? [after, ...names] : names)) await g.machine('machine transition add', { machine, from, to }, step);
@@ -145,7 +153,7 @@ export async function addStates(machine: string, n: number, chain: boolean, afte
 	return names;
 }
 
-/** What a copy of states carries: each state whole, and the transitions among them. */
+/** What a copy of states carries: each state whole, what it sets keyed by attribute NAME, and the transitions among them. */
 export interface Fragment {
 	kind: 'goofi-machine';
 	states: Record<string, State>;
@@ -154,9 +162,10 @@ export interface Fragment {
 
 export function fragmentOf(m: Machine, states: string[]): Fragment {
 	const set = new Set(states);
+	const named = <T>(by: Record<string, T> = {}): Record<string, T> => Object.fromEntries(Object.entries(by).map(([a, v]) => [m.attributes[a]?.name ?? a, v]));
 	return {
 		kind: 'goofi-machine',
-		states: Object.fromEntries(states.map((s) => [s, m.states[s]])),
+		states: Object.fromEntries(states.map((s) => [s, { ...m.states[s], values: named(m.states[s].values), envelopes: named(m.states[s].envelopes) }])),
 		transitions: Object.values(m.transitions).filter((t) => set.has(t.from) && set.has(t.to))
 	};
 }
@@ -170,18 +179,18 @@ export function parseFragment(text: string): Fragment | null {
 	}
 }
 
-/** The fragment into `machine` as ONE step, each state `offset` from where it was copied and
- * named by the manager, the transitions among them rewired to the new names; the shares of a
- * draw are left to its new transitions. Answers the new names. */
+/** The fragment into `machine` as ONE step, each state `offset` from where it was copied, named
+ * by the manager and set on this machine's attributes of the same names, the transitions among
+ * them rewired to the new ids; the shares of a draw are left to its new transitions. Answers the new ids. */
 export async function pasteFragment(machine: string, f: Fragment, offset: [number, number]): Promise<string[]> {
 	const g = graph();
 	const renamed = new Map<string, string>();
 	try {
 		await history().transaction('Paste states', async (step) => {
 			for (const [old, s] of Object.entries(f.states)) {
-				const r = await g.machine<{ name: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
-				renamed.set(old, r.name);
-				await g.machine('machine state edit', { machine, name: r.name, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
+				const r = await g.machine<{ id: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
+				renamed.set(old, r.id);
+				await g.machine('machine state edit', { machine, name: r.id, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
 			}
 			for (const t of f.transitions) {
 				await g.machine('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);

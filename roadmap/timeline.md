@@ -13,7 +13,7 @@ build asks for `jack.pc`). `goofi-bridge` and `goofi-tests` do not build without
 
 - An object has an id that the manager mints; its name is an attribute of the id-keyed record,
   as a node has a uid and a name. This holds for a machine, a state, a playhead, an attribute
-  and a track.
+  and a track. Shipped for the machine: `Graph::mint_id`, off the mint a node's uid comes from.
 - A rename changes the name and the texts that spell it (expressions, as a node rename does).
   It changes no key, so no run, flight, cursor, gate or panel state moves.
 - Every runtime structure and every panel state keys by id. A panel never holds a name.
@@ -98,18 +98,15 @@ build asks for `jack.pc`). `goofi-bridge` and `goofi-tests` do not build without
 
 In this order, each a tested commit:
 
-1. Identity in the state machine: the model, the ops, the thread, the document, the panel and
-   the tests. The fixture: a machine, a state and a playhead renamed in flight keep the run.
-   It closes the rename item of `roadmap/state-machine.md`.
-2. The `owner` field of a group.
-3. The clock: the two readings of `Time`, each reader moved to the one it means, the `clock`
+1. The `owner` field of a group.
+2. The clock: the two readings of `Time`, each reader moved to the one it means, the `clock`
    group and the `clock` ops.
-4. The shared blend module and the shared stepper thread.
-5. The timeline root, the `timeline` ops, the track groups, the curve functionals.
-6. Note tracks: the store's `notes`, the queue, the `MidiIn` port.
-7. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
+3. The shared blend module and the shared stepper thread.
+4. The timeline root, the `timeline` ops, the track groups, the curve functionals.
+5. Note tracks: the store's `notes`, the queue, the `MidiIn` port.
+6. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
    the clock controls.
-8. The words: the architecture lines of AGENTS.md (time, queues, the timeline), a README
+7. The words: the architecture lines of AGENTS.md (time, queues, the timeline), a README
    section, the orientation, the generated frontend files.
 
 ## Open

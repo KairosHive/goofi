@@ -178,22 +178,24 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A machine panel is born over a machine the same way: the first the patch has, else a fresh
     // one born in the step. A removal re-aims the panels that showed the machine at the first left,
     // in its own step, so a client never has to react — a reaction that edits would fight undo.
-    let machine_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["machine"].clone();
+    // The panel holds the machine's id; `machine_of` reads the name of the machine it shows.
+    let machine_of = |g: &Goofi| g.doc()["machines"][entries(g)[&first_panel(g)]["state"]["machine"].as_str().unwrap_or_default()]["name"].clone();
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
     assert_eq!(machine_of(&g), j!("machine0"), "an empty patch is given a machine with the panel");
-    assert!(g.doc()["machines"]["machine0"].is_object());
     g.call("undo", j!({}));
-    assert!(g.doc()["machines"].get("machine0").is_none(), "the birth's machine went with the birth");
+    assert_eq!(g.doc()["machines"], j!({}), "the birth's machine went with the birth");
     g.call("machine add", j!({ "name": "seq" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
     assert_eq!(machine_of(&g), j!("seq"), "a patch with a machine shows it, and mints none");
     assert_eq!(g.doc()["machines"].as_object().unwrap().len(), 1);
     g.call("machine add", j!({ "name": "aux" }));
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "machine": "aux" } }));
+    assert_eq!(machine_of(&g), j!("aux"), "a panel names a machine as an op does, and holds its id");
+    g.call("undo", j!({}));
     g.call("machine remove", j!({ "machine": "seq" }));
     assert_eq!(machine_of(&g), j!("aux"), "the panel moved to the machine left");
     g.call("undo", j!({}));
     assert_eq!(machine_of(&g), j!("seq"), "and back, with the machine");
-    assert!(g.doc()["machines"]["seq"].is_object());
     // Three steps back — aux, the machine panel, seq — and the control panel stands as it was born.
     for _ in 0..3 {
         g.call("undo", j!({}));

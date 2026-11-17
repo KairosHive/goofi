@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Attribute } from '$lib/api/generated';
 import { brief, fractionOf, valueAt } from './attributes';
 
-const num = (vmin: number, vmax: number, int = false): Attribute => ({ default: vmin, kind: { type: 'num', vmin, vmax, int, face: 'plain' }, curve: 'linear' });
-const sel: Attribute = { default: 'a', kind: { type: 'string', options: ['a', 'b', 'c'] }, curve: 'linear' };
-const bool: Attribute = { default: 0, kind: { type: 'bool' }, curve: 'linear' };
+const num = (vmin: number, vmax: number, int = false): Attribute => ({ name: 'level', default: vmin, kind: { type: 'num', vmin, vmax, int, face: 'plain' }, curve: 'linear' });
+const sel: Attribute = { name: 'pick', default: 'a', kind: { type: 'string', options: ['a', 'b', 'c'] }, curve: 'linear' };
+const bool: Attribute = { name: 'gate', default: 0, kind: { type: 'bool' }, curve: 'linear' };
 
 describe('a cell as a slider', () => {
 	it('paints a number across its range, an integer on the grid', () => {
@@ -28,9 +28,9 @@ describe('a cell as a slider', () => {
 		expect(fractionOf(sel, 'c')).toBe(0);
 	});
 	it('paints nothing on a text, a colour or an envelope', () => {
-		expect(valueAt({ default: '', kind: { type: 'string' }, curve: 'linear' }, 0.5, '')).toBeNull();
-		expect(valueAt({ default: [0, 0, 0, 1], kind: { type: 'num', vmin: 0, vmax: 1, int: false, face: 'color' }, curve: 'linear' }, 0.5, [0, 0, 0, 1])).toBeNull();
-		expect(fractionOf({ default: '', kind: { type: 'string' }, curve: 'linear' }, 'x')).toBeNull();
+		expect(valueAt({ name: 'word', default: '', kind: { type: 'string' }, curve: 'linear' }, 0.5, '')).toBeNull();
+		expect(valueAt({ name: 'tint', default: [0, 0, 0, 1], kind: { type: 'num', vmin: 0, vmax: 1, int: false, face: 'color' }, curve: 'linear' }, 0.5, [0, 0, 0, 1])).toBeNull();
+		expect(fractionOf({ name: 'word', default: '', kind: { type: 'string' }, curve: 'linear' }, 'x')).toBeNull();
 	});
 	it('prints a value short', () => {
 		expect(brief(0.123456)).toBe('0.12');
