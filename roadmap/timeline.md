@@ -52,3 +52,5 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - The clock's section is drawn again to change it: it has no edges to drag and cannot be
   moved. A position put past its end folds into it.
 - A click on a note takes it out, so a note is picked for its fields by a drag alone.
+- A track dragged onto a param writes the expression that reads it; no test drops one there.
+- A track dragged over the others shows no line where it will land.

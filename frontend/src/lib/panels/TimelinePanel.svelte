@@ -12,6 +12,7 @@
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
+	import { draggable, type DragSource, type Outcome } from '$lib/drag';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
@@ -176,6 +177,22 @@
 	let pressed = '';
 	const press = createLongPress((at) => trackMenu(pressed, at.clientX, at.clientY));
 
+	// ---- a track lifted by what it says about itself: let go on another track it takes that
+	// track's place, and on a param it is the expression that reads it.
+	let stack = $state<HTMLElement | null>(null);
+	function lift(id: string): DragSource {
+		const t = g.timeline[id];
+		const reads = `vars.${t.name}.${t.kind === 'curve' ? 'value' : 'notes'}`;
+		return { key: id, tags: ['number'], label: reads, home: stack, expression: () => reads };
+	}
+	function place(id: string, outcome: Outcome | null): void {
+		const onto = outcome?.inHome ? document.elementFromPoint(outcome.at.x, outcome.at.y)?.closest<HTMLElement>('[data-track]')?.dataset.track : undefined;
+		if (!onto || onto === id) return;
+		// Onto a track further on it goes after it, and before one that comes first.
+		const before = shown.indexOf(onto) > shown.indexOf(id) ? shown[shown.indexOf(onto) + 1] : onto;
+		void g.op('timeline track move', { track: id, before }).catch(fail('Move track'));
+	}
+
 	/** A track's edge dragged: how large this panel draws it, and nothing of the track. */
 	let sizing = $state<{ id: string; size: number; sent?: boolean } | null>(null);
 	function resize(e: PointerEvent, id: string): void {
@@ -324,7 +341,7 @@
 	<div class="body">
 		<div class="range"><RangeBar {view} {total} {vertical} onChange={(next) => (view = next)} /></div>
 		<div class="scroll thin-scrollbar">
-			<div class="stack">
+			<div class="stack" bind:this={stack}>
 				<div class="row ruler" data-testid="timeline-ruler">
 					<span class="info"></span>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -343,6 +360,7 @@
 						class="row track"
 						class:notes={t.kind === 'note'}
 						data-testid={`track-${t.name}`}
+						data-track={id}
 						style:--size={size ? `${size}px` : null}
 						style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
 						oncontextmenu={(e) => {
@@ -357,7 +375,7 @@
 						onpointerup={press.cancel}
 						onpointercancel={press.cancel}
 					>
-						<div class="info">
+						<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button'), onEnd: (outcome) => place(id, outcome) }}>
 							<div class="title">
 								<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
 								<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
@@ -557,6 +575,7 @@
 		overflow: auto;
 		font-size: var(--fs-small);
 		color: var(--text-muted);
+		cursor: grab;
 	}
 	/* The track's name, and beside it the buttons that hide it and delete it. */
 	.title {

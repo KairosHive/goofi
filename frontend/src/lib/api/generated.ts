@@ -90,7 +90,11 @@ seed?: number, };
 export type Note = { at: number, length: number, pitch: number, velocity: number, };
 export type Key = { at: number, value: number, curve: Curve, };
 export type Lanes = { "kind": "note", range: [number, number], scale: string, root: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], keys: Array<Key>, };
-export type Track = { name: string, } & ({ "kind": "note", range: [number, number], scale: string, root: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], keys: Array<Key>, });
+export type Track = { name: string, 
+/**
+ * Its place among the tracks, the lowest first: the order a panel draws them in.
+ */
+order: number, } & ({ "kind": "note", range: [number, number], scale: string, root: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], keys: Array<Key>, });
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.

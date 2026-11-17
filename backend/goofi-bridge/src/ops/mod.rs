@@ -486,6 +486,7 @@ pub static TREE: &[Entry] = &[
         Group("track", "one track: its name, its unit, its notes or its curve attributes", &[
             Leaf(write::<timeline::TrackAdd>()),
             Leaf(write::<timeline::TrackEdit>()),
+            Leaf(write::<timeline::TrackMove>()),
             Leaf(write::<timeline::TrackRemove>()),
         ]),
     ]),

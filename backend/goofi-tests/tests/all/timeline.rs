@@ -82,6 +82,20 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     g.until("the note to end", |g| (held(g, "keys.notes", 60) == 0.0).then_some(()));
     at(&g, 1.0);
 
+    // A track is put before another, or last: the order every panel draws them in.
+    let order = |g: &Goofi| {
+        let doc = g.doc();
+        let mut tracks: Vec<_> = doc["timeline"].as_object().unwrap().values().map(|t| (t["order"].as_u64(), t["name"].as_str().unwrap().to_string())).collect();
+        tracks.sort();
+        tracks.into_iter().map(|(_, name)| name).collect::<Vec<_>>()
+    };
+    assert_eq!(order(&g), ["sweep", "keys"]);
+    g.call("timeline track move", j!({ "track": "keys", "before": "sweep" }));
+    assert_eq!(order(&g), ["keys", "sweep"]);
+    g.call("timeline track move", j!({ "track": "keys" }));
+    assert_eq!(order(&g), ["sweep", "keys"]);
+    assert!(g.refuse("timeline track move", j!({ "track": "keys", "before": "nowhere" })).contains("nowhere"));
+
     // What does not hold together is refused whole.
     for (payload, why) in [
         (j!({ "track": "keys", "notes": [{ "at": 0.0, "length": 0.0, "pitch": 60, "velocity": 0.5 }] }), "lasts more than 0"),

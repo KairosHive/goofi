@@ -26,6 +26,9 @@ const VALUE: &str = "value";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
+    /// Its place among the tracks, the lowest first: the order a panel draws them in.
+    #[serde(default)]
+    pub order: u32,
     #[serde(flatten)]
     pub lanes: Lanes,
 }

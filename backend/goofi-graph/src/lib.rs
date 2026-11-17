@@ -1032,6 +1032,20 @@ impl Graph {
         Ok(self.rewrite_variable_reads(&moved))
     }
 
+    /// Put the track `id` before the track `before`, or last, and number every track by its place.
+    pub fn move_track(&mut self, id: &str, before: Option<&str>) {
+        let tracks = &mut Arc::make_mut(&mut self.patch.stepped).tracks;
+        let mut ids: Vec<String> = tracks.keys().filter(|k| *k != id).cloned().collect();
+        ids.sort_by_key(|k| tracks[k].order);
+        let at = before.and_then(|b| ids.iter().position(|k| k == b)).unwrap_or(ids.len());
+        ids.insert(at, id.to_string());
+        for (place, k) in ids.iter().enumerate() {
+            if let Some(track) = tracks.get_mut(k) {
+                track.order = place as u32;
+            }
+        }
+    }
+
     /// Hold every owned group in step with what steps on the clock: one group per playhead, under
     /// its name and owned by its machine, with the machine's two elements and one entry per
     /// attribute; one per track, under its name, with what the track holds; nothing else.

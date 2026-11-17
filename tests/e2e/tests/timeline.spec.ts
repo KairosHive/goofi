@@ -65,6 +65,18 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect(await shade(keys), 'one track is a lighter grey, the next a darker').not.toBe(await shade(fade));
 		expect(await shade(keys)).toBe(await shade(bass));
 
+		// A track dragged by what it says about itself, onto another, takes that one's place.
+		const names = async (): Promise<string[]> => panel.locator('section.track').evaluateAll((all) => all.map((t) => t.querySelector<HTMLInputElement>('.name input, input.name')?.value ?? ''));
+		expect(await names()).toEqual(['track0', 'track1', 'track2']);
+		const [from, onto] = [(await keys.locator('.info').boundingBox())!, (await bass.locator('.info').boundingBox())!];
+		await page.mouse.move(from.x + 20, from.y + from.height - 6);
+		await page.mouse.down();
+		await page.mouse.move(onto.x + 20, onto.y + onto.height / 2, { steps: 8 });
+		await page.mouse.up();
+		await expect.poll(names).toEqual(['track1', 'track2', 'track0']);
+		await rawCall(page, 'timeline track move', { track: 'track0', before: 'track1' });
+		await expect.poll(names).toEqual(['track0', 'track1', 'track2']);
+
 		// A track's button hides it; the bar lists what is hidden, and a pick there shows it again.
 		await keys.getByTestId('track-hide').click();
 		await expect(keys).toHaveCount(0);

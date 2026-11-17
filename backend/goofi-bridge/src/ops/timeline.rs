@@ -9,8 +9,8 @@ use crate::Txn;
 use goofi_graph::timeline::{Key, Lanes, Note, Track};
 
 op!(List, "timeline list", 0, NoArgs,
-    "Every track of the timeline, under its id, in the order the panel stacks them. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and its keyboard as a panel draws it — `range: [low, high]`, the pitches it shows, and `scale` and `root`, whose notes it marks and a gesture lands on, the options of a `Quantize` node — and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds one curve, `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve` (see `machine attribute add`), and holds before the first and after the last.",
-    "{tracks: {id: {name, kind: note, range, scale, root, notes} | {name, kind: curve, range, keys}}}");
+    "Every track of the timeline, under its id; `order` is its place among them, the lowest first, which a panel draws them by. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and its keyboard as a panel draws it — `range: [low, high]`, the pitches it shows, and `scale` and `root`, whose notes it marks and a gesture lands on, the options of a `Quantize` node — and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds one curve, `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve` (see `machine attribute add`), and holds before the first and after the last.",
+    "{tracks: {id: {name, order, kind: note, range, scale, root, notes} | {name, order, kind: curve, range, keys}}}");
 
 op!(TrackAdd, "timeline track add", 1, TrackAddArgs {
     pub kind: String,
@@ -31,6 +31,13 @@ op!(TrackEdit, "timeline track edit", 1, TrackEditArgs {
     pub keys: Option<Vec<Key>>,
 },
     "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `notes` replaces a note track's notes whole; `range`, `scale` and `root` set its keyboard. `range` and `keys` replace a curve track's range and its keyframes whole. Previewable: a drag sends the notes or the keyframes as a preview.",
+    "{name}");
+
+op!(TrackMove, "timeline track move", 1, TrackMoveArgs {
+    pub track: String,
+    pub before: Option<String>,
+},
+    "Put a track before the track `before`, or last without one: every track's `order` is its place again.",
     "{name}");
 
 op!(TrackRemove, "timeline track remove", 1, TrackRemoveArgs {
@@ -65,7 +72,7 @@ impl WriteOp for TrackAdd {
         let lanes: Lanes = serde_json::from_value(json!({ "kind": a.kind })).map_err(|_| format!("`kind` is `note` or `curve`, not `{}`", a.kind))?;
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("track", 0, |n| tx.g.group_taken(n)));
         let id = tx.g.mint_id("k", |_| false);
-        set(tx, &id, Some(Track { name: name.clone(), lanes }))?;
+        set(tx, &id, Some(Track { name: name.clone(), order: tx.g.timeline().values().map(|t| t.order + 1).max().unwrap_or(0), lanes }))?;
         Ok(json!({ "id": id, "name": name }))
     }
 }
@@ -97,6 +104,16 @@ impl WriteOp for TrackEdit {
         let out = json!({ "name": track.name });
         set(tx, &id, Some(track))?;
         Ok(out)
+    }
+}
+
+impl WriteOp for TrackMove {
+    const LABEL: &str = "Move track";
+    fn run(tx: &mut Txn, a: TrackMoveArgs) -> Result<Value, String> {
+        let (id, track) = track_of(tx, &a.track)?;
+        let before = a.before.map(|b| id_of("track", tx.g.timeline(), &b)).transpose()?;
+        tx.g.move_track(&id, before.as_deref());
+        Ok(json!({ "name": track.name }))
     }
 }
 
