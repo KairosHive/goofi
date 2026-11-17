@@ -590,7 +590,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let none = |t: &Target| Err(format!("{t:?} is not readable here"));
     let run = |instants: &[f64]| -> Vec<Vec<(String, Data)>> {
         let mut m = Machines::default();
-        m.configure(model.clone(), Some(ev.clone()));
+        m.configure(model.clone(), Default::default(), Some(ev.clone()));
         instants.iter().map(|t| m.advance(*t, &none)).collect()
     };
     let dense: Vec<f64> = (0..=2002).map(|i| i as f64 * period / 2.0).collect();
@@ -624,7 +624,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let mut eased = model.clone();
     eased["pp"].attributes["gain"].curve = bezier;
     let mut m = Machines::default();
-    m.configure(eased, Some(ev.clone()));
+    m.configure(eased, Default::default(), Some(ev.clone()));
     m.advance(0.0, &none);
     let w = m.advance(1.5 * period, &none);
     let gain = written(&w, "p.gain");
@@ -637,7 +637,7 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     // 0.4 periods, before the first decision is due, puts the head in B then; the one out of B is
     // due a period after THAT instant, not after the advance that carried it.
     let mut m = Machines::default();
-    m.configure(model.clone(), Some(ev.clone()));
+    m.configure(model.clone(), Default::default(), Some(ev.clone()));
     m.advance(0.0, &none);
     m.jump(0.4 * period, "pp", "p", "B");
     let w = m.advance(1.3 * period, &none);
@@ -678,7 +678,7 @@ fn an_envelope_scales_a_states_value_from_a_playheads_arrival_and_a_transition_e
         assert!((got - want).abs() < 1e-6, "at {t}: {got}, wanted {want}");
     };
     let mut m = Machines::default();
-    m.configure(model, Some(ev.clone()));
+    m.configure(model, Default::default(), Some(ev.clone()));
     m.advance(0.0, &none);
     let gain_at = |m: &mut Machines, t: f64| -> Data { written(&m.advance(t, &none), "p.gain").clone() };
 
@@ -781,7 +781,7 @@ fn a_state_decides_in_sequence_by_weight_or_by_expression_once_per_interval() {
             "playheads": { "p": { "start": "H" } }
         } }));
         let mut m = Machines::default();
-        m.configure(model, Some(ev.clone()));
+        m.configure(model, Default::default(), Some(ev.clone()));
         m.advance(0.0, read);
         let mut path = String::new();
         for k in 1..=6 {

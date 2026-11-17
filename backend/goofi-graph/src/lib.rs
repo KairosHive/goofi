@@ -539,9 +539,9 @@ struct Greyed {
     last: Option<(&'static str, &'static NodeManifest)>,
 }
 
-/// Each variable of a group that both records hold, by its element's key, where its name moved.
-fn moved(was: (&str, &[(String, String)]), now: (&str, &[(String, String)])) -> Vec<(String, String)> {
-    let pairs = was.1.iter().filter_map(|(key, e)| Some((format!("{}.{e}", was.0), format!("{}.{}", now.0, now.1.iter().find(|(k, _)| k == key)?.1))));
+/// Each variable that both groups hold, by its entry's key, where its name moved.
+fn moved(was: &machine::Keyed, now: &machine::Keyed) -> Vec<(String, String)> {
+    let pairs = was.iter().filter_map(|(key, e)| Some((e.0.clone(), now.iter().find(|(k, _)| k == key)?.1 .0.clone())));
     pairs.filter(|(from, to)| from != to).collect()
 }
 
@@ -992,9 +992,8 @@ impl Graph {
             renamed(old.map(|o| &o.states), &record.states).into_iter().chain(renamed(old.map(|o| &o.playheads), &record.playheads)).collect();
         let attributes = renamed(old.map(|o| &o.attributes), &record.attributes);
         // Every variable of a playhead both records hold, where its name moved.
-        let playheads = old.iter().flat_map(|o| o.playheads.iter().map(move |(ph, was)| (*o, ph, was)));
-        let moved: Vec<(String, String)> =
-            playheads.filter_map(|(o, ph, was)| Some(moved((&was.name, &o.elements()), (&record.playheads.get(ph)?.name, &record.elements())))).flatten().collect();
+        let held = old.iter().flat_map(|o| o.playheads.keys().filter(|ph| record.playheads.contains_key(*ph)).map(move |ph| (*o, ph)));
+        let moved: Vec<(String, String)> = held.flat_map(|(o, ph)| moved(&o.playhead_entries(ph), &record.playhead_entries(ph))).collect();
         // The variable reads first: they spell the playhead and the attribute as they were.
         record.rewrite_expressions(|e| expr_rewrite::rename_variables(e, |n| to(&moved, n)));
         record.rewrite_expressions(|e| expr_rewrite::rename_states(e, |n| to(&named, n)));
@@ -1013,30 +1012,22 @@ impl Graph {
     }
 
     /// Set, replace or remove (`None`) the track `id` whole. A name that moved is followed as a
-    /// machine's is; a removed track leaves every timeline panel that hid it.
+    /// machine's is. A panel that hid a removed track keeps its id, which names nothing again.
     pub fn set_track(&mut self, id: &str, record: Option<timeline::Track>) -> Result<Vec<Uid>, String> {
         let old = self.patch.stepped.tracks.get(id);
-        let mut moved = Vec::new();
-        match record {
-            None => {
-                let writes = self.patch.arrangement.rewrite(|ty, state| {
-                    let hidden = state.get_mut("hidden").and_then(serde_json::Value::as_array_mut).filter(|_| ty == "timeline");
-                    hidden.is_some_and(|h| h.len() != { h.retain(|v| v != id); h.len() })
-                });
-                self.arrangement_mut().set_contents(&writes);
-                Arc::make_mut(&mut self.patch.stepped).tracks.shift_remove(id);
-            }
-            Some(record) => {
-                record.check()?;
-                let valid = goofi_core::variables::is_valid_identifier;
-                if valid(id) || !valid(&record.name) || (old.is_none_or(|o| o.name != record.name) && self.group_taken(&record.name)) {
-                    return Err(format!("invalid track name `{}`, or a variable group already: {}", record.name, machine::NAME_RULE));
-                }
-                moved = old.map_or(moved, |o| self::moved((&o.name, &o.elements()), (&record.name, &record.elements())));
-                self.variables().move_owned(&moved);
-                Arc::make_mut(&mut self.patch.stepped).tracks.insert(id.to_string(), record);
-            }
+        let Some(record) = record else {
+            Arc::make_mut(&mut self.patch.stepped).tracks.shift_remove(id);
+            self.sync_owned();
+            return Ok(Vec::new());
+        };
+        record.check()?;
+        let valid = goofi_core::variables::is_valid_identifier;
+        if valid(id) || !valid(&record.name) || (old.is_none_or(|o| o.name != record.name) && self.group_taken(&record.name)) {
+            return Err(format!("invalid track name `{}`, or a variable group already: {}", record.name, machine::NAME_RULE));
         }
+        let moved = old.map_or(Vec::new(), |o| moved(&o.entries(), &record.entries()));
+        self.variables().move_owned(&moved);
+        Arc::make_mut(&mut self.patch.stepped).tracks.insert(id.to_string(), record);
         self.sync_owned();
         Ok(self.rewrite_variable_reads(&moved))
     }
@@ -1045,12 +1036,12 @@ impl Graph {
     /// its name and owned by its machine, with the machine's two elements and one entry per
     /// attribute; one per track, under its name, with what the track holds; nothing else.
     fn sync_owned(&mut self) {
-        use goofi_core::variables::{Entries, Group, Owner};
+        use goofi_core::variables::{Group, Owner};
         let mut store = self.variables();
         let stepped = &self.patch.stepped;
         let playheads = stepped.machines.iter().flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), Owner::Machine(m.clone()), record.playhead_entries(ph))));
         let tracks = stepped.tracks.iter().map(|(id, track)| (track.name.clone(), Owner::Track(id.clone()), track.entries()));
-        let wanted: Vec<(String, Owner, Entries)> = playheads.chain(tracks).collect();
+        let wanted: Vec<(String, Owner, machine::Keyed)> = playheads.chain(tracks).collect();
         let held = |g: &str, owner: &Owner| wanted.iter().any(|(name, o, _)| name == g && o == owner);
         let gone: Vec<String> =
             store.groups().filter(|(g, rec)| matches!(&rec.owner, Some(o) if !matches!(o, Owner::Midi(_)) && !held(g, o))).map(|(g, _)| g.to_string()).collect();
@@ -1058,7 +1049,7 @@ impl Graph {
             store.release(&group);
         }
         for (group, owner, entries) in wanted {
-            let _ = store.claim(&group, Group { owner: Some(owner), ..Default::default() }, entries);
+            let _ = store.claim(&group, Group { owner: Some(owner), ..Default::default() }, entries.into_iter().map(|(_, e)| e).collect());
         }
     }
 
@@ -1553,7 +1544,8 @@ impl Graph {
 
     /// Every wide variable's value, by name: what [`write_variables`] puts in the workspace.
     pub fn wide_variables(&self) -> Vec<(String, Data)> {
-        self.variables().entries().filter(|(_, v)| is_wide(&v.value)).map(|(n, v)| (n.to_string(), v.value.clone())).collect()
+        let store = self.variables();
+        store.entries().filter(|(n, v)| is_wide(&v.value) && !store.is_ephemeral(n)).map(|(n, v)| (n.to_string(), v.value.clone())).collect()
     }
 }
 
@@ -3259,23 +3251,22 @@ impl Graph {
         self.runtime.time.clone()
     }
 
-    /// Play or pause the clock's position, and put it at `to`.
-    pub fn steer_clock(&self, playing: Option<bool>, to: Option<f64>) {
-        let time = &self.runtime.time;
-        time.steer(playing.unwrap_or(time.playing()), to);
-        self.variables().publish("clock.playing", Data::number(f64::from(u8::from(time.playing()))));
-    }
-
     /// The clock as the store says it: the length its position restarts at, and the readings a
     /// patch takes as variables. Both are functionals of `t`, so nothing publishes as it runs.
     fn sync_clock(&self) {
+        let number = |name: &str| self.variables().get(name).map_or(0.0, goofi_core::control::number_of);
+        // A length under a millisecond is no length: nothing could read a position that short.
+        let length = Some(number("clock.length")).filter(|l| *l >= 1e-3).unwrap_or(0.0);
+        self.runtime.time.set_length(if number("clock.loop") != 0.0 { length } else { 0.0 });
+        if self.runtime.evaluator.is_none() {
+            return;
+        }
+        let progress = if length > 0.0 { format!("min(t / {length:?}, 1.0)") } else { "0.0".to_string() };
+        // Compiled before the store is locked: a compile takes the interpreter.
+        let frames = [("clock.time", "t"), ("clock.progress", progress.as_str())].map(|(name, source)| (name, machine::functional_code(&self.runtime.evaluator, source)));
         let mut store = self.variables();
-        let number = |name: &str| store.get(name).map_or(0.0, goofi_core::control::number_of);
-        let length = if number("clock.loop") != 0.0 { number("clock.length").max(0.0) } else { 0.0 };
-        self.runtime.time.set_length(length);
-        let progress = if length > 0.0 { format!("t / {length:?}") } else { "0.0".to_string() };
-        for (name, source) in [("clock.time", "t"), ("clock.progress", progress.as_str())] {
-            store.publish(name, Data::functional(machine::functional_code(&self.runtime.evaluator, source), goofi_core::Meta::default()));
+        for (name, code) in frames {
+            store.publish(name, Data::functional(code, goofi_core::Meta::default()));
         }
     }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than

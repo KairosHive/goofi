@@ -232,7 +232,7 @@ pub static BUILTINS: &[Builtin] = &[
     Builtin { name: "vars", kind: "namespace", scope: "all", signature: "vars.group.element", pick: None, args: &[],
         doc: "The patch's variables: a control panel's widgets, a MIDI device's controls and the system's facts." },
     Builtin { name: "t", kind: "value", scope: "all", signature: "t", pick: None, args: &[],
-        doc: "Patch seconds: the patch clock at this evaluation." },
+        doc: "Patch seconds: the patch clock's position at this evaluation, which `clock set` pauses and places." },
     Builtin { name: "np", kind: "namespace", scope: "all", signature: "np", pick: None, args: &[],
         doc: "numpy, whole. A frame arrives as a float32 array; a text as a str." },
     Builtin { name: "lfo", kind: "function", scope: "all", signature: "lfo(freq=1, src=t, vmin=…, vmax=…, fn='sin')", pick: None, args: &[

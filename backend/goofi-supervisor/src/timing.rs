@@ -41,10 +41,10 @@ fn since_base() -> u64 {
 }
 
 /// The patch's time, in two readings off one object that every engine holds. The RUN time counts
-/// from the load and never stops: every stamp, recording, tie and wait reads it. The POSITION is
-/// where the patch stands: it plays from the load, and it can pause, jump and restart at a
-/// length; an expression's `t`, a node's `now`, a machine and the timeline read it. A load
-/// restarts both, because a patch loaded an hour in begins at zero.
+/// from the load and never stops: every stamp, recording and tie reads it, and it is a node's
+/// `now`. The POSITION is where the patch stands: it plays from the load, and it can pause, jump
+/// and restart at a length; an expression's `t`, a functional, a machine and the timeline read
+/// it. A load restarts both, because a patch loaded an hour in begins at zero.
 #[derive(Debug)]
 pub struct Time {
     origin: AtomicU64,
@@ -64,8 +64,8 @@ impl Default for Time {
 
 impl Time {
     pub fn new() -> Time {
-        let (zero, playing) = (AtomicU64::new(0f64.to_bits()), AtomicU64::new(f64::NAN.to_bits()));
-        Time { origin: AtomicU64::new(since_base()), wall: Mutex::new(SystemTime::now()), shift: zero, held: playing, length: AtomicU64::new(0f64.to_bits()) }
+        let playing = AtomicU64::new(f64::NAN.to_bits());
+        Time { origin: AtomicU64::new(since_base()), wall: Mutex::new(SystemTime::now()), shift: AtomicU64::new(0), held: playing, length: AtomicU64::new(0) }
     }
 
     /// The run time: seconds since the patch began.
@@ -97,18 +97,22 @@ impl Time {
         self.held.store(if playing { f64::NAN } else { at }.to_bits(), Ordering::Relaxed);
     }
 
-    /// The seconds at which the position restarts; 0 is never.
+    /// The seconds at which the position restarts; 0 is never. The position goes on from where
+    /// it stands under the old length, folded into the new one.
     pub fn set_length(&self, length: f64) {
-        self.length.store(length.to_bits(), Ordering::Relaxed);
+        let at = self.position();
+        if self.length.swap(length.to_bits(), Ordering::Relaxed) != length.to_bits() {
+            self.steer(self.playing(), Some(at));
+        }
     }
 
-    /// The instant the position next stands at `at`, or restarts, where that is sooner: what a
-    /// wait toward a deadline of the position parks until. None while it is paused, and for a
+    /// How long until the position next stands at `at`, or restarts, where that is sooner: what a
+    /// wait toward a deadline of the position parks for. None while it is paused, and for a
     /// position it never reaches.
-    pub fn instant_at(&self, at: f64) -> Option<Instant> {
+    pub fn until(&self, at: f64) -> Option<Duration> {
         let length = f64::from_bits(self.length.load(Ordering::Relaxed));
         let at = if length > 0.0 { at.min(length) } else { at };
-        (self.playing() && at.is_finite()).then(|| Instant::now() + Duration::from_secs_f64((at - self.position()).max(0.0)))
+        (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - self.position()).max(0.0)))
     }
 
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing
@@ -128,11 +132,12 @@ impl Time {
         self.wall() + Duration::from_secs_f64(seconds.max(0.0))
     }
 
-    /// Begin again from now, playing from zero.
+    /// Begin again from now, playing from zero. The position is put on the run time first, so no
+    /// reader between the two stores sees a time before zero.
     pub fn restart(&self) {
+        self.steer(true, Some(self.now()));
         self.origin.store(since_base(), Ordering::Relaxed);
         *self.wall.lock() = SystemTime::now();
-        self.steer(true, Some(0.0));
     }
 }
 

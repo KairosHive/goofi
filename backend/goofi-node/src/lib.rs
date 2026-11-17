@@ -322,7 +322,7 @@ impl fmt::Debug for ExprState {
 pub struct EvalCtx<'a> {
     /// The expression's variables by the generated name the rewrite minted, in its order.
     pub locals: &'a [(String, Local)],
-    /// Patch seconds (`NodeCtx::now`), off the one patch time — for time-based expressions.
+    /// Patch seconds, the position of the one patch time — for time-based expressions.
     pub t: f64,
     /// The driven param's declared range, which `lfo()` and `nse()` span by default.
     pub range: (f64, f64),

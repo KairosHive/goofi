@@ -14,7 +14,7 @@ use goofi_core::indexmap::IndexMap;
 use goofi_core::{Data, Param};
 use goofi_graph::expr_rewrite::{self, Target};
 use goofi_graph::machine::{Machine, Machines};
-use goofi_graph::timeline::Timeline;
+use goofi_graph::timeline::Track;
 use goofi_graph::Graph;
 use goofi_node::{ExprEvaluator, Local};
 use goofi_transport::{machines_door, output_service, service_base, Door, Hub, Payload, Subscriber, MACHINES_FRAME_ID, MACHINES_INBOX_ID};
@@ -30,13 +30,15 @@ pub struct NodeReads {
 }
 
 pub enum Msg {
-    Configure(IndexMap<String, Machine>, Timeline, Option<Arc<dyn ExprEvaluator>>, NodeReads),
+    Configure(IndexMap<String, Machine>, (IndexMap<String, Track>, f64), Option<Arc<dyn ExprEvaluator>>, NodeReads),
     /// An effect, stamped with the patch second of the op that asked for it.
     Fire { at: f64, machine: String, playhead: String, transition: String },
     Jump { at: f64, machine: String, playhead: String, state: String },
     Reset { at: f64, machine: Option<String> },
     /// A variable was written; one a machine reads is a reason to look again.
     Changed(String),
+    /// The clock's position was put somewhere: every run starts over there.
+    Jumped,
 }
 
 /// The manager's hand on the thread: a message in its inbox, and a ring on its door for it.
@@ -52,10 +54,10 @@ impl Driver {
     }
 
     /// Hand the thread the settled model: the machines, with every node read resolved against
-    /// the graph, and the timeline as it runs at the clock's tempo.
+    /// the graph, and the tracks with the clock's tempo.
     pub fn configure(&self, g: &Graph) {
         let bpm = g.variables().get("clock.bpm").map_or(120.0, goofi_core::control::number_of);
-        self.send(Msg::Configure(g.machines().clone(), Timeline::new(g.timeline(), bpm, &g.evaluator()), g.evaluator(), node_reads(g)));
+        self.send(Msg::Configure(g.machines().clone(), (g.timeline().clone(), bpm), g.evaluator(), node_reads(g)));
     }
 
     pub fn send(&self, msg: Msg) {
@@ -141,21 +143,19 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             (g.variable_store(), g.time(), state.hub.door(&machines_door(g.instance())))
         };
         let mut machines = Machines::default();
-        let mut tracks = Timeline::default();
         let mut reads = NodeReads::default();
         let mut streams = Streams::default();
         let mut logged: HashSet<String> = HashSet::new();
-        let mut last = 0.0;
         loop {
             // Park toward the next instant owed; a ring — a frame read, or the inbox — is the other
             // reason to wake.
-            let due = [machines.next_deadline(), tracks.next_deadline(last)].into_iter().flatten().reduce(f64::min);
-            let owed = time.instant_at(due.unwrap_or(f64::INFINITY));
-            let wait = owed.map_or(IDLE, |at| goofi_supervisor::timing::Deadline::at(at).left().min(IDLE));
+            // With nothing that steps, nothing is owed, a restart of the position included.
+            let owed = time.until(machines.next_deadline().unwrap_or(f64::INFINITY)).filter(|_| !machines.is_empty());
+            let wait = owed.map_or(IDLE, |left| left.min(IDLE));
             let mut woken = door.wait_until(Instant::now() + wait).has(MACHINES_FRAME_ID);
             loop {
                 match rx.try_recv() {
-                    Ok(msg) => woken |= take(&mut machines, &mut tracks, &mut reads, &mut streams, &state.hub, msg),
+                    Ok(msg) => woken |= take(&mut machines, &mut reads, &mut streams, &state.hub, msg),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
                 }
@@ -163,13 +163,12 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             if state.stopping.stopped() {
                 return;
             }
-            if machines.is_empty() && tracks.is_empty() {
+            if machines.is_empty() {
                 continue;
             }
             // The position went back — a jump, a restart at the length — and that is owed too.
             let now = time.position();
-            let back = now < std::mem::replace(&mut last, now);
-            if !woken && !back && due.is_none_or(|at| at > now) {
+            if !woken && !machines.behind(now) && machines.next_deadline().is_none_or(|at| at > now) {
                 continue;
             }
             // The frames the expressions read, taken in one look; the step runs off every lock.
@@ -201,7 +200,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             let writes = machines.advance(now, &read);
             {
                 let mut store = store.lock();
-                for (name, value) in writes.into_iter().chain(tracks.writes(now)) {
+                for (name, value) in writes {
                     store.drive(&name, value);
                 }
             }
@@ -215,11 +214,10 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
 }
 
 /// One message into the machines; whether it is a reason to settle now.
-fn take(machines: &mut Machines, tracks: &mut Timeline, reads: &mut NodeReads, streams: &mut Streams, hub: &Hub, msg: Msg) -> bool {
+fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, hub: &Hub, msg: Msg) -> bool {
     match msg {
-        Msg::Configure(config, timeline, evaluator, node_reads) => {
-            machines.configure(config, evaluator);
-            *tracks = timeline;
+        Msg::Configure(config, timed, evaluator, node_reads) => {
+            machines.configure(config, timed, evaluator);
             streams.follow(hub, &node_reads);
             *reads = node_reads;
         }
@@ -227,6 +225,7 @@ fn take(machines: &mut Machines, tracks: &mut Timeline, reads: &mut NodeReads, s
         Msg::Jump { at, machine, playhead, state } => machines.jump(at, &machine, &playhead, &state),
         Msg::Reset { at, machine } => machines.reset(at, machine.as_deref()),
         Msg::Changed(name) => return machines.keys().contains(&name),
+        Msg::Jumped => machines.restart(),
     }
     true
 }

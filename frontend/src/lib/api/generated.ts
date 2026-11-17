@@ -87,12 +87,11 @@ export type Machine = { name: string, attributes: { [key in string]: Attribute }
  * What the random draws start from; absent is 0.
  */
 seed?: number, };
-export type Unit = "seconds" | "beats";
 export type Note = { at: number, length: number, pitch: number, velocity: number, };
 export type Key = { at: number, value: number, curve: Curve, };
 export type Lane = { name: string, range: [number, number], keys: Array<Key>, };
 export type Lanes = { "kind": "note", notes: Array<Note>, } | { "kind": "curve", attributes: { [key in string]: Lane }, };
-export type Track = { name: string, unit: Unit, } & ({ "kind": "note", notes: Array<Note>, } | { "kind": "curve", attributes: { [key in string]: Lane }, });
+export type Track = { name: string, beats: boolean, } & ({ "kind": "note", notes: Array<Note>, } | { "kind": "curve", attributes: { [key in string]: Lane }, });
 export type PatchDoc = { 
 /**
  * Keyed by uid spelling; a key that is not one is reminted on the way in.

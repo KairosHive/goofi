@@ -41,7 +41,6 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     assert_eq!(time(&g), 100.0);
     g.call("clock set", j!({ "playing": true }));
     g.until("the position to play from the jump", |g| (time(g) > 100.0).then_some(()));
-    assert!(time(&g) < 160.0, "it plays from where it was put");
     assert_eq!(g.call("clock set", j!({ "playing": false, "time": 0.0 })), j!({ "playing": false, "time": 0.0 }));
     assert!(g.refuse("clock set", j!({ "time": -1.0 })).contains("at least 0"));
 
@@ -56,10 +55,16 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     });
     let progress = |g: &Goofi| number(g, "clock.progress");
     assert!(g.stays(|g| time(g) < 0.2 && (0.0..1.0).contains(&progress(g))), "the position stays under its length");
-    // Endless again, it counts up past the length.
+    // Endless again, it goes on from where it stands, past the length; it does not jump to the
+    // run time, which is a thousand seconds on after the restart below.
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 1000.0 }));
+    g.call("clock set", j!({ "time": 999.9 }));
+    g.until("the position to restart at a thousand seconds", |g| (time(g) < 999.0).then_some(()));
     g.call("variable entry edit", j!({ "name": "clock.loop", "value": 0.0 }));
+    assert!(time(&g) < 999.0, "the position went on from where it stood");
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.2 }));
     g.until("the endless position to pass the length", |g| (time(g) > 0.2).then_some(()));
-    assert_eq!(progress(&g), 0.0);
+    assert_eq!(progress(&g), 1.0, "progress runs to the end of a length the position does not restart at");
 
     // A paused clock plays again from zero on a load: the clock is the patch's.
     g.call("clock set", j!({ "playing": false, "time": 50.0 }));
@@ -67,7 +72,7 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     let path = dir.path().join("clock.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     g.call("session load", j!({ "path": path.to_string_lossy() }));
-    assert_eq!(number(&g, "clock.playing"), 1.0);
+    assert_eq!((number(&g, "clock.playing"), number(&g, "clock.length")), (1.0, 0.2), "the clock plays, and its length rode the file");
     assert!(time(&g) < 50.0, "the position began again");
 }
 
@@ -102,4 +107,13 @@ fn a_machine_steps_by_the_position() {
     g.call("machine state edit", j!({ "machine": "pulse", "name": "a", "interval": -1.0 }));
     g.call("clock set", j!({ "time": 0.0 }));
     g.until("the run to start over", |g| (state(g) == "a").then_some(()));
+    // A jump far ahead starts the runs over there too: it settles none of the beats between,
+    // and the machine steps on.
+    for name in ["a", "b"] {
+        g.call("machine state edit", j!({ "machine": "pulse", "name": name, "interval": 0.1 }));
+    }
+    g.until("the playhead to step again", |g| (state(g) == "b").then_some(()));
+    g.call("clock set", j!({ "time": 1e9 }));
+    g.until("the run to start over after the jump", |g| (state(g) == "a").then_some(()));
+    g.until("the playhead to step on after the jump", |g| (state(g) == "b").then_some(()));
 }

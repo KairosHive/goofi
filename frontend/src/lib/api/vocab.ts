@@ -167,7 +167,7 @@ export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [
 	] },
 	{ name: 'vars', kind: 'namespace', scope: 'all', signature: "vars.group.element", doc: "The patch's variables: a control panel's widgets, a MIDI device's controls and the system's facts.", pick: null, args: [
 	] },
-	{ name: 't', kind: 'value', scope: 'all', signature: "t", doc: "Patch seconds: the patch clock at this evaluation.", pick: null, args: [
+	{ name: 't', kind: 'value', scope: 'all', signature: "t", doc: "Patch seconds: the patch clock's position at this evaluation, which `clock set` pauses and places.", pick: null, args: [
 	] },
 	{ name: 'np', kind: 'namespace', scope: 'all', signature: "np", doc: "numpy, whole. A frame arrives as a float32 array; a text as a str.", pick: null, args: [
 	] },

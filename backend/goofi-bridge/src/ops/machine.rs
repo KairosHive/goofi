@@ -205,7 +205,7 @@ fn machine_of(g: &Graph, given: &str) -> Result<(String, Machine), String> {
 }
 
 /// The id of the `kind` that `given` names in `map`.
-fn id_of<V: Named>(kind: &str, map: &IndexMap<String, V>, given: &str) -> Result<String, String> {
+pub(super) fn id_of<V: Named>(kind: &str, map: &IndexMap<String, V>, given: &str) -> Result<String, String> {
     machine::find(map, given).map(str::to_string).ok_or_else(|| format!("no {kind} `{given}`"))
 }
 
@@ -221,7 +221,7 @@ fn set(tx: &mut Txn, id: &str, mut next: Machine) -> Result<(), String> {
 }
 
 /// The name an op answered with: what its history label spells, whatever the caller named it by.
-pub(super) fn named(o: &Value) -> &str {
+fn named(o: &Value) -> &str {
     o["name"].as_str().unwrap_or_default()
 }
 
@@ -488,7 +488,7 @@ impl WriteOp for StateEdit {
 
     fn label(a: &StateEditArgs, o: &Value) -> String {
         match (&a.pos, &a.values) {
-            (Some(_), None) if a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", named(o)),
+            (Some(_), None) if a.to.is_none() && a.envelopes.is_none() && a.interval.is_none() && a.interval_expression.is_none() && a.mode.is_none() && a.noop.is_none() && a.weights.is_none() && a.expression.is_none() => format!("Move state {}", named(o)),
             _ => edited("state", &a.to, o),
         }
     }

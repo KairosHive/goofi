@@ -270,10 +270,10 @@ pub struct Cx<'a> {
     pub readers: &'a [bool],
     /// Per output: whether the recorder holds this slot armed.
     pub recorded: &'a [bool],
-    /// The patch's run time at this run: its `procstart` stamp.
+    /// The patch's run time at this run: the node's `now` and its `procstart` stamp.
     pub now: f64,
-    /// The patch's clock: its position is the node's `now`, and its run time, read again as a
-    /// frame leaves, the `procend` stamp.
+    /// The patch's clock: its run time, read again as a frame leaves, is the `procend` stamp, and
+    /// its position is an expression's `t`.
     pub time: &'a goofi_supervisor::timing::Time,
     /// The node this run is, as its frames' `source` names it.
     pub uid: Uid,

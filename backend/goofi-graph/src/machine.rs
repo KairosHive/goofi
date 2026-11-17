@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use goofi_core::control;
 use goofi_core::ease::Curve;
-use goofi_core::variables::{is_valid_identifier, Control, ControlKind, Entries};
+use goofi_core::variables::{is_valid_identifier, Control, ControlKind};
 use goofi_core::{Data, Face, Meta, MetaValue, Param, Value};
 use goofi_node::{EvalCtx, ExprEvaluator, Field, Local};
 use indexmap::IndexMap;
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::expr_rewrite::{self, Target, VarRef};
+use crate::timeline::{Timeline, Track};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name: where
 /// it is, and how far along its transition. Where it came from and when it arrived are no
@@ -48,6 +49,27 @@ pub trait Named {
 pub fn find<'a, V: Named>(map: &'a IndexMap<String, V>, given: &str) -> Option<&'a str> {
     map.get_key_value(given).or_else(|| map.iter().find(|(_, v)| v.name() == given)).map(|(id, _)| id.as_str())
 }
+
+/// Whether every record of `map` has an id that is no name, and a legal name of its own.
+pub(crate) fn names<V: Named>(kind: &str, map: &IndexMap<String, V>) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for (id, v) in map {
+        if is_valid_identifier(id) {
+            return Err(format!("`{id}` is a name, not the id of a {kind}"));
+        }
+        if !is_valid_identifier(v.name()) {
+            return Err(format!("invalid {kind} name `{}`: {NAME_RULE}", v.name()));
+        }
+        if !seen.insert(v.name()) {
+            return Err(format!("{kind} `{}` already exists", v.name()));
+        }
+    }
+    Ok(())
+}
+
+/// What an owned group holds, each entry under the key a rename is read off: the element's own
+/// name where the owner names it, the id of the record where a person does.
+pub type Keyed = Vec<(String, (String, Data, Option<Control>))>;
 
 /// The name of the record `id` keys in `map`; the id where it keys none.
 pub fn name_of<'a, V: Named>(map: &'a IndexMap<String, V>, id: &'a str) -> &'a str {
@@ -325,21 +347,6 @@ impl Machine {
     /// Whether the record holds together: every name legal and its kind's alone, every reference
     /// the id of something it holds.
     pub fn check(&self) -> Result<(), String> {
-        fn names<V: Named>(kind: &str, map: &IndexMap<String, V>) -> Result<(), String> {
-            let mut seen = HashSet::new();
-            for (id, v) in map {
-                if is_valid_identifier(id) {
-                    return Err(format!("`{id}` is a name, not the id of a {kind}"));
-                }
-                if !is_valid_identifier(v.name()) {
-                    return Err(format!("invalid {kind} name `{}`: {NAME_RULE}", v.name()));
-                }
-                if !seen.insert(v.name()) {
-                    return Err(format!("{kind} `{}` already exists", v.name()));
-                }
-            }
-            Ok(())
-        }
         names("attribute", &self.attributes)?;
         names("state", &self.states)?;
         names("playhead", &self.playheads)?;
@@ -402,23 +409,17 @@ impl Machine {
         Ok(())
     }
 
-    /// The elements of a playhead's group, each by the key a rename is read off and its name.
-    pub fn elements(&self) -> Vec<(String, String)> {
-        let own = OWN.iter().map(|e| (e.to_string(), e.to_string()));
-        own.chain(self.attributes.iter().map(|(id, a)| (id.clone(), a.name.clone()))).collect()
-    }
-
     /// The variables the group of the playhead `id` holds: the machine's own two, then one per
     /// attribute, each born as the start state has it — at rest there, before the machine has moved it.
-    pub fn playhead_entries(&self, id: &str) -> Entries {
+    pub fn playhead_entries(&self, id: &str) -> Keyed {
         let Some(p) = self.playheads.get(id) else { return Vec::new() };
         let start = self.states.get(&p.start);
         let own = [Data::text(name_of(&self.states, &p.start)), Data::number(1.0)];
         let held = |a: &str, attr: &Attribute| start.and_then(|s| s.values.get(a)).unwrap_or(&attr.default).clone();
         OWN.iter()
             .zip(own)
-            .map(|(e, v)| (format!("{}.{e}", p.name), v, None))
-            .chain(self.attributes.iter().map(|(a, attr)| (format!("{}.{}", p.name, attr.name), held(a, attr), Some(attr.kind.control(&attr.default)))))
+            .map(|(e, v)| (e.to_string(), (format!("{}.{e}", p.name), v, None)))
+            .chain(self.attributes.iter().map(|(a, attr)| (a.clone(), (format!("{}.{}", p.name, attr.name), held(a, attr), Some(attr.kind.control(&attr.default))))))
             .collect()
     }
 }
@@ -563,17 +564,30 @@ pub struct Machines {
     functionals: HashMap<String, Arc<[u8]>>,
     /// The instant of the last advance: one earlier than it says the clock restarted.
     last: f64,
+    /// The tracks and the tempo as last configured, and the timeline built from them.
+    timed: (IndexMap<String, Track>, f64),
+    timeline: Timeline,
 }
 
 impl Machines {
     pub fn is_empty(&self) -> bool {
-        self.config.is_empty()
+        self.config.is_empty() && self.timed.0.is_empty()
     }
 
-    /// Replace the model. A playhead it still holds keeps its place and what it holds; one whose
-    /// state is gone starts over. Takes effect on the next advance; the same model again is nothing.
-    pub fn configure(&mut self, config: IndexMap<String, Machine>, evaluator: Option<Arc<dyn ExprEvaluator>>) {
+    /// Whether the position `now` is before the last advance: that is owed a pass too.
+    pub fn behind(&self, now: f64) -> bool {
+        now < self.last
+    }
+
+    /// Replace the model and the timeline. A playhead it still holds keeps its place and what it
+    /// holds; one whose state is gone starts over. Takes effect on the next advance; the same
+    /// model again is nothing, and the timeline is built again only when a track or the tempo moved.
+    pub fn configure(&mut self, config: IndexMap<String, Machine>, timed: (IndexMap<String, Track>, f64), evaluator: Option<Arc<dyn ExprEvaluator>>) {
         let same_evaluator = evaluator.as_ref().map(Arc::as_ptr) == self.evaluator.as_ref().map(Arc::as_ptr);
+        if !same_evaluator || timed != self.timed {
+            self.timeline = Timeline::new(&timed.0, timed.1, &evaluator);
+            self.timed = timed;
+        }
         if same_evaluator && config == self.config {
             return;
         }
@@ -646,6 +660,12 @@ impl Machines {
         self.requests.push((at, Request::Reset { machine: machine.map(str::to_string) }));
     }
 
+    /// The position was put somewhere else: the next advance starts every run over there, with
+    /// no settle of what lies between.
+    pub fn restart(&mut self) {
+        self.last = f64::INFINITY;
+    }
+
     /// Every variable the machines' expressions read — what an advance wants handed to it.
     pub fn keys(&self) -> &[String] {
         &self.keys
@@ -667,18 +687,19 @@ impl Machines {
             let due = h.flight.as_ref().map(|f| f.end).or_else(|| h.due.map(|d| d.at).filter(|at| at.is_finite()));
             due.into_iter().chain(h.attrs.values().filter_map(Motion::end))
         });
-        owed.chain(self.requests.iter().map(|(at, _)| *at)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
+        owed.chain(self.requests.iter().map(|(at, _)| *at)).chain(self.timeline.next_deadline(self.last)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
     }
 
     /// Step every machine to `now`: every landing, due and request before it is settled at its
     /// own instant, in order, then the instant itself. Answers every playhead variable as it
     /// stands, a functional for an attribute in flight.
     pub fn advance(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) -> Vec<(String, Data)> {
-        // The clock restarted — a load, a new patch — so every instant a run or a request holds
-        // is of the patch before: every run starts over at its playheads' starts.
+        // The position went back or was put elsewhere — a load, a jump, a restart at the length —
+        // so every instant a run holds is of before: every run starts over at its playheads'
+        // starts, and a request stamped past `now` goes with them.
         if now < self.last {
             self.runs.clear();
-            self.requests.clear();
+            self.requests.retain(|(at, _)| *at <= now);
             self.functionals.clear();
             self.reconcile = true;
         }
@@ -737,6 +758,7 @@ impl Machines {
             }
         }
         self.functionals = used;
+        out.extend(self.timeline.writes(now));
         out
     }
 

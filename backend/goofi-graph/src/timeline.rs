@@ -5,34 +5,26 @@
 use std::sync::Arc;
 
 use goofi_core::ease::Curve;
-use goofi_core::variables::{is_valid_identifier, Entries, MIDI_ENTRIES};
+use goofi_core::variables::MIDI_ENTRIES;
 use goofi_core::{Data, Face, Meta};
 use goofi_node::ExprEvaluator;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::machine::{functional_code, AttributeKind, Leg, Motion, NAME_RULE};
+use crate::machine::{functional_code, names, AttributeKind, Keyed, Leg, Motion};
 
-/// The one element of a note track's group: each held note's velocity, where a MIDI device's
-/// `notes` has its channel 1, so a reader of a device reads a track.
-pub const NOTES: &str = "notes";
+/// The one element of a note track's group, and its width: each held note's velocity, where a
+/// MIDI device's `notes` has its channel 1, so a reader of a device reads a track.
+const NOTES: (&str, usize) = MIDI_ENTRIES[1];
 
-/// What a track's times are in: seconds, or beats of `clock.bpm`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "lowercase")]
-pub enum Unit {
-    #[default]
-    Seconds,
-    Beats,
-}
-
-/// A track: its name, which is its variable group's, the unit of its times, and what it holds.
+/// A track: its name, which is its variable group's; whether its times are beats of `clock.bpm`
+/// and not seconds; and what it holds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
     #[serde(default)]
-    pub unit: Unit,
+    pub beats: bool,
     #[serde(flatten)]
     pub lanes: Lanes,
 }
@@ -51,8 +43,7 @@ pub enum Lanes {
     },
 }
 
-/// A note: when it starts and how long it lasts, in the track's unit; its MIDI pitch; its
-/// velocity in 0..1.
+/// A note: when it starts and how long it lasts, its MIDI pitch, and its velocity in 0..1.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Note {
     pub at: f64,
@@ -61,8 +52,7 @@ pub struct Note {
     pub velocity: f64,
 }
 
-/// A curve attribute: the range its values take, and its keyframes in time order. Its value holds
-/// before the first keyframe and after the last.
+/// A curve attribute: its range, and its keyframes in time order. Its value holds outside them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Lane {
     pub name: String,
@@ -71,7 +61,7 @@ pub struct Lane {
     pub keys: Vec<Key>,
 }
 
-/// A keyframe: the value at `at`, in the track's unit, and the curve from it to the next one.
+/// A keyframe: the value at `at`, and the curve from it to the next one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Key {
     pub at: f64,
@@ -86,38 +76,28 @@ impl Track {
     /// Whether the record holds together.
     pub fn check(&self) -> Result<(), String> {
         let time = |at: f64| at.is_finite() && at >= 0.0;
-        match &self.lanes {
-            Lanes::Note { notes } if notes.iter().any(|n| !time(n.at) || !(n.length.is_finite() && n.length > 0.0) || n.pitch > 127 || !(0.0..=1.0).contains(&n.velocity)) => {
-                Err("a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1".into())
+        let (ok, why) = match &self.lanes {
+            Lanes::Note { notes } => {
+                let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
+                (notes.iter().all(whole), "a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
-            Lanes::Note { .. } => Ok(()),
-            Lanes::Curve { attributes } => attributes.iter().try_for_each(|(id, lane)| {
-                let named = !is_valid_identifier(id) && is_valid_identifier(&lane.name) && attributes.values().filter(|l| l.name == lane.name).count() == 1;
-                let keyed = lane.keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && lane.keys.windows(2).all(|k| k[0].at < k[1].at);
-                if named && keyed && lane.range.iter().all(|v| v.is_finite()) {
-                    return Ok(());
-                }
-                Err(format!("attribute `{}`: a name of its own ({NAME_RULE}), a finite range, and keyframes of finite numbers, each later than the one before", lane.name))
-            }),
-        }
-    }
-
-    /// The elements of the track's group, each by the key a rename is read off and its name.
-    pub fn elements(&self) -> Vec<(String, String)> {
-        match &self.lanes {
-            Lanes::Note { .. } => vec![(NOTES.into(), NOTES.into())],
-            Lanes::Curve { attributes } => attributes.iter().map(|(id, lane)| (id.clone(), lane.name.clone())).collect(),
-        }
+            Lanes::Curve { attributes } => {
+                names("attribute", attributes)?;
+                let keyed = |l: &Lane| l.keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && l.keys.windows(2).all(|k| k[0].at < k[1].at);
+                (attributes.values().all(|l| keyed(l) && l.range.iter().all(|v| v.is_finite())), "an attribute has a finite range and keyframes of finite numbers, each later than the one before")
+            }
+        };
+        ok.then_some(()).ok_or_else(|| format!("track `{}`: {why}", self.name))
     }
 
     /// The variables the track's group holds, each born at rest.
-    pub fn entries(&self) -> Entries {
+    pub fn entries(&self) -> Keyed {
         match &self.lanes {
-            Lanes::Note { .. } => vec![(format!("{}.{NOTES}", self.name), Data::numbers(std::iter::repeat_n(0.0, MIDI_ENTRIES[1].1)), None)],
-            Lanes::Curve { attributes } => attributes.values().map(|lane| {
+            Lanes::Note { .. } => vec![(NOTES.0.into(), (format!("{}.{}", self.name, NOTES.0), Data::numbers(std::iter::repeat_n(0.0, NOTES.1)), None))],
+            Lanes::Curve { attributes } => attributes.iter().map(|(id, lane)| {
                 let kind = AttributeKind::Num { vmin: lane.range[0], vmax: lane.range[1], int: false, face: Face::Plain };
-                let born = Data::number(lane.keys.first().map_or(lane.range[0], |k| k.value));
-                (format!("{}.{}", self.name, lane.name), born.clone(), Some(kind.control(&born)))
+                let born = Data::number(lane.keys.last().map_or(lane.range[0], |k| k.value));
+                (id.clone(), (format!("{}.{}", self.name, lane.name), born.clone(), Some(kind.control(&born))))
             }).collect(),
         }
     }
@@ -126,20 +106,21 @@ impl Track {
 /// The timeline as it runs: what every track writes at a position, built whole from the tracks
 /// and the tempo. A curve is compiled here once; a note is `[start, end, pitch, velocity]` in seconds.
 #[derive(Default)]
-pub struct Timeline {
+pub(crate) struct Timeline {
     curves: Vec<(String, Data)>,
     notes: Vec<(String, Vec<[f64; 4]>)>,
 }
 
 impl Timeline {
-    pub fn new(tracks: &IndexMap<String, Track>, bpm: f64, evaluator: &Option<Arc<dyn ExprEvaluator>>) -> Timeline {
+    pub(crate) fn new(tracks: &IndexMap<String, Track>, bpm: f64, evaluator: &Option<Arc<dyn ExprEvaluator>>) -> Timeline {
         let mut out = Timeline::default();
         for track in tracks.values() {
-            let seconds = |at: f64| if track.unit == Unit::Beats { at * 60.0 / bpm } else { at };
+            // A tempo of nothing is the slowest there is: a beat never comes.
+            let seconds = |at: f64| if track.beats { at * 60.0 / bpm.max(1e-9) } else { at };
             match &track.lanes {
                 Lanes::Note { notes } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();
-                    out.notes.push((format!("{}.{NOTES}", track.name), notes));
+                    out.notes.push((format!("{}.{}", track.name, NOTES.0), notes));
                 }
                 Lanes::Curve { attributes } => {
                     for lane in attributes.values() {
@@ -154,14 +135,10 @@ impl Timeline {
         out
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.curves.is_empty() && self.notes.is_empty()
-    }
-
     /// What every track's group holds at the position `now`.
-    pub fn writes(&self, now: f64) -> Vec<(String, Data)> {
+    pub(crate) fn writes(&self, now: f64) -> Vec<(String, Data)> {
         let held = self.notes.iter().map(|(name, notes)| {
-            let mut velocities = vec![0.0; MIDI_ENTRIES[1].1];
+            let mut velocities = vec![0.0; NOTES.1];
             for [_, _, pitch, velocity] in notes.iter().filter(|n| (n[0]..n[1]).contains(&now)) {
                 velocities[*pitch as usize] = *velocity;
             }
@@ -171,7 +148,7 @@ impl Timeline {
     }
 
     /// The next position past `now` at which a note starts or ends.
-    pub fn next_deadline(&self, now: f64) -> Option<f64> {
+    pub(crate) fn next_deadline(&self, now: f64) -> Option<f64> {
         self.notes.iter().flat_map(|(_, notes)| notes.iter().flat_map(|n| [n[0], n[1]])).filter(|at| *at > now).reduce(f64::min)
     }
 }

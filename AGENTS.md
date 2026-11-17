@@ -122,10 +122,10 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   anything waits, paces or measures (`Event`, `Deadline`, `Pace`, `Grid`, `RateMeter`,
   `sleep_until`, `wait_readable`). Nothing else sleeps in a loop, sets a socket timeout, rounds
   a deadline to a tick or keeps a clock of its own. `Time` has two readings. The run time counts
-  from the load and never stops: every stamp, recording, tie and wait reads it. The position
-  plays from the load and can pause, jump and restart at a length (`clock set`, the `clock`
-  variables): an expression's `t`, a node's `now`, a functional and the machines read it. A
-  pause stops the position alone; the engines run on.
+  from the load and never stops: every stamp, recording and tie reads it, and it is a node's
+  `now`. The position plays from the load and can pause, jump and restart at a length
+  (`clock set`, the `clock` variables): an expression's `t`, a functional, the machines and the
+  timeline read it. A pause stops the position alone; the engines run on.
 - `goofi_supervisor::ready` is how a component is built: compilation and configuration (a node's
   instantiation and `prepare`, a shader's pipeline, a device's open) run through `ready::prepare`
   on a thread of their own, the system keeps running on what it has, and the owner takes the

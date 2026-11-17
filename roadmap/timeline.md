@@ -28,9 +28,8 @@ This file holds the decisions for what remains and the order of the work.
 - Each track has a hide button. A right click on a track, or a long press, opens a menu:
   `Hide Track`, `Hide Tracks Above`, `Hide Tracks Below`, `Hide Other Tracks`, `Delete Track…`.
   The delete asks first (`ConfirmDialog`).
-- The removal of a track takes its id out of every panel's state in the same write. One
-  function on `Layout` rewrites the state of every panel that names a thing; `unbind`,
-  `retarget` and this are its three callers.
+- A track's id is never minted twice, so the id of a removed track in a panel's state names
+  nothing: a panel passes over an id it does not know, and nothing rewrites the panels.
 - The panel shows and drives the clock: play, pause, stop, the position, the tempo, the length
   and the loop. It owns no transport of its own.
 
@@ -48,8 +47,13 @@ In this order, each a tested commit:
 
 - What a machine does when the position goes back (a jump, a restart at the length). Today a
   position that went back starts every run over, as a load does; that rule holds until decided.
-- A node that measures elapsed time from its `now` (`Clock`, the simulations) sees a negative
-  step when the position goes back. No node was changed for it.
+- A node's `now` is the run time, so a node runs on through a pause and never sees time go
+  back; a node that follows the position reads `t` in an expression. Whether a node gets the
+  position too.
+- A curve attribute's functional nests one conditional per keyframe: the interpreter refuses
+  to compile some thousands of them. Whether a lane gets a ceiling or a flat table.
+- A control panel that draws a playhead's or a track's group is not re-aimed when the owner is
+  renamed.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
 - How `MidiIn`'s `port` param holds a track: by id, so a rename of the track needs no rewrite.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.

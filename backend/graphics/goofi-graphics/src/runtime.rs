@@ -293,7 +293,7 @@ impl Runtime {
                     stage.cells.spent.push(up);
                 }
             }
-            self.gpu.queue.write_buffer(&state.time, 0, &(self.time.position() as f32).to_le_bytes());
+            self.gpu.queue.write_buffer(&state.time, 0, &(self.time.position_at(t) as f32).to_le_bytes());
             self.gpu.queue.write_buffer(&state.frame, 0, &state.count.to_le_bytes());
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);

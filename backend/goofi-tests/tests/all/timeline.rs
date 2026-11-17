@@ -47,11 +47,16 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     at(&g, 2.0);
     g.until("the stepped level before its next keyframe", |g| (number(g, "sweep.level") == 0.0).then_some(()));
     // In beats, a time follows the tempo: beat 2 is one second at 120 and two at 60.
-    g.call("timeline track edit", j!({ "track": "sweep", "unit": "beats", "attributes": { level: ramp } }));
+    g.call("timeline track edit", j!({ "track": "sweep", "beats": true, "attributes": { level: ramp } }));
     at(&g, 1.0);
     g.until("the level at beat 2 of a tempo of 120", |g| ((number(g, "sweep.level") - 5.0).abs() < 1e-3).then_some(()));
     g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
     g.until("the level at beat 1 of a tempo of 60", |g| (number(g, "sweep.level") == 0.0).then_some(()));
+    // At a tempo of nothing no beat comes: the value before the first keyframe holds.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 0.0 }));
+    at(&g, 2.0);
+    g.until("the level at a tempo of nothing", |g| (number(g, "sweep.level") == 0.0).then_some(()));
+    at(&g, 1.0);
     g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
 
     // A note track: the velocity of each note the position is in, as a device's `notes` has it.
@@ -95,6 +100,9 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     let manifest = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     assert!(manifest.contains("timeline:") && !manifest.contains("keys.notes"), "{manifest}");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let files: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    assert!(!files.iter().any(|f| f.contains("keys.notes")), "the file carries no value its owner derives: {files:?}");
     let other = Goofi::new();
     other.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
     other.call("session load", j!({ "path": path.to_string_lossy() }));
