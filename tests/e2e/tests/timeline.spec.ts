@@ -197,6 +197,28 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		expect((await trackNamed(page, 'track0')).notes[0]).toMatchObject({ at: 2, length: 1 });
+		// A drag with Shift held draws a box that picks every note it touches: they move as one,
+		// a field sets them all, and the ✕ takes them all out.
+		const ats = async (): Promise<number[]> => (await trackNamed(page, 'track0')).notes.map((n: any) => n.at);
+		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 2, length: 1, pitch: 60, velocity: 0.8 }, { at: 4, length: 1, pitch: 64, velocity: 0.8 }] });
+		await expect(note).toHaveCount(2);
+		await page.keyboard.down('Shift');
+		await page.mouse.move(ground.x + ground.width * 0.1, ground.y + 2);
+		await page.mouse.down();
+		await page.mouse.move(ground.x + ground.width * 0.8, ground.y + ground.height - 2, { steps: 6 });
+		await expect(panel.getByTestId('timeline-box')).toBeVisible();
+		await page.mouse.up();
+		await page.keyboard.up('Shift');
+		await expect(lane.locator('.note.picked')).toHaveCount(2);
+		await dragBy(page, note.nth(0), ground.width * 0.125, 0);
+		await expect.poll(ats).toEqual([3, 5]);
+		await keys.getByLabel('Velocity').fill('0.4');
+		await keys.getByLabel('Velocity').press('Enter');
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.4, 0.4]);
+		await keys.getByTestId('track-delete-picked').click();
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
+		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// A name typed over the track's is a rename: the track is the same one.
 		await keys.getByLabel('Track name').fill('lead');
 		await keys.getByLabel('Track name').press('Enter');

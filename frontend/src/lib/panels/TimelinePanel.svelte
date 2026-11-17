@@ -14,6 +14,7 @@
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { draggable, type DragSource, type Outcome } from '$lib/drag';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
@@ -215,9 +216,11 @@
 	});
 
 	// ---- the notes and the keyframes.
-	let picked = $state<{ track: string; index: number } | null>(null);
-	/** Pick a note or a keyframe, or nothing. The focus leaves first, so a field that shows the one
-	 * picked before commits to that one. */
+	let picked = $state<{ track: string; index: number }[]>([]);
+	/** The places in the track `id` of what is picked there. */
+	const pickedIn = (id: string): number[] => picked.filter((p) => p.track === id).map((p) => p.index);
+	/** Pick notes and keyframes, or none. The focus leaves first, so a field that shows what was
+	 * picked before commits to that. */
 	function pick(next: typeof picked): void {
 		(document.activeElement as HTMLElement | null)?.blur();
 		picked = next;
@@ -235,11 +238,11 @@
 	}
 	/** The note or keyframe a drag holds: the view does not follow the clock under it. */
 	let dragged = $state<{ track: string; index: number } | null>(null);
-	/** Change the picked note or keyframe, or with null remove it. */
+	/** Change every note or keyframe picked in a track, or with null remove them. */
 	function change(id: string, t: Track, to: Partial<Note & Key> | null): void {
-		const { index } = picked!;
-		if (!to) picked = null;
-		edit(id, put(t, held(t).flatMap((o, k) => (k !== index ? [o] : to ? [{ ...o, ...to }] : []))));
+		const indices = pickedIn(id);
+		if (!to) picked = picked.filter((p) => p.track !== id);
+		edit(id, put(t, held(t).flatMap((o, k) => (!indices.includes(k) ? [o] : to ? [{ ...o, ...to }] : []))));
 	}
 	/** The cell of a note lane under a pointer: where it begins, and the note of the scale it is on. */
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
@@ -256,53 +259,99 @@
 		const [f, v] = point(e, e.currentTarget as Element);
 		const [lo, hi] = t.range;
 		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: fixed(grid), velocity: 0.8 } : { at: fixed(Math.max(0, view[0] + f * width)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
-		if (t.kind === 'note') picked = { track: id, index: t.notes.length };
+		if (t.kind === 'note') picked = [{ track: id, index: t.notes.length }];
 		edit(id, put(t, [...held(t), born]));
 	}
-	/** A drag of one note or keyframe by as much as the pointer moves, a note onto the grid: each
-	 * move previews the lane as it stands with that one moved, and the release sends the last of
-	 * them as the edit. `stretch` drags a note's end and not the note. A press that does not move
-	 * picks a keyframe, and takes a note out. */
+	/** A drag of a note or a keyframe, and with it of everything picked, by as much as the pointer
+	 * moves, a note onto the grid: each move previews every lane it touches as it stands with those
+	 * moved, and the release sends the last of them as the edit. `stretch` drags one note's end and
+	 * not the note. A press that does not move picks a keyframe, and takes a note out. */
 	let drag: (() => void) | undefined;
 	function dragItem(e: PointerEvent, id: string, t: Track, index: number, stretch = false): void {
 		e.stopPropagation();
-		pick({ track: id, index });
+		if (stretch || !pickedIn(id).includes(index)) pick([{ track: id, index }]);
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [f0, v0] = point(e, ground);
-		const [lo, hi] = t.range;
-		const [o, per] = [held(t)[index], width];
-		const now = (): (Note | Key)[] => held(g.timeline[id]);
-		/** The lane as it stands, with the dragged one where `to` puts it. */
-		const moved = (to: Partial<Note & Key>): Record<string, unknown> => put(t, now().map((it, k) => (k === index ? { ...it, ...to } : it)));
-		let patch: Record<string, unknown> | null = null;
+		const rows = t.range[1] - t.range[0] + 1;
+		// Every track the drag moves something of, with what its lane held at the press and what
+		// of it moves. The lane is taken now: a preview puts a new one in the track's record.
+		const tracks = [...new Set(picked.map((p) => p.track))].map((track) => ({ track, was: g.timeline[track], all: held(g.timeline[track]), indices: pickedIn(track) }));
+		// Keyframes keep their order: the drag goes no further than the nearest one it leaves.
+		let [least, most] = [-Infinity, Infinity];
+		for (const { was, all, indices } of tracks) {
+			if (was.kind !== 'curve') continue;
+			for (const k of indices) {
+				const [before, after] = [all[k - 1], all[k + 1]];
+				least = Math.max(least, (before && !indices.includes(k - 1) ? before.at + 0.001 : 0) - all[k].at);
+				if (after && !indices.includes(k + 1)) most = Math.min(most, after.at - 0.001 - all[k].at);
+			}
+		}
+		/** Each lane as it stands, with what the drag holds moved `by` beats and `dv` of its lane across. */
+		const moved = (by: number, dv: number): [string, Record<string, unknown>][] =>
+			tracks.map(({ track, was, all, indices }) => [
+				track,
+				put(was, held(g.timeline[track]).map((it, k) => {
+					const o = all[k];
+					if (!indices.includes(k) || !o) return it;
+					if (was.kind === 'note') {
+						const n = o as Note;
+						return stretch ? { ...it, length: fixed(Math.max(grid, onGrid(n.at + n.length + by) - n.at)) } : { ...it, at: fixed(Math.max(0, onGrid(n.at + by))), pitch: snap(was, n.pitch + Math.round(dv * rows)) };
+					}
+					const [lo, hi] = was.range;
+					return { ...it, at: fixed(o.at + clamp(by, least, most)), value: fixed(clamp((o as Key).value + dv * (hi - lo), lo, hi)) };
+				}))
+			]);
+		let patches: [string, Record<string, unknown>][] | null = null;
 		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => {
-				if (!patch && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
+				if (!patches && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
 				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
-				const at = o.at + (f - f0) * per;
-				const by = (f - f0) * width;
-				// A note lands on its scale; a keyframe stays between its neighbours and inside the range.
-				patch = moved(
-					t.kind !== 'note'
-						? {}
-						: stretch
-							? { length: fixed(Math.max(grid, onGrid(o.at + (o as Note).length + by) - o.at)) }
-							: { at: fixed(Math.max(0, onGrid(o.at + by))), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
-				);
-				if (t.kind === 'curve') patch = moved({ at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp((o as Key).value + (v - v0) * (hi - lo), lo, hi)) });
-				g.previewTrack(id, patch);
+				patches = moved((f - f0) * width, v - v0);
+				for (const [track, patch] of patches) g.previewTrack(track, patch);
 			},
 			commit: () => {
 				dragged = null;
-				if (patch) edit(id, patch);
-				else if (t.kind === 'note' && !stretch) change(id, g.timeline[id] ?? t, null);
+				const all = patches;
+				if (all?.length === 1) edit(...all[0]);
+				else if (all) void history().transaction('Move notes and keyframes', async (step) => {
+					for (const [track, patch] of all) await g.op('timeline track edit', { track, ...patch }, step);
+				}).catch(fail('Edit track'));
+				else if (t.kind === 'note' && !stretch) {
+					picked = [{ track: id, index }];
+					change(id, g.timeline[id] ?? t, null);
+				}
 			},
-			// Put back, unless the dragged one left the lane under the drag.
+			// Put back, where the track is still there.
 			cancel: () => {
 				dragged = null;
-				if (patch && now()[index]) g.previewTrack(id, moved('pitch' in o ? { at: o.at, pitch: o.pitch } : { at: o.at, value: o.value }));
+				if (patches) for (const { track, was, all } of tracks) if (g.timeline[track]) g.previewTrack(track, put(was, all));
 			}
+		});
+	}
+	/** A drag with Shift held draws a box: every note and keyframe it touches is picked. */
+	let box = $state<{ left: number; top: number; width: number; height: number } | null>(null);
+	function boxPick(e: PointerEvent): void {
+		if (!e.shiftKey || !stack) return;
+		e.stopPropagation();
+		const home = stack;
+		const origin = home.getBoundingClientRect();
+		const drawn = (p: { clientX: number; clientY: number }): NonNullable<typeof box> => ({ left: Math.min(e.clientX, p.clientX), top: Math.min(e.clientY, p.clientY), width: Math.abs(p.clientX - e.clientX), height: Math.abs(p.clientY - e.clientY) });
+		let last = drawn(e);
+		drag = beginDrag(home, e.pointerId, {
+			move: (p) => {
+				last = drawn(p);
+				box = { ...last, left: last.left - origin.left, top: last.top - origin.top };
+			},
+			commit: () => {
+				box = null;
+				const touched = [...home.querySelectorAll<HTMLElement>('[data-item]')].filter((el) => {
+					const b = el.getBoundingClientRect();
+					return b.left < last.left + last.width && b.right > last.left && b.top < last.top + last.height && b.bottom > last.top;
+				});
+				pick(touched.map((el) => ({ track: el.closest<HTMLElement>('[data-track]')!.dataset.track!, index: Number(el.dataset.item) })));
+			},
+			cancel: () => (box = null)
 		});
 	}
 	// A drag ends with the panel, and with the note or keyframe it holds.
@@ -341,7 +390,8 @@
 	<div class="body">
 		<div class="range"><RangeBar {view} {total} {vertical} onChange={(next) => (view = next)} /></div>
 		<div class="scroll thin-scrollbar">
-			<div class="stack" bind:this={stack}>
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
 				<div class="row ruler" data-testid="timeline-ruler">
 					<span class="info"></span>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -351,7 +401,8 @@
 				</div>
 				{#each shown as id (id)}
 					{@const t = g.timeline[id]}
-					{@const mine = picked?.track === id ? held(t)[picked.index] : undefined}
+					{@const chosen = pickedIn(id)}
+					{@const mine = held(t)[chosen[0]]}
 					{@const [lo, hi] = t.range}
 					{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
 					{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
@@ -413,7 +464,7 @@
 								class="ground"
 								data-testid="track-lane"
 								onclick={(e) => addAt(e, id, t)}
-								onpointerdown={() => pick(null)}
+								onpointerdown={() => pick([])}
 								onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
 								onpointerleave={() => (over = null)}
 							>
@@ -431,7 +482,8 @@
 									{#each t.notes as n, i}
 										<div
 											class="note"
-											class:picked={mine === n}
+											class:picked={chosen.includes(i)}
+											data-item={i}
 											style:--a={share(along(n.at))}
 											style:--l={share((n.length) / width)}
 											style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
@@ -447,7 +499,7 @@
 										<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 									</svg>
 									{#each t.keys as k, i}
-										<span class="key" class:picked={mine === k} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
+										<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
 									{/each}
 								{/if}
 							</div>
@@ -459,6 +511,9 @@
 				{#if band && band[1] > view[0] && band[0] < view[1]}
 					{@const from = clamp(along(band[0]), 0, 1)}
 					<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
+				{/if}
+				{#if box}
+					<div class="box" data-testid="timeline-box" style:left={`${box.left}px`} style:top={`${box.top}px`} style:width={`${box.width}px`} style:height={`${box.height}px`}></div>
 				{/if}
 				{#if within(beat, view)}
 					<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
@@ -731,6 +786,13 @@
 		border-radius: 50%;
 		background: var(--accent-strong);
 		cursor: grab;
+	}
+	.box {
+		position: absolute;
+		z-index: 2;
+		border: 1px solid var(--accent);
+		background: var(--accent-fill);
+		pointer-events: none;
 	}
 	.picked {
 		outline: var(--focus-width) solid var(--focus-ink);

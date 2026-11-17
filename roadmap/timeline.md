@@ -28,7 +28,7 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
 - A curve track's variable is `vars.<track>.value`, because every variable is in a group.
   Whether a track's value takes the track's name alone.
-- The panel edits one note or keyframe at a time: no selection of several, no copy.
+- What a box picks is moved, set and taken out together; it is not copied, and no key deletes it.
 - The panel has no keyboard path to a note, a keyframe or a track's menu.
 - Under a finger a note is one row high: it takes no hit-size press, because the rows beside
   it are notes too.
