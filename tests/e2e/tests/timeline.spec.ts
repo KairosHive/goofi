@@ -256,6 +256,18 @@ test('a held finger opens a track\'s menu, and a double tap makes a note', async
 		await expect(page.locator('.context-menu .item', { hasText: 'Hide Other Tracks' })).toBeVisible();
 		await finger.up();
 		await page.keyboard.press('Escape');
+		// Two keyframes closer than a finger is wide: a tap on the first one's dot picks that one,
+		// not the one whose hit area reaches over it.
+		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'fade' });
+		const near = [2, 2.5].map((at) => ({ at, value: 0.5, curve: 'linear' }));
+		await rawCall(page, 'timeline track edit', { track: 'fade', attributes: { level: { name: 'level', range: [0, 1], keys: near } } });
+		const fade = page.getByTestId('track-fade');
+		const dots = fade.locator('.key');
+		const [a, b] = [(await dots.nth(0).boundingBox())!, (await dots.nth(1).boundingBox())!];
+		expect(b.x - a.x, 'the dots are closer than half a hit area').toBeLessThan(22);
+		await page.touchscreen.tap(a.x + a.width / 2, a.y + a.height / 2);
+		await expect(fade.getByLabel('Value')).toBeVisible();
+		expect(await dots.nth(0).getAttribute('class'), 'the dot under the finger is the one picked').toContain('picked');
 		await expectIntact(page, 'the timeline panel on a phone');
 	} finally {
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });

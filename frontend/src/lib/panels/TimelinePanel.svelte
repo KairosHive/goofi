@@ -279,8 +279,8 @@
 											<span
 												class="key"
 												class:picked={mine === k}
-												style:left={`${(100 * k.at) / units(t)}%`}
-												style:top={`${(100 * (lane.range[1] - k.value)) / (lane.range[1] - lane.range[0] || 1)}%`}
+												style:--x={`${(100 * k.at) / units(t)}%`}
+												style:--y={`${(100 * (lane.range[1] - k.value)) / (lane.range[1] - lane.range[0] || 1)}%`}
 												onpointerdown={(e) => dragItem(e, id, t, aid, i)}
 											></span>
 										{/each}
@@ -355,13 +355,10 @@
 	}
 	/* A row's side: the name on a line of its own, the range and the ✕ under it. */
 	.side {
-		--number-width: calc(var(--space-8) * 1.75);
+		--number-width: max(calc(var(--space-8) * 1.75), var(--hit));
 	}
 	.side :global(.name) {
 		flex: 1 1 100%;
-	}
-	header {
-		flex-wrap: nowrap;
 	}
 	header :global(.name) {
 		flex: 0 1 calc(var(--side) - var(--space-4));
@@ -430,11 +427,13 @@
 		stroke: var(--accent);
 		stroke-width: 1.5;
 	}
+	/* Placed by its centre with no transform: a transform would keep its hit area above the other dots. */
 	.key {
 		position: absolute;
+		left: calc(var(--x) - var(--space-5) / 2);
+		top: calc(var(--y) - var(--space-5) / 2);
 		width: var(--space-5);
 		height: var(--space-5);
-		translate: -50% -50%;
 		border-radius: 50%;
 		background: var(--accent-strong);
 		cursor: grab;
