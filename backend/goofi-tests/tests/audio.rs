@@ -545,30 +545,36 @@ fn a_patch_sounds_under_the_external_clock() {
         }
     }
     // Step: a note track of the timeline is a port too. A node that joins takes the note the
-    // position is in, a pause releases it, a resume strikes it again, and a note taken off the
-    // track ends.
+    // position is in; a pause releases it and a resume strikes it again; of two notes of one pitch
+    // that overlap, the end of the first leaves the second sounding; a removed track ends its notes.
     g.call("timeline track add", j!({ "kind": "note", "name": "keys" }));
-    let notes = j!([{ "at": 0.0, "length": 1e6, "pitch": 69, "velocity": 100.0 / 127.0 }]);
-    g.call("timeline track edit", j!({ "track": "keys", "notes": notes }));
+    let note = |at: f64, length: f64, pitch: u8| j!({ "at": at, "length": length, "pitch": pitch, "velocity": 100.0 / 127.0 });
+    g.call("timeline track edit", j!({ "track": "keys", "notes": [note(0.0, 1000.0, 69), note(500.0, 1e6, 69), note(550.0, 150.0, 60), note(1400.0, 1e6, 72)] }));
+    g.call("clock set", j!({ "playing": true, "time": 10.0 }));
     assert_eq!(refreshed(&g, &mut ev, midi, "midi", "port").last().map(String::as_str), Some("timeline: keys"), "a note track is listed as a port");
     g.set_param(midi, "midi", "port", "timeline: keys");
     let pitch = g.probe(midi, "pitch");
-    // A note takes the next voice in turn, so the voice that sounds is any of the three.
-    let voice = |g: &Goofi, on: bool| {
-        g.until(if on { "the track's A4 to take a voice" } else { "the voice to release" }, |g| {
+    // The pitches of the voices that sound, in volts per octave, lowest first.
+    let sounds_at = |g: &Goofi, what: &str, want: &[f32]| {
+        g.until(what, |g| {
             let (x, channels) = drive(g, TENTH);
-            let played = pitch.latest().is_some_and(|d| (f32s(&d)[0] - 0.75).abs() < 1e-3);
-            (channels == 3 && if on { peak(&x[x.len() - 3..]) > 0.99 && played } else { peak(&x[x.len() - 3..]) == 0.0 }).then_some(())
+            let d = pitch.latest().filter(|d| channels == 3 && shape(d)[0] == 3)?;
+            let mut heard: Vec<f32> = (0..3).filter(|c| x[x.len() - 3 + c] > 0.99).map(|c| f32s(&d)[c * shape(&d)[1]]).collect();
+            heard.sort_by(f32::total_cmp);
+            (heard.len() == want.len() && heard.iter().zip(want).all(|(h, w)| (h - w).abs() < 1e-3) && (!want.is_empty() || peak(&x[x.len() - 3..]) == 0.0)).then_some(())
         })
     };
-    voice(&g, true);
+    sounds_at(&g, "the track's A4 to take a voice", &[0.75]);
     g.call("clock set", j!({ "playing": false }));
-    voice(&g, false);
+    sounds_at(&g, "a pause to release the voice", &[]);
     g.call("clock set", j!({ "playing": true }));
-    voice(&g, true);
-    g.call("timeline track edit", j!({ "track": "keys", "notes": [] }));
-    voice(&g, false);
+    sounds_at(&g, "a resume to strike A4 again", &[0.75]);
+    g.call("clock set", j!({ "time": 600.0 }));
+    sounds_at(&g, "C4 beside the two A4s that overlap", &[0.0, 0.75]);
+    g.call("clock set", j!({ "time": 1500.0 }));
+    sounds_at(&g, "the second A4 to sound on past the end of the first, beside C5", &[0.75, 1.0]);
     g.call("timeline track remove", j!({ "track": "keys" }));
+    sounds_at(&g, "a removed track to end its notes", &[]);
     g.call("node remove", j!({ "node": hex(voices) }));
     g.call("node remove", j!({ "node": hex(midi) }));
 

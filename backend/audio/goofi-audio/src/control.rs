@@ -128,9 +128,7 @@ impl TrackPorts {
         let port = ports.1.entry(port.to_string()).or_default();
         port.held.retain(|held| held.note != pitch);
         port.held.extend(note.on.then_some(note));
-        for ring in port.rings.iter().filter_map(std::sync::Weak::upgrade) {
-            let _ = ring.lock().push(note);
-        }
+        port.rings.retain(|ring| ring.upgrade().map(|ring| ring.lock().push(note)).is_some());
     }
 }
 
@@ -307,9 +305,14 @@ impl AudioHalf {
             let wanted = text(consts, midi_in::P::PORT);
             if io.port.as_deref() != Some(wanted.as_str()) {
                 io.midi = None;
-                // The node's ring leaves the track it was on, and joins the one it names now.
                 let (ring, mut tracks) = (Arc::downgrade(&producer), self.audio.tracks.0.lock());
-                tracks.1.values_mut().for_each(|port| port.rings.retain(|r| r.strong_count() > 0 && !r.ptr_eq(&ring)));
+                // The track the node leaves ends the notes that sound there.
+                for port in tracks.1.values_mut().filter(|port| port.rings.iter().any(|r| r.ptr_eq(&ring))) {
+                    port.rings.retain(|r| !r.ptr_eq(&ring));
+                    for note in &port.held {
+                        let _ = producer.lock().push(Note { on: false, ..*note });
+                    }
+                }
                 let error = if wanted == NO_PORT {
                     None
                 } else if let Some(track) = wanted.strip_prefix(TRACK) {
@@ -320,6 +323,7 @@ impl AudioHalf {
                     port.rings.push(ring);
                     None
                 } else {
+                    drop(tracks);
                     match open_port(&wanted, producer) {
                         Ok(connection) => {
                             io.midi = Some(goofi_supervisor::scope::leased(

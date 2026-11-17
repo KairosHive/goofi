@@ -573,7 +573,8 @@ pub struct Machines {
 
 impl Machines {
     pub fn is_empty(&self) -> bool {
-        self.config.is_empty() && self.timed.0.is_empty()
+        // A note of a track that went still sounds: its end is owed.
+        self.config.is_empty() && self.timed.0.is_empty() && self.sounding.is_empty()
     }
 
     /// The notes that start and end since the last ask, each by its track, its pitch and its
@@ -581,7 +582,9 @@ impl Machines {
     /// while the clock plays, and with nothing while it is paused.
     pub fn strike(&mut self, playing: bool) -> Vec<(String, u8, f64)> {
         let held = if playing { self.timeline.held(self.last) } else { Vec::new() };
-        let ends = self.sounding.iter().filter(|s| !held.contains(s)).map(|s| (s.0.clone(), s.2, 0.0));
+        // A note that sounds on at the pitch of one that ends keeps the pitch: no end is sent.
+        let kept = |s: &(String, usize, u8, f64)| held.iter().any(|h| (&h.0, h.2) == (&s.0, s.2) && self.sounding.contains(h));
+        let ends = self.sounding.iter().filter(|s| !held.contains(s) && !kept(s)).map(|s| (s.0.clone(), s.2, 0.0));
         let out = ends.chain(held.iter().filter(|h| !self.sounding.contains(h)).map(|h| (h.0.clone(), h.2, h.3))).collect();
         self.sounding = held;
         out

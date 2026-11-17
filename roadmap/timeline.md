@@ -45,6 +45,12 @@ In this order, each a tested commit:
 - A note reaches `MidiIn` at the block after the machines' thread wakes for it, as a device's
   note does. Whether the thread sends a note ahead, stamped with the instant it falls on, so
   the node lands it in the block that holds that instant.
+- Two notes of one pitch that abut end and start in one block, so a `MidiIn` of one voice
+  keeps its gate up and plays them as one note.
+- A note is known by its place in the track, so a note taken out before one that sounds
+  strikes the sounding one again.
+- A note ring that is full drops the note, an end included. Not examined: whether the audio
+  thread can stop draining a node's ring while the node is in the plan.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
