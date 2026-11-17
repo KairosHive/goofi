@@ -55,6 +55,7 @@ mod scan;
 mod wav;
 pub mod vst3;
 
+pub use control::TrackPorts;
 use control::{AudioHalf, AudioShared};
 use goofi_runtime::{Desired, Handle, Plane, Shared};
 use nodes::{audio_in, audio_out, Class};
@@ -502,6 +503,7 @@ impl AudioEngine {
                 anchor: anchor.clone(),
                 swaps: Mutex::new(HashMap::new()),
                 savers: Mutex::new(HashMap::new()),
+                tracks: Default::default(),
             }),
             classes,
             vst3: None,
@@ -537,6 +539,11 @@ impl AudioEngine {
     /// The window thread every plugin from here on is made on — before anything scans.
     pub fn set_ui(&mut self, ui: Option<goofi_window::Ui>) {
         self.ui = ui;
+    }
+
+    /// The timeline's note tracks as MIDI ports, for the thread that plays them.
+    pub fn track_ports(&self) -> TrackPorts {
+        self.audio.tracks.clone()
     }
 
     /// The external clock: render whole blocks until `frames` are ready, and hand them over

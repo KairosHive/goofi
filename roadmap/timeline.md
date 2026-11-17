@@ -2,23 +2,12 @@
 
 A timeline panel: tracks of notes and of keyframed curves, stacked on one time axis, each track
 a group of variables the patch reads. Shipped: the clock it plays on (the position of
-`goofi_supervisor::timing::Time`, the `clock` group, `clock set`) and the tracks themselves
-(`goofi_graph::timeline`, the `timeline` ops, a track's group, written by the machines' thread).
+`goofi_supervisor::timing::Time`, the `clock` group, `clock set`), the tracks themselves
+(`goofi_graph::timeline`, the `timeline` ops, a track's group, written by the machines' thread)
+and a note track as a port of the audio `MidiIn` node (`goofi_audio::TrackPorts`).
 This file holds the decisions for what remains and the order of the work.
 
 ## Decisions
-
-### Notes as events
-
-- A note track is a port of the audio `MidiIn` node, listed with the host's ports.
-- The timeline sends each note ahead of its time, stamped with the run-time instant it falls
-  on. The node lands it in the block that holds that instant, so the error is one block.
-  A device's note lands at the next block, as today.
-- The notes ride a transport queue per listening node: bounded, oldest dropped, never blocking
-  the sender. AGENTS.md says that only the recorder reads a queue; that line changes in the
-  same commit.
-- A pause, a jump and a restart release every held note.
-- Nothing more of `roadmap/triggers.md` is built here.
 
 ### Panel
 
@@ -37,10 +26,9 @@ This file holds the decisions for what remains and the order of the work.
 
 In this order, each a tested commit:
 
-1. Note tracks as events: the queue, the `MidiIn` port. (`vars.<track>.notes` shipped.)
-2. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
+1. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
    the clock controls.
-3. The words: the architecture lines of AGENTS.md (queues, the timeline), a README section,
+2. The words: the architecture lines of AGENTS.md (the timeline, its ports), a README section,
    the orientation.
 
 ## Open
@@ -54,8 +42,12 @@ In this order, each a tested commit:
   to compile some thousands of them. Whether a lane gets a ceiling or a flat table.
 - A control panel that draws a playhead's or a track's group is not re-aimed when the owner is
   renamed.
+- A note reaches `MidiIn` at the block after the machines' thread wakes for it, as a device's
+  note does. Whether the thread sends a note ahead, stamped with the instant it falls on, so
+  the node lands it in the block that holds that instant.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
-- How `MidiIn`'s `port` param holds a track: by id, so a rename of the track needs no rewrite.
+- `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
+  track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
 - The `Clock` node keeps a tempo of its own. Whether it reads `clock.bpm` instead.
 - The expression editor still starts a completion behind a dismissed window, and Tab takes it.

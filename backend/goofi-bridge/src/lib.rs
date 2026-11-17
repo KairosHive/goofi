@@ -232,7 +232,7 @@ impl AppState {
         let graph = Arc::new(Mutex::new(graph_val));
         record::attach(&recorder, &graph);
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
-        let (machines, machines_rx) = machines::Driver::new(&hub, graph.lock().instance());
+        let (machines, machines_rx) = machines::Driver::new(&hub, &mut graph.lock());
         graph.lock().variable_store().lock().set_watch(machines.watch());
         let reducers = reducer::SlotReducers::new(hub.clone(), graph.clone(), follow_tx);
         let state = AppState {

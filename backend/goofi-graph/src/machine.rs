@@ -567,11 +567,24 @@ pub struct Machines {
     /// The tracks and the tempo as last configured, and the timeline built from them.
     timed: (IndexMap<String, Track>, f64),
     timeline: Timeline,
+    /// The notes a port was last told sound: what [`Self::strike`] levels with the tracks.
+    sounding: Vec<(String, usize, u8, f64)>,
 }
 
 impl Machines {
     pub fn is_empty(&self) -> bool {
         self.config.is_empty() && self.timed.0.is_empty()
+    }
+
+    /// The notes that start and end since the last ask, each by its track, its pitch and its
+    /// velocity, 0 for an end: what sounds is level with what the tracks hold at the last advance
+    /// while the clock plays, and with nothing while it is paused.
+    pub fn strike(&mut self, playing: bool) -> Vec<(String, u8, f64)> {
+        let held = if playing { self.timeline.held(self.last) } else { Vec::new() };
+        let ends = self.sounding.iter().filter(|s| !held.contains(s)).map(|s| (s.0.clone(), s.2, 0.0));
+        let out = ends.chain(held.iter().filter(|h| !self.sounding.contains(h)).map(|h| (h.0.clone(), h.2, h.3))).collect();
+        self.sounding = held;
+        out
     }
 
     /// Whether the position `now` is before the last advance: that is owed a pass too.

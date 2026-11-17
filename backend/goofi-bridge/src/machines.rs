@@ -14,7 +14,7 @@ use goofi_core::indexmap::IndexMap;
 use goofi_core::{Data, Param};
 use goofi_graph::expr_rewrite::{self, Target};
 use goofi_graph::machine::{Machine, Machines};
-use goofi_graph::timeline::Track;
+use goofi_graph::timeline::{Lanes, Track};
 use goofi_graph::Graph;
 use goofi_node::{ExprEvaluator, Local};
 use goofi_transport::{machines_door, output_service, service_base, Door, Hub, Payload, Subscriber, MACHINES_FRAME_ID, MACHINES_INBOX_ID};
@@ -45,17 +45,21 @@ pub enum Msg {
 pub struct Driver {
     tx: Sender<Msg>,
     door: Arc<Door>,
+    /// The note tracks as the audio engine's MIDI ports; on a demo, which has none, nobody's.
+    ports: goofi_audio::TrackPorts,
 }
 
 impl Driver {
-    pub fn new(hub: &Hub, instance: &str) -> (Driver, Receiver<Msg>) {
+    pub fn new(hub: &Hub, g: &mut Graph) -> (Driver, Receiver<Msg>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Driver { tx, door: hub.door(&machines_door(instance)) }, rx)
+        let ports = crate::try_audio_engine(g).map(|audio| audio.track_ports()).unwrap_or_default();
+        (Driver { tx, door: hub.door(&machines_door(g.instance())), ports }, rx)
     }
 
     /// Hand the thread the settled model: the machines, with every node read resolved against
-    /// the graph, and the tracks with the clock's tempo.
+    /// the graph, and the tracks with the clock's tempo. The note tracks are the ports there are.
     pub fn configure(&self, g: &Graph) {
+        self.ports.list(g.timeline().values().filter(|t| matches!(t.lanes, Lanes::Note { .. })).map(|t| t.name.clone()).collect());
         let bpm = g.variables().get("clock.bpm").map_or(120.0, goofi_core::control::number_of);
         self.send(Msg::Configure(g.machines().clone(), (g.timeline().clone(), bpm), g.evaluator(), node_reads(g)));
     }
@@ -204,6 +208,9 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
                     store.drive(&name, value);
                 }
             }
+            for (port, pitch, velocity) in machines.strike(time.playing()) {
+                state.machines.ports.strike(&port, pitch, velocity);
+            }
             for why in machines.take_errors() {
                 if logged.insert(why.clone()) {
                     goofi_supervisor::log::record(goofi_supervisor::log::Source::component("machines"), goofi_supervisor::log::Level::Error, None, why);
@@ -224,7 +231,8 @@ fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, h
         Msg::Fire { at, machine, playhead, transition } => machines.fire(at, &machine, &playhead, &transition),
         Msg::Jump { at, machine, playhead, state } => machines.jump(at, &machine, &playhead, &state),
         Msg::Reset { at, machine } => machines.reset(at, machine.as_deref()),
-        Msg::Changed(name) => return machines.keys().contains(&name),
+        // A pause and a resume are a pass too: the notes that sound stop, and start again.
+        Msg::Changed(name) => return name == "clock.playing" || machines.keys().contains(&name),
         Msg::Jumped => machines.restart(),
     }
     true

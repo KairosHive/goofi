@@ -93,6 +93,45 @@ pub struct AudioShared {
     /// A plugin's state, readable OFF the runtime lock — VST3 lets a host read it beside
     /// `process` — so a save never holds the callback's lock for the plugin's serialization.
     pub savers: Mutex<HashMap<goofi_node::Uid, Saver>>,
+    pub tracks: TrackPorts,
+}
+
+/// The timeline's note tracks as the MIDI ports a `MidiIn` may pick: the names there are, and
+/// each port by its name.
+#[derive(Clone, Default)]
+pub struct TrackPorts(Arc<Mutex<Listed>>);
+
+type Listed = (Vec<String>, HashMap<String, TrackPort>);
+
+/// A track's port: the note rings of the nodes on it, each held as long as its node holds it, and
+/// the notes that sound, which a node that joins takes as struck.
+#[derive(Default)]
+struct TrackPort {
+    rings: Vec<std::sync::Weak<Mutex<rtrb::Producer<Note>>>>,
+    held: Vec<Note>,
+}
+
+/// What a track's port is listed as, before the track's name.
+const TRACK: &str = "timeline: ";
+
+impl TrackPorts {
+    /// The ports there are: one per note track, by the track's name.
+    pub fn list(&self, names: Vec<String>) {
+        self.0.lock().0 = names;
+    }
+
+    /// One note into every node on `port`, as a device's callback hands one over: it lands at the
+    /// start of the next block. A velocity of 0 is the note's end.
+    pub fn strike(&self, port: &str, pitch: u8, velocity: f64) {
+        let note = Note { on: velocity > 0.0, note: pitch, velocity: (velocity * 127.0).round() as u8, pedal: false, wheel: None };
+        let mut ports = self.0.lock();
+        let port = ports.1.entry(port.to_string()).or_default();
+        port.held.retain(|held| held.note != pitch);
+        port.held.extend(note.on.then_some(note));
+        for ring in port.rings.iter().filter_map(std::sync::Weak::upgrade) {
+            let _ = ring.lock().push(note);
+        }
+    }
 }
 
 /// What answers a plugin node's opaque state from any thread.
@@ -221,6 +260,7 @@ impl AudioHalf {
                 if let Ok(input) = midir::MidiInput::new("goofi") {
                     names.extend(input.ports().iter().filter_map(|p| input.port_name(p).ok()));
                 }
+                names.extend(self.audio.tracks.0.lock().0.iter().map(|track| format!("{TRACK}{track}")));
                 Some(names)
             }
             _ => None,
@@ -267,7 +307,17 @@ impl AudioHalf {
             let wanted = text(consts, midi_in::P::PORT);
             if io.port.as_deref() != Some(wanted.as_str()) {
                 io.midi = None;
+                // The node's ring leaves the track it was on, and joins the one it names now.
+                let (ring, mut tracks) = (Arc::downgrade(&producer), self.audio.tracks.0.lock());
+                tracks.1.values_mut().for_each(|port| port.rings.retain(|r| r.strong_count() > 0 && !r.ptr_eq(&ring)));
                 let error = if wanted == NO_PORT {
+                    None
+                } else if let Some(track) = wanted.strip_prefix(TRACK) {
+                    let port = tracks.1.entry(track.to_string()).or_default();
+                    for note in &port.held {
+                        let _ = producer.lock().push(*note);
+                    }
+                    port.rings.push(ring);
                     None
                 } else {
                     match open_port(&wanted, producer) {

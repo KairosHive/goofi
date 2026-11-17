@@ -544,6 +544,31 @@ fn a_patch_sounds_under_the_external_clock() {
             });
         }
     }
+    // Step: a note track of the timeline is a port too. A node that joins takes the note the
+    // position is in, a pause releases it, a resume strikes it again, and a note taken off the
+    // track ends.
+    g.call("timeline track add", j!({ "kind": "note", "name": "keys" }));
+    let notes = j!([{ "at": 0.0, "length": 1e6, "pitch": 69, "velocity": 100.0 / 127.0 }]);
+    g.call("timeline track edit", j!({ "track": "keys", "notes": notes }));
+    assert_eq!(refreshed(&g, &mut ev, midi, "midi", "port").last().map(String::as_str), Some("timeline: keys"), "a note track is listed as a port");
+    g.set_param(midi, "midi", "port", "timeline: keys");
+    let pitch = g.probe(midi, "pitch");
+    // A note takes the next voice in turn, so the voice that sounds is any of the three.
+    let voice = |g: &Goofi, on: bool| {
+        g.until(if on { "the track's A4 to take a voice" } else { "the voice to release" }, |g| {
+            let (x, channels) = drive(g, TENTH);
+            let played = pitch.latest().is_some_and(|d| (f32s(&d)[0] - 0.75).abs() < 1e-3);
+            (channels == 3 && if on { peak(&x[x.len() - 3..]) > 0.99 && played } else { peak(&x[x.len() - 3..]) == 0.0 }).then_some(())
+        })
+    };
+    voice(&g, true);
+    g.call("clock set", j!({ "playing": false }));
+    voice(&g, false);
+    g.call("clock set", j!({ "playing": true }));
+    voice(&g, true);
+    g.call("timeline track edit", j!({ "track": "keys", "notes": [] }));
+    voice(&g, false);
+    g.call("timeline track remove", j!({ "track": "keys" }));
     g.call("node remove", j!({ "node": hex(voices) }));
     g.call("node remove", j!({ "node": hex(midi) }));
 

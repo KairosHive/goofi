@@ -108,6 +108,7 @@ impl Track {
 #[derive(Default)]
 pub(crate) struct Timeline {
     curves: Vec<(String, Data)>,
+    /// Per note track, by its name.
     notes: Vec<(String, Vec<[f64; 4]>)>,
 }
 
@@ -120,7 +121,7 @@ impl Timeline {
             match &track.lanes {
                 Lanes::Note { notes } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();
-                    out.notes.push((format!("{}.{}", track.name, NOTES.0), notes));
+                    out.notes.push((track.name.clone(), notes));
                 }
                 Lanes::Curve { attributes } => {
                     for lane in attributes.values() {
@@ -142,9 +143,19 @@ impl Timeline {
             for [_, _, pitch, velocity] in notes.iter().filter(|n| (n[0]..n[1]).contains(&now)) {
                 velocities[*pitch as usize] = *velocity;
             }
-            (name.clone(), Data::numbers(velocities))
+            (format!("{name}.{}", NOTES.0), Data::numbers(velocities))
         });
         self.curves.iter().cloned().chain(held).collect()
+    }
+
+    /// The notes the position `now` is in: each by its track, its place in the track, its pitch
+    /// and its velocity.
+    pub(crate) fn held(&self, now: f64) -> Vec<(String, usize, u8, f64)> {
+        let held = |(track, notes): &(String, Vec<[f64; 4]>)| {
+            let inside = notes.iter().enumerate().filter(|(_, n)| (n[0]..n[1]).contains(&now));
+            inside.map(|(i, n)| (track.clone(), i, n[2] as u8, n[3])).collect::<Vec<_>>()
+        };
+        self.notes.iter().flat_map(held).collect()
     }
 
     /// The next position past `now` at which a note starts or ends.
