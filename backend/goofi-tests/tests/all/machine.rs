@@ -221,13 +221,14 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(g.stays(|g| g.call("session status", j!({}))["dirty"] == false), "a fire changes nothing in the patch");
 
     // An eased transition is sampled: monotonic, ending at the target, `progress` rising to 1.
-    // The curve is the attribute's: a preset, or a bezier whose handles keep x in 0..1.
+    // The curve is the attribute's: a preset, or anchor points whose handles stay in their segments.
     let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "wavy" }));
-    assert!(why.contains("bezier") && why.contains("smooth"), "{why}");
-    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": { "bezier": [1.5, 0.0, 0.5, 1.0] } }));
-    assert!(why.contains("0..1"), "{why}");
-    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "smooth" }));
-    assert_eq!(named(&g)["seq"]["attributes"]["gain"]["curve"], j!("smooth"));
+    assert!(why.contains("custom") && why.contains("in_out"), "{why}");
+    let folded = j!({ "custom": [[0.0, 0.0, 0.0, 0.0, 1.5, 0.0], [1.0, 1.0, -0.5, 0.0, 0.0, 0.0]] });
+    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": folded }));
+    assert!(why.contains("inside its segment"), "{why}");
+    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "in_out" }));
+    assert_eq!(named(&g)["seq"]["attributes"]["gain"]["curve"], j!("in_out"));
     // Seen in flight on a move long enough that no reader's pace can miss it, and never waited
     // out: a flight a test must catch inside its own length is a race with the scheduler.
     let t2 = write("machine transition add", j!({ "machine": "seq", "from": "B", "to": "C", "duration": 30.0 }))["id"].clone();
@@ -618,11 +619,11 @@ fn the_stepper_settles_every_instant_it_is_owed_however_it_is_advanced() {
     let progress = written(mid, "p.progress");
     assert!((value_at(&ev, progress, 1.75 * period) - 0.75).abs() < 1e-9);
     assert_eq!(d[2].iter().filter(|(n, _)| n == "p.gain").count(), 1);
-    // An attribute's own curve shapes its functional: a bezier easing out lies above the diagonal,
+    // An attribute's own curve shapes its functional: a custom one easing out lies above the diagonal,
     // and the Python the reader runs answers what the Rust blend answers.
-    let bezier = goofi_core::ease::Curve::Bezier([0.1, 0.9, 0.3, 1.0]);
+    let bezier = goofi_core::ease::Curve::Custom(vec![[0.0, 0.0, 0.0, 0.0, 0.1, 0.9], [1.0, 1.0, -0.7, 0.0, 0.0, 0.0]]);
     let mut eased = model.clone();
-    eased["pp"].attributes["gain"].curve = bezier;
+    eased["pp"].attributes["gain"].curve = bezier.clone();
     let mut m = Machines::default();
     m.configure(eased, Default::default(), Some(ev.clone()));
     m.advance(0.0, &none);

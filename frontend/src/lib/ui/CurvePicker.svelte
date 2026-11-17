@@ -6,7 +6,7 @@
 	import type { Curve } from '$lib/api/generated';
 	import Popover from './Popover.svelte';
 	import CurvePanel from './CurvePanel.svelte';
-	import { curveName, curvePath } from './curve';
+	import { SHORT, curveName, curvePath } from './curve';
 	import { claimFieldControlId } from './field';
 
 	let {
@@ -37,7 +37,7 @@
 		<svg class="ui-curve-glyph" viewBox={`-1 -1 ${W + 2} ${H + 2}`} aria-hidden="true">
 			<path d={curvePath(value, W, H, 24)} vector-effect="non-scaling-stroke" />
 		</svg>
-		<span class="ui-curve-name">{curveName(value)}</span>
+		<span class="ui-curve-name">{SHORT[curveName(value)]}</span>
 	</button>
 </div>
 

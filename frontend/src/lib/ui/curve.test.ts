@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { curveAt, curvePath, handlesOf, PRESETS } from './curve';
+import { curveAt, curvePath, fitted, pointsOf, PRESETS, type Point } from './curve';
 
 describe('curveAt', () => {
 	it('runs every preset from 0 to 1 and never backwards', () => {
@@ -14,27 +14,35 @@ describe('curveAt', () => {
 			}
 		}
 	});
-	it('solves a bezier for its x, and a symmetric one crosses the middle', () => {
-		const ease = { bezier: [0.42, 0, 0.58, 1] as [number, number, number, number] };
-		expect(curveAt(ease, 0)).toBe(0);
-		expect(curveAt(ease, 1)).toBe(1);
+	it('travels a custom curve segment by segment, through every anchor point', () => {
+		const ease = { custom: pointsOf('in_out') };
+		expect(curveAt(ease, 0)).toBeCloseTo(0, 6);
+		expect(curveAt(ease, 1)).toBeCloseTo(1, 6);
 		expect(curveAt(ease, 0.5)).toBeCloseTo(0.5, 6);
 		expect(curveAt(ease, 0.25)).toBeLessThan(0.25);
-		expect(curveAt({ bezier: [0.1, 0.9, 0.3, 1] }, 0.25)).toBeGreaterThan(0.25);
+		// Three points: the curve is at the middle one where that one stands.
+		const bent: Point[] = [[0, 0, 0, 0, 0.1, 0], [0.5, 0.8, -0.1, 0, 0.1, 0], [1, 1, -0.1, 0, 0, 0]];
+		expect(curveAt({ custom: bent }, 0.5)).toBeCloseTo(0.8, 6);
+		expect(curveAt({ custom: bent }, 0.25)).toBeGreaterThan(0.25);
 	});
-	it('seeds a custom curve with the shape of the preset it leaves', () => {
+	it('seeds an edited curve with the shape of the preset it leaves', () => {
 		// A step has no bezier: its seed is the steepest corner, checked at its ends alone.
 		for (const p of PRESETS) {
-			const h = handlesOf(p);
+			const custom = pointsOf(p);
 			for (let i = 0; i <= 10; i++) {
 				const x = i / 10;
 				if (p === 'step' && i % 10 !== 0) continue;
-				expect(Math.abs(curveAt({ bezier: h }, x) - curveAt(p, x))).toBeLessThan(0.1);
+				expect(Math.abs(curveAt({ custom }, x) - curveAt(p, x))).toBeLessThan(0.1);
 			}
 		}
 	});
+	it('keeps a handle inside the segment it shapes', () => {
+		const loose: Point[] = [[0, 0, -1, 1, 0.9, 0], [0.5, 0.5, -0.9, 0, 0.9, 0], [1, 1, -0.9, 0, 1, 1]];
+		expect(fitted(loose)).toEqual([[0, 0, 0, 0, 0.5, 0], [0.5, 0.5, -0.5, 0, 0.5, 0], [1, 1, -0.5, 0, 0, 0]]);
+	});
 	it('draws a path that starts at the bottom left and ends at the top right', () => {
-		expect(curvePath('linear', 10, 10, 2)).toBe('M0.00 10.00 L5.00 5.00 L10.00 0.00');
+		expect(curvePath('linear', 10, 10, 2)).toBe('M0 10 L5 5 L10 0');
 		expect(curvePath('step', 10, 10)).toBe('M0 10 L10 10 L10 0');
+		expect(curvePath({ custom: pointsOf('in') }, 10, 10)).toBe('M0 10 C4.2 10 10 0 10 0');
 	});
 });

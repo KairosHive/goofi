@@ -216,7 +216,7 @@ as well as a hand-built one.
 A patch can carry state machines beside its graph: boxes on a second canvas, transitions between
 them, and playheads that step through them and set the patch's variables as they go. A state's
 value may play an ADSR envelope on a playhead's arrival, and over a transition's duration each
-attribute eases by a curve of its own — a preset, or a bezier drawn in a curve editor. A state
+attribute eases by a curve of its own — a preset, or a curve of anchor points drawn in a curve editor. A state
 decides which transition out to take every interval, in turn, by a weighted draw or by an
 expression; a transition's own `condition` takes it the instant the condition turns true. Both are
 the Python a param's expression is, over `vars.*`, `nd()`, `t` and the same functions, plus `me`,

@@ -284,17 +284,22 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		const kind = popover.getByTestId('attribute-gain');
 		await expect(kind).toHaveAttribute('data-face', 'number');
 		await expect(kind.locator('[aria-label="integer"]')).toHaveCount(1);
-		// The curve is the attribute's: a preset picked from the strip, or a custom bezier whose
-		// handles are typed, seeded from the shape of the preset it leaves.
+		// The curve is the attribute's: a preset picked from the strip, or a curve of its own points.
+		// A press on the square adds a point to the preset's shape, and the ✕ takes it out again.
 		await press(popover.getByTestId('attribute-curve').locator('button'));
-		await press(page.getByTestId('curve-preset').getByText('smooth'));
-		await expect.poll(async () => (await machineState()).attributes.gain.curve).toBe('smooth');
-		await press(page.getByTestId('curve-preset').getByText('custom'));
-		await expect.poll(async () => (await machineState()).attributes.gain.curve).toEqual({ bezier: [0.33, 0, 0.67, 1] });
-		const x1 = page.getByTestId('curve-x1');
-		await x1.fill('0.5');
-		await x1.press('Enter');
-		await expect.poll(async () => (await machineState()).attributes.gain.curve.bezier[0]).toBeCloseTo(0.5);
+		const curveOf = async (): Promise<any> => (await machineState()).attributes.gain.curve;
+		await press(page.getByTestId('curve-preset').getByText('eio'));
+		await expect.poll(curveOf).toBe('in_out');
+		const square = page.getByTestId('curve-square');
+		const squared = (await square.boundingBox())!;
+		const spot = { x: squared.width * 0.5, y: squared.height * 0.2 };
+		await (hasTouch ? square.tap({ position: spot }) : square.click({ position: spot }));
+		await expect.poll(async () => (await curveOf()).custom?.length).toBe(3);
+		const added = (await curveOf()).custom[1];
+		expect([added[0], added[1]].map((v: number) => Number(v.toFixed(1)))).toEqual([0.5, 0.8]);
+		await expect(page.getByTestId('curve-point')).toHaveCount(3);
+		await press(page.getByTestId('curve-remove'));
+		await expect.poll(async () => (await curveOf()).custom.length).toBe(2);
 		await page.keyboard.press('Escape');
 		await expect(page.getByTestId('curve-preset')).toHaveCount(0);
 		await kind.getByTestId('attribute-kind').locator('select').selectOption('text');

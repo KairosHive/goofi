@@ -146,7 +146,7 @@ impl Timeline {
                     out.notes.push((track.name.clone(), notes));
                 }
                 Lanes::Curve { range, keys } => {
-                    let leg = |k: &[Key]| Leg { start: seconds(k[0].at), end: seconds(k[1].at), from: Data::number(k[0].value), to: Data::number(k[1].value), curve: k[0].curve };
+                    let leg = |k: &[Key]| Leg { start: seconds(k[0].at), end: seconds(k[1].at), from: Data::number(k[0].value), to: Data::number(k[1].value), curve: k[0].curve.clone() };
                     let motion = Motion { legs: keys.windows(2).map(leg).collect(), rest: Data::number(keys.last().map_or(range[0], |k| k.value)) };
                     let value = motion.source().map_or(motion.rest.clone(), |source| Data::functional(functional_code(evaluator, &source), Meta::default()));
                     out.curves.push((format!("{}.{VALUE}", track.name), value));

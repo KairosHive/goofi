@@ -1,12 +1,15 @@
-<!-- CurvePanel — an easing curve's surface: the presets as a strip, the curve drawn over the unit
-     square, and for a custom curve its two bezier handles, dragged on the square or typed under
-     it. A drag previews through `onInput`; its release commits through `onChange`. -->
+<!-- CurvePanel — an easing curve's surface, always the one size: the presets as a strip, and the
+     curve over the unit square, where it is edited. A press on the square's ground adds an anchor
+     point there; a press on a point picks it, and a drag moves it; a picked point shows its two
+     handles, and a drag moves one; Delete, or the ✕ in the corner, takes the picked point out. An
+     edit of a preset makes it a custom curve of the preset's shape. A drag previews through
+     `onInput`; its release commits through `onChange`. -->
 <script lang="ts">
+	import { Icon, IconButton } from 'panelty';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Curve } from '$lib/api/generated';
-	import NumberInput from './NumberInput.svelte';
 	import Segmented from './Segmented.svelte';
-	import { PRESETS, curvePath, handlesOf, isBezier, type Handles } from './curve';
+	import { PRESETS, SHORT, curveName, curvePath, fitted, pointsOf, type Point } from './curve';
 
 	let {
 		value,
@@ -18,93 +21,140 @@
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: Curve;
 		onChange: (curve: Curve) => unknown;
-		/** Each step of a handle's drag, before the release commits it. */
+		/** Each step of a drag, before the release commits it. */
 		onInput?: (curve: Curve) => unknown;
 		disabled?: boolean;
 	} = $props();
 
-	/** The handles under a drag in flight, so the curve follows the hand before the commit. */
-	let draft = $state<Handles | null>(null);
-	const curve = $derived<Curve>(draft ? { bezier: draft } : value);
-	const handles = $derived(draft ?? handlesOf(value));
-	const custom = $derived(isBezier(curve));
+	/** The points under a drag in flight, so the curve follows the hand before the commit. */
+	let draft = $state<Point[] | null>(null);
+	const curve = $derived<Curve>(draft ? { custom: draft } : value);
+	const points = $derived(draft ?? pointsOf(value));
+	/** The anchor point picked: its handles show, and Delete takes it out. */
+	let picked = $state<number | null>(null);
+	const removable = $derived(picked !== null && picked > 0 && picked < points.length - 1);
 
-	// The square is the curve's own, 0 to 1 each way: a handle that overshoots is typed in its
-	// field, and is drawn past the square's edge.
 	const W = 100;
-	const H = W;
 	const px = (x: number): number => x * W;
-	const py = (y: number): number => H - y * W;
-	const path = $derived(curvePath(curve, W, W));
-
-	const SEGMENTS = [...PRESETS.map((id) => ({ id, label: id === 'in_out' ? 'in·out' : id, title: `The ${id} preset` })), { id: 'custom', label: 'custom', title: 'A bezier of your own, from the shape the preset left' }];
+	const py = (y: number): number => W - y * W;
+	const SEGMENTS = [...PRESETS, 'custom'].map((id) => ({ id, label: SHORT[id], title: id === 'custom' ? 'A curve of your own points' : `The ${id} preset` }));
 	function choose(id: string): void {
-		draft = null;
-		onChange(id === 'custom' ? { bezier: handlesOf(value) } : (id as Curve));
+		picked = null;
+		onChange(id === 'custom' ? { custom: pointsOf(value) } : (id as Curve));
 	}
 
 	let square = $state<SVGSVGElement | null>(null);
-	let held: 0 | 1 | null = $state(null);
 	function at(e: PointerEvent): [number, number] {
 		const box = square!.getBoundingClientRect();
-		const x = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
-		const y = Math.min(1, Math.max(0, 1 - (e.clientY - box.top) / box.height));
-		return [Number(x.toFixed(3)), Number(y.toFixed(3))];
+		return [(e.clientX - box.left) / box.width, 1 - (e.clientY - box.top) / box.height];
 	}
-	function down(i: 0 | 1, e: PointerEvent): void {
-		if (disabled || !custom) return;
-		held = i;
-		draft = [...handles] as Handles;
-		square?.setPointerCapture(e.pointerId);
+	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+	const fixed = (v: number): number => Number(v.toFixed(3));
+	/** What a drag holds: a point, or one of its handles (2 the one before it, 4 the one after),
+	 * and whether it has changed the curve yet. */
+	let held: { index: number; part: 0 | 2 | 4; changed: boolean } | null = null;
+	function hold(e: PointerEvent, index: number, part: 0 | 2 | 4, next: Point[], changed: boolean): void {
+		e.stopPropagation();
 		e.preventDefault();
+		held = { index, part, changed };
+		picked = index;
+		draft = next;
+		square?.setPointerCapture(e.pointerId);
+		square?.focus();
+		if (changed) onInput?.({ custom: next });
+	}
+	const grab = (e: PointerEvent, index: number, part: 0 | 2 | 4): void => {
+		if (!disabled) hold(e, index, part, points.map((p) => [...p] as Point), false);
+	};
+	/** A press on the square's own ground: a new point there, picked and held. */
+	function add(e: PointerEvent): void {
+		if (disabled) return;
+		const [x, y] = at(e);
+		const next = points.map((p) => [...p] as Point);
+		const index = next.findIndex((p) => p[0] > x);
+		if (index < 1 || x <= next[index - 1][0] + 0.01 || x >= next[index][0] - 0.01) return;
+		const reach = fixed(Math.min(x - next[index - 1][0], next[index][0] - x) / 3);
+		next.splice(index, 0, [fixed(x), fixed(clamp(y, 0, 1)), -reach, 0, reach, 0]);
+		hold(e, index, 0, fitted(next), true);
 	}
 	function move(e: PointerEvent): void {
-		if (held === null || !draft) return;
+		if (!held || !draft) return;
 		const [x, y] = at(e);
-		draft = draft.map((v, k) => (k === held! * 2 ? x : k === held! * 2 + 1 ? y : v)) as Handles;
-		onInput?.({ bezier: draft });
+		const { index, part } = held;
+		const p = [...draft[index]] as Point;
+		if (part !== 0) {
+			p[part] = fixed(x - p[0]);
+			p[part + 1] = fixed(clamp(y, -0.5, 1.5) - p[1]);
+		} else if (index > 0 && index < draft.length - 1) {
+			// A point between two others stays between them; the ends stay where a curve begins and ends.
+			p[0] = fixed(clamp(x, draft[index - 1][0] + 0.01, draft[index + 1][0] - 0.01));
+			p[1] = fixed(clamp(y, 0, 1));
+		} else return;
+		held.changed = true;
+		draft = fitted(draft.map((q, i) => (i === index ? p : q)));
+		onInput?.({ custom: draft });
 	}
 	function up(e: PointerEvent): void {
-		if (held === null) return;
+		if (!held) return;
 		square?.releasePointerCapture(e.pointerId);
-		const next = draft!;
+		const [next, changed] = [draft!, held.changed];
 		held = null;
 		draft = null;
-		onChange({ bezier: next });
+		// A press that changed nothing is a pick alone: a preset stays the preset.
+		if (changed) onChange({ custom: next });
 	}
-	function type(k: number, v: number): void {
-		const next = handles.map((h, i) => (i === k ? (k % 2 === 0 ? Math.min(1, Math.max(0, v)) : v) : h)) as Handles;
-		onChange({ bezier: next });
+	/** Take the picked point out; the ends stay. */
+	function remove(): void {
+		if (!removable) return;
+		const next = fitted(points.filter((_, i) => i !== picked));
+		picked = null;
+		onChange({ custom: next });
 	}
 </script>
 
 <div {...rest} class={`ui-curve-panel ${klass}`.trim()} class:disabled>
-	<Segmented value={custom ? 'custom' : (curve as string)} segments={SEGMENTS} onChange={choose} {disabled} aria-label="curve" data-testid="curve-preset" fill />
-	<svg class="ui-curve-square" class:custom bind:this={square} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="the curve" data-testid="curve-square"
-		onpointermove={move} onpointerup={up} onpointercancel={up}>
-		<rect class="ui-curve-unit" x="0" y="0" width={W} height={W} />
-		<line class="ui-curve-diagonal" x1="0" y1={py(0)} x2={W} y2={py(1)} />
-		<path class="ui-curve-line" d={path} vector-effect="non-scaling-stroke" />
-		{#if custom}
-			<line class="ui-curve-arm" x1={px(0)} y1={py(0)} x2={px(handles[0])} y2={py(handles[1])} />
-			<line class="ui-curve-arm" x1={px(1)} y1={py(1)} x2={px(handles[2])} y2={py(handles[3])} />
-			{#each [0, 1] as i (i)}
-				<circle class="ui-curve-handle" class:held={held === i} cx={px(handles[i * 2])} cy={py(handles[i * 2 + 1])} r="5"
-					role="slider" aria-label={`handle ${i + 1}`} aria-valuenow={handles[i * 2]} tabindex={disabled ? -1 : 0} data-testid={`curve-handle-${i}`}
-					onpointerdown={(e) => down(i as 0 | 1, e)} />
+	<Segmented value={curveName(curve)} segments={SEGMENTS} onChange={choose} {disabled} aria-label="curve" data-testid="curve-preset" fill />
+	<div class="ui-curve-frame">
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+		<svg
+			class="ui-curve-square"
+			bind:this={square}
+			viewBox={`0 0 ${W} ${W}`}
+			role="application"
+			aria-label="the curve: press to add a point, drag a point or its handles, Delete to take the picked point out"
+			tabindex="0"
+			data-testid="curve-square"
+			onpointerdown={add}
+			onpointermove={move}
+			onpointerup={up}
+			onpointercancel={up}
+			onkeydown={(e) => {
+				if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+				e.preventDefault();
+				remove();
+			}}
+		>
+			<rect class="ui-curve-unit" x="0" y="0" width={W} height={W} />
+			<line class="ui-curve-diagonal" x1="0" y1={py(0)} x2={W} y2={py(1)} />
+			<path class="ui-curve-line" d={curvePath(curve, W, W)} vector-effect="non-scaling-stroke" />
+			{#each points as p, i (i)}
+				{#if picked === i}
+					{#each [2, 4] as const as part (part)}
+						{#if part === 2 ? i > 0 : i < points.length - 1}
+							<line class="ui-curve-arm" x1={px(p[0])} y1={py(p[1])} x2={px(p[0] + p[part])} y2={py(p[1] + p[part + 1])} />
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<circle class="ui-curve-handle" cx={px(p[0] + p[part])} cy={py(p[1] + p[part + 1])} r="3" data-testid={part === 2 ? 'curve-handle-in' : 'curve-handle-out'} onpointerdown={(e) => grab(e, i, part)} />
+						{/if}
+					{/each}
+				{/if}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<circle class="ui-curve-point" class:picked={picked === i} cx={px(p[0])} cy={py(p[1])} r="4" data-testid="curve-point" onpointerdown={(e) => grab(e, i, 0)} />
 			{/each}
+		</svg>
+		{#if removable}
+			<span class="ui-curve-remove"><IconButton variant="ghost" size="sm" label="Delete point" data-testid="curve-remove" onclick={remove}><Icon name="x" /></IconButton></span>
 		{/if}
-	</svg>
-	{#if custom}
-		<div class="ui-curve-handles">
-			{#each ['x1', 'y1', 'x2', 'y2'] as name, k (name)}
-				<label class="ui-curve-number">
-					<span>{name}</span>
-					<NumberInput value={handles[k]} min={k % 2 === 0 ? 0 : undefined} max={k % 2 === 0 ? 1 : undefined} step={0.01} {disabled} onChange={(v) => type(k, v)} data-testid={`curve-${name}`} />
-				</label>
-			{/each}
-		</div>
-	{/if}
+	</div>
 </div>
 
 <style>
@@ -114,6 +164,15 @@
 		gap: var(--space-3);
 		width: 100%;
 	}
+	.ui-curve-frame {
+		position: relative;
+	}
+	/* In the corner no curve reaches: one begins bottom left and ends top right. */
+	.ui-curve-remove {
+		position: absolute;
+		top: 0;
+		left: 0;
+	}
 	.ui-curve-square {
 		display: block;
 		width: 100%;
@@ -122,6 +181,9 @@
 		border-radius: var(--radius-sm);
 		background: var(--surface-1);
 		touch-action: none;
+	}
+	.ui-curve-square:focus-visible {
+		outline: var(--focus-width) solid var(--focus-ink);
 	}
 	.ui-curve-unit {
 		fill: var(--surface-2);
@@ -138,39 +200,25 @@
 		stroke: var(--accent);
 		stroke-width: 2;
 		stroke-linejoin: round;
+		pointer-events: none;
 	}
 	.ui-curve-arm {
 		stroke: var(--text-muted);
 		stroke-width: 0.6;
+		pointer-events: none;
 	}
+	.ui-curve-point,
 	.ui-curve-handle {
 		fill: var(--surface-3);
 		stroke: var(--accent);
 		stroke-width: 1.5;
 		cursor: grab;
 	}
-	.ui-curve-handle.held {
+	.ui-curve-point.picked {
 		fill: var(--accent);
-		cursor: grabbing;
 	}
-	.ui-curve-handle:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
-	}
-	.ui-curve-handles {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: var(--space-2);
-		--number-width: 100%;
-	}
-	.ui-curve-number {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
-		min-width: 0;
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		font-size: var(--fs-micro);
-		text-align: center;
+	.ui-curve-handle {
+		stroke: var(--text-muted);
 	}
 	.ui-curve-panel.disabled .ui-curve-line {
 		opacity: var(--disabled-opacity);

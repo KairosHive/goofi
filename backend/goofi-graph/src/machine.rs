@@ -1153,7 +1153,7 @@ fn depart(head: &mut Head, machine: &Machine, id: &str, ctx: &Ctx) {
             Some(_) => scale(target, 0.0).unwrap_or_else(|| target.clone()),
             None => target.clone(),
         };
-        let curve = machine.attributes.get(&a).map_or(Curve::default(), |attr| attr.curve);
+        let curve = machine.attributes.get(&a).map_or(Curve::default(), |attr| attr.curve.clone());
         head.attrs.insert(a, ramp(ctx.now, t.duration, &cur, &level, curve));
     }
     if t.duration <= 0.0 {
