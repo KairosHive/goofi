@@ -244,7 +244,7 @@ describe('a machine — keyed by id in the document, spelled by name', () => {
 					playheads: { 'p-1': { name: 'walker', color: '', start: 's-1' } }
 				}
 			},
-			variable_groups: { walker: { lock: { config: true, value: true }, machine: 'm-1' } }
+			variable_groups: { walker: { lock: { config: true, value: true }, owner: { machine: 'm-1' } } }
 		});
 		const m = g.machines['m-1'];
 		expect(m.name).toBe('sweep');

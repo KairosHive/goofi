@@ -31,8 +31,7 @@ import {
 	variableViews,
 	variableGroupLocks,
 	controlGroups,
-	machineGroups,
-	midiGroups,
+	ownedGroups,
 	machineViews,
 	arrangementTabs,
 	type Doc,
@@ -40,7 +39,7 @@ import {
 	type ControlView,
 	type LockView
 } from '$lib/crdt/graphDoc';
-import type { Literal, Machine, Midi } from '$lib/api/generated';
+import type { Literal, Machine } from '$lib/api/generated';
 import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
@@ -150,8 +149,8 @@ export class GraphStore {
 	/** The groups a control panel may draw, in document order. */
 	controlGroups: string[] = $derived(controlGroups(this.doc));
 	/** Every group that reads a MIDI device, by name. */
-	midiGroups: Record<string, Midi> = $derived(midiGroups(this.doc));
-	machineGroups: Record<string, string> = $derived(machineGroups(this.doc));
+	midiGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'midi'));
+	machineGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'machine'));
 	/** Every state machine, by id, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
 

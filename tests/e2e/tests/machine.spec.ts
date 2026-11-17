@@ -446,7 +446,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 
 		// The playhead's group is the machine's: listed locked whole, like a device's.
 		const groups = (await rawCall(page, 'session state')).result.variable_groups;
-		expect(groups.playhead0.machine).toBe((await machineState()).id);
+		expect(groups.playhead0.owner.machine).toBe((await machineState()).id);
 
 		// The tabs' ＋ starts a second machine and shows it; its ✕ removes it and the first comes back.
 		// The last tab's ✕ leaves a fresh empty machine, as a new panel on a new patch gets one.

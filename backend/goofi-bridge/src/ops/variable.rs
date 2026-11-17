@@ -10,7 +10,7 @@ use goofi_graph::Graph;
 
 op!(List, "variable list", 0, NoArgs,
     "Every patch variable — what an expression can read and the variable writes can set — each with the lock that holds it (its own and its group's together), and every group that carries a lock. A value is an array or a string: a number, a list (nested for a wider array) or text. The groups `system`, `signal`, `graphics` and `audio` are goofi's own: config-locked for life, and their EPHEMERAL members — `system.goofi_home` and the `audio.*` facts the audio engine publishes — are goofi's own value, never saved into a patch.",
-    "{variables: [{name, value, lock: {config, value}, control?, expression?, error?}], groups: {group: {lock}}}");
+    "{variables: [{name, value, lock: {config, value}, control?, expression?, error?}], groups: {group: {lock, owner?}}} — `owner` is `{midi: port}`, `{machine: id}` or `{track: id}` for a group its owner alone writes");
 
 op!(EntryAdd, "variable entry add", 1, EntryAddArgs {
     pub name: Option<String>,

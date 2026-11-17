@@ -109,7 +109,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
             .any(|r| r["kind"] == "device" && r["name"].as_str().unwrap().contains("goofi-test-keys"));
         assert!(held(&g), "the port is a device the session holds");
         let group = g.call("variable list", j!({}))["groups"][&live].clone();
-        assert!(group["midi"]["port"].as_str().unwrap().contains("goofi-test-keys"), "{group}");
+        assert!(group["owner"]["midi"].as_str().unwrap().contains("goofi-test-keys"), "{group}");
         let why = g.refuse("variable entry add", j!({ "group": &live }));
         assert!(why.contains("config-locked"), "a device's group takes no entry of a user's: {why}");
         let why = g.refuse("variable entry edit", j!({ "name": format!("{live}.cc"), "value": 1 }));

@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Machine, Midi } from '$lib/api/generated';
+import type { Link, Literal, Lock, Machine } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -123,32 +123,23 @@ function lockOf(raw: unknown): LockView {
 }
 
 /** Explicit groups and their built-in flags, by name: an owned group — a device's, a machine's
- *  playhead — is locked whole. */
+ *  playhead, a track's — is locked whole. */
 export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
 		const r = obj(rec);
-		out[group] = r.midi || r.machine ? { config: true, value: true } : lockOf(r.lock);
+		out[group] = r.owner ? { config: true, value: true } : lockOf(r.lock);
 	}
 	return out;
 }
 
-/** Every group that reads a MIDI device, by name: the bus MIDI learn listens to. */
-export function midiGroups(doc: Doc): Record<string, Midi> {
-	const out: Record<string, Midi> = {};
-	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
-		const midi = obj(rec).midi;
-		if (typeof midi === 'object' && midi && typeof (midi as Midi).port === 'string') out[group] = midi as Midi;
-	}
-	return out;
-}
-
-/** Every group a machine's playhead owns, by name, with the id of the machine it belongs to. */
-export function machineGroups(doc: Doc): Record<string, string> {
+/** Every group an owner of `kind` holds, by name, with what names the owner: a MIDI device's
+ * port (the bus MIDI learn listens to), a machine's id (the group is a playhead's), a track's id. */
+export function ownedGroups(doc: Doc, kind: 'midi' | 'machine' | 'track'): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
-		const machine = obj(rec).machine;
-		if (typeof machine === 'string') out[group] = machine;
+		const by = obj(obj(rec).owner)[kind];
+		if (typeof by === 'string') out[group] = by;
 	}
 	return out;
 }
@@ -156,7 +147,7 @@ export function machineGroups(doc: Doc): Record<string, string> {
 /** The groups a control panel may draw, in document order: every plain group — not a device's,
  * not a playhead's, not goofi's own — and every group a control panel names, held or not. */
 export function controlGroups(doc: Doc): string[] {
-	const owned = new Set(['system', 'signal', 'graphics', 'audio', ...Object.keys(midiGroups(doc)), ...Object.keys(machineGroups(doc))]);
+	const owned = new Set(['system', 'signal', 'graphics', 'audio', ...Object.entries(obj(doc.variable_groups)).filter(([, r]) => obj(r).owner).map(([g]) => g)]);
 	const out = new Set<string>();
 	for (const group of Object.keys(obj(doc.variable_groups))) if (!owned.has(group)) out.add(group);
 	for (const name of Object.keys(obj(doc.variables))) {

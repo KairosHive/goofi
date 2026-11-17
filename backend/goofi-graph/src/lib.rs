@@ -1011,21 +1011,22 @@ impl Graph {
     /// name and owned by its machine, with the machine's two elements and one entry per
     /// attribute; nothing else.
     fn sync_playheads(&mut self) {
+        use goofi_core::variables::{Entries, Group, Owner};
         let mut store = self.variables();
-        let wanted: Vec<(String, String, goofi_core::variables::Entries)> = self
+        let wanted: Vec<(String, Owner, Entries)> = self
             .patch
             .machines
             .iter()
-            .flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), m.clone(), record.playhead_entries(ph))))
+            .flat_map(|(m, record)| record.playheads.iter().map(move |(ph, p)| (p.name.clone(), Owner::Machine(m.clone()), record.playhead_entries(ph))))
             .collect();
+        let held = |g: &str, owner: &Owner| wanted.iter().any(|(name, o, _)| name == g && o == owner);
         let gone: Vec<String> =
-            store.groups().filter(|(g, rec)| rec.machine.is_some() && !wanted.iter().any(|(ph, m, _)| ph == g && Some(m.as_str()) == rec.machine.as_deref())).map(|(g, _)| g.to_string()).collect();
+            store.groups().filter(|(g, rec)| matches!(&rec.owner, Some(o) if !matches!(o, Owner::Midi(_)) && !held(g, o))).map(|(g, _)| g.to_string()).collect();
         for group in gone {
             store.release(&group);
         }
-        for (ph, m, entries) in wanted {
-            let record = goofi_core::variables::Group { machine: Some(m), ..Default::default() };
-            let _ = store.claim(&ph, record, entries);
+        for (group, owner, entries) in wanted {
+            let _ = store.claim(&group, Group { owner: Some(owner), ..Default::default() }, entries);
         }
     }
 
@@ -2982,7 +2983,7 @@ impl Graph {
     /// machine's, and the element is one it publishes.
     fn playhead_field(&self, playhead: &str, field: &str) -> Result<(Uid, &'static str), String> {
         let store = self.variables();
-        if store.machine(playhead).is_none() {
+        if !matches!(store.owner(playhead), Some(goofi_core::variables::Owner::Machine(_))) {
             return Err(format!("no playhead named `{playhead}`"));
         }
         let key = format!("{playhead}.{field}");

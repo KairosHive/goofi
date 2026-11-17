@@ -29,8 +29,8 @@ export type VariableRecord = { value?: Literal, control?: Control,
  * The expression the manager computes it by, bare or in Python; absent is set by hand.
  */
 expression?: string, lock?: Lock, };
-export type Midi = { port: string, };
-export type Group = { lock: Lock, midi?: Midi, machine?: string, };
+export type Owner = { "midi": string } | { "machine": string } | { "track": string };
+export type Group = { lock: Lock, owner?: Owner, };
 export type AttributeKind = { "type": "num", vmin: number, vmax: number, int: boolean, face: Face, } | { "type": "bool" } | { "type": "string", options?: Array<string>, };
 export type Attribute = { name: string, default: Literal, kind: AttributeKind, curve: Curve, };
 export type Decision = "sequence" | "random" | "expression";

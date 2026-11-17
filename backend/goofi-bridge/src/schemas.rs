@@ -386,7 +386,7 @@ pub fn snapshot(
 /// records and the machines, each declared once in Rust and checked into the tree.
 pub fn typescript() -> String {
     use goofi_core::record::{RecordedOutput, VideoQuality};
-    use goofi_core::variables::{Control, ControlKind, Group, Lock, Midi};
+    use goofi_core::variables::{Control, ControlKind, Group, Lock, Owner};
     use goofi_graph::doc::{Archive, Link, NodeRecord, ParamEntry, PatchDoc, VariableRecord};
     use goofi_graph::machine::{Attribute, AttributeKind, Decision, Machine, Playhead, State, Transition};
     use goofi_core::ease::Curve;
@@ -407,7 +407,7 @@ pub fn typescript() -> String {
         Control::decl(&cfg),
         Lock::decl(&cfg),
         VariableRecord::decl(&cfg),
-        Midi::decl(&cfg),
+        Owner::decl(&cfg),
         Group::decl(&cfg),
         AttributeKind::decl(&cfg),
         Attribute::decl(&cfg),

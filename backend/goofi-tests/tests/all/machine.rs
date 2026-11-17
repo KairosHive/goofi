@@ -180,7 +180,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     assert!(g.doc()["variables"]["desk.origin"].get("error").is_none(), "an attribute resolves");
     g.call("control remove", j!({ "group": "desk", "element": "origin" }));
     let listed = g.call("variable list", j!({}));
-    assert_eq!(Some(&listed["groups"]["head"]["machine"]), g.doc()["machines"].as_object().unwrap().keys().next().map(|id| j!(id)).as_ref(), "{}", listed["groups"]);
+    assert_eq!(Some(&listed["groups"]["head"]["owner"]["machine"]), g.doc()["machines"].as_object().unwrap().keys().next().map(|id| j!(id)).as_ref(), "{}", listed["groups"]);
     assert_eq!(g.doc()["variables"]["head.gain"]["control"]["kind"], j!("knob"), "a number attribute's variable wears a knob");
     assert_eq!(g.doc()["variables"]["head.gain"]["lock"], Value::Null, "the lock is the group's, not the entry's own");
     for (op, payload) in [
@@ -419,7 +419,7 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     at_rest_in(&other, "lead", "Start");
     at_rest_in(&other, "second", "C");
     assert_eq!(number(&other, "lead.level"), 0.2);
-    assert!(other.doc()["machines"][other.call("variable list", j!({}))["groups"]["lead"]["machine"].as_str().unwrap()].is_object());
+    assert!(other.doc()["machines"][other.call("variable list", j!({}))["groups"]["lead"]["owner"]["machine"].as_str().unwrap()].is_object());
     bound(&other, "loaded elsewhere", computed, 1.4);
     bound(&other, "loaded elsewhere", shared, 0.0);
 

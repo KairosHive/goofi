@@ -46,8 +46,8 @@ async function baseline(page: Page, name: string): Promise<void> {
 
 /** The device groups the backend holds open now. */
 async function openGroups(page: Page): Promise<string[]> {
-	const groups = (await backendDoc(page)).variable_groups as Record<string, { midi?: unknown }>;
-	return Object.keys(groups).filter((g) => groups[g].midi);
+	const groups = (await backendDoc(page)).variable_groups as Record<string, { owner?: { midi?: unknown } }>;
+	return Object.keys(groups).filter((g) => groups[g].owner?.midi);
 }
 
 test('MIDI learn opens every device, maps the first moved element, and keeps only the devices read', async ({ page }) => {
