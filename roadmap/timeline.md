@@ -26,12 +26,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A note ring that is full drops the note, an end included. Not examined: whether the audio
   thread can stop draining a node's ring while the node is in the plan.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
-- The panel has no snap to a grid, and its view zooms by the range bar alone: no wheel and no
-  pinch.
-- The panel's view follows the clock by a page; whether it scrolls with it.
 - A curve track's variable is `vars.<track>.value`, because every variable is in a group.
   Whether a track's value takes the track's name alone.
-- A position put past the end of the loop folds into it; whether it plays on outside it.
 - The panel edits one note or keyframe at a time: no selection of several, no copy.
 - The panel has no keyboard path to a note, a keyframe or a track's menu.
 - Under a finger a note is one row high: it takes no hit-size press, because the rows beside
@@ -42,7 +38,6 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   name next moves: the shared live value holds a commit as pending. The machine's attribute
   form has the same fault.
 - A panel keeps the id of a removed track in `state.hidden` and `state.sizes`; nothing reads it.
-- The loop's section is drawn again to change it: it has no edges to drag and cannot be moved.
 - The range bar stands for everything from 0 to the view, so far along the axis a small drag
   of it is a long time.
 - A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
@@ -53,3 +48,7 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
 - The `Clock` node keeps a tempo of its own. Whether it reads `clock.bpm` instead.
 - The expression editor still starts a completion behind a dismissed window, and Tab takes it.
+- The panel's view zooms by the range bar alone: no wheel and no pinch.
+- The clock's section is drawn again to change it: it has no edges to drag and cannot be
+  moved. A position put past its end folds into it.
+- A click on a note takes it out, so a note is picked for its fields by a drag alone.

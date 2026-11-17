@@ -63,7 +63,7 @@ export const PANEL_TYPES: readonly PanelTypeInfo[] = [
 	{ id: 'variables', title: 'Variables', icon: 'globe', doc: 'the patch variables, which any expression can read' },
 	{ id: 'control', title: 'Control', icon: 'sliders-vertical', doc: 'knobs, sliders and text widgets over one group of variables' },
 	{ id: 'machine', title: 'State machine', icon: 'waypoints', doc: 'one state machine: its states, transitions and playheads on a canvas' },
-	{ id: 'timeline', title: 'Timeline', icon: 'chart-no-axes-gantt', doc: 'every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id, `state.beats` is whether its ruler counts beats' },
+	{ id: 'timeline', title: 'Timeline', icon: 'chart-no-axes-gantt', doc: 'every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id, `state.grid` names the grid its notes snap to' },
 	{ id: 'agent', title: 'Agent', icon: 'bot', doc: 'a terminal on an agent harness, running in the patch workspace' },
 	{ id: 'recorder', title: 'Recorder', icon: 'circle-dot', doc: 'capture the output slots of any node to disk, on one clock' },
 ];

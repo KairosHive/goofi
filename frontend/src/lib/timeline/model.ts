@@ -5,10 +5,9 @@ import { curveAt } from '$lib/ui/curve';
 /** The seconds one time unit lasts: a beat of the tempo, or a second. */
 export const unit = (beats: boolean, bpm: number): number => (beats ? 60 / Math.max(bpm, 1e-9) : 1);
 
-/** Where the last note or keyframe of every track ends, in seconds. */
-export function contentEnd(tracks: Track[], bpm: number): number {
-	const ends = tracks.flatMap((t) => (t.kind === 'note' ? t.notes.map((n) => n.at + n.length) : t.keys.map((k) => k.at)).map((at) => at * unit(t.beats, bpm)));
-	return Math.max(0, ...ends);
+/** Where the last note or keyframe of every track ends, in beats. */
+export function contentEnd(tracks: Track[]): number {
+	return Math.max(0, ...tracks.flatMap((t) => (t.kind === 'note' ? t.notes.map((n) => n.at + n.length) : t.keys.map((k) => k.at))));
 }
 
 /** The ruler's marks between `from` and `to`: at most `want` gaps, at a round step. */

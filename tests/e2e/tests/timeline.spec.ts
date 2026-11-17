@@ -35,8 +35,10 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	await waitForApp(page);
 	const menuItem = (label: string): Locator => page.locator('.context-menu .item', { hasText: label }).first();
 	try {
-		// The walk begins with the clock at rest at 0, where the view begins.
+		// The walk begins with the clock at rest at 0, where the view begins, and at a tempo of 60:
+		// the timeline counts beats, and a beat is then a second.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
+		await rawCall(page, 'variable entry edit', { name: 'clock.bpm', value: 60 });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
 			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
@@ -46,7 +48,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 
 		// The + under the words adds the first track, the bar's + the others, of either kind; the
 		// tracks stack in the order they were made.
-		await expect(panel.getByTestId('timeline-unit')).toContainText(/secs/i);
+		await expect(panel.getByLabel('dur')).toBeVisible();
 		await expect(panel.getByLabel('bpm')).toBeVisible();
 		await panel.getByTestId('timeline-add-first').click();
 		await menuItem('Note Track').click();
@@ -106,8 +108,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dialog.getByRole('button', { name: 'Cancel' }).click();
 		await expect(dialog).toBeHidden();
 		expect(await trackNamed(page, 'track1')).toBeTruthy();
-		await fade.locator('.info').click({ button: 'right', position: { x: 4, y: 4 } });
-		await menuItem('Delete Track…').click();
+		await fade.getByTestId('track-delete').click();
 		await dialog.getByTestId('track-delete-confirm').click();
 		await expect.poll(() => trackNamed(page, 'track1')).toBeUndefined();
 		// An undo brings the track back, as the dialog says.
@@ -235,7 +236,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await panel.getByTestId('clock-play').click();
 		await expect(panel.getByTestId('clock-play')).toHaveAccessibleName('Play');
 		await panel.getByTestId('clock-stop').click();
-		await expect(panel.getByTestId('clock-time')).toHaveValue('0');
+		await expect(panel.getByTestId('clock-time')).toHaveValue('0.0');
 		const time = panel.getByTestId('clock-time');
 		// The line of the position crosses the ruler and every track. Far past what is in view the
 		// view stays where it is and shows no line, and the position's field shows the whole number.
@@ -246,12 +247,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const lastMark = async (): Promise<number> => Number(await panel.getByTestId('timeline-ruler').locator('.tick').last().innerText());
 		const marked = await lastMark();
 		await rawCall(page, 'clock set', { time: 1234.56 });
-		await expect(time).toHaveValue('1234.56');
+		await expect(time).toHaveValue('1234.6');
 		await expect(line).toHaveCount(0);
 		expect(await lastMark(), 'the view stays').toBe(marked);
 		expect(await time.evaluate((el: HTMLInputElement) => el.scrollWidth <= el.clientWidth), 'the field shows the whole position').toBe(true);
 		await rawCall(page, 'clock set', { time: 0 });
-		await expect(time).toHaveValue('0');
+		await expect(time).toHaveValue('0.0');
 		await time.fill('3');
 		await time.press('Enter');
 		await expect.poll(() => clock(page, 'time')).toBe(3);
@@ -262,7 +263,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await rawCall(page, 'clock set', { time: 5 });
 		await expect.poll(async () => (await playhead.boundingBox())!.x, 'the new position reaches the page under the focus').not.toBe(stood);
 		await panel.getByTestId('clock-bpm').click();
-		await expect(time).toHaveValue('5');
+		await expect(time).toHaveValue('5.0');
 		expect(await clock(page, 'time')).toBe(5);
 		// A click half way along the ruler puts the position at the time the marks give that place.
 		const ruler = panel.getByTestId('timeline-ruler').locator('.lane');
@@ -276,6 +277,15 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await bpm.fill('90');
 		await bpm.press('Enter');
 		await expect.poll(() => clock(page, 'bpm')).toBe(90);
+		await bpm.fill('60');
+		await bpm.press('Enter');
+		await expect.poll(() => clock(page, 'bpm')).toBe(60);
+		// The section is the clock's own, and no variable: `clock set` says what it is.
+		const section = async (): Promise<[number, number] | null> => (await rawCall(page, 'clock set', {})).result.section;
+		const span = async (): Promise<number> => {
+			const now = await section();
+			return now ? now[1] - now[0] : 0;
+		};
 
 		// A drag along the ruler marks the section the clock loops in: the position restarts at
 		// the section's start.
@@ -284,11 +294,11 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 			await page.mouse.down();
 			await page.mouse.move(axis.x + axis.width * 0.5, axis.y + 4, { steps: 6 });
 			await page.mouse.up();
-			await expect.poll(() => clock(page, 'length')).toBeGreaterThan(0);
+			await expect.poll(span).toBeGreaterThan(0);
 		};
 		await mark();
-		expect(await clock(page, 'length')).toBeCloseTo(timeAt(0.5) - timeAt(0.25), 1);
-		const start = await clock(page, 'start');
+		expect(await span()).toBeCloseTo(timeAt(0.5) - timeAt(0.25), 1);
+		const start = (await section())![0];
 		expect(start).toBeCloseTo(timeAt(0.25), 1);
 		await expect(panel.getByTestId('timeline-loop')).toBeVisible();
 		await panel.getByTestId('clock-play').click();
@@ -308,21 +318,32 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const firstMark = async (): Promise<number> => Number(await ruler.locator('.tick').first().innerText());
 		await ruler.dblclick({ position: { x: axis.width * 0.375, y: 4 } });
 		await expect.poll(firstMark).toBeCloseTo(start, 1);
-		expect(await lastMark()).toBeCloseTo(start + (await clock(page, 'length')), 1);
+		expect(await lastMark()).toBeCloseTo(start + (await span()), 1);
 		await panel.getByTestId('clock-loop').click();
-		await expect.poll(() => clock(page, 'length')).toBe(0);
+		await expect.poll(span).toBe(0);
 		await expect(panel.getByTestId('timeline-loop')).toHaveCount(0);
 		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
 		await expect.poll(lastMark).toBe(marked);
 		// A click on the ruler outside the section clears it.
 		await mark();
 		await ruler.click({ position: { x: axis.width * 0.75, y: 4 } });
-		await expect.poll(() => clock(page, 'length')).toBe(0);
+		await expect.poll(span).toBe(0);
+
+		// The timeline's length is the `dur` field, a variable: with one, a double click on the
+		// ruler looks at that much.
+		const dur = panel.getByTestId('clock-length');
+		for (const [beats, last] of [[6, 6], [0, marked]] as const) {
+			await dur.fill(String(beats));
+			await dur.press('Enter');
+			await expect.poll(() => clock(page, 'length')).toBe(beats);
+			await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
+			await expect.poll(lastMark).toBe(last);
+		}
 
 		// The range bar is the view: its end dragged in zooms in, and dragged out past the end of
 		// the bar zooms out past everything there is.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
-		await expect(time).toHaveValue('0');
+		await expect(time).toHaveValue('0.0');
 		await expect.poll(lastMark).toBe(marked);
 		const bar = (await panel.getByTestId('range-bar').boundingBox())!;
 		expect(bar.y + bar.height, 'the range bar is right above the ruler').toBeLessThanOrEqual(axis.y + 1);
@@ -352,7 +373,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(panel).not.toHaveClass(/vertical/);
 	} finally {
 		// The clock and the tracks are the running patch's: the next spec on this worker starts clean.
-		for (const [name, value] of [['start', 0], ['length', 0], ['bpm', 120]] as const) await rawCall(page, 'variable entry edit', { name: `clock.${name}`, value });
+		await rawCall(page, 'clock set', { section: [0, 0] });
+		for (const [name, value] of [['length', 0], ['bpm', 120]] as const) await rawCall(page, 'variable entry edit', { name: `clock.${name}`, value });
 		await rawCall(page, 'clock set', { playing: true });
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
 		await closeSplit(page);

@@ -236,27 +236,29 @@ chain tool wires every box it crosses.
 A patch plays on one clock from the moment it loads, and by default it never ends. `t` in an
 expression is its position in seconds, and so is `vars.clock.time`. `goofi clock set --no-playing`
 pauses the position and `--time 12` puts it at a second; the engines run on through a pause, and
-a recording never stops. `vars.clock.bpm` is the tempo. With `vars.clock.length` at a millisecond or more the
-clock loops: the position restarts at `vars.clock.start` when it reaches the end of that section,
-and `vars.clock.progress` is how far along the section it is, 0 to 1.
+a recording never stops. `vars.clock.bpm` is the tempo. `vars.clock.length` is the timeline's
+length in beats: with one, the position restarts from 0 when it reaches it, and
+`vars.clock.progress` is how far along it is, 0 to 1. A length of 0 is endless.
 
-The timeline holds tracks on that position. A `note` track holds notes; it writes the held
-velocities to `vars.<track>.notes`, and the audio `MidiIn` node lists it as a port
-(`timeline: <track>`), so its notes play an instrument as a keyboard does. Its lane has a
-piano keyboard beside it, from a lowest to a highest pitch, which marks the notes of a scale and
-a root, the ones a `Quantize` node offers; a note made or moved on the lane lands on that scale. A `curve` track is one
-line through keyframes: the value eases from a keyframe to the next by that keyframe's curve,
-holds outside them, and is `vars.<track>.value`. A track counts its times in seconds or in beats
-of the tempo. `goofi timeline track add note` and `timeline track edit` build one from the CLI or
-an agent; the same ops drive the timeline panel.
+The timeline holds tracks on that position, their times in beats, so a change of the tempo moves
+them all together. A `note` track holds notes; it writes the held velocities to
+`vars.<track>.notes`, and the audio `MidiIn` node lists it as a port (`timeline: <track>`), so
+its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, from a
+lowest to a highest pitch, which marks the notes of a scale and a root, the ones a `Quantize`
+node offers; a note made or moved on the lane lands on that scale. A `curve` track is one line
+through keyframes: the value eases from a keyframe to the next by that keyframe's curve, holds
+outside them, and is `vars.<track>.value`. `goofi timeline track add note` and
+`timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
-across them where the clock is. A double click makes a note or a keyframe and a drag moves it. A
-press on the ruler places the clock, and a drag along it marks the section the clock loops in.
-The bar along the lanes is the view: drag it to move along the axis, drag either end of it to
-zoom, as far out as you like. A track's edge resizes it, and a panel hides the tracks it is told
-to, so two panels show one timeline in different ways. In a panel taller than wide the time runs
-down and the tracks stand as columns.
+across them where the clock is. A click on a lane makes a note or a keyframe, a click on a note
+takes it out, and a drag moves one; a note snaps to the grid the bar chooses. A press on the
+ruler places the clock, and a drag along it marks a section the clock loops in: that section is
+the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
+view: drag it to move along the axis, drag either end of it to zoom, as far out as you like; a
+double click on the ruler looks at everything again. A track's edge resizes it, and a panel
+hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
+taller than wide the time runs down and the tracks stand as columns.
 
 ## Testing
 

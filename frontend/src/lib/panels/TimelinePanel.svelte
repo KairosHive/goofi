@@ -13,7 +13,6 @@
 	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
@@ -23,17 +22,11 @@
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
 		hidden?: string[];
-		/** Whether the ruler counts beats and not seconds. */
-		beats?: boolean;
 		/** How large this panel draws a track across the axis, in pixels, by the track's id. */
 		sizes?: Record<string, number>;
 		/** The grid a note snaps to, by its name. */
 		grid?: string;
 	}
-	const UNITS = [
-		{ id: 's', label: 'secs', title: 'Times in seconds' },
-		{ id: 'beats', label: 'beats', title: 'Times in beats of the tempo' }
-	];
 
 	let { state: panelState, setState }: PanelProps = $props();
 	const g = graph();
@@ -51,31 +44,38 @@
 	const vertical = $derived(tall > wide);
 
 	// ---- the clock: its variables read live, `clock set` to steer it, its loop a section of the axis.
-	watchVariables(() => ['time', 'playing', 'bpm', 'start', 'length'].map((n) => `clock.${n}`));
+	watchVariables(() => ['time', 'playing', 'bpm', 'length'].map((n) => `clock.${n}`));
 	function clock(name: string): number {
 		const v = variableValue(`clock.${name}`);
 		return typeof v === 'number' ? v : 0;
 	}
 	const playing = $derived(clock('playing') > 0);
-	/** The seconds one mark of the ruler counts. */
-	const mark = $derived(unit(own.beats === true, clock('bpm')));
-	const loop = $derived<[number, number] | null>(clock('length') > 0 ? [clock('start'), clock('start') + clock('length')] : null);
+	/** The seconds a beat lasts: the axis counts beats, the clock seconds. */
+	const spb = $derived(unit(true, clock('bpm')));
+	/** The clock's position, in beats. */
+	const beat = $derived(clock('time') / spb);
+	/** The section the clock loops in, in seconds as the clock holds it: the clock's own, and no
+	 * variable. In beats it is `loop`. */
+	let looped = $state<[number, number] | null>(null);
+	const loop = $derived<[number, number] | null>(looped && [looped[0] / spb, looped[1] / spb]);
 	const steer = (to: { playing?: boolean; time?: number }): void => void g.op('clock set', to).catch(fail('Set clock'));
-	/** The loop as ONE step; with no length, none. The old loop goes before the new one's start
-	 * lands, so the position is never folded into a loop made of one and the other. */
-	const setLoop = (start: number, length: number): void =>
-		void history()
-			.transaction(length > 0 ? 'Set loop' : 'Clear loop', async (step) => {
-				const write = (name: string, value: number): Promise<unknown> => g.op('variable entry edit', { name: `clock.${name}`, value: fixed(value) }, step);
-				await write('length', 0);
-				if (length > 0) await write('start', start).then(() => write('length', length));
-			})
+	/** Mark the section the clock loops in, from and to in beats; with no length, clear it. */
+	const setLoop = (from: number, to: number): void =>
+		void g
+			.op<{ section: [number, number] | null }>('clock set', { section: [from * spb, to * spb] })
+			.then((r) => (looped = r.section))
 			.catch(fail('Set loop'));
+	// What the clock loops in now: a `clock set` that sets nothing says it.
+	void g
+		.op<{ section: [number, number] | null }>('clock set', {})
+		.then((r) => (looped = r.section))
+		.catch(() => {});
 
 	// ---- the view: the seconds of the axis this panel looks at. It stays where it is put: the
 	// clock runs out of it, and a double click on the ruler brings back everything there is.
-	/** Where everything there is ends: the tracks' content with room after it, and the loop. */
-	const reach = (): number => Math.max(8, contentEnd(Object.values(g.timeline), clock('bpm') || 120) * 1.25, loop?.[1] ?? 0);
+	/** Where everything there is ends, in beats: the timeline's length, or without one the tracks'
+	 * content with room after it. */
+	const reach = (): number => (clock('length') > 0 ? clock('length') : Math.max(8, contentEnd(Object.values(g.timeline)) * 1.25));
 	let view = $state<[number, number]>([0, untrack(reach)]);
 	const width = $derived(view[1] - view[0]);
 	const within = (seconds: number, [from, to]: [number, number]): boolean => seconds >= from && seconds <= to;
@@ -107,9 +107,9 @@
 			},
 			commit: () => {
 				// A section too short to hear is a press that slipped.
-				if (section && section[1] - section[0] >= 0.05) setLoop(section[0], section[1] - section[0]);
+				if (section && section[1] - section[0] >= 0.05) setLoop(section[0], section[1]);
 				else {
-					steer({ time: from });
+					steer({ time: from * spb });
 					if (loop && !within(from, loop)) setLoop(0, 0);
 				}
 				section = null;
@@ -137,15 +137,15 @@
 		'1/16 beat': [0.0625, true]
 	};
 	const gridName = $derived(own.grid && own.grid in GRIDS ? own.grid : '1/4 beat');
-	/** The seconds between two lines of the grid. */
-	const grid = $derived(GRIDS[gridName][0] * unit(GRIDS[gridName][1], clock('bpm')));
-	/** A time in seconds on the nearest line of the grid, as `round` rounds. */
-	const onGrid = (seconds: number, round = Math.round): number => round(seconds / grid + 1e-9) * grid;
+	/** The beats between two lines of the grid. */
+	const grid = $derived(GRIDS[gridName][1] ? GRIDS[gridName][0] : GRIDS[gridName][0] / spb);
+	/** A time in beats on the nearest line of the grid, as `round` rounds. */
+	const onGrid = (beats: number, round = Math.round): number => round(beats / grid + 1e-9) * grid;
 
 	// ---- the tracks: an edit is one op on the track; what a panel hides and how large it draws a
 	// track are the panel's state.
 	const edit = (track: string, patch: Record<string, unknown>): void => void g.op('timeline track edit', { track, ...patch }).catch(fail('Edit track'));
-	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind, beats: own.beats === true }).catch(fail('Add track'));
+	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind }).catch(fail('Add track'));
 	const hide = (ids: string[], label: string): void => setState({ hidden: ids }, 'authored', label);
 	const rename = (id: string, to: string): void => {
 		if (to !== g.timeline[id].name && isValidIdentifier(to)) edit(id, { to });
@@ -216,8 +216,6 @@
 		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(t, p));
 		return notes.reduce((best, p) => (Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best), notes[0] ?? clamp(pitch, lo, hi));
 	}
-	/** The seconds one of a track's time units lasts. */
-	const secs = (t: Track): number => unit(t.beats, clock('bpm'));
 	/** The note or keyframe a drag holds: the view does not follow the clock under it. */
 	let dragged = $state<{ track: string; index: number } | null>(null);
 	/** Change the picked note or keyframe, or with null remove it. */
@@ -230,7 +228,7 @@
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
 		const [f, v] = point(p, ground);
 		const [lo, hi] = t.range;
-		return { at: fixed(onGrid(Math.max(0, view[0] + f * width), Math.floor) / secs(t)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
+		return { at: fixed(onGrid(Math.max(0, view[0] + f * width), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
 	}
 	/** The cell the pointer is over, to light it. */
 	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
@@ -240,7 +238,7 @@
 		if (e.target !== e.currentTarget) return;
 		const [f, v] = point(e, e.currentTarget as Element);
 		const [lo, hi] = t.range;
-		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: fixed(grid / secs(t)), velocity: 0.8 } : { at: fixed(Math.max(0, view[0] + f * width) / secs(t)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: fixed(grid), velocity: 0.8 } : { at: fixed(Math.max(0, view[0] + f * width)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
 		if (t.kind === 'note') picked = { track: id, index: t.notes.length };
 		edit(id, put(t, [...held(t), born]));
 	}
@@ -255,7 +253,7 @@
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [f0, v0] = point(e, ground);
 		const [lo, hi] = t.range;
-		const [o, per] = [held(t)[index], width / secs(t)];
+		const [o, per] = [held(t)[index], width];
 		const now = (): (Note | Key)[] => held(g.timeline[id]);
 		/** The lane as it stands, with the dragged one where `to` puts it. */
 		const moved = (to: Partial<Note & Key>): Record<string, unknown> => put(t, now().map((it, k) => (k === index ? { ...it, ...to } : it)));
@@ -266,14 +264,14 @@
 				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
 				const at = o.at + (f - f0) * per;
-				const [by, beat] = [(f - f0) * width, secs(t)];
+				const by = (f - f0) * width;
 				// A note lands on its scale; a keyframe stays between its neighbours and inside the range.
 				patch = moved(
 					t.kind !== 'note'
 						? {}
 						: stretch
-							? { length: fixed(Math.max(grid, onGrid((o.at + (o as Note).length) * beat + by) - o.at * beat) / beat) }
-							: { at: fixed(Math.max(0, onGrid(o.at * beat + by)) / beat), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
+							? { length: fixed(Math.max(grid, onGrid(o.at + (o as Note).length + by) - o.at)) }
+							: { at: fixed(Math.max(0, onGrid(o.at + by))), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
 				);
 				if (t.kind === 'curve') patch = moved({ at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp((o as Key).value + (v - v0) * (hi - lo), lo, hi)) });
 				g.previewTrack(id, patch);
@@ -307,12 +305,12 @@
 			<div class="tools">
 			<IconButton variant="ghost" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
 			<IconButton variant="ghost" label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
-			<NumberInput class="position" aria-label="Position" title="The clock's position" data-testid="clock-time" value={Number((clock('time') / mark).toFixed(2))} min={0} onChange={(v) => steer({ time: v * mark })} />
-			<Segmented aria-label="Ruler unit" value={own.beats ? 'beats' : 's'} segments={UNITS} data-testid="timeline-unit" onChange={(u) => setState({ beats: u === 'beats' }, 'authored', 'Set ruler unit')} />
+			<NumberInput class="position" aria-label="Position" title="The clock's position, in beats" data-testid="clock-time" value={beat} digits={1} min={0} onChange={(v) => steer({ time: v * spb })} />
 			<label class="labeled">grid <Select title="The lines a note snaps to when it is made or dragged" data-testid="timeline-grid" value={gridName} options={Object.keys(GRIDS)} onChange={(grid) => setState({ grid }, 'authored', 'Set grid')} /></label>
 			<label class="labeled">bpm <NumberInput title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => void g.setVariableValue('clock.bpm', v).catch(fail('Set tempo'))} /></label>
+			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
 			{#if loop}
-				<Segmented value="loop" segments={[{ id: 'loop', label: 'loop', title: 'The clock loops in the section marked on the ruler: press to clear it', testid: 'clock-loop' }]} onChange={() => setLoop(clock('start'), 0)} />
+				<Segmented value="loop" segments={[{ id: 'loop', label: 'loop', title: 'The clock loops in the section marked on the ruler: press to clear it', testid: 'clock-loop' }]} onChange={() => setLoop(0, 0)} />
 			{/if}
 			{#if stowed.length > 0}
 				<Button size="sm" data-testid="timeline-hidden" title="Hidden tracks: pick one to show it" onclick={(e) => drop(e, stowed.map((id) => ({ label: g.timeline[id].name, action: () => hide(hidden.filter((h) => h !== id), 'Show Track') })))}>
@@ -331,7 +329,7 @@
 					<span class="info"></span>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div class="lane" onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
-						{#each ticks(view[0] / mark, view[1] / mark) as tick}<span class="tick" style:--a={share(along(tick * mark))}>{tick}</span>{/each}
+						{#each ticks(view[0], view[1]) as tick}<span class="tick" style:--a={share(along(tick))}>{tick}</span>{/each}
 					</div>
 				</div>
 				{#each shown as id (id)}
@@ -360,9 +358,11 @@
 						onpointercancel={press.cancel}
 					>
 						<div class="info">
-							<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
-							<Segmented aria-label="Time unit" value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
-							<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
+							<div class="title">
+								<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
+								<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
+								<IconButton variant="ghost" size="sm" label="Delete track" data-testid="track-delete" onclick={() => (asked = id)}><Icon name="x" /></IconButton>
+							</div>
 							{#each [0, 1] as end (end)}
 								<NumberInput aria-label={end ? 'Highest' : 'Lowest'} title={`The ${end ? 'highest' : 'lowest'} ${t.kind === 'note' ? 'pitch of the keyboard' : 'value'}`} value={t.range[end]} step={t.kind === 'note' ? 1 : 0.1} onChange={(v) => edit(id, { range: t.range.with(end, v) })} />
 							{/each}
@@ -408,14 +408,14 @@
 										<path d={gridPath(view[0], view[1], grid, vertical)} vector-effect="non-scaling-stroke" />
 									</svg>
 									{#if over?.track === id}
-										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at * secs(t)))} style:--l={share(grid / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(grid / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
 									{/if}
 									{#each t.notes as n, i}
 										<div
 											class="note"
 											class:picked={mine === n}
-											style:--a={share(along(n.at * secs(t)))}
-											style:--l={share((n.length * secs(t)) / width)}
+											style:--a={share(along(n.at))}
+											style:--l={share((n.length) / width)}
 											style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
 											style:--s={share(1 / (hi - lo + 1))}
 											style:opacity={0.4 + 0.6 * n.velocity}
@@ -426,10 +426,10 @@
 									{/each}
 								{:else}
 									<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
-										<path d={lanePath(t.keys, t.range, (at) => along(at * secs(t)), vertical)} vector-effect="non-scaling-stroke" />
+										<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 									</svg>
 									{#each t.keys as k, i}
-										<span class="key" class:picked={mine === k} style:--a={share(along(k.at * secs(t)))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
+										<span class="key" class:picked={mine === k} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
 									{/each}
 								{/if}
 							</div>
@@ -442,8 +442,8 @@
 					{@const from = clamp(along(band[0]), 0, 1)}
 					<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
 				{/if}
-				{#if within(clock('time'), view)}
-					<div class="playhead" data-testid="timeline-playhead" style:--a={along(clock('time'))}></div>
+				{#if within(beat, view)}
+					<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
 				{/if}
 			</div>
 			{#if shown.length === 0}
@@ -558,8 +558,17 @@
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 	}
-	.info :global(.name) {
+	/* The track's name, and beside it the buttons that hide it and delete it. */
+	.title {
 		flex: 1 1 100%;
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+	}
+	.title :global(.name) {
+		flex: 1 1 0;
+		min-width: 0;
 	}
 	/* A note track's keyboard stands between what it says and its lane, a key per row. */
 	.notes .info {

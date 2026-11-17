@@ -21,13 +21,11 @@ const NOTES: (&str, usize) = MIDI_ENTRIES[1];
 /// The one element of a curve track's group.
 const VALUE: &str = "value";
 
-/// A track: its name, which is its variable group's; whether its times are beats of `clock.bpm`
-/// and not seconds; and what it holds.
+/// A track: its name, which is its variable group's, and what it holds. Its times are beats of
+/// `clock.bpm`, so a change of the tempo moves them all together.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
-    #[serde(default)]
-    pub beats: bool,
     #[serde(flatten)]
     pub lanes: Lanes,
 }
@@ -138,7 +136,7 @@ impl Timeline {
         let mut out = Timeline::default();
         for track in tracks.values() {
             // A tempo of nothing is the slowest there is: a beat never comes.
-            let seconds = |at: f64| if track.beats { at * 60.0 / bpm.max(1e-9) } else { at };
+            let seconds = |at: f64| at * 60.0 / bpm.max(1e-9);
             match &track.lanes {
                 Lanes::Note { notes, .. } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();

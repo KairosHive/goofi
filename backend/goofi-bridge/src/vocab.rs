@@ -67,7 +67,7 @@ pub static PANEL_TYPES: &[PanelType] = &[
     PanelType { id: "machine", title: "State machine", icon: "waypoints", accepts_node: false,
                 doc: "one state machine: its states, transitions and playheads on a canvas" },
     PanelType { id: "timeline", title: "Timeline", icon: "chart-no-axes-gantt", accepts_node: false,
-                doc: "every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id, `state.beats` is whether its ruler counts beats" },
+                doc: "every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id, `state.grid` names the grid its notes snap to" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,

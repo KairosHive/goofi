@@ -547,6 +547,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: a note track of the timeline is a port too. A node that joins takes the note the
     // position is in; a pause releases it and a resume strikes it again; of two notes of one pitch
     // that overlap, the end of the first leaves the second sounding; a removed track ends its notes.
+    // At a tempo of 60 a track's beat is a second.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
     g.call("timeline track add", j!({ "kind": "note", "name": "keys" }));
     let note = |at: f64, length: f64, pitch: u8| j!({ "at": at, "length": length, "pitch": pitch, "velocity": 100.0 / 127.0 });
     g.call("timeline track edit", j!({ "track": "keys", "notes": [note(0.0, 1000.0, 69), note(500.0, 1e6, 69), note(550.0, 150.0, 60), note(1400.0, 1e6, 72)] }));
@@ -575,16 +577,16 @@ fn a_patch_sounds_under_the_external_clock() {
         let (x, channels) = drive(g, TENTH);
         (0..3).find(|c| channels == 3 && x[x.len() - 3 + c] > 0.99)
     };
-    g.call("variable entry edit", j!({ "name": "clock.start", "value": 10.0 }));
-    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.3 }));
+    g.call("clock set", j!({ "section": [10.0, 10.3] }));
     let first = g.until("the note to sound in the loop", voice);
     g.until("the loop's restart to strike the note again", |g| voice(g).filter(|v| *v != first));
-    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.0 }));
+    g.call("clock set", j!({ "section": [0.0, 0.0] }));
     g.call("clock set", j!({ "time": 600.0 }));
     sounds_at(&g, "C4 beside the two A4s that overlap", &[0.0, 0.75]);
     g.call("clock set", j!({ "time": 1500.0 }));
     sounds_at(&g, "the second A4 to sound on past the end of the first, beside C5", &[0.75, 1.0]);
     g.call("timeline track remove", j!({ "track": "keys" }));
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
     sounds_at(&g, "a removed track to end its notes", &[]);
     g.call("node remove", j!({ "node": hex(voices) }));
     g.call("node remove", j!({ "node": hex(midi) }));

@@ -342,10 +342,9 @@ pub static SYSTEM_VARIABLES: &[VariableDef] = &[
         ephemeral: true,
     },
     VariableDef { name: "clock.bpm", value: || Data::number(120.0), doc: "The tempo, in beats a minute: what a time in beats is read by.", ephemeral: false },
-    VariableDef { name: "clock.start", value: || Data::number(0.0), doc: "The second the clock's loop begins at: where the position restarts.", ephemeral: false },
-    VariableDef { name: "clock.length", value: || Data::number(0.0), doc: "The seconds the clock's loop lasts: the position restarts at `clock.start` when it reaches the loop's end. 0 is endless, the position counts up from the load.", ephemeral: false },
+    VariableDef { name: "clock.length", value: || Data::number(0.0), doc: "The timeline's length in beats: the clock's position restarts from 0 when it reaches it. 0 is endless, the position counts up from the load.", ephemeral: false },
     VariableDef { name: "clock.time", value: || Data::number(0.0), doc: "The clock's position in seconds: what `t` is. `clock set` pauses and places it.", ephemeral: true },
-    VariableDef { name: "clock.progress", value: || Data::number(0.0), doc: "The clock's position along its loop, 0..1; 0 while the clock is endless.", ephemeral: true },
+    VariableDef { name: "clock.progress", value: || Data::number(0.0), doc: "The clock's position along `clock.length`, 0..1; 0 while the clock is endless.", ephemeral: true },
     VariableDef { name: "clock.playing", value: || Data::number(1.0), doc: "Whether the clock's position plays: 0 while it is paused.", ephemeral: true },
 ];
 

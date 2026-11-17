@@ -2,16 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
 import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from './model';
 
-const notes: Track = { name: 'keys', beats: true, kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
-const curve: Track = { name: 'fade', beats: false, kind: 'curve', range: [0, 2], keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
+const notes: Track = { name: 'keys', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
+const curve: Track = { name: 'fade', kind: 'curve', range: [0, 2], keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
 
 describe('the timeline model', () => {
-	it('reads a time in beats by the tempo, and in seconds as it is', () => {
+	it('reads a beat by the tempo, and finds where the tracks end', () => {
 		expect(unit(true, 120)).toBe(0.5);
 		expect(unit(false, 120)).toBe(1);
-		expect(contentEnd([notes, curve], 120)).toBe(3);
-		expect(contentEnd([notes, curve], 30)).toBe(8);
-		expect(contentEnd([], 120)).toBe(0);
+		expect(contentEnd([notes, curve])).toBe(4);
+		expect(contentEnd([])).toBe(0);
 	});
 
 	it('marks the ruler at a round step, over what is in view', () => {

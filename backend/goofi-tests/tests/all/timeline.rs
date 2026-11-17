@@ -26,6 +26,8 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     let g = Goofi::new();
     g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
     at(&g, 0.0);
+    // A track's times are beats: at a tempo of 60 a beat is a second.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
 
     // A curve track: one value, eased between its keyframes and held outside them.
     let sweep = g.call("timeline track add", j!({ "kind": "curve", "name": "sweep" }));
@@ -45,9 +47,10 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     g.call("timeline track edit", j!({ "track": "sweep", "keys": stepped }));
     at(&g, 2.0);
     g.until("the stepped level before its next keyframe", |g| (number(g, "sweep.value") == 0.0).then_some(()));
-    // In beats, a time follows the tempo: beat 2 is one second at 120 and two at 60.
-    g.call("timeline track edit", j!({ "track": "sweep", "beats": true, "keys": ramp }));
+    // A time follows the tempo: beat 2 is one second at 120 and two at 60.
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": ramp }));
     at(&g, 1.0);
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
     g.until("the level at beat 2 of a tempo of 120", |g| ((number(g, "sweep.value") - 5.0).abs() < 1e-3).then_some(()));
     g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
     g.until("the level at beat 1 of a tempo of 60", |g| (number(g, "sweep.value") == 0.0).then_some(()));
@@ -56,7 +59,7 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     at(&g, 2.0);
     g.until("the level at a tempo of nothing", |g| (number(g, "sweep.value") == 0.0).then_some(()));
     at(&g, 1.0);
-    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
 
     // A note track: the velocity of each note the position is in, as a device's `notes` has it.
     g.call("timeline track add", j!({ "kind": "note", "name": "keys" }));
@@ -98,6 +101,7 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     // A rename moves the group with what it holds, and every expression that reads it follows.
     let reader = g.add("_TestScalar");
     g.call("node param edit", j!({ "node": hex(reader), "param": "control/value", "expression": "vars.sweep.value" }));
+    at(&g, 2.0);
     g.call("timeline track edit", j!({ "track": "sweep", "to": "rise" }));
     assert_eq!(g.doc()["nodes"][hex(reader)]["params"]["control"]["value"]["expression"], j!("vars.rise.value"));
     g.until("the renamed track's variable", |g| ((number(g, "rise.value") - 5.0).abs() < 1e-3).then_some(()));

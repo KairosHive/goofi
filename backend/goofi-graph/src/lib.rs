@@ -3251,18 +3251,19 @@ impl Graph {
         self.runtime.time.clone()
     }
 
-    /// The clock as the store says it: the loop its position restarts in, and the readings a
+    /// The clock as the store says it: the length its position restarts at, and the readings a
     /// patch takes as variables. Both are functionals of `t`, so nothing publishes as it runs.
     fn sync_clock(&self) {
         let number = |name: &str| self.variables().get(name).map_or(0.0, goofi_core::control::number_of);
         // A length under a millisecond is no length: nothing could read a position that short.
-        let length = Some(number("clock.length")).filter(|l| *l >= 1e-3).unwrap_or(0.0);
-        let start = number("clock.start").max(0.0);
-        self.runtime.time.set_loop(start, length);
+        // The length is beats, and a tempo of nothing has no beat: the clock is endless then.
+        let tempo = number("clock.bpm");
+        let length = Some(number("clock.length") * 60.0 / tempo).filter(|l| tempo > 0.0 && *l >= 1e-3).unwrap_or(0.0);
+        self.runtime.time.set_length(length);
         if self.runtime.evaluator.is_none() {
             return;
         }
-        let progress = if length > 0.0 { format!("min(max(t - {start:?}, 0.0) / {length:?}, 1.0)") } else { "0.0".to_string() };
+        let progress = if length > 0.0 { format!("min(t / {length:?}, 1.0)") } else { "0.0".to_string() };
         // Compiled before the store is locked: a compile takes the interpreter.
         let frames = [("clock.time", "t"), ("clock.progress", progress.as_str())].map(|(name, source)| (name, machine::functional_code(&self.runtime.evaluator, source)));
         let mut store = self.variables();

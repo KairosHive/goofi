@@ -13,6 +13,7 @@
 		min,
 		max,
 		step = 1,
+		digits,
 		class: klass = '',
 		...rest
 	}: Omit<HTMLInputAttributes, 'value' | 'type' | 'inputmode' | 'min' | 'max' | 'step' | 'oninput'> & {
@@ -21,6 +22,8 @@
 		min?: number;
 		max?: number;
 		step?: number;
+		/** The decimal places it always shows; without it, as many as the number has. */
+		digits?: number;
 	} = $props();
 
 	const ownId = $props.id();
@@ -37,7 +40,7 @@
 	});
 
 	function fmt(n: number): string {
-		return Number.isFinite(n) ? String(n) : '';
+		return !Number.isFinite(n) ? '' : digits === undefined ? String(n) : n.toFixed(digits);
 	}
 	function clamp(n: number): number {
 		if (min !== undefined) n = Math.max(min, n);
