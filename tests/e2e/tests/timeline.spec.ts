@@ -35,7 +35,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	await waitForApp(page);
 	const menuItem = (label: string): Locator => page.locator('.context-menu .item', { hasText: label }).first();
 	try {
-		// The view follows the clock, so the walk begins with the clock at rest at 0.
+		// The walk begins with the clock at rest at 0, where the view begins.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
@@ -176,25 +176,28 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await keys.getByTestId('track-delete-picked').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
-		// One click on a note takes it out; one on its empty cell puts a note back.
+		// One click on a note takes it out; one on an empty cell puts a note on the line of the
+		// grid before it, and the grid is the bar's to choose.
 		await note.first().click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
-		await lane.click({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
+		await panel.getByTestId('timeline-grid').locator('select').selectOption('1 s');
+		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
+		expect((await trackNamed(page, 'track0')).notes[0]).toMatchObject({ at: 2, length: 1 });
 		// A name typed over the track's is a rename: the track is the same one.
 		await keys.getByLabel('Track name').fill('lead');
 		await keys.getByLabel('Track name').press('Enter');
 		await expect.poll(async () => (await trackNamed(page, 'lead'))?.notes.length).toBe(1);
 
-		// A curve track is one line: a double click on its lane makes a keyframe, and a drag moves
-		// it in time and in value.
+		// A curve track is one line: a click on its lane makes a keyframe, and a drag moves it in
+		// time and in value.
 		const curve = fade;
 		const attr = curve.getByTestId('track-lane');
 		const box = (await attr.boundingBox())!;
 		const keysOf = async (): Promise<any[]> => (await trackNamed(page, 'track1')).keys;
-		await attr.dblclick({ position: { x: box.width * 0.2, y: box.height * 0.75 } });
+		await attr.click({ position: { x: box.width * 0.2, y: box.height * 0.75 } });
 		await expect.poll(async () => (await keysOf()).length).toBe(1);
-		await attr.dblclick({ position: { x: box.width * 0.6, y: box.height * 0.25 } });
+		await attr.click({ position: { x: box.width * 0.6, y: box.height * 0.25 } });
 		await expect.poll(async () => (await keysOf()).length).toBe(2);
 		const [first, last] = await keysOf();
 		expect(first.at < last.at && first.value < last.value, 'the keyframes are where they were made').toBe(true);
@@ -234,16 +237,19 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await panel.getByTestId('clock-stop').click();
 		await expect(panel.getByTestId('clock-time')).toHaveValue('0');
 		const time = panel.getByTestId('clock-time');
-		// Far past what the tracks hold, the view goes with the clock: the line of the position is
-		// drawn from the ruler down across every track, and its field shows the whole number.
+		// The line of the position crosses the ruler and every track. Far past what is in view the
+		// view stays where it is and shows no line, and the position's field shows the whole number.
+		const line = panel.getByTestId('timeline-playhead');
+		const [top, bottom] = [(await panel.getByTestId('timeline-ruler').boundingBox())!, (await panel.locator('section.track').last().boundingBox())!];
+		const drawn = (await line.boundingBox())!;
+		expect(drawn.y <= top.y + 1 && drawn.y + drawn.height >= bottom.y + bottom.height - 1, 'the line crosses the ruler and every track').toBe(true);
+		const lastMark = async (): Promise<number> => Number(await panel.getByTestId('timeline-ruler').locator('.tick').last().innerText());
+		const marked = await lastMark();
 		await rawCall(page, 'clock set', { time: 1234.56 });
 		await expect(time).toHaveValue('1234.56');
-		const line = panel.getByTestId('timeline-playhead');
-		expect.soft(await line.count(), 'the line of the position is drawn').toBe(1);
-		const [top, bottom] = [(await panel.getByTestId('timeline-ruler').boundingBox())!, (await panel.locator('section.track').last().boundingBox())!];
-		const drawn = (await line.boundingBox()) ?? { y: 0, height: 0 };
-		expect.soft(drawn.y <= top.y + 1 && drawn.y + drawn.height >= bottom.y + bottom.height - 1, 'the line crosses the ruler and every track').toBe(true);
-		expect.soft(await time.evaluate((el: HTMLInputElement) => el.scrollWidth <= el.clientWidth), 'the field shows the whole position').toBe(true);
+		await expect(line).toHaveCount(0);
+		expect(await lastMark(), 'the view stays').toBe(marked);
+		expect(await time.evaluate((el: HTMLInputElement) => el.scrollWidth <= el.clientWidth), 'the field shows the whole position').toBe(true);
 		await rawCall(page, 'clock set', { time: 0 });
 		await expect(time).toHaveValue('0');
 		await time.fill('3');
@@ -272,12 +278,16 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(() => clock(page, 'bpm')).toBe(90);
 
 		// A drag along the ruler marks the section the clock loops in: the position restarts at
-		// the section's start. A click on the ruler clears the section.
-		await page.mouse.move(axis.x + axis.width * 0.25, axis.y + 4);
-		await page.mouse.down();
-		await page.mouse.move(axis.x + axis.width * 0.5, axis.y + 4, { steps: 6 });
-		await page.mouse.up();
-		await expect.poll(() => clock(page, 'length')).toBeCloseTo(timeAt(0.5) - timeAt(0.25), 1);
+		// the section's start.
+		const mark = async (): Promise<void> => {
+			await page.mouse.move(axis.x + axis.width * 0.25, axis.y + 4);
+			await page.mouse.down();
+			await page.mouse.move(axis.x + axis.width * 0.5, axis.y + 4, { steps: 6 });
+			await page.mouse.up();
+			await expect.poll(() => clock(page, 'length')).toBeGreaterThan(0);
+		};
+		await mark();
+		expect(await clock(page, 'length')).toBeCloseTo(timeAt(0.5) - timeAt(0.25), 1);
 		const start = await clock(page, 'start');
 		expect(start).toBeCloseTo(timeAt(0.25), 1);
 		await expect(panel.getByTestId('timeline-loop')).toBeVisible();
@@ -292,18 +302,30 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 			}, 'the position restarts inside the section')
 			.toBe(true);
 		expect(before).toBeGreaterThanOrEqual(start);
-		await expect(panel.getByTestId('clock-loop')).toBeVisible();
-		await ruler.click({ position: { x: axis.width * 0.75, y: 4 } });
+		await rawCall(page, 'clock set', { playing: false });
+		// A double click on the section looks at the section alone, and keeps it; the loop chip
+		// clears it, and a double click on the ruler then looks at everything again.
+		const firstMark = async (): Promise<number> => Number(await ruler.locator('.tick').first().innerText());
+		await ruler.dblclick({ position: { x: axis.width * 0.375, y: 4 } });
+		await expect.poll(firstMark).toBeCloseTo(start, 1);
+		expect(await lastMark()).toBeCloseTo(start + (await clock(page, 'length')), 1);
+		await panel.getByTestId('clock-loop').click();
 		await expect.poll(() => clock(page, 'length')).toBe(0);
 		await expect(panel.getByTestId('timeline-loop')).toHaveCount(0);
+		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
+		await expect.poll(lastMark).toBe(marked);
+		// A click on the ruler outside the section clears it.
+		await mark();
+		await ruler.click({ position: { x: axis.width * 0.75, y: 4 } });
+		await expect.poll(() => clock(page, 'length')).toBe(0);
 
 		// The range bar is the view: its end dragged in zooms in, and dragged out past the end of
 		// the bar zooms out past everything there is.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
 		await expect(time).toHaveValue('0');
-		const lastMark = async (): Promise<number> => Number(await ruler.locator('.tick').last().innerText());
-		await expect.poll(lastMark).toBe(8);
+		await expect.poll(lastMark).toBe(marked);
 		const bar = (await panel.getByTestId('range-bar').boundingBox())!;
+		expect(bar.y + bar.height, 'the range bar is right above the ruler').toBeLessThanOrEqual(axis.y + 1);
 		await dragBy(page, panel.getByTestId('range-to'), -bar.width / 2, 0);
 		await expect.poll(lastMark).toBeLessThan(6);
 		await dragBy(page, panel.getByTestId('range-to'), bar.width * 1.5, 0);
@@ -352,7 +374,8 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 		const track = page.getByTestId('track-keys');
 		const lane = (await track.getByTestId('track-lane').boundingBox())!;
 		for (const notes of [1, 0]) {
-			await page.touchscreen.tap(lane.x + lane.width * 0.3, lane.y + lane.height / 2);
+			// Inside a cell, clear of the line it begins on and of the end a drag stretches.
+			await page.touchscreen.tap(lane.x + lane.width * 0.3, lane.y + lane.height * 0.505);
 			await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(notes);
 		}
 		const head = (await track.locator('.info').boundingBox())!;

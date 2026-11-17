@@ -29,13 +29,13 @@
 	const handles = $derived(draft ?? handlesOf(value));
 	const custom = $derived(isBezier(curve));
 
-	// The square shows y from -0.25 to 1.25, so an overshooting handle stays in reach.
+	// The square is the curve's own, 0 to 1 each way: a handle that overshoots is typed in its
+	// field, and is drawn past the square's edge.
 	const W = 100;
-	const PAD = 25;
-	const H = W + 2 * PAD;
+	const H = W;
 	const px = (x: number): number => x * W;
-	const py = (y: number): number => H - PAD - y * W;
-	const path = $derived(curvePath(curve, W, W).replace(/(-?\d+\.?\d*) (-?\d+\.?\d*)/g, (_, x, y) => `${x} ${Number(y) + PAD}`));
+	const py = (y: number): number => H - y * W;
+	const path = $derived(curvePath(curve, W, W));
 
 	const SEGMENTS = [...PRESETS.map((id) => ({ id, label: id === 'in_out' ? 'in·out' : id, title: `The ${id} preset` })), { id: 'custom', label: 'custom', title: 'A bezier of your own, from the shape the preset left' }];
 	function choose(id: string): void {
@@ -48,7 +48,7 @@
 	function at(e: PointerEvent): [number, number] {
 		const box = square!.getBoundingClientRect();
 		const x = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
-		const y = Math.min(1.25, Math.max(-0.25, 1.25 - ((e.clientY - box.top) / box.height) * (H / W)));
+		const y = Math.min(1, Math.max(0, 1 - (e.clientY - box.top) / box.height));
 		return [Number(x.toFixed(3)), Number(y.toFixed(3))];
 	}
 	function down(i: 0 | 1, e: PointerEvent): void {
@@ -82,7 +82,7 @@
 	<Segmented value={custom ? 'custom' : (curve as string)} segments={SEGMENTS} onChange={choose} {disabled} aria-label="curve" data-testid="curve-preset" fill />
 	<svg class="ui-curve-square" class:custom bind:this={square} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="the curve" data-testid="curve-square"
 		onpointermove={move} onpointerup={up} onpointercancel={up}>
-		<rect class="ui-curve-unit" x="0" y={PAD} width={W} height={W} />
+		<rect class="ui-curve-unit" x="0" y="0" width={W} height={W} />
 		<line class="ui-curve-diagonal" x1="0" y1={py(0)} x2={W} y2={py(1)} />
 		<path class="ui-curve-line" d={path} vector-effect="non-scaling-stroke" />
 		{#if custom}
@@ -117,7 +117,8 @@
 	.ui-curve-square {
 		display: block;
 		width: 100%;
-		aspect-ratio: 100 / 150;
+		aspect-ratio: 1;
+		overflow: visible;
 		border-radius: var(--radius-sm);
 		background: var(--surface-1);
 		touch-action: none;
