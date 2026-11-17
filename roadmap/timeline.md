@@ -29,6 +29,10 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - The panel's axis fits the clock's length, or else the tracks' content: it has no zoom, no
   scroll and no snap to a grid.
 - The panel edits one note or keyframe at a time: no selection of several, no copy.
+- The panel has no keyboard path to a note, a keyframe or a track's menu.
+- A name the manager refuses, or one that is no identifier, stays in the name field until the
+  name next moves: the shared live value holds a commit as pending. The machine's attribute
+  form has the same fault.
 - A panel keeps the id of a removed track in `state.hidden`; nothing reads it.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.

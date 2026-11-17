@@ -4,7 +4,7 @@
      is a `timeline` or a `clock` op, so the manager owns the model and this panel the drawing and
      the gesture. -->
 <script lang="ts">
-	import { ContextMenu, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
+	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { graph } from '$lib/stores/graph.svelte';
@@ -39,15 +39,17 @@
 		const v = variableValue(`clock.${name}`);
 		return typeof v === 'number' ? v : 0;
 	}
-	const bpm = $derived(clock('bpm') || 120);
 	const playing = $derived(clock('playing') > 0);
 	/** The seconds one mark of the ruler counts. */
-	const mark = $derived(unit(view.beats === true, bpm));
+	const mark = $derived(unit(view.beats === true, clock('bpm')));
+	/** What a drag holds still, so its own previews move neither: the axis, and its lane's range. */
+	let frozen = $state<{ span: number; track: string; range: [number, number] } | null>(null);
 	/** The seconds the axis spans: the clock's length while it restarts there, else what the tracks hold. */
-	const span = $derived(clock('loop') > 0 && clock('length') > 0 ? clock('length') : Math.max(8, contentEnd(Object.values(g.timeline), bpm) * 1.25));
+	const span = $derived(frozen?.span ?? (clock('loop') > 0 && clock('length') > 0 ? clock('length') : Math.max(8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25)));
 	const steer = (to: { playing?: boolean; time?: number }): void => void g.op('clock set', to).catch(fail('Set clock'));
 	const set = (name: string, value: number): void => void g.setVariableValue(`clock.${name}`, value).catch(fail('Set clock'));
 	const fixed = (v: number): number => Number(v.toFixed(3));
+	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 	const fraction = (p: { clientX: number; clientY: number }, el: Element): [number, number] => {
 		const box = el.getBoundingClientRect();
 		return [(p.clientX - box.left) / box.width, (p.clientY - box.top) / box.height];
@@ -56,12 +58,13 @@
 	// ---- the tracks: an edit is one op on the track; what a panel hides is the panel's state.
 	const edit = (track: string, patch: Record<string, unknown>): void => void g.op('timeline track edit', { track, ...patch }).catch(fail('Edit track'));
 	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind, beats: view.beats === true }).catch(fail('Add track'));
-	const hide = (ids: string[], label: string): void => setState({ ...view, hidden: ids }, 'authored', label);
+	const hide = (ids: string[], label: string): void => setState({ hidden: ids }, 'authored', label);
 	const rename = (id: string, to: string): void => {
 		if (to !== g.timeline[id].name && isValidIdentifier(to)) edit(id, { to });
 	};
-	/** A track asked to be deleted, until the dialog answers. */
-	let doomed = $state<string | null>(null);
+	/** The track asked to be deleted, until the dialog answers or the track goes. */
+	let asked = $state('');
+	const doomed = $derived(g.timeline[asked]);
 
 	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function trackMenu(id: string, x: number, y: number): void {
@@ -70,7 +73,7 @@
 			return { label, disabled: more.length === 0, action: () => hide([...hidden, ...more], label) };
 		};
 		const items = [entry('this', 'Hide Track'), entry('above', 'Hide Tracks Above'), entry('below', 'Hide Tracks Below'), entry('others', 'Hide Other Tracks')];
-		menu = { x, y, items: [...items, { separator: true }, { label: 'Delete Track…', icon: 'x', action: () => (doomed = id) }] };
+		menu = { x, y, items: [...items, { separator: true }, { label: 'Delete Track…', icon: 'x', action: () => (asked = id) }] };
 	}
 	/** A menu that drops from the bar button that opened it. */
 	function drop(e: MouseEvent, items: MenuItem[]): void {
@@ -83,10 +86,17 @@
 
 	// ---- the notes and the keyframes: what a lane holds, a note track's lane being the empty name.
 	let picked = $state<{ track: string; lane: string; index: number } | null>(null);
+	/** Pick a note or a keyframe, or nothing. The focus leaves first, so a field that shows the one
+	 * picked before commits to that one. */
+	function pick(next: typeof picked): void {
+		(document.activeElement as HTMLElement | null)?.blur();
+		picked = next;
+	}
 	const held = (t: Track, lane: string): (Note | Key)[] => (t.kind === 'note' ? t.notes : (t.attributes[lane]?.keys ?? []));
 	const put = (t: Track, lane: string, items: unknown[]): Record<string, unknown> =>
 		t.kind === 'note' ? { notes: items } : { attributes: { [lane]: { ...t.attributes[lane], keys: items } } };
-	const units = (t: Track): number => span / unit(t.beats, bpm);
+	const range = (t: Track, lane: string): [number, number] => (t.kind === 'note' ? pitches(t.notes) : t.attributes[lane].range);
+	const units = (t: Track): number => span / unit(t.beats, clock('bpm'));
 	/** Change the picked note or keyframe, or with null remove it. */
 	function change(id: string, t: Track, to: Partial<Note & Key> | null): void {
 		const { lane, index } = picked!;
@@ -97,42 +107,51 @@
 	function addAt(e: MouseEvent, id: string, t: Track, lane: string): void {
 		if (e.target !== e.currentTarget) return;
 		const [fx, fy] = fraction(e, e.currentTarget as Element);
-		const [lo, hi] = t.kind === 'note' ? pitches(t.notes) : t.attributes[lane].range;
+		const [lo, hi] = range(t, lane);
 		const at = fixed(fx * units(t));
-		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: hi - Math.floor(fy * (hi - lo + 1)), velocity: 0.8 } : { at, value: fixed(hi - fy * (hi - lo)), curve: 'linear' };
+		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: clamp(hi - Math.floor(fy * (hi - lo + 1)), lo, hi), velocity: 0.8 } : { at, value: fixed(clamp(hi - fy * (hi - lo), lo, hi)), curve: 'linear' };
 		edit(id, put(t, lane, [...held(t, lane), born]));
 	}
-	/** A drag of one note or keyframe: each move previews the lane with it at the pointer, and the
-	 * release sends the last of them as the edit. `stretch` drags a note's end and not the note. */
-	function dragItem(e: PointerEvent, id: string, t: Track, lane: string, index: number, stretch = false): void {
+	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane,
+	 * and the release sends the last of them as the edit. A press that does not move is a pick alone. */
+	let drag: (() => void) | undefined;
+	function dragItem(e: PointerEvent, id: string, t: Track, lane: string, index: number): void {
 		e.stopPropagation();
-		picked = { track: id, lane, index };
-		const el = e.currentTarget as HTMLElement;
-		const ground = el.closest('.lane')!;
-		const [x0] = fraction(e, ground);
-		const [lo, hi] = t.kind === 'note' ? pitches(t.notes) : t.attributes[lane].range;
-		const all = held(t, lane);
-		const moved = (fx: number, fy: number): Note | Key => {
-			const o = all[index];
-			if ('pitch' in o) {
-				if (stretch) return { ...o, length: fixed(Math.max(0.01, fx * units(t) - o.at)) };
-				return { ...o, at: fixed(Math.max(0, o.at + (fx - x0) * units(t))), pitch: Math.min(127, Math.max(0, hi - Math.floor(fy * (hi - lo + 1)))) };
-			}
-			// A keyframe stays between its neighbours and inside the attribute's range.
-			const [before, after] = [(all[index - 1]?.at ?? -1) + 0.001, (all[index + 1]?.at ?? Infinity) - 0.001];
-			return { ...o, at: fixed(Math.min(after, Math.max(0, before, fx * units(t)))), value: fixed(Math.min(hi, Math.max(lo, hi - fy * (hi - lo)))) };
-		};
+		pick({ track: id, lane, index });
+		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
+		const [x0, y0] = fraction(e, ground);
+		const [lo, hi] = range(t, lane);
+		const [all, per] = [held(t, lane), units(t)];
+		const o = all[index];
 		let patch: Record<string, unknown> | null = null;
-		beginDrag(el, e.pointerId, {
+		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => {
+				if (!patch && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
+				frozen ??= { span, track: id, range: [lo, hi] };
 				const [fx, fy] = fraction(p, ground);
-				patch = put(t, lane, all.map((o, k) => (k === index ? moved(fx, fy) : o)));
+				const at = o.at + (fx - x0) * per;
+				// A keyframe stays between its neighbours and inside the attribute's range.
+				const next =
+					'pitch' in o
+						? { ...o, at: fixed(Math.max(0, at)), pitch: clamp(o.pitch - Math.round((fy - y0) * (hi - lo + 1)), lo, hi) }
+						: { ...o, at: fixed(clamp(at, Math.max(0, (all[index - 1]?.at ?? -1) + 0.001), (all[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value - (fy - y0) * (hi - lo), lo, hi)) };
+				patch = put(t, lane, all.map((was, k) => (k === index ? next : was)));
 				g.previewTrack(id, patch);
 			},
-			commit: () => patch && edit(id, patch),
-			cancel: () => g.previewTrack(id, put(t, lane, all))
+			commit: () => {
+				frozen = null;
+				if (patch) edit(id, patch);
+			},
+			cancel: () => {
+				frozen = null;
+				if (patch) g.previewTrack(id, put(t, lane, all));
+			}
 		});
 	}
+	$effect(() => () => {
+		press.cancel();
+		drag?.();
+	});
 	/** A new attribute on a curve track, under the first free name. */
 	function addAttribute(id: string, t: Extract<Track, { kind: 'curve' }>): void {
 		const names = Object.values(t.attributes).map((l) => l.name);
@@ -146,13 +165,13 @@
 		{#snippet start()}
 			<IconButton label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
 			<IconButton label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
-			<NumberInput class="num" aria-label="Position" title="The clock's position" data-testid="clock-time" value={Number((clock('time') / mark).toFixed(2))} min={0} onChange={(v) => steer({ time: v * mark })} />
-			<Segmented value={view.beats ? 'beats' : 's'} segments={UNITS} data-testid="timeline-unit" onChange={(u) => setState({ ...view, beats: u === 'beats' }, 'authored', 'Set ruler unit')} />
+			<NumberInput aria-label="Position" title="The clock's position" data-testid="clock-time" value={Number((clock('time') / mark).toFixed(2))} min={0} onChange={(v) => steer({ time: v * mark })} />
+			<Segmented aria-label="Ruler unit" value={view.beats ? 'beats' : 's'} segments={UNITS} data-testid="timeline-unit" onChange={(u) => setState({ beats: u === 'beats' }, 'authored', 'Set ruler unit')} />
 		{/snippet}
 		{#snippet end()}
-			<NumberInput class="num" aria-label="Tempo" title="The tempo, in beats a minute" data-testid="clock-bpm" value={bpm} min={1} max={999} onChange={(v) => set('bpm', v)} />
+			<NumberInput aria-label="Tempo" title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => set('bpm', v)} />
 			<Segmented value={clock('loop') > 0 ? 'loop' : null} segments={[{ id: 'loop', label: 'loop', title: 'Restart the clock at the length', testid: 'clock-loop' }]} onChange={() => set('loop', clock('loop') > 0 ? 0 : 1)} />
-			<NumberInput class="num" aria-label="Length" title="Where the clock restarts while it loops" data-testid="clock-length" value={Number((clock('length') / mark).toFixed(2))} min={0} onChange={(v) => set('length', v * mark)} />
+			<NumberInput aria-label="Length" title="Where the clock restarts while it loops" data-testid="clock-length" value={Number((clock('length') / mark).toFixed(2))} min={0} onChange={(v) => set('length', v * mark)} />
 			{#if stowed.length > 0}
 				<Button size="sm" data-testid="timeline-hidden" title="Hidden tracks: pick one to show it" onclick={(e) => drop(e, stowed.map((id) => ({ label: g.timeline[id].name, action: () => hide(hidden.filter((h) => h !== id), 'Show Track') })))}>
 					{stowed.length} hidden <Icon name="chevron-down" />
@@ -161,104 +180,110 @@
 			<IconButton label="Add track" data-testid="timeline-add" onclick={(e) => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }])}><Icon name="plus" /></IconButton>
 		{/snippet}
 	</Bar>
-	<ScrollArea class="tracks">
-		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-		<div class="row ruler" data-testid="timeline-ruler">
-			<span></span>
-			<div class="lane" onclick={(e) => steer({ time: fraction(e, e.currentTarget)[0] * span })} title="Click to put the clock's position here">
-				{#each ticks(span / mark) as tick (tick)}<span class="tick" style:left={`${(100 * tick * mark) / span}%`}>{tick}</span>{/each}
+	<ScrollArea>
+		<div class="stack">
+			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+			<div class="row ruler" data-testid="timeline-ruler">
+				<span></span>
+				<div class="lane" onclick={(e) => steer({ time: fraction(e, e.currentTarget)[0] * span })} title="Click to put the clock's position here">
+					{#each ticks(span / mark) as tick (tick)}<span class="tick" style:left={`${(100 * tick * mark) / span}%`}>{tick}</span>{/each}
+				</div>
 			</div>
-		</div>
-		{#each shown as id (id)}
-			{@const t = g.timeline[id]}
-			{@const mine = picked?.track === id ? held(t, picked.lane)[picked.index] : undefined}
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<section
-				class="track"
-				data-testid={`track-${t.name}`}
-				oncontextmenu={(e) => {
-					e.preventDefault();
-					trackMenu(id, e.clientX, e.clientY);
-				}}
-				onpointerdown={(e) => {
-					pressed = id;
-					if (e.pointerType !== 'mouse') press.start(e);
-				}}
-				onpointermove={press.move}
-				onpointerup={press.cancel}
-				onpointercancel={press.cancel}
-			>
-				<header>
-					<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
-					<Segmented value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
-					{#if t.kind === 'curve'}
-						<IconButton size="sm" label="Add attribute" data-testid="track-add-attribute" onclick={() => addAttribute(id, t)}><Icon name="plus" /></IconButton>
-					{/if}
-					<span class="grow"></span>
-					{#if mine}
-						{#if 'pitch' in mine}
-							<NumberInput class="num" aria-label="Velocity" title="The note's velocity, 0 to 1" value={mine.velocity} min={0} max={1} step={0.05} onChange={(velocity) => change(id, t, { velocity })} />
-						{:else}
-							<NumberInput class="num" aria-label="Value" title="The keyframe's value" value={mine.value} step={0.01} onChange={(value) => change(id, t, { value })} />
-							<CurvePicker value={mine.curve} onChange={(curve) => change(id, t, { curve })} />
+			{#each shown as id (id)}
+				{@const t = g.timeline[id]}
+				{@const mine = picked?.track === id ? held(t, picked.lane)[picked.index] : undefined}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<section
+					class="track"
+					data-testid={`track-${t.name}`}
+					oncontextmenu={(e) => {
+						e.preventDefault();
+						trackMenu(id, e.clientX, e.clientY);
+					}}
+					onpointerdown={(e) => {
+						pressed = id;
+						if (e.pointerType !== 'mouse') press.start(e);
+					}}
+					onpointermove={press.move}
+					onpointerup={press.cancel}
+					onpointercancel={press.cancel}
+				>
+					<header>
+						<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
+						<Segmented aria-label="Time unit" value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
+						{#if t.kind === 'curve'}
+							<IconButton size="sm" label="Add attribute" data-testid="track-add-attribute" onclick={() => addAttribute(id, t)}><Icon name="plus" /></IconButton>
 						{/if}
-						<IconButton size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
-					{/if}
-					<IconButton size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
-				</header>
-				{#if t.kind === 'note'}
-					{@const [lo, hi] = pitches(t.notes)}
-					<div class="row">
-						<span class="side">{t.notes.length} notes</span>
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="lane" data-testid="track-lane" ondblclick={(e) => addAt(e, id, t, '')} onpointerdown={() => (picked = null)}>
-							{#each t.notes as n, i (i)}
-								<div
-									class="note"
-									class:picked={mine === n}
-									style:left={`${(100 * n.at) / units(t)}%`}
-									style:width={`${(100 * n.length) / units(t)}%`}
-									style:top={`${(100 * (hi - n.pitch)) / (hi - lo + 1)}%`}
-									style:height={`${100 / (hi - lo + 1)}%`}
-									style:opacity={0.4 + 0.6 * n.velocity}
-									onpointerdown={(e) => dragItem(e, id, t, '', i)}
-								>
-									<span class="end" onpointerdown={(e) => dragItem(e, id, t, '', i, true)}></span>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{:else}
-					{#each Object.entries(t.attributes) as [aid, lane] (aid)}
+						<span class="grow"></span>
+						{#if mine && picked}
+							{#if 'pitch' in mine}
+								<NumberInput aria-label="Length" title="How long the note lasts" value={mine.length} min={0.01} step={0.25} onChange={(length) => change(id, t, { length })} />
+								<NumberInput aria-label="Velocity" title="The note's velocity, 0 to 1" value={mine.velocity} min={0} max={1} step={0.05} onChange={(velocity) => change(id, t, { velocity })} />
+							{:else}
+								{@const [min, max] = range(t, picked.lane)}
+								<NumberInput aria-label="Value" title="The keyframe's value" value={mine.value} {min} {max} step={0.01} onChange={(value) => change(id, t, { value })} />
+								<CurvePicker value={mine.curve} onChange={(curve) => change(id, t, { curve })} />
+							{/if}
+							<IconButton size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
+						{/if}
+						<IconButton size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
+					</header>
+					{#if t.kind === 'note'}
+						{@const [lo, hi] = frozen?.track === id ? frozen.range : pitches(t.notes)}
 						<div class="row">
-							<span class="side">
-								<TextInput class="name" aria-label="Attribute name" value={lane.name} onChange={(name) => isValidIdentifier(name) && edit(id, { attributes: { [aid]: { ...lane, name } } })} />
-								{#each [0, 1] as end (end)}
-									<NumberInput class="num" aria-label={end ? 'Maximum' : 'Minimum'} title={end ? 'The highest value' : 'The lowest value'} value={lane.range[end]} step={0.1} onChange={(v) => edit(id, { attributes: { [aid]: { ...lane, range: lane.range.with(end, v) } } })} />
-								{/each}
-								<IconButton size="sm" label="Remove attribute" onclick={() => edit(id, { attributes: { [aid]: null } })}><Icon name="x" /></IconButton>
-							</span>
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div class="lane" data-testid={`track-lane-${lane.name}`} ondblclick={(e) => addAt(e, id, t, aid)} onpointerdown={() => (picked = null)}>
-								<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><path d={lanePath(lane, units(t), 1000, 100)} vector-effect="non-scaling-stroke" /></svg>
-								{#each lane.keys as k, i (i)}
-									<span
-										class="key"
-										class:picked={mine === k}
-										style:left={`${(100 * k.at) / units(t)}%`}
-										style:top={`${(100 * (lane.range[1] - k.value)) / (lane.range[1] - lane.range[0] || 1)}%`}
-										onpointerdown={(e) => dragItem(e, id, t, aid, i)}
-									></span>
-								{/each}
+							<span class="side">{t.notes.length} notes</span>
+							<div class="lane">
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<div class="ground" style:--rows={hi - lo + 1} data-testid="track-lane" ondblclick={(e) => addAt(e, id, t, '')} onpointerdown={() => pick(null)}>
+									{#each t.notes as n, i}
+										<div
+											class="note"
+											class:picked={mine === n}
+											style:left={`${(100 * n.at) / units(t)}%`}
+											style:width={`${(100 * n.length) / units(t)}%`}
+											style:top={`${(100 * (hi - n.pitch)) / (hi - lo + 1)}%`}
+											style:height={`${100 / (hi - lo + 1)}%`}
+											style:opacity={0.4 + 0.6 * n.velocity}
+											onpointerdown={(e) => dragItem(e, id, t, '', i)}
+										></div>
+									{/each}
+								</div>
 							</div>
 						</div>
-					{/each}
-				{/if}
-			</section>
-		{/each}
-		{#if clock('time') <= span}
-			<div class="playhead" data-testid="timeline-playhead" style:--at={clock('time') / span}></div>
-		{/if}
+					{:else}
+						{#each Object.entries(t.attributes) as [aid, lane] (aid)}
+							<div class="row">
+								<span class="side">
+									<TextInput class="name" aria-label="Attribute name" value={lane.name} onChange={(name) => isValidIdentifier(name) && edit(id, { attributes: { [aid]: { ...lane, name } } })} />
+									{#each [0, 1] as end (end)}
+										<NumberInput aria-label={end ? 'Maximum' : 'Minimum'} title={end ? 'The highest value' : 'The lowest value'} value={lane.range[end]} step={0.1} onChange={(v) => edit(id, { attributes: { [aid]: { ...lane, range: lane.range.with(end, v) } } })} />
+									{/each}
+									<IconButton size="sm" label="Remove attribute" onclick={() => edit(id, { attributes: { [aid]: null } })}><Icon name="x" /></IconButton>
+								</span>
+								<div class="lane">
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<div class="ground" data-testid={`track-lane-${lane.name}`} ondblclick={(e) => addAt(e, id, t, aid)} onpointerdown={() => pick(null)}>
+										<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><path d={lanePath(lane, units(t), 1000, 100)} vector-effect="non-scaling-stroke" /></svg>
+										{#each lane.keys as k, i}
+											<span
+												class="key"
+												class:picked={mine === k}
+												style:left={`${(100 * k.at) / units(t)}%`}
+												style:top={`${(100 * (lane.range[1] - k.value)) / (lane.range[1] - lane.range[0] || 1)}%`}
+												onpointerdown={(e) => dragItem(e, id, t, aid, i)}
+											></span>
+										{/each}
+									</div>
+								</div>
+							</div>
+						{/each}
+					{/if}
+				</section>
+			{/each}
+			{#if clock('time') <= span}
+				<div class="playhead" data-testid="timeline-playhead" style:--at={clock('time') / span}></div>
+			{/if}
+		</div>
 		{#if shown.length === 0}
 			<EmptyState>
 				{#snippet title()}{stowed.length > 0 ? 'Every track is hidden' : 'No tracks'}{/snippet}
@@ -272,47 +297,36 @@
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 <ConfirmDialog
-	open={doomed !== null}
-	question={`Delete track ${g.timeline[doomed ?? '']?.name ?? ''}?`}
+	open={doomed !== undefined}
+	question={`Delete track ${doomed?.name}?`}
 	detail="Its notes or keyframes and its variable group go with it. Undo brings the track back."
-	onClose={() => (doomed = null)}
+	onClose={() => (asked = '')}
 	data-testid="track-delete-dialog"
 >
 	<Button
 		variant="danger"
 		data-testid="track-delete-confirm"
 		onclick={() => {
-			void g.op('timeline track remove', { track: doomed }).catch(fail('Delete track'));
-			doomed = null;
+			void g.op('timeline track remove', { track: asked }).catch(fail('Delete track'));
+			asked = '';
 		}}>Delete</Button
 	>
-	<Button variant="ghost" onclick={() => (doomed = null)}>Cancel</Button>
+	<Button variant="ghost" onclick={() => (asked = '')}>Cancel</Button>
 </ConfirmDialog>
 
 <style>
 	.timeline {
-		/* The column beside the lanes: what a row says about itself. */
+		/* The column beside the lanes: what a row says about itself. A pitch's row in a note lane. */
 		--side: calc(var(--space-8) * 6);
+		--row: var(--space-3);
+		--number-width: calc(var(--space-8) * 2.5);
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
 	}
-	.timeline :global(.tracks) {
+	.stack {
 		position: relative;
-		flex: 1 1 auto;
-		min-height: 0;
-	}
-	.timeline :global(.num) {
-		width: calc(var(--space-8) * 2.5);
-	}
-	/* A row's side: the name on a line of its own, the range and the ✕ under it. */
-	.side :global(.name) {
-		flex: 1 1 100%;
-	}
-	.side :global(.num) {
-		flex: 1 1 0;
-		min-width: 0;
 	}
 	.track {
 		border-top: 1px solid var(--border);
@@ -328,9 +342,15 @@
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 	}
+	/* A row's side: the name on a line of its own, the range and the ✕ under it. */
+	.side {
+		--number-width: calc(var(--space-8) * 1.75);
+	}
+	.side :global(.name) {
+		flex: 1 1 100%;
+	}
 	header {
 		flex-wrap: nowrap;
-		max-width: 100%;
 	}
 	header :global(.name) {
 		flex: 0 1 calc(var(--side) - var(--space-4));
@@ -343,15 +363,19 @@
 		display: grid;
 		grid-template-columns: var(--side) minmax(0, 1fr);
 	}
+	/* The room above and under the ground shows a keyframe at the end of its range whole. */
 	.lane {
 		position: relative;
-		height: calc(var(--space-8) * 3);
+		padding: var(--space-3) 0;
 		background: var(--surface-2);
 		border-bottom: 1px solid var(--bg);
-		/* A keyframe at the top or the bottom of the range shows whole; nothing leaves the axis sideways. */
-		overflow: clip visible;
+		overflow: hidden;
 		touch-action: none;
 		user-select: none;
+	}
+	.ground {
+		position: relative;
+		height: calc(var(--rows, 10) * var(--row));
 	}
 	.ruler {
 		position: sticky;
@@ -361,6 +385,7 @@
 	}
 	.ruler .lane {
 		height: var(--space-8);
+		padding: 0;
 		cursor: pointer;
 	}
 	.tick {
@@ -380,12 +405,6 @@
 		border-radius: var(--radius-sm);
 		background: var(--accent);
 		cursor: grab;
-	}
-	.end {
-		position: absolute;
-		inset: 0 0 0 auto;
-		width: var(--space-3);
-		cursor: ew-resize;
 	}
 	svg {
 		position: absolute;
@@ -421,13 +440,19 @@
 		background: var(--danger);
 		pointer-events: none;
 	}
+	/* Under a finger a row is taller, and a note and a keyframe take a press a hit-size wide. */
 	@media (hover: none) and (pointer: coarse) {
-		.key {
-			width: var(--space-7);
-			height: var(--space-7);
+		.timeline {
+			--row: var(--space-4);
 		}
-		.end {
-			width: var(--space-6);
+		.key::after,
+		.note::after {
+			content: '';
+			position: absolute;
+			inset: calc((100% - var(--hit)) / 2);
+		}
+		.note::after {
+			inset-inline: 0;
 		}
 	}
 </style>

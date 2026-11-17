@@ -92,16 +92,20 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const dialog = page.getByTestId('track-delete-dialog');
 		await expect(dialog).toContainText('Delete track track1?');
 		await dialog.getByRole('button', { name: 'Cancel' }).click();
+		await expect(dialog).toBeHidden();
 		expect(await trackNamed(page, 'track1')).toBeTruthy();
 		await fade.locator('header').click({ button: 'right', position: { x: 4, y: 4 } });
 		await menuItem('Delete Track…').click();
 		await dialog.getByTestId('track-delete-confirm').click();
 		await expect.poll(() => trackNamed(page, 'track1')).toBeUndefined();
+		// An undo brings the track back, as the dialog says.
+		await rawCall(page, 'undo');
+		await expect(fade).toBeVisible();
 		await panel.getByTestId('timeline-hidden').click();
 		await menuItem('track0').click();
 
-		// A double click on a note lane makes a note; a drag moves it in time; its end stretches
-		// it; picked, its velocity is in the track's bar, and the ✕ there removes it.
+		// A double click on a note lane makes a note; a drag moves it in time; picked, its length
+		// and its velocity are in the track's bar, and the ✕ there removes it.
 		const lane = keys.getByTestId('track-lane');
 		const ground = (await lane.boundingBox())!;
 		await lane.dblclick({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
@@ -112,20 +116,29 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dragBy(page, note, ground.width * 0.2, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(born.at);
 		expect((await trackNamed(page, 'track0')).notes[0].pitch, 'a level drag keeps the pitch').toBe(born.pitch);
-		await dragBy(page, note.locator('.end'), ground.width * 0.1, 0);
-		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].length).toBeGreaterThan(born.length);
-		const velocity = keys.getByLabel('Velocity');
-		await velocity.fill('0.5');
-		await velocity.press('Enter');
-		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].velocity).toBe(0.5);
+		for (const [field, value] of [['Length', 2], ['Velocity', 0.5]] as const) {
+			await keys.getByLabel(field).fill(String(value));
+			await keys.getByLabel(field).press('Enter');
+			await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0][field.toLowerCase()]).toBe(value);
+		}
+		// A press on another note picks it: the field that showed the first hands it nothing.
+		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
+		await expect(note).toHaveCount(2);
+		await note.nth(0).click();
+		await keys.getByLabel('Velocity').click();
+		await note.nth(1).click();
+		await expect(keys.getByLabel('Velocity')).toHaveValue('0.9');
+		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.3, 0.9]);
 		await keys.getByTestId('track-delete-picked').click();
-		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
+		// A name typed over the track's is a rename: the track is the same one.
+		await keys.getByLabel('Track name').fill('lead');
+		await keys.getByLabel('Track name').press('Enter');
+		await expect.poll(async () => (await trackNamed(page, 'lead'))?.notes.length).toBe(1);
 
 		// A curve track takes attributes; a double click on an attribute's lane makes a keyframe,
 		// and a drag moves it in time and in value.
-		await panel.getByTestId('timeline-add').click();
-		await menuItem('Curve Track').click();
-		const curve = panel.getByTestId('track-track1');
+		const curve = fade;
 		await curve.getByTestId('track-add-attribute').click();
 		const attr = curve.getByTestId('track-lane-attr0');
 		const box = (await attr.boundingBox())!;
@@ -139,6 +152,24 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dragBy(page, attr.locator('.key').nth(1), box.width * 0.1, box.height * 0.2);
 		await expect.poll(async () => (await keysOf())[1].value).toBeLessThan(last.value);
 		expect((await keysOf())[1].at).toBeGreaterThan(last.at);
+		// A press that hardly moves picks the keyframe and edits nothing: its value shows in the bar.
+		const held = (await keysOf())[1];
+		const dot = (await attr.locator('.key').nth(1).boundingBox())!;
+		await page.mouse.move(dot.x + dot.width / 2 + 3, dot.y + dot.height / 2 + 3);
+		await page.mouse.down();
+		await page.mouse.move(dot.x + dot.width / 2 + 4, dot.y + dot.height / 2 + 3);
+		await page.mouse.up();
+		await expect(curve.getByLabel('Value')).toHaveValue(String(held.value));
+		expect((await keysOf())[1]).toEqual(held);
+		// A keyframe held near the end of the lane stays under the pointer: the axis does not
+		// grow under its own drag.
+		await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width * 0.9, dot.y + dot.height / 2, { steps: 12 });
+		for (let wiggle = 0; wiggle < 20; wiggle++) await page.mouse.move(box.x + box.width * 0.9 + (wiggle % 2), dot.y + dot.height / 2);
+		await page.mouse.up();
+		await expect.poll(async () => (await keysOf())[1].at).toBeGreaterThan(held.at);
+		expect((await keysOf())[1].at, 'nine tenths of an axis of 8 seconds').toBeCloseTo(7.2, 0);
 		await expectIntact(page, 'the timeline panel with a note track and a curve track');
 
 		// The bar steers the clock: a pause, a stop at 0, a position typed, a click on the ruler,
@@ -151,10 +182,18 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await time.fill('3');
 		await time.press('Enter');
 		await expect.poll(() => clock(page, 'time')).toBe(3);
+		// A focus that types nothing is no edit: the clock stays where another hand put it.
+		await time.click();
+		await rawCall(page, 'clock set', { time: 5 });
+		await panel.getByTestId('clock-bpm').click();
+		await expect(time).toHaveValue('5');
+		expect(await clock(page, 'time')).toBe(5);
+		// A click half way along the ruler puts the position at the time the marks give that place.
 		const ruler = panel.getByTestId('timeline-ruler').locator('.lane');
-		await ruler.click({ position: { x: (await ruler.boundingBox())!.width / 2, y: 4 } });
-		// The span is 8 seconds, and a click lands on a whole pixel.
-		await expect.poll(() => clock(page, 'time')).toBeCloseTo(4, 1);
+		const [axis, mark] = [(await ruler.boundingBox())!, ruler.locator('.tick').last()];
+		const perSecond = ((await mark.boundingBox())!.x - axis.x) / Number(await mark.innerText());
+		await ruler.click({ position: { x: axis.width / 2, y: 4 } });
+		await expect.poll(() => clock(page, 'time')).toBeCloseTo(axis.width / 2 / perSecond, 1);
 		const bpm = panel.getByTestId('clock-bpm');
 		await bpm.fill('90');
 		await bpm.press('Enter');
@@ -169,10 +208,10 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(() => clock(page, 'time'), 'the position restarts at the length').toBeLessThan(2);
 	} finally {
 		// The clock and the tracks are the running patch's: the next spec on this worker starts clean.
-		await closeSplit(page);
 		for (const [name, value] of [['loop', 0], ['length', 0], ['bpm', 120]] as const) await rawCall(page, 'variable entry edit', { name: `clock.${name}`, value });
 		await rawCall(page, 'clock set', { playing: true });
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
+		await closeSplit(page);
 		await restorePanelType(page);
 	}
 });

@@ -18,13 +18,13 @@ export function contentEnd(tracks: Track[], bpm: number): number {
 export function ticks(span: number, want = 8): number[] {
 	const raw = span / want;
 	const mag = 10 ** Math.floor(Math.log10(raw));
-	const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
+	const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
 	return Array.from({ length: Math.floor(span / step + 1e-9) + 1 }, (_, i) => Number((i * step).toPrecision(6)));
 }
 
 /** The pitches a note lane shows, lowest and highest: two octaves from C3, widened to hold every note. */
 export function pitches(notes: Note[]): [number, number] {
-	return [Math.min(48, ...notes.map((n) => n.pitch - 2)), Math.max(72, ...notes.map((n) => n.pitch + 2))];
+	return [Math.max(0, Math.min(48, ...notes.map((n) => n.pitch - 2))), Math.min(127, Math.max(72, ...notes.map((n) => n.pitch + 2)))];
 }
 
 /** A lane's curve as an SVG path over a `w` by `h` box that spans `span` of the track's time

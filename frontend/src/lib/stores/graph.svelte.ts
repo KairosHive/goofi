@@ -33,7 +33,6 @@ import {
 	controlGroups,
 	ownedGroups,
 	machineViews,
-	trackViews,
 	arrangementTabs,
 	type Doc,
 	type VariableView,
@@ -155,7 +154,7 @@ export class GraphStore {
 	/** Every state machine, by id, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
 	/** Every track of the timeline, by id, in stacking order. */
-	timeline: Record<string, Track> = $derived(trackViews(this.doc));
+	timeline = $derived((this.doc.timeline ?? {}) as Record<string, Track>);
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);

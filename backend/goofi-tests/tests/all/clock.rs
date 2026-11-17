@@ -107,13 +107,12 @@ fn a_machine_steps_by_the_position() {
     g.call("machine state edit", j!({ "machine": "pulse", "name": "a", "interval": -1.0 }));
     g.call("clock set", j!({ "time": 0.0 }));
     g.until("the run to start over", |g| (state(g) == "a").then_some(()));
-    // A jump far ahead starts the runs over there too: it settles none of the beats between,
-    // and the machine steps on.
+    // A jump far ahead settles none of the beats between: the machine steps on from there.
     for name in ["a", "b"] {
         g.call("machine state edit", j!({ "machine": "pulse", "name": name, "interval": 0.1 }));
     }
     g.until("the playhead to step again", |g| (state(g) == "b").then_some(()));
     g.call("clock set", j!({ "time": 1e9 }));
-    g.until("the run to start over after the jump", |g| (state(g) == "a").then_some(()));
-    g.until("the playhead to step on after the jump", |g| (state(g) == "b").then_some(()));
+    g.until("the playhead to step to a after the jump", |g| (state(g) == "a").then_some(()));
+    g.until("the playhead to step on to b", |g| (state(g) == "b").then_some(()));
 }

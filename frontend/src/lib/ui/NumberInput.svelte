@@ -55,14 +55,17 @@
 		live.commit(v);
 	}
 
+	// A text nobody typed is no edit: a source that moved under the focus keeps its own value.
+	let typed = false;
 	function commitText(): void {
 		const raw = text.trim();
 		const n = Number(raw);
-		if (raw !== '' && Number.isFinite(n)) {
+		if (typed && raw !== '' && Number.isFinite(n)) {
 			const v = clamp(n);
 			text = fmt(v);
 			live.commit(v);
 		}
+		typed = false;
 		live.end();
 	}
 
@@ -82,7 +85,10 @@
 		else if (e.key === 'ArrowUp') stepBy(e, 1);
 		else if (e.key === 'ArrowDown') stepBy(e, -1);
 	}}
-	oninput={(e) => (text = (e.currentTarget as HTMLInputElement).value)}
+	oninput={(e) => {
+		typed = true;
+		text = (e.currentTarget as HTMLInputElement).value;
+	}}
 />
 
 <style>

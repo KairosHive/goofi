@@ -28,6 +28,7 @@ describe('the timeline model', () => {
 	it('widens a note lane to hold every note', () => {
 		expect(pitches([])).toEqual([48, 72]);
 		expect(pitches(notes.notes)).toEqual([48, 92]);
+		expect(pitches([{ at: 0, length: 1, pitch: 127, velocity: 1 }, { at: 0, length: 1, pitch: 0, velocity: 1 }])).toEqual([0, 127]);
 	});
 
 	it('draws a lane held before its first keyframe and after its last', () => {
