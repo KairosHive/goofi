@@ -1,6 +1,6 @@
 // The timeline panel: tracks stacked on one time axis, hidden per panel and shown again from the
 // bar's list, a track's menu with its five entries, a delete that asks first, a note and a keyframe
-// made by a double click and moved by a drag, the clock steered from the bar and looped in a
+// made by a click and a double click and moved by a drag, the clock steered from the bar and looped in a
 // section dragged on the ruler, the view zoomed by its range bar, a track resized, and the whole
 // stood on its side in a panel taller than wide. On a phone, a
 // held finger is the door onto the menu and a double tap makes the note.
@@ -59,6 +59,9 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const tops = await Promise.all([keys, fade, bass].map(async (t) => (await t.boundingBox())!.y));
 		expect(tops[0] < tops[1] && tops[1] < tops[2], 'the tracks are stacked').toBe(true);
 		expect((await trackNamed(page, 'track1')).kind).toBe('curve');
+		const shade = (t: Locator): Promise<string> => t.evaluate((el) => getComputedStyle(el).backgroundColor);
+		expect(await shade(keys), 'one track is a lighter grey, the next a darker').not.toBe(await shade(fade));
+		expect(await shade(keys)).toBe(await shade(bass));
 
 		// A track's button hides it; the bar lists what is hidden, and a pick there shows it again.
 		await keys.getByTestId('track-hide').click();
@@ -133,7 +136,10 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(board).toHaveCount(25);
 		const lane = keys.getByTestId('track-lane');
 		const ground = (await lane.boundingBox())!;
-		await lane.dblclick({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
+		// The lane is cells: the one under the pointer is lit, and one click on it makes a note.
+		await lane.hover({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
+		await expect(lane.getByTestId('track-cell')).toBeVisible();
+		await lane.click({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		const born = (await trackNamed(page, 'track0')).notes[0];
 		expect(born.at).toBeGreaterThan(0);
@@ -142,6 +148,9 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dragBy(page, note, ground.width * 0.2, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(born.at);
 		expect((await trackNamed(page, 'track0')).notes[0].pitch, 'a level drag keeps the pitch').toBe(born.pitch);
+		// A note's end dragged makes it longer, by whole cells.
+		await dragBy(page, note.locator('.end'), ground.width * 0.1, 0);
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].length).toBeGreaterThan(born.length);
 		for (const [field, value] of [['Length', 2], ['Velocity', 0.5]] as const) {
 			await keys.getByLabel(field).fill(String(value));
 			await keys.getByLabel(field).press('Enter');
@@ -152,7 +161,6 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(note).toHaveCount(2);
 		// A velocity typed and not entered lands on its note at the next press, and the drag that
 		// press begins keeps it: a note is drawn as strong as its velocity.
-		await note.nth(0).click();
 		await keys.getByLabel('Velocity').fill('0.6');
 		const grab = (await note.nth(0).boundingBox())!;
 		await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
@@ -162,12 +170,16 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.up();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(1);
 		expect((await trackNamed(page, 'track0')).notes[0].velocity).toBe(0.6);
-		await note.nth(0).click();
 		await keys.getByLabel('Velocity').click();
-		await note.nth(1).click();
+		await dragBy(page, note.nth(1), ground.width * 0.05, 0);
 		await expect(keys.getByLabel('Velocity')).toHaveValue('0.9');
 		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await keys.getByTestId('track-delete-picked').click();
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
+		// One click on a note takes it out; one on its empty cell puts a note back.
+		await note.first().click();
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
+		await lane.click({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// A name typed over the track's is a rename: the track is the same one.
 		await keys.getByLabel('Track name').fill('lead');
@@ -260,7 +272,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(() => clock(page, 'bpm')).toBe(90);
 
 		// A drag along the ruler marks the section the clock loops in: the position restarts at
-		// the section's start. The loop chip in the bar clears the section.
+		// the section's start. A click on the ruler clears the section.
 		await page.mouse.move(axis.x + axis.width * 0.25, axis.y + 4);
 		await page.mouse.down();
 		await page.mouse.move(axis.x + axis.width * 0.5, axis.y + 4, { steps: 6 });
@@ -280,7 +292,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 			}, 'the position restarts inside the section')
 			.toBe(true);
 		expect(before).toBeGreaterThanOrEqual(start);
-		await panel.getByTestId('clock-loop').click();
+		await expect(panel.getByTestId('clock-loop')).toBeVisible();
+		await ruler.click({ position: { x: axis.width * 0.75, y: 4 } });
 		await expect.poll(() => clock(page, 'length')).toBe(0);
 		await expect(panel.getByTestId('timeline-loop')).toHaveCount(0);
 
@@ -325,7 +338,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	}
 });
 
-test('a held finger opens a track\'s menu, and a double tap makes a note', async ({ page, hasTouch }) => {
+test('a held finger opens a track\'s menu, and a tap makes a note and takes it out', async ({ page, hasTouch }) => {
 	test.skip(!hasTouch, 'the finger walk');
 	await page.goto('/');
 	await waitForApp(page);
@@ -338,8 +351,10 @@ test('a held finger opens a track\'s menu, and a double tap makes a note', async
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'keys' });
 		const track = page.getByTestId('track-keys');
 		const lane = (await track.getByTestId('track-lane').boundingBox())!;
-		for (let tap = 0; tap < 2; tap++) await page.touchscreen.tap(lane.x + lane.width * 0.3, lane.y + lane.height / 2);
-		await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(1);
+		for (const notes of [1, 0]) {
+			await page.touchscreen.tap(lane.x + lane.width * 0.3, lane.y + lane.height / 2);
+			await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(notes);
+		}
 		const head = (await track.locator('.info').boundingBox())!;
 		const finger = await touchSession(page);
 		await finger.down({ x: head.x + head.width * 0.6, y: head.y + head.height / 2 });

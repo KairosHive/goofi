@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { contentEnd, hiding, lanePath, ticks, unit } from './model';
+import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from './model';
 
 const notes: Track = { name: 'keys', beats: true, kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', beats: false, kind: 'curve', range: [0, 2], keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -32,6 +32,12 @@ describe('the timeline model', () => {
 		// A view that begins after the first keyframe starts the line at that keyframe, out of view.
 		expect(lanePath(curve.keys, curve.range, (at) => (at - 2) / 2, false, 1)).toBe('M-500 100 L-500 100 L500 0 L1000 0');
 		expect(lanePath([], [0, 1], along)).toBe('');
+	});
+
+	it('draws a line between the cells in view, and fewer when they are too many', () => {
+		expect(gridPath(0, 1, 0.25)).toBe('M0 0V100M250 0V100M500 0V100M750 0V100M1000 0V100');
+		expect(gridPath(0.1, 0.6, 0.25, true)).toBe('M0 300H100M0 800H100');
+		expect(gridPath(0, 1000, 0.25).split('M').length - 1).toBe(126);
 	});
 
 	it('names the tracks each menu entry hides', () => {

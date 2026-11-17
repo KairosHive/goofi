@@ -43,6 +43,18 @@ export function lanePath(keys: Key[], [lo, hi]: [number, number], along: (at: nu
 	return `${points.join(' ')} L${at(Math.max(1, along(last.at)), last.value)}`;
 }
 
+/** The lines between a lane's cells, `cell` seconds apart, over the seconds in view, as a path in
+ * the box `lanePath` draws in. Cells too many to tell apart are drawn by the two, the four, and on. */
+export function gridPath(from: number, to: number, cell: number, flip = false): string {
+	let step = cell;
+	while ((to - from) / step > 200) step *= 2;
+	const first = Math.ceil(from / step - 1e-9);
+	return Array.from({ length: Math.max(0, Math.floor(to / step + 1e-9) - first + 1) }, (_, i) => {
+		const a = Number(((1000 * ((first + i) * step - from)) / (to - from)).toFixed(1));
+		return flip ? `M0 ${a}H100` : `M${a} 0V100`;
+	}).join('');
+}
+
 /** The tracks a menu entry hides, of those a panel shows: the track, those above it, those below
  * it, or every other. */
 export function hiding(shown: string[], id: string, which: 'this' | 'above' | 'below' | 'others'): string[] {

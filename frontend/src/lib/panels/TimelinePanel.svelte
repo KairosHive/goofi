@@ -16,7 +16,7 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { contentEnd, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
+	import { contentEnd, gridPath, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, Select, TextInput } from '$lib/ui';
 
@@ -100,7 +100,8 @@
 	/** What the range bar stands for: the view, and everything there is to see. */
 	const total = $derived<[number, number]>([Math.min(0, view[0] - width / 10), Math.max(view[1] + width / 10, 8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25, loop?.[1] ?? 0)]);
 
-	/** A press on the ruler puts the clock there; a drag along it marks the section the clock loops in. */
+	/** A press on the ruler puts the clock there and clears the loop; a drag along it marks the
+	 * section the clock loops in. */
 	let section = $state<[number, number] | null>(null);
 	function onRuler(e: PointerEvent): void {
 		const lane = e.currentTarget as HTMLElement;
@@ -113,7 +114,10 @@
 			commit: () => {
 				// A section too short to hear is a press that slipped.
 				if (section && section[1] - section[0] >= 0.05) setLoop(section[0], section[1] - section[0]);
-				else steer({ time: from });
+				else {
+					steer({ time: from });
+					if (loop) setLoop(0, 0);
+				}
 				section = null;
 			},
 			cancel: () => (section = null)
@@ -205,20 +209,33 @@
 		if (!to) picked = null;
 		edit(id, put(t, held(t).flatMap((o, k) => (k !== index ? [o] : to ? [{ ...o, ...to }] : []))));
 	}
-	/** A double click on a lane's own ground adds a note or a keyframe there. */
+	/** A note lane's cell along the axis, in the track's time units: a note begins on one, and is
+	 * a whole count of them long. */
+	const CELL = 0.25;
+	/** The cell of a note lane under a pointer: where it begins, and the note of the scale it is on. */
+	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
+		const [f, v] = point(p, ground);
+		const [lo, hi] = t.range;
+		return { at: Math.floor(Math.max(0, view[0] + f * width) / secs(t) / CELL) * CELL, pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
+	}
+	/** The cell the pointer is over, to light it. */
+	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
+	/** A click on a note lane's own ground adds a note in that cell; a double click on a curve's
+	 * adds a keyframe there. The one added is the one picked. */
 	function addAt(e: MouseEvent, id: string, t: Track): void {
 		if (e.target !== e.currentTarget) return;
 		const [f, v] = point(e, e.currentTarget as Element);
 		const [lo, hi] = t.range;
-		const at = fixed(Math.max(0, view[0] + f * width) / secs(t));
-		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))), velocity: 0.8 } : { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: CELL, velocity: 0.8 } : { at: fixed(Math.max(0, view[0] + f * width) / secs(t)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		if (t.kind === 'note') picked = { track: id, index: t.notes.length };
 		edit(id, put(t, [...held(t), born]));
 	}
-	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane
-	 * as it stands with that one moved, and the release sends the last of them as the edit. A press
-	 * that does not move is a pick alone. */
+	/** A drag of one note or keyframe by as much as the pointer moves, a note by whole cells: each
+	 * move previews the lane as it stands with that one moved, and the release sends the last of
+	 * them as the edit. `stretch` drags a note's end and not the note. A press that does not move
+	 * picks a keyframe, and takes a note out. */
 	let drag: (() => void) | undefined;
-	function dragItem(e: PointerEvent, id: string, t: Track, index: number): void {
+	function dragItem(e: PointerEvent, id: string, t: Track, index: number, stretch = false): void {
 		e.stopPropagation();
 		pick({ track: id, index });
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
@@ -235,17 +252,22 @@
 				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
 				const at = o.at + (f - f0) * per;
+				const cells = Math.round(((f - f0) * per) / CELL) * CELL;
 				// A note lands on its scale; a keyframe stays between its neighbours and inside the range.
 				patch = moved(
-					t.kind === 'note'
-						? { at: fixed(Math.max(0, at)), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
-						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp((o as Key).value + (v - v0) * (hi - lo), lo, hi)) }
+					t.kind !== 'note'
+						? {}
+						: stretch
+							? { length: fixed(Math.max(CELL, (o as Note).length + cells)) }
+							: { at: fixed(Math.max(0, o.at + cells)), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
 				);
+				if (t.kind === 'curve') patch = moved({ at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp((o as Key).value + (v - v0) * (hi - lo), lo, hi)) });
 				g.previewTrack(id, patch);
 			},
 			commit: () => {
 				dragged = null;
 				if (patch) edit(id, patch);
+				else if (t.kind === 'note' && !stretch) change(id, g.timeline[id] ?? t, null);
 			},
 			// Put back, unless the dragged one left the lane under the drag.
 			cancel: () => {
@@ -291,7 +313,7 @@
 				<div class="row ruler" data-testid="timeline-ruler">
 					<span class="info"></span>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div class="lane" onpointerdown={onRuler} title="Press to put the clock here; drag to mark the section it loops in">
+					<div class="lane" onpointerdown={onRuler} title="Press to put the clock here and clear the loop; drag to mark the section it loops in">
 						{#each ticks(view[0] / mark, view[1] / mark) as tick}<span class="tick" style:--a={share(along(tick * mark))}>{tick}</span>{/each}
 					</div>
 				</div>
@@ -299,6 +321,7 @@
 					{@const t = g.timeline[id]}
 					{@const mine = picked?.track === id ? held(t)[picked.index] : undefined}
 					{@const [lo, hi] = t.range}
+					{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
 					{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<section
@@ -344,15 +367,33 @@
 						{#if t.kind === 'note'}
 							<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
 							<div class="keys" data-testid="track-keyboard" aria-hidden="true">
-								{#each Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) as p (p)}
+								{#each board as p (p)}
 									<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{NOTE_NAMES[p % 12] === t.root ? `${t.root}${Math.floor(p / 12) - 1}` : ''}</span>
 								{/each}
 							</div>
 						{/if}
 						<div class="lane">
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div class="ground" data-testid="track-lane" ondblclick={(e) => addAt(e, id, t)} onpointerdown={() => pick(null)}>
+							<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+							<div
+								class="ground"
+								data-testid="track-lane"
+								onclick={t.kind === 'note' ? (e) => addAt(e, id, t) : undefined}
+								ondblclick={t.kind === 'curve' ? (e) => addAt(e, id, t) : undefined}
+								onpointerdown={() => pick(null)}
+								onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
+								onpointerleave={() => (over = null)}
+							>
 								{#if t.kind === 'note'}
+									<!-- The cells: a row a pitch, darker off the scale and on a black key; a line a cell. -->
+									<div class="rows" aria-hidden="true">
+										{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)}></span>{/each}
+									</div>
+									<svg class="grid" viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
+										<path d={gridPath(view[0], view[1], CELL * secs(t), vertical)} vector-effect="non-scaling-stroke" />
+									</svg>
+									{#if over?.track === id}
+										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at * secs(t)))} style:--l={share((CELL * secs(t)) / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+									{/if}
 									{#each t.notes as n, i}
 										<div
 											class="note"
@@ -363,7 +404,9 @@
 											style:--s={share(1 / (hi - lo + 1))}
 											style:opacity={0.4 + 0.6 * n.velocity}
 											onpointerdown={(e) => dragItem(e, id, t, i)}
-										></div>
+										>
+											<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
+										</div>
 									{/each}
 								{:else}
 									<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
@@ -470,9 +513,14 @@
 		display: grid;
 		grid-template-columns: var(--side) minmax(0, 1fr);
 	}
+	/* One track a lighter grey, the next a darker. */
 	.track {
 		position: relative;
 		border-top: 1px solid var(--border);
+		background: var(--surface-2);
+	}
+	.track:nth-of-type(even) {
+		background: var(--surface-3);
 	}
 	/* It takes the room its lane gives it, and scrolls what does not fit. */
 	.info {
@@ -527,7 +575,6 @@
 		display: flex;
 		min-height: var(--size, calc(var(--rows, 24) * var(--row)));
 		padding: var(--pad) 0;
-		background: var(--surface-2);
 		overflow: hidden;
 		touch-action: none;
 		user-select: none;
@@ -545,7 +592,6 @@
 	.ruler .lane {
 		min-height: var(--space-8);
 		padding: 0;
-		background: none;
 		cursor: pointer;
 	}
 	.tick {
@@ -558,12 +604,46 @@
 		color: var(--text-muted);
 		pointer-events: none;
 	}
-	.note {
+	.rows {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column-reverse;
+		pointer-events: none;
+	}
+	.rows span {
+		flex: 1 1 0;
+		border-top: 1px solid var(--bg);
+	}
+	.rows .black {
+		background: var(--surface-1);
+	}
+	.rows .out {
+		background: var(--bg);
+	}
+	.grid path {
+		stroke: var(--bg);
+		stroke-width: 1;
+	}
+	.note,
+	.cell {
 		position: absolute;
 		left: var(--a);
 		top: var(--c);
 		width: var(--l);
 		height: var(--s);
+	}
+	.cell {
+		background: var(--hover-fill);
+		pointer-events: none;
+	}
+	.end {
+		position: absolute;
+		inset: 0 0 0 auto;
+		width: var(--space-3);
+		cursor: ew-resize;
+	}
+	.note {
 		min-width: var(--space-2);
 		border-radius: var(--radius-sm);
 		background: var(--accent);
@@ -676,13 +756,29 @@
 		border-left: 0;
 		border-top: 1px solid var(--border-strong);
 	}
-	.vertical .note {
+	.vertical .rows {
+		flex-direction: row;
+	}
+	.vertical .rows span {
+		border-top: 0;
+		border-left: 1px solid var(--bg);
+	}
+	.vertical .note,
+	.vertical .cell {
 		left: var(--c);
 		top: var(--a);
 		width: var(--s);
 		height: var(--l);
+	}
+	.vertical .note {
 		min-width: 0;
 		min-height: var(--space-2);
+	}
+	.vertical .end {
+		inset: auto 0 0 0;
+		width: auto;
+		height: var(--space-3);
+		cursor: ns-resize;
 	}
 	.vertical .key {
 		left: calc(var(--c) - var(--space-5) / 2);
@@ -725,6 +821,13 @@
 		}
 		.grip {
 			height: var(--space-5);
+		}
+		.end {
+			width: var(--space-6);
+		}
+		.vertical .end {
+			width: auto;
+			height: var(--space-6);
 		}
 		.vertical .grip {
 			width: var(--space-5);
