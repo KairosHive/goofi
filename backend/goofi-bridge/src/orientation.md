@@ -70,6 +70,11 @@ the node's own record: rename, move, viewer write, any mix in one call and one u
 refuses a dtype mismatch naming both ends, a wrong slot naming the slots that exist, and an end
 naming no node: a reply means the wire is there. Take names from a read, never from memory.
 
+The patch plays on one clock: `t` is its position, `clock set` pauses and places it, and the
+`clock.*` variables hold its tempo, its length and whether it restarts there. `timeline track add`
+and `timeline track edit` put notes and keyframed curves on that position; each track is a group
+of variables, and a note track is a MIDI port of `audio:MidiIn`.
+
 ## Custom nodes
 
 The patch's own library is `nodes_signal/` in the workspace: one file is one type, named by

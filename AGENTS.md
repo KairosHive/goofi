@@ -84,6 +84,12 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
 - Params have one active source: constant or expression. Values use `/params/<node>`; errors use
   `/control`. Viewer demand must not change engine scheduling.
+- The state machines and the timeline are one snapshot root, stepped by one thread
+  (`goofi-machines`) on the clock's position. A record there (a machine, a state, an attribute,
+  a playhead, a track) is keyed by a minted id and its name is an attribute: an op takes either,
+  and a rename moves the name and nothing of the run. A playhead and a track each own a group of
+  variables. A curve attribute of a track is one functional of `t`; a note track holds the
+  velocities at the position, and is a MIDI port of the audio `MidiIn` (`goofi_audio::TrackPorts`).
 - Every frame carries engine stamps: the run's `procstart` and `procend`, the node's `index` and
   `ufreq`, the `node` and `slot` it left by, and its `source`: per input slot, the frame held
   there, named by those same five. The immediate inputs only, never the history behind them.

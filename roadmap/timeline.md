@@ -3,12 +3,7 @@
 Shipped: the clock the timeline plays on (the position of `goofi_supervisor::timing::Time`, the
 `clock` group, `clock set`), the tracks (`goofi_graph::timeline`, the `timeline` ops, a track's
 group, written by the machines' thread), a note track as a port of the audio `MidiIn` node
-(`goofi_audio::TrackPorts`) and the panel (`TimelinePanel.svelte`). This file holds what remains.
-
-## Remaining work
-
-1. The words: the architecture lines of AGENTS.md (the timeline, its ports), a README section,
-   the orientation.
+(`goofi_audio::TrackPorts`) and the panel (`TimelinePanel.svelte`). This file holds what is open.
 
 ## Open
 

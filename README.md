@@ -231,6 +231,24 @@ column, row and cell for the settings behind it. A selection on the canvas light
 is edited as one; a line dragged out of a selected group fans out, into one fans in, and with the
 chain tool wires every box it crosses.
 
+## The clock and the timeline
+
+A patch plays on one clock from the moment it loads, and by default it never ends. `t` in an
+expression is its position, and so are `vars.clock.time` and `vars.clock.progress`.
+`goofi clock set --no-playing` pauses the position and `--time 12` puts it at a second; the
+engines run on through a pause, and a recording never stops. `vars.clock.bpm` is the tempo;
+with `vars.clock.loop` on, the position restarts at `vars.clock.length`.
+
+The timeline holds tracks on that position. A `note` track holds notes; it writes the held
+velocities to `vars.<track>.notes`, and the audio `MidiIn` node lists it as a port
+(`timeline: <track>`), so its notes play an instrument as a keyboard does. A `curve` track holds
+attributes, each a line through keyframes: the value eases from a keyframe to the next by that
+keyframe's curve, holds outside them, and is `vars.<track>.<attribute>`. A track counts its times
+in seconds or in beats of the tempo. `goofi timeline track add note` and `timeline track edit`
+build one from the CLI or an agent; the same ops drive the timeline panel, which stacks the
+tracks on one time axis, edits notes and keyframes by gesture, and steers the clock. A panel
+hides the tracks it is told to, so two panels show different sets of one timeline.
+
 ## Testing
 
 ```bash
