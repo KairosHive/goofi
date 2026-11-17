@@ -1,5 +1,5 @@
 /* The timeline's arithmetic: what the panel draws its tracks by, apart from the drawing. */
-import type { Key, Note, Track } from '$lib/api/generated';
+import type { Key, Track } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
 
 /** The seconds one time unit lasts: a beat of the tempo, or a second. */
@@ -17,12 +17,9 @@ export function ticks(from: number, to: number, want = 8): number[] {
 	const mag = 10 ** Math.floor(Math.log10(raw));
 	const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw)!;
 	const first = Math.ceil(from / step - 1e-9);
-	return Array.from({ length: Math.max(0, Math.floor(to / step + 1e-9) - first + 1) }, (_, i) => Number(((first + i) * step).toPrecision(6)));
-}
-
-/** The pitches a note lane shows, lowest and highest: two octaves from C3, widened to hold every note. */
-export function pitches(notes: Note[]): [number, number] {
-	return [Math.max(0, Math.min(48, ...notes.map((n) => n.pitch - 2))), Math.min(127, Math.max(72, ...notes.map((n) => n.pitch + 2)))];
+	// A mark is a whole count of steps, spelled to the step's own decimals.
+	const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+	return Array.from({ length: Math.max(0, Math.floor(to / step + 1e-9) - first + 1) }, (_, i) => Number(((first + i) * step).toFixed(decimals)));
 }
 
 /** A curve as an SVG path in a box 1000 along the time axis and 100 across it: each keyframe eases

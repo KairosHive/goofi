@@ -115,12 +115,29 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 
 		// A double click on a note lane makes a note; a drag moves it in time; picked, its length
 		// and its velocity are in the track's bar, and the ✕ there removes it.
+		// The keyboard beside a note lane has a key for every pitch of its range; a scale and a
+		// root dim the keys outside them, and a note made on the lane lands on the scale.
+		const board = keys.getByTestId('track-keyboard').locator('span');
+		await expect(board).toHaveCount(25);
+		await keys.getByLabel('Highest').fill('60');
+		await keys.getByLabel('Highest').press('Enter');
+		await expect(board).toHaveCount(13);
+		await keys.locator('[aria-label="Scale"] select').selectOption('pentatonic_major');
+		await expect(keys.locator('.keys .out')).toHaveCount(7);
+		await keys.locator('[aria-label="Root"] select').selectOption('D');
+		await expect(keys.locator('.keys span:not(.out)').first()).toHaveAttribute('data-pitch', '50');
+		expect(await trackNamed(page, 'track0')).toMatchObject({ range: [48, 60], scale: 'pentatonic_major', root: 'D' });
+		await keys.locator('[aria-label="Root"] select').selectOption('C');
+		await keys.getByLabel('Highest').fill('72');
+		await keys.getByLabel('Highest').press('Enter');
+		await expect(board).toHaveCount(25);
 		const lane = keys.getByTestId('track-lane');
 		const ground = (await lane.boundingBox())!;
 		await lane.dblclick({ position: { x: ground.width * 0.25, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		const born = (await trackNamed(page, 'track0')).notes[0];
 		expect(born.at).toBeGreaterThan(0);
+		expect([0, 2, 4, 7, 9], 'the note is one of C pentatonic').toContain(born.pitch % 12);
 		const note = lane.locator('.note');
 		await dragBy(page, note, ground.width * 0.2, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(born.at);

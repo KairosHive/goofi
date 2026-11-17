@@ -569,6 +569,8 @@ pub struct Machines {
     timeline: Timeline,
     /// The notes a port was last told sound: what [`Self::strike`] levels with the tracks.
     sounding: Vec<(String, usize, u8, f64)>,
+    /// The position went back since the last strike: what sounds is struck again.
+    again: bool,
 }
 
 impl Machines {
@@ -582,10 +584,12 @@ impl Machines {
     /// while the clock plays, and with nothing while it is paused.
     pub fn strike(&mut self, playing: bool) -> Vec<(String, u8, f64)> {
         let held = if playing { self.timeline.held(self.last) } else { Vec::new() };
+        // A position that went back, a loop's restart, strikes again every note it holds.
+        let again = std::mem::take(&mut self.again);
         // A note that sounds on at the pitch of one that ends keeps the pitch: no end is sent.
         let kept = |s: &(String, usize, u8, f64)| held.iter().any(|h| (&h.0, h.2) == (&s.0, s.2) && self.sounding.contains(h));
-        let ends = self.sounding.iter().filter(|s| !held.contains(s) && !kept(s)).map(|s| (s.0.clone(), s.2, 0.0));
-        let out = ends.chain(held.iter().filter(|h| !self.sounding.contains(h)).map(|h| (h.0.clone(), h.2, h.3))).collect();
+        let ends = self.sounding.iter().filter(|s| again || (!held.contains(s) && !kept(s))).map(|s| (s.0.clone(), s.2, 0.0));
+        let out = ends.chain(held.iter().filter(|h| again || !self.sounding.contains(h)).map(|h| (h.0.clone(), h.2, h.3))).collect();
         self.sounding = held;
         out
     }
@@ -710,10 +714,11 @@ impl Machines {
     /// own instant, in order, then the instant itself. Answers every playhead variable as it
     /// stands, a functional for an attribute in flight.
     pub fn advance(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) -> Vec<(String, Data)> {
-        // The position went back or was put elsewhere — a load, a jump, a restart at the length —
+        // The position went back or was put elsewhere — a load, a jump, a loop's restart —
         // so every instant a run holds is of before: every run starts over at its playheads'
         // starts, and a request stamped past `now` goes with them.
         if now < self.last {
+            self.again = true;
             self.runs.clear();
             self.requests.retain(|(at, _)| *at <= now);
             self.functionals.clear();

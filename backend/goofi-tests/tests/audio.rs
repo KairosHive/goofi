@@ -569,6 +569,17 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds_at(&g, "a pause to release the voice", &[]);
     g.call("clock set", j!({ "playing": true }));
     sounds_at(&g, "a resume to strike A4 again", &[0.75]);
+    // A loop the note covers: each restart of the position strikes the note again, and a note
+    // struck again takes the next voice.
+    let voice = |g: &Goofi| {
+        let (x, channels) = drive(g, TENTH);
+        (0..3).find(|c| channels == 3 && x[x.len() - 3 + c] > 0.99)
+    };
+    g.call("variable entry edit", j!({ "name": "clock.start", "value": 10.0 }));
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.3 }));
+    let first = g.until("the note to sound in the loop", voice);
+    g.until("the loop's restart to strike the note again", |g| voice(g).filter(|v| *v != first));
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.0 }));
     g.call("clock set", j!({ "time": 600.0 }));
     sounds_at(&g, "C4 beside the two A4s that overlap", &[0.0, 0.75]);
     g.call("clock set", j!({ "time": 1500.0 }));

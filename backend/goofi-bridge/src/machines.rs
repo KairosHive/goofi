@@ -170,7 +170,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             if machines.is_empty() {
                 continue;
             }
-            // The position went back — a jump, a restart at the length — and that is owed too.
+            // The position went back — a jump, a loop's restart — and that is owed too.
             let now = time.position();
             if !woken && !machines.behind(now) && machines.next_deadline().is_none_or(|at| at > now) {
                 continue;

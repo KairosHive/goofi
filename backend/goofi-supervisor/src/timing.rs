@@ -43,14 +43,14 @@ fn since_base() -> u64 {
 /// The patch's time, in two readings off one object that every engine holds. The RUN time counts
 /// from the load and never stops: every stamp, recording and tie reads it, and it is a node's
 /// `now`. The POSITION is where the patch stands: it plays from the load, and it can pause, jump
-/// and restart at a length; an expression's `t`, a functional, a machine and the timeline read
+/// and loop in a section; an expression's `t`, a functional, a machine and the timeline read
 /// it. A load restarts both, because a patch loaded an hour in begins at zero.
 #[derive(Debug)]
 pub struct Time {
     origin: AtomicU64,
     wall: Mutex<SystemTime>,
     /// The position, as three `f64`s a reader takes with no lock: it is `run - shift` while it
-    /// plays and `held` while it is paused (NaN while it plays), folded into `length` unless 0.
+    /// plays and `held` while it is paused (NaN while it plays), folded into the loop where there is one.
     shift: AtomicU64,
     held: AtomicU64,
     start: AtomicU64,

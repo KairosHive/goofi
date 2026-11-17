@@ -8,8 +8,7 @@
 		view,
 		total,
 		onChange,
-		vertical = false,
-		least = 0.05
+		vertical = false
 	}: {
 		/** What is in view, from and to. */
 		view: [number, number];
@@ -18,9 +17,9 @@
 		onChange: (view: [number, number]) => void;
 		/** The axis runs down. */
 		vertical?: boolean;
-		/** The narrowest a view gets. */
-		least?: number;
 	} = $props();
+	/** The narrowest a view gets. */
+	const least = 0.05;
 
 	let bar = $state<HTMLElement | null>(null);
 	const share = (v: number): string => `${(100 * (v - total[0])) / (total[1] - total[0])}%`;
@@ -65,7 +64,8 @@
 	}
 	.thumb {
 		position: absolute;
-		inset: 0 calc(100% - var(--to)) 0 var(--from);
+		/* A view too narrow to show keeps both its ends on the bar. */
+		inset: 0 calc(100% - var(--to)) 0 min(var(--from), calc(100% - 2 * var(--thick)));
 		display: flex;
 		justify-content: space-between;
 		min-width: calc(var(--thick) * 2);
@@ -74,7 +74,7 @@
 		cursor: grab;
 	}
 	.vertical .thumb {
-		inset: var(--from) 0 calc(100% - var(--to)) 0;
+		inset: min(var(--from), calc(100% - 2 * var(--thick))) 0 calc(100% - var(--to)) 0;
 		flex-direction: column;
 		min-width: 0;
 		min-height: calc(var(--thick) * 2);
@@ -83,10 +83,15 @@
 		position: relative;
 		width: var(--thick);
 		height: var(--thick);
+		cursor: ew-resize;
+	}
+	/* The dot is drawn smaller than the press it takes. */
+	.end::before {
+		content: '';
+		position: absolute;
+		inset: 20%;
 		border-radius: 50%;
 		background: var(--text-muted);
-		scale: 0.6;
-		cursor: ew-resize;
 	}
 	.vertical .end {
 		cursor: ns-resize;
@@ -94,6 +99,11 @@
 	@media (hover: none) and (pointer: coarse) {
 		.bar {
 			--thick: var(--space-8);
+		}
+		.end::after {
+			content: '';
+			position: absolute;
+			inset: calc((100% - var(--hit)) / 2);
 		}
 	}
 </style>

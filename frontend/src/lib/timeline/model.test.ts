@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { contentEnd, hiding, lanePath, pitches, ticks, unit } from './model';
+import { contentEnd, hiding, lanePath, ticks, unit } from './model';
 
-const notes: Track = { name: 'keys', beats: true, kind: 'note', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
+const notes: Track = { name: 'keys', beats: true, kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', beats: false, kind: 'curve', range: [0, 2], keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
 
 describe('the timeline model', () => {
@@ -20,12 +20,7 @@ describe('the timeline model', () => {
 		expect(ticks(0, 1.5)).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4]);
 		expect(ticks(-3, 5)).toEqual([-3, -2, -1, 0, 1, 2, 3, 4, 5]);
 		expect(ticks(100.5, 103)).toEqual([100.5, 101, 101.5, 102, 102.5, 103]);
-	});
-
-	it('widens a note lane to hold every note', () => {
-		expect(pitches([])).toEqual([48, 72]);
-		expect(pitches(notes.notes)).toEqual([48, 92]);
-		expect(pitches([{ at: 0, length: 1, pitch: 127, velocity: 1 }, { at: 0, length: 1, pitch: 0, velocity: 1 }])).toEqual([0, 127]);
+		expect(ticks(1000000, 1000008)).toEqual([1000000, 1000001, 1000002, 1000003, 1000004, 1000005, 1000006, 1000007, 1000008]);
 	});
 
 	it('draws a curve held before its first keyframe and after its last', () => {

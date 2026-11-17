@@ -65,6 +65,14 @@ fn a_track_writes_its_group_at_the_clocks_position() {
         at(&g, time);
         g.until(&format!("the note at {time}"), |g| (held(g, "keys.notes", 60) == velocity).then_some(()));
     }
+    // Its keyboard shows two octaves from C3 until it is told another range.
+    let keyboard = |g: &Goofi| g.call("timeline list", j!({}))["tracks"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap()["range"].clone();
+    assert_eq!(keyboard(&g), j!([48, 72]));
+    g.call("timeline track edit", j!({ "track": "keys", "range": [36, 84], "scale": "minor", "root": "D" }));
+    assert_eq!(keyboard(&g), j!([36, 84]));
+    let doc = g.doc();
+    let held_as = doc["timeline"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap();
+    assert_eq!((&held_as["scale"], &held_as["root"], held_as["notes"].as_array().map(Vec::len)), (&j!("minor"), &j!("D"), Some(1)), "the keyboard's scale, and the notes as they were");
     // Played, the thread wakes for the note's start and for its end.
     g.call("clock set", j!({ "playing": true, "time": 0.9 }));
     g.until("the note to start", |g| (held(g, "keys.notes", 60) == 0.5).then_some(()));
@@ -75,6 +83,10 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     for (payload, why) in [
         (j!({ "track": "keys", "notes": [{ "at": 0.0, "length": 0.0, "pitch": 60, "velocity": 0.5 }] }), "lasts more than 0"),
         (j!({ "track": "keys", "keys": [] }), "a note track takes `notes`"),
+        (j!({ "track": "keys", "range": [60, 60] }), "a lower pitch to a higher one"),
+        (j!({ "track": "keys", "range": [60.5, 72] }), "two pitches"),
+        (j!({ "track": "keys", "scale": "wrong" }), "a scale and a root"),
+        (j!({ "track": "sweep", "root": "D" }), "a note track takes"),
         (j!({ "track": "sweep", "keys": [{ "at": 1.0, "value": 0.0 }, { "at": 1.0, "value": 1.0 }] }), "each later"),
         (j!({ "track": "sweep", "to": "keys" }), "a variable group already"),
     ] {

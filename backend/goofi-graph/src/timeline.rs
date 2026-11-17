@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use goofi_core::ease::Curve;
+use goofi_core::scale;
 use goofi_core::variables::MIDI_ENTRIES;
 use goofi_core::{Data, Face, Meta};
 use goofi_node::ExprEvaluator;
@@ -31,12 +32,19 @@ pub struct Track {
     pub lanes: Lanes,
 }
 
-/// What a track holds: notes, or one curve through its keyframes, in time order, over a range.
-/// The curve's value holds outside the keyframes.
+/// What a track holds: notes, with the keyboard a panel draws them on — its lowest and highest
+/// pitch, and the scale and root whose notes it marks — or one curve through its keyframes, in
+/// time order, over a range. The curve's value holds outside the keyframes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Lanes {
     Note {
+        #[serde(default = "keyboard")]
+        range: [u8; 2],
+        #[serde(default = "chromatic")]
+        scale: String,
+        #[serde(default = "c")]
+        root: String,
         #[serde(default)]
         notes: Vec<Note>,
     },
@@ -61,6 +69,19 @@ fn unit() -> [f64; 2] {
     [0.0, 1.0]
 }
 
+/// Two octaves from C3.
+fn keyboard() -> [u8; 2] {
+    [48, 72]
+}
+
+fn chromatic() -> String {
+    scale::PRESET_NAMES[0].into()
+}
+
+fn c() -> String {
+    scale::NOTES[0].into()
+}
+
 /// A keyframe: the value at `at`, and the curve from it to the next one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Key {
@@ -77,9 +98,10 @@ impl Track {
     pub fn check(&self) -> Result<(), String> {
         let time = |at: f64| at.is_finite() && at >= 0.0;
         let (ok, why) = match &self.lanes {
-            Lanes::Note { notes } => {
+            Lanes::Note { range, scale, root, notes } => {
                 let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
-                (notes.iter().all(whole), "a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
+                let keyboard = range[0] < range[1] && range[1] <= 127 && scale::PRESET_NAMES.contains(&scale.as_str()) && scale::NOTES.contains(&root.as_str());
+                (keyboard && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
             Lanes::Curve { range, keys } => {
                 let whole = keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && keys.windows(2).all(|k| k[0].at < k[1].at);
@@ -118,7 +140,7 @@ impl Timeline {
             // A tempo of nothing is the slowest there is: a beat never comes.
             let seconds = |at: f64| if track.beats { at * 60.0 / bpm.max(1e-9) } else { at };
             match &track.lanes {
-                Lanes::Note { notes } => {
+                Lanes::Note { notes, .. } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();
                     out.notes.push((track.name.clone(), notes));
                 }

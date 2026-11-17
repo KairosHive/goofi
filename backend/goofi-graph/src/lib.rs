@@ -3251,7 +3251,7 @@ impl Graph {
         self.runtime.time.clone()
     }
 
-    /// The clock as the store says it: the length its position restarts at, and the readings a
+    /// The clock as the store says it: the loop its position restarts in, and the readings a
     /// patch takes as variables. Both are functionals of `t`, so nothing publishes as it runs.
     fn sync_clock(&self) {
         let number = |name: &str| self.variables().get(name).map_or(0.0, goofi_core::control::number_of);

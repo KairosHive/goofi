@@ -41,7 +41,13 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A name the manager refuses, or one that is no identifier, stays in the name field until the
   name next moves: the shared live value holds a commit as pending. The machine's attribute
   form has the same fault.
-- A panel keeps the id of a removed track in `state.hidden`; nothing reads it.
+- A panel keeps the id of a removed track in `state.hidden` and `state.sizes`; nothing reads it.
+- The loop's section is drawn again to change it: it has no edges to drag and cannot be moved.
+- The range bar stands for everything from 0 to the view, so far along the axis a small drag
+  of it is a long time.
+- A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
+  is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
+- In a standing panel a track says what it is in a box of one size: what does not fit scrolls.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.

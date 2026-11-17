@@ -11,7 +11,7 @@ op!(Set, "clock set", 0, SetArgs {
     pub playing: Option<bool>,
     pub time: Option<f64>,
 },
-    "Steer the patch clock's position: what `t` is in every expression, and what the machines and the timeline step by. `playing` false pauses it and true resumes it; `time` puts it at that second, so a stop is `{playing: false, time: 0}`, and every machine starts over from there. The engines run on through a pause, and a stamp or a recording never stops: those read the run time. The tempo and the loop are the variables `clock.bpm`, `clock.start` and `clock.length`: with a length above 0 the position restarts at the start when it reaches the loop's end; `clock.time`, `clock.progress` and `clock.playing` say where it stands. Not undoable, and no change to the patch.",
+    "Steer the patch clock's position: what `t` is in every expression, and what the machines and the timeline step by. `playing` false pauses it and true resumes it; `time` puts it at that second, so a stop is `{playing: false, time: 0}`, and every machine starts over from there. The engines run on through a pause, and a stamp or a recording never stops: those read the run time. The tempo and the loop are the variables `clock.bpm`, `clock.start` and `clock.length`: with a length of a millisecond or more the position restarts at the start when it reaches the loop's end; `clock.time`, `clock.progress` and `clock.playing` say where it stands. Not undoable, and no change to the patch.",
     "{playing, time}");
 
 impl EffectOp for Set {

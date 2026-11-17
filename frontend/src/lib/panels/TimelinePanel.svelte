@@ -10,14 +10,15 @@
 	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
 	import { untrack } from 'svelte';
 	import type { Key, Note, Track } from '$lib/api/generated';
+	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { contentEnd, hiding, lanePath, pitches, ticks, unit } from '$lib/timeline/model';
+	import { contentEnd, hiding, lanePath, ticks, unit } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
-	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, TextInput } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, Select, TextInput } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
@@ -58,12 +59,14 @@
 	const mark = $derived(unit(own.beats === true, clock('bpm')));
 	const loop = $derived<[number, number] | null>(clock('length') > 0 ? [clock('start'), clock('start') + clock('length')] : null);
 	const steer = (to: { playing?: boolean; time?: number }): void => void g.op('clock set', to).catch(fail('Set clock'));
-	/** The loop's start and length as ONE step; a length of 0 clears it. */
+	/** The loop as ONE step; with no length, none. The old loop goes before the new one's start
+	 * lands, so the position is never folded into a loop made of one and the other. */
 	const setLoop = (start: number, length: number): void =>
 		void history()
 			.transaction(length > 0 ? 'Set loop' : 'Clear loop', async (step) => {
-				await g.op('variable entry edit', { name: 'clock.start', value: fixed(start) }, step);
-				await g.op('variable entry edit', { name: 'clock.length', value: fixed(length) }, step);
+				const write = (name: string, value: number): Promise<unknown> => g.op('variable entry edit', { name: `clock.${name}`, value: fixed(value) }, step);
+				await write('length', 0);
+				if (length > 0) await write('start', start).then(() => write('length', length));
 			})
 			.catch(fail('Set loop'));
 
@@ -81,7 +84,7 @@
 		const at = clock('time');
 		const now = untrack(() => view);
 		if (within(at, now)) followed = true;
-		else if (followed && !untrack(() => frozen)) view = [at, at + now[1] - now[0]];
+		else if (followed && !untrack(() => dragged || section)) view = [at, at + now[1] - now[0]];
 	});
 	/** Where a second falls on the axis: 0 at the start of the view, 1 at its end. */
 	const along = (seconds: number): number => (seconds - view[0]) / width;
@@ -95,7 +98,7 @@
 	 * a column from its left. */
 	const across = (low: number, size = 0): string => share(vertical ? low : 1 - low - size);
 	/** What the range bar stands for: the view, and everything there is to see. */
-	const total = $derived<[number, number]>([Math.min(0, view[0]), Math.max(view[1], 8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25, loop?.[1] ?? 0, clock('time'))]);
+	const total = $derived<[number, number]>([Math.min(0, view[0] - width / 10), Math.max(view[1] + width / 10, 8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25, loop?.[1] ?? 0)]);
 
 	/** A press on the ruler puts the clock there; a drag along it marks the section the clock loops in. */
 	let section = $state<[number, number] | null>(null);
@@ -108,7 +111,8 @@
 				if (section || Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) >= MOVE_TOLERANCE_PX) section = [Math.min(from, at(p)), Math.max(from, at(p))];
 			},
 			commit: () => {
-				if (section) setLoop(section[0], section[1] - section[0]);
+				// A section too short to hear is a press that slipped.
+				if (section && section[1] - section[0] >= 0.05) setLoop(section[0], section[1] - section[0]);
 				else steer({ time: from });
 				section = null;
 			},
@@ -155,7 +159,7 @@
 	let sizing = $state<{ id: string; size: number; sent?: boolean } | null>(null);
 	function resize(e: PointerEvent, id: string): void {
 		e.stopPropagation();
-		const lane = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+		const lane = (e.currentTarget as HTMLElement).parentElement!.querySelector('.lane')!.getBoundingClientRect();
 		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => (sizing = { id, size: Math.max(24, Math.round(vertical ? lane.width + p.clientX - e.clientX : lane.height + p.clientY - e.clientY)) }),
 			commit: () => {
@@ -182,11 +186,19 @@
 	}
 	const held = (t: Track | undefined): (Note | Key)[] => (t?.kind === 'note' ? t.notes : (t?.keys ?? []));
 	const put = (t: Track, items: unknown[]): Record<string, unknown> => (t.kind === 'note' ? { notes: items } : { keys: items });
-	const range = (t: Track): [number, number] => (t.kind === 'note' ? pitches(t.notes) : t.range);
+	type NoteTrack = Extract<Track, { kind: 'note' }>;
+	/** Whether a pitch is a note of the scale a note track's keyboard marks. */
+	const inScale = (t: NoteTrack, pitch: number): boolean => (SCALES[t.scale] ?? []).includes((((pitch - NOTE_NAMES.indexOf(t.root as never)) % 12) + 12) % 12);
+	/** The note of the scale nearest `pitch`, on the keyboard. */
+	function snap(t: NoteTrack, pitch: number): number {
+		const [lo, hi] = t.range;
+		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(t, p));
+		return notes.reduce((best, p) => (Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best), notes[0] ?? clamp(pitch, lo, hi));
+	}
 	/** The seconds one of a track's time units lasts. */
 	const secs = (t: Track): number => unit(t.beats, clock('bpm'));
-	/** What a drag holds still, so its own previews do not move it: its lane's range. */
-	let frozen = $state<{ track: string; index: number; range: [number, number] } | null>(null);
+	/** The note or keyframe a drag holds: the view does not follow the clock under it. */
+	let dragged = $state<{ track: string; index: number } | null>(null);
 	/** Change the picked note or keyframe, or with null remove it. */
 	function change(id: string, t: Track, to: Partial<Note & Key> | null): void {
 		const { index } = picked!;
@@ -197,9 +209,9 @@
 	function addAt(e: MouseEvent, id: string, t: Track): void {
 		if (e.target !== e.currentTarget) return;
 		const [f, v] = point(e, e.currentTarget as Element);
-		const [lo, hi] = range(t);
+		const [lo, hi] = t.range;
 		const at = fixed(Math.max(0, view[0] + f * width) / secs(t));
-		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: clamp(lo + Math.floor(v * (hi - lo + 1)), lo, hi), velocity: 0.8 } : { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))), velocity: 0.8 } : { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
 		edit(id, put(t, [...held(t), born]));
 	}
 	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane
@@ -211,7 +223,7 @@
 		pick({ track: id, index });
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [f0, v0] = point(e, ground);
-		const [lo, hi] = range(t);
+		const [lo, hi] = t.range;
 		const [o, per] = [held(t)[index], width / secs(t)];
 		const now = (): (Note | Key)[] => held(g.timeline[id]);
 		/** The lane as it stands, with the dragged one where `to` puts it. */
@@ -220,31 +232,31 @@
 		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => {
 				if (!patch && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
-				frozen ??= { track: id, index, range: [lo, hi] };
+				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
 				const at = o.at + (f - f0) * per;
-				// A keyframe stays between its neighbours and inside the curve's range.
+				// A note lands on its scale; a keyframe stays between its neighbours and inside the range.
 				patch = moved(
-					'pitch' in o
-						? { at: fixed(Math.max(0, at)), pitch: clamp(o.pitch + Math.round((v - v0) * (hi - lo + 1)), lo, hi) }
-						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value + (v - v0) * (hi - lo), lo, hi)) }
+					t.kind === 'note'
+						? { at: fixed(Math.max(0, at)), pitch: snap(t, (o as Note).pitch + Math.round((v - v0) * (hi - lo + 1))) }
+						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp((o as Key).value + (v - v0) * (hi - lo), lo, hi)) }
 				);
 				g.previewTrack(id, patch);
 			},
 			commit: () => {
-				frozen = null;
+				dragged = null;
 				if (patch) edit(id, patch);
 			},
 			// Put back, unless the dragged one left the lane under the drag.
 			cancel: () => {
-				frozen = null;
+				dragged = null;
 				if (patch && now()[index]) g.previewTrack(id, moved('pitch' in o ? { at: o.at, pitch: o.pitch } : { at: o.at, value: o.value }));
 			}
 		});
 	}
 	// A drag ends with the panel, and with the note or keyframe it holds.
 	$effect(() => {
-		if (frozen && !held(g.timeline[frozen.track])[frozen.index]) drag?.();
+		if (dragged && !held(g.timeline[dragged.track])[dragged.index]) drag?.();
 	});
 	$effect(() => () => {
 		press.cancel();
@@ -280,17 +292,18 @@
 					<span class="info"></span>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div class="lane" onpointerdown={onRuler} title="Press to put the clock here; drag to mark the section it loops in">
-						{#each ticks(view[0] / mark, view[1] / mark) as tick (tick)}<span class="tick" style:--a={share(along(tick * mark))}>{tick}</span>{/each}
+						{#each ticks(view[0] / mark, view[1] / mark) as tick}<span class="tick" style:--a={share(along(tick * mark))}>{tick}</span>{/each}
 					</div>
 				</div>
 				{#each shown as id (id)}
 					{@const t = g.timeline[id]}
 					{@const mine = picked?.track === id ? held(t)[picked.index] : undefined}
-					{@const [lo, hi] = frozen?.track === id ? frozen.range : range(t)}
+					{@const [lo, hi] = t.range}
 					{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<section
 						class="row track"
+						class:notes={t.kind === 'note'}
 						data-testid={`track-${t.name}`}
 						style:--size={size ? `${size}px` : null}
 						style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
@@ -310,10 +323,12 @@
 							<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
 							<Segmented aria-label="Time unit" value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
 							<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
-							{#if t.kind === 'curve'}
-								{#each [0, 1] as end (end)}
-									<NumberInput aria-label={end ? 'Maximum' : 'Minimum'} title={end ? 'The highest value' : 'The lowest value'} value={t.range[end]} step={0.1} onChange={(v) => edit(id, { range: t.range.with(end, v) })} />
-								{/each}
+							{#each [0, 1] as end (end)}
+								<NumberInput aria-label={end ? 'Highest' : 'Lowest'} title={`The ${end ? 'highest' : 'lowest'} ${t.kind === 'note' ? 'pitch of the keyboard' : 'value'}`} value={t.range[end]} step={t.kind === 'note' ? 1 : 0.1} onChange={(v) => edit(id, { range: t.range.with(end, v) })} />
+							{/each}
+							{#if t.kind === 'note'}
+								<Select aria-label="Scale" title="The scale whose notes the keyboard marks and a note lands on" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit(id, { scale })} />
+								<Select aria-label="Root" title="The note the scale starts on" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit(id, { root })} />
 							{/if}
 							{#if mine}
 								{#if 'pitch' in mine}
@@ -326,6 +341,14 @@
 								<IconButton variant="ghost" size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
 							{/if}
 						</div>
+						{#if t.kind === 'note'}
+							<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
+							<div class="keys" data-testid="track-keyboard" aria-hidden="true">
+								{#each Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) as p (p)}
+									<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{NOTE_NAMES[p % 12] === t.root ? `${t.root}${Math.floor(p / 12) - 1}` : ''}</span>
+								{/each}
+							</div>
+						{/if}
 						<div class="lane">
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<div class="ground" data-testid="track-lane" ondblclick={(e) => addAt(e, id, t)} onpointerdown={() => pick(null)}>
@@ -404,8 +427,11 @@
 	   A row reads them as left, width, top and height; a column the other way round. */
 	.timeline {
 		/* What a track says about itself, beside its lane. A pitch's row in a note lane. */
-		--side: calc(var(--space-8) * 7);
+		--side: calc(var(--space-8) * 8);
+		--keys: var(--space-8);
 		--row: var(--space-3);
+		/* The room before and after a lane's ground: a keyframe at the end of its range shows whole. */
+		--pad: var(--space-3);
 		--number-width: calc(var(--space-8) * 2.5);
 		display: flex;
 		flex-direction: column;
@@ -465,12 +491,42 @@
 	.info :global(.name) {
 		flex: 1 1 100%;
 	}
-	/* The room before and after the ground shows a keyframe at the end of its range whole. */
+	/* A note track's keyboard stands between what it says and its lane, a key per row. */
+	.notes .info {
+		padding-right: calc(var(--keys) + var(--space-2));
+	}
+	.keys {
+		position: absolute;
+		inset: var(--pad) auto var(--pad) calc(var(--side) - var(--keys));
+		display: flex;
+		flex-direction: column-reverse;
+		width: var(--keys);
+	}
+	.keys span {
+		flex: 1 1 0;
+		display: flex;
+		align-items: center;
+		min-width: 0;
+		min-height: 0;
+		border-top: 1px solid var(--bg);
+		background: var(--text-dim);
+		color: var(--bg);
+		font-family: var(--font-mono);
+		font-size: var(--fs-micro);
+		white-space: nowrap;
+	}
+	.keys .black {
+		background: var(--surface-4);
+		color: var(--text);
+	}
+	.keys .out {
+		opacity: 0.3;
+	}
 	.lane {
 		position: relative;
 		display: flex;
 		min-height: var(--size, calc(var(--rows, 24) * var(--row)));
-		padding: var(--space-3) 0;
+		padding: var(--pad) 0;
 		background: var(--surface-2);
 		overflow: hidden;
 		touch-action: none;
@@ -588,9 +644,23 @@
 		border-top: 0;
 		border-left: 1px solid var(--border);
 	}
+	.vertical .notes .info {
+		padding: var(--space-2) var(--space-2) calc(var(--keys) + var(--space-2));
+	}
+	.vertical .keys {
+		inset: calc(var(--side) - var(--keys)) var(--pad) auto var(--pad);
+		flex-direction: row;
+		width: auto;
+		height: var(--keys);
+	}
+	.vertical .keys span {
+		border-top: 0;
+		border-left: 1px solid var(--bg);
+		writing-mode: vertical-rl;
+	}
 	.vertical .lane {
 		min-height: 0;
-		padding: 0 var(--space-3);
+		padding: 0 var(--pad);
 	}
 	.vertical .ruler {
 		top: auto;
@@ -642,6 +712,7 @@
 	@media (hover: none) and (pointer: coarse) {
 		.timeline {
 			--row: var(--space-5);
+			--pad: var(--space-6);
 		}
 		.ground {
 			isolation: isolate;

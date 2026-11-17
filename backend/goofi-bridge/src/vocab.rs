@@ -186,6 +186,19 @@ pub fn typescript() -> String {
     let me_fields = quoted(&goofi_graph::machine::ME_FIELDS);
     let playhead_fields = quoted(&goofi_graph::machine::OWN);
     let own_groups = quoted(&goofi_core::variables::OWN_GROUPS);
+    let note_names = quoted(goofi_core::scale::NOTES);
+    // Each named scale as the semitones above its root nearest its degrees: what a keyboard marks.
+    let scales: String = goofi_core::scale::PRESET_NAMES
+        .iter()
+        .map(|name| {
+            let mut degrees = [0.0; goofi_core::scale::MAX_DEGREES];
+            let n = goofi_core::scale::Recipe::preset(name).degrees(&mut degrees);
+            let mut semitones: Vec<u32> = degrees[..n].iter().map(|cents| (cents / 100.0).round() as u32 % 12).collect();
+            semitones.sort_unstable();
+            semitones.dedup();
+            format!("\t{name}: [{}],\n", semitones.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
+        })
+        .collect();
     let expr_args = |args: &[goofi_node::expr::Arg]| {
         args.iter()
             .map(|a| {
@@ -298,6 +311,10 @@ pub fn typescript() -> String {
          export const PLAYHEAD_FIELDS = [{playhead_fields}] as const;\n\
          /** The variable groups goofi owns: each named for life, and no control panel draws one. */\n\
          export const OWN_GROUPS = [{own_groups}] as const;\n\
+         /** The twelve notes by name, from C: what a root is one of. */\n\
+         export const NOTE_NAMES = [{note_names}] as const;\n\
+         /** The named scales, each as the semitones above its root nearest its degrees. */\n\
+         export const SCALES: Record<string, readonly number[]> = {{\n{scales}}};\n\
          \n\
          export interface ExprArgInfo {{\n\
          \treadonly name: string;\n\
