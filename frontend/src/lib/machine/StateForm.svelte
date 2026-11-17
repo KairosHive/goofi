@@ -22,7 +22,7 @@
 
 	const g = graph();
 	function call(op: MachineOp, payload: Record<string, unknown>): void {
-		void g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
+		void g.op(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
 	}
 	const one = $derived(ids.length === 1 ? ids[0] : null);
 	const s = $derived(one ? m.states[one] : null);
@@ -74,7 +74,7 @@
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function pickTransition(e: MouseEvent): void {
 		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const add = (to: string): void => void g.machine('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
+		const add = (to: string): void => void g.op('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
 		picker = { x: r.left, y: r.bottom, items: Object.entries(m.states).map(([to, s]) => ({ label: s.name, action: () => add(to) })) };
 	}
 	/** The one delete path: a playhead starting here refuses it, as the manager says. */

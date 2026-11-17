@@ -65,13 +65,13 @@
 		setState({ machine }, 'authored', `Show machine ${g.machines[machine]?.name}`);
 	}
 	function call(op: MachineOp, payload: Record<string, unknown>): Promise<unknown> {
-		return g.machine(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
+		return g.op(op, { machine: name, ...payload }).catch((e) => notify().failure(op, e));
 	}
 	/** A new machine, shown here, as ONE step. */
 	async function create(): Promise<void> {
 		try {
 			await history().transaction('Add machine', async (step) => {
-				const r = await g.machine<{ id: string }>('machine add', {}, step);
+				const r = await g.op<{ id: string }>('machine add', {}, step);
 				await g.setPanelState(panelId, { machine: r.id }, step);
 			});
 		} catch (e) {
@@ -86,8 +86,8 @@
 	async function remove(machine: string): Promise<void> {
 		try {
 			await history().transaction(`Remove machine ${g.machines[machine]?.name}`, async (step) => {
-				if (tabs.length === 1) await g.machine('machine add', {}, step);
-				await g.machine('machine remove', { machine }, step);
+				if (tabs.length === 1) await g.op('machine add', {}, step);
+				await g.op('machine remove', { machine }, step);
 			});
 		} catch (e) {
 			notify().failure('Remove machine', e);
@@ -295,7 +295,7 @@
 	}
 	async function addTransition(from: string, to: string): Promise<void> {
 		try {
-			const r = await g.machine<{ id: string }>('machine transition add', { machine: name, from, to });
+			const r = await g.op<{ id: string }>('machine transition add', { machine: name, from, to });
 			sel.setSelection(panelId, [], [r.id]);
 		} catch (e) {
 			notify().failure('Add transition', e);

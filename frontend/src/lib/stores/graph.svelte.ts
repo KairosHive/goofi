@@ -33,13 +33,14 @@ import {
 	controlGroups,
 	ownedGroups,
 	machineViews,
+	trackViews,
 	arrangementTabs,
 	type Doc,
 	type VariableView,
 	type ControlView,
 	type LockView
 } from '$lib/crdt/graphDoc';
-import type { Literal, Machine } from '$lib/api/generated';
+import type { Literal, Machine, Track } from '$lib/api/generated';
 import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
@@ -153,6 +154,8 @@ export class GraphStore {
 	machineGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'machine'));
 	/** Every state machine, by id, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
+	/** Every track of the timeline, by id, in stacking order. */
+	timeline: Record<string, Track> = $derived(trackViews(this.doc));
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
@@ -649,9 +652,9 @@ export class GraphStore {
 		await this.ctl.call('control remove', { group, element });
 	}
 
-	/** One `machine …` op, as the panel speaks them: the op vocabulary is the interface, so the
-	 * panel names the op and the manager answers. */
-	machine<T = Record<string, unknown>>(op: MachineOp, payload: Record<string, unknown>, step?: Step): Promise<T> {
+	/** One op, as a panel speaks them: the op vocabulary is the interface, so the panel names the
+	 * op and the manager answers. */
+	op<T = Record<string, unknown>>(op: OpName, payload: Record<string, unknown>, step?: Step): Promise<T> {
 		return this.ctl.call(op, payload, step) as Promise<T>;
 	}
 
@@ -664,6 +667,11 @@ export class GraphStore {
 	 * machine's key. */
 	previewState(machine: string, name: string, patch: { pos?: [number, number]; values?: Record<string, Literal>; envelopes?: Record<string, number[]>; interval?: number; noop?: number; weights?: Record<string, number> }): void {
 		this.ctl.preview(`machine ${machine}`, 'machine state edit', { machine, name, ...patch });
+	}
+
+	/** A note or a keyframe drag in flight: the track's notes or attributes, previewed under its key. */
+	previewTrack(track: string, patch: Record<string, unknown>): void {
+		this.ctl.preview(`track ${track}`, 'timeline track edit', { track, ...patch });
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is

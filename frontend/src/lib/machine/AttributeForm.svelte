@@ -14,7 +14,7 @@
 
 	const g = graph();
 	function call(op: MachineOp, payload: Record<string, unknown>): void {
-		void g.machine(op, { machine: name, name: attr, ...payload }).catch((e) => notify().failure(op, e));
+		void g.op(op, { machine: name, name: attr, ...payload }).catch((e) => notify().failure(op, e));
 	}
 	/** A new face starts the default over, so the widget can always draw what it is handed. */
 	function setFace(face: string): void {

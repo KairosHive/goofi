@@ -4,7 +4,7 @@
  */
 import { EMPTY_PANEL_TYPE, OWN_GROUPS, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Machine } from '$lib/api/generated';
+import type { Link, Literal, Lock, Machine, Track } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -177,6 +177,9 @@ export function machineViews(doc: Doc): Record<string, Machine> {
 	}
 	return out;
 }
+
+/** Every track of the timeline, by id, in the order a panel stacks them. */
+export const trackViews = (doc: Doc): Record<string, Track> => obj(doc.timeline) as Record<string, Track>;
 
 /** What holds `gv` right now: its own lock and its group's together. */
 export function effectiveLock(gv: VariableView, group: LockView | undefined): LockView {

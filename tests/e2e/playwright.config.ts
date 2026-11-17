@@ -68,7 +68,7 @@ export default defineConfig({
 		{ name: 'desktop', testIgnore: /touch\.spec\.ts$/ },
 		{
 			name: 'phone',
-			testMatch: /(touch|integrity|machine)\.spec\.ts$/,
+			testMatch: /(touch|integrity|machine|timeline)\.spec\.ts$/,
 			use: { ...devices['Pixel 7'] }
 		},
 		{

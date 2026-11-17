@@ -1,34 +1,13 @@
 # Timeline
 
-A timeline panel: tracks of notes and of keyframed curves, stacked on one time axis, each track
-a group of variables the patch reads. Shipped: the clock it plays on (the position of
-`goofi_supervisor::timing::Time`, the `clock` group, `clock set`), the tracks themselves
-(`goofi_graph::timeline`, the `timeline` ops, a track's group, written by the machines' thread)
-and a note track as a port of the audio `MidiIn` node (`goofi_audio::TrackPorts`).
-This file holds the decisions for what remains and the order of the work.
-
-## Decisions
-
-### Panel
-
-- Panel type `timeline`. Tracks are stacked vertically on one time axis.
-- A panel's state holds the ids of the tracks it hides. Two panels can hide different sets.
-- A hidden track is listed in a dropdown in the panel's bar; a click on it shows it again.
-- Each track has a hide button. A right click on a track, or a long press, opens a menu:
-  `Hide Track`, `Hide Tracks Above`, `Hide Tracks Below`, `Hide Other Tracks`, `Delete Track…`.
-  The delete asks first (`ConfirmDialog`).
-- A track's id is never minted twice, so the id of a removed track in a panel's state names
-  nothing: a panel passes over an id it does not know, and nothing rewrites the panels.
-- The panel shows and drives the clock: play, pause, stop, the position, the tempo, the length
-  and the loop. It owns no transport of its own.
+Shipped: the clock the timeline plays on (the position of `goofi_supervisor::timing::Time`, the
+`clock` group, `clock set`), the tracks (`goofi_graph::timeline`, the `timeline` ops, a track's
+group, written by the machines' thread), a note track as a port of the audio `MidiIn` node
+(`goofi_audio::TrackPorts`) and the panel (`TimelinePanel.svelte`). This file holds what remains.
 
 ## Remaining work
 
-In this order, each a tested commit:
-
-1. The panel: tracks, show and hide, the menu, the note editor, the keyframe and curve editor,
-   the clock controls.
-2. The words: the architecture lines of AGENTS.md (the timeline, its ports), a README section,
+1. The words: the architecture lines of AGENTS.md (the timeline, its ports), a README section,
    the orientation.
 
 ## Open
@@ -52,6 +31,10 @@ In this order, each a tested commit:
 - A note ring that is full drops the note, an end included. Not examined: whether the audio
   thread can stop draining a node's ring while the node is in the plan.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
+- The panel's axis fits the clock's length, or else the tracks' content: it has no zoom, no
+  scroll and no snap to a grid.
+- The panel edits one note or keyframe at a time: no selection of several, no copy.
+- A panel keeps the id of a removed track in `state.hidden`; nothing reads it.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.

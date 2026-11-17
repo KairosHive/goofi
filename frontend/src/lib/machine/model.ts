@@ -76,7 +76,7 @@ export async function editEach(machine: string, op: MachineOp, key: 'name' | 'id
 	const g = graph();
 	try {
 		await history().transaction(op, async (step) => {
-			for (const id of ids) await g.machine(op, { machine, [key]: id, ...patch }, step);
+			for (const id of ids) await g.op(op, { machine, [key]: id, ...patch }, step);
 		});
 	} catch (e) {
 		notify().failure(op, e);
@@ -109,7 +109,7 @@ export async function connect(machine: string, m: Machine, pairs: [string, strin
 	const g = graph();
 	try {
 		await history().transaction(label, async (step) => {
-			for (const [from, to] of fresh) await g.machine('machine transition add', { machine, from, to }, step);
+			for (const [from, to] of fresh) await g.op('machine transition add', { machine, from, to }, step);
 		});
 	} catch (e) {
 		notify().failure(label, e);
@@ -140,11 +140,11 @@ export async function addStates(machine: string, n: number, chain: boolean, afte
 	try {
 		await history().transaction(n === 1 ? 'Add state' : `Add ${n} states`, async (step) => {
 			for (let i = 0; i < n; i++) {
-				const r = await g.machine<{ id: string }>('machine state add', { machine }, step);
+				const r = await g.op<{ id: string }>('machine state add', { machine }, step);
 				names.push(r.id);
 			}
 			if (chain) {
-				for (const [from, to] of chained(after ? [after, ...names] : names)) await g.machine('machine transition add', { machine, from, to }, step);
+				for (const [from, to] of chained(after ? [after, ...names] : names)) await g.op('machine transition add', { machine, from, to }, step);
 			}
 		});
 	} catch (e) {
@@ -188,12 +188,12 @@ export async function pasteFragment(machine: string, f: Fragment, offset: [numbe
 	try {
 		await history().transaction('Paste states', async (step) => {
 			for (const [old, s] of Object.entries(f.states)) {
-				const r = await g.machine<{ id: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
+				const r = await g.op<{ id: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
 				renamed.set(old, r.id);
-				await g.machine('machine state edit', { machine, name: r.id, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
+				await g.op('machine state edit', { machine, name: r.id, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
 			}
 			for (const t of f.transitions) {
-				await g.machine('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);
+				await g.op('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);
 			}
 		});
 	} catch (e) {

@@ -48,13 +48,13 @@
 							{
 								label: 'Add a playhead here',
 								icon: 'plus' as const,
-								action: () => void g.machine('machine playhead add', { machine, start: id, color: dotColor('', Object.keys(m?.playheads ?? {}).length) }).catch((e) => notify().failure('Add playhead', e))
+								action: () => void g.op('machine playhead add', { machine, start: id, color: dotColor('', Object.keys(m?.playheads ?? {}).length) }).catch((e) => notify().failure('Add playhead', e))
 							}
 						]),
 				{
 					label: group ? `Delete ${group.length} states` : 'Delete state',
 					icon: 'x',
-					action: () => (group ?? [id]).forEach((s) => void g.machine('machine state remove', { machine, name: s }).catch((e) => notify().failure('Remove state', e)))
+					action: () => (group ?? [id]).forEach((s) => void g.op('machine state remove', { machine, name: s }).catch((e) => notify().failure('Remove state', e)))
 				}
 			]
 		};

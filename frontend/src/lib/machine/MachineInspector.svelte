@@ -101,7 +101,7 @@
 		if (!done || done.touched.size === 0) return;
 		try {
 			await history().transaction(`Paint ${m.attributes[done.attr]?.name}`, async (step) => {
-				for (const [state, v] of done.touched) await g.machine('machine state edit', { machine: name, name: state, values: { [done.attr]: v } }, step);
+				for (const [state, v] of done.touched) await g.op('machine state edit', { machine: name, name: state, values: { [done.attr]: v } }, step);
 			});
 		} catch (e) {
 			notify().failure('Paint', e);
@@ -124,7 +124,7 @@
 				interval = Number((d0 > 0 ? (d0 * w) / w0 : w / perSecond).toFixed(2));
 				g.previewState(name, state, { interval });
 			},
-			commit: () => void g.machine('machine state edit', { machine: name, name: state, interval }).catch((err) => notify().failure('Edit state', err)),
+			commit: () => void g.op('machine state edit', { machine: name, name: state, interval }).catch((err) => notify().failure('Edit state', err)),
 			cancel: () => g.previewState(name, state, { interval: m.states[state].interval })
 		});
 	}
@@ -217,8 +217,8 @@
 		if (!creatable) return;
 		try {
 			await history().transaction(`Add attribute ${attr}`, async (step) => {
-				await g.machine('machine attribute add', { machine: name, name: attr, value: FACES[0].born, kind: FACES[0].kind }, step);
-				for (const id of selected) await g.machine('machine state edit', { machine: name, name: id, values: { [attr]: FACES[0].born } }, step);
+				await g.op('machine attribute add', { machine: name, name: attr, value: FACES[0].born, kind: FACES[0].kind }, step);
+				for (const id of selected) await g.op('machine state edit', { machine: name, name: id, values: { [attr]: FACES[0].born } }, step);
 			});
 			fresh = '';
 		} catch (e) {
@@ -230,8 +230,8 @@
 		const last = order[order.length - 1];
 		try {
 			await history().transaction('Add state', async (step) => {
-				const r = await g.machine<{ id: string }>('machine state add', { machine: name }, step);
-				if (last) await g.machine('machine transition add', { machine: name, from: last, to: r.id }, step);
+				const r = await g.op<{ id: string }>('machine state add', { machine: name }, step);
+				if (last) await g.op('machine transition add', { machine: name, from: last, to: r.id }, step);
 				sel.setSelection(panelId, [r.id], []);
 			});
 		} catch (e) {

@@ -20,13 +20,13 @@
 	const playheads = $derived(Object.keys(m.playheads));
 	watchVariables(() => playheads.map((p) => `${m.playheads[p].name}.state`));
 
-	const call = (op: MachineOp, patch: Record<string, unknown>): void => void g.machine(op, { machine: name, id, ...patch }).catch((e) => notify().failure(op, e));
+	const call = (op: MachineOp, patch: Record<string, unknown>): void => void g.op(op, { machine: name, id, ...patch }).catch((e) => notify().failure(op, e));
 	const edit = (patch: Record<string, unknown>): void => call('machine transition edit', patch);
 	// ---- firing by hand: the playheads resting in `from` (anywhere, for `*`); one goes at once, several ask.
 	const candidates = $derived(playheads.filter((p) => t && (t.from === '*' || stateOf(m, p) === t.from)));
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function fire(e: MouseEvent): void {
-		const go = (p: string): void => void g.machine('machine fire', { machine: name, playhead: p, transition: id }).catch((err) => notify().failure('Fire', err));
+		const go = (p: string): void => void g.op('machine fire', { machine: name, playhead: p, transition: id }).catch((err) => notify().failure('Fire', err));
 		if (candidates.length === 1) return go(candidates[0]);
 		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		picker = { x: r.left, y: r.bottom, items: candidates.map((p) => ({ label: m.playheads[p].name, icon: 'circle-dot', action: () => go(p) })) };

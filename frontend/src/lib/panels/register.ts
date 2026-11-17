@@ -10,6 +10,7 @@ import ConsolePanel from './ConsolePanel.svelte';
 import VariablesPanel from './VariablesPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
 import MachinePanel from './MachinePanel.svelte';
+import TimelinePanel from './TimelinePanel.svelte';
 import AgentPanel from './AgentPanel.svelte';
 import RecorderPanel from './RecorderPanel.svelte';
 
@@ -22,6 +23,7 @@ const components: Record<PanelTypeId, Component<PanelProps>> = {
 	variables: VariablesPanel,
 	control: ControlPanel,
 	machine: MachinePanel,
+	timeline: TimelinePanel,
 	agent: AgentPanel,
 	recorder: RecorderPanel
 };
