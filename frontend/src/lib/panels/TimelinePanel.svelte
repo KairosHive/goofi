@@ -1,63 +1,126 @@
-<!-- Timeline panel: every track of the patch stacked on one time axis — a note track as a piano
-     roll, a curve track as one lane per attribute — under the clock they play on. The tracks are
-     the patch's; the tracks a panel hides and the unit of its ruler are its own state. Every change
-     is a `timeline` or a `clock` op, so the manager owns the model and this panel the drawing and
-     the gesture. -->
+<!-- Timeline panel: every track of the patch on one time axis, each with what it says about itself
+     beside its lane — a note track as a piano roll, a curve track as one line through its
+     keyframes — under the clock they play on. A panel wider than tall stacks the tracks as rows
+     and runs the time to the right; a panel taller than wide stands them as columns and runs the
+     time down. The tracks are the patch's; what a panel hides, how large it draws a track and the
+     unit of its ruler are its own state; what part of the axis it looks at is no state at all.
+     Every change is a `timeline` or a `clock` op or a clock variable, so the manager owns the
+     model and this panel the drawing and the gesture. -->
 <script lang="ts">
 	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
+	import { untrack } from 'svelte';
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { contentEnd, hiding, lanePath, pitches, ticks, unit } from '$lib/timeline/model';
-	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, ScrollArea, Segmented, TextInput } from '$lib/ui';
+	import RangeBar from '$lib/timeline/RangeBar.svelte';
+	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, TextInput } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
 		hidden?: string[];
 		/** Whether the ruler counts beats and not seconds. */
 		beats?: boolean;
+		/** How large this panel draws a track across the axis, in pixels, by the track's id. */
+		sizes?: Record<string, number>;
 	}
 	const UNITS = [
-		{ id: 's', label: 's', title: 'Times in seconds' },
+		{ id: 's', label: 'secs', title: 'Times in seconds' },
 		{ id: 'beats', label: 'beats', title: 'Times in beats of the tempo' }
 	];
 
 	let { state: panelState, setState }: PanelProps = $props();
 	const g = graph();
-	const view = $derived(asStateObject(panelState) as TimelineState);
-	const hidden = $derived(view.hidden ?? []);
+	const own = $derived(asStateObject(panelState) as TimelineState);
+	const hidden = $derived(own.hidden ?? []);
 	const shown = $derived(Object.keys(g.timeline).filter((id) => !hidden.includes(id)));
 	// An id the timeline does not hold is a removed track's: the panel passes over it.
 	const stowed = $derived(hidden.filter((id) => id in g.timeline));
 	const fail = (what: string) => (e: unknown) => notify().failure(what, e);
+	const fixed = (v: number): number => Number(v.toFixed(3));
+	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+	const share = (f: number): string => `${100 * f}%`;
+	let [wide, tall] = $state([0, 0]);
+	/** A panel taller than wide runs the time down and stands the tracks beside each other. */
+	const vertical = $derived(tall > wide);
 
-	// ---- the clock: its variables read live, `clock set` to steer it.
-	watchVariables(() => ['time', 'playing', 'bpm', 'length', 'loop'].map((n) => `clock.${n}`));
+	// ---- the clock: its variables read live, `clock set` to steer it, its loop a section of the axis.
+	watchVariables(() => ['time', 'playing', 'bpm', 'start', 'length'].map((n) => `clock.${n}`));
 	function clock(name: string): number {
 		const v = variableValue(`clock.${name}`);
 		return typeof v === 'number' ? v : 0;
 	}
 	const playing = $derived(clock('playing') > 0);
 	/** The seconds one mark of the ruler counts. */
-	const mark = $derived(unit(view.beats === true, clock('bpm')));
-	/** What a drag holds still, so its own previews move neither: the axis, and its lane's range. */
-	let frozen = $state<{ span: number; track: string; lane: string; index: number; range: [number, number] } | null>(null);
-	/** The seconds the axis spans: the clock's length while it restarts there, else what the tracks hold. */
-	const span = $derived(frozen?.span ?? (clock('loop') > 0 && clock('length') > 0 ? clock('length') : Math.max(8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25)));
+	const mark = $derived(unit(own.beats === true, clock('bpm')));
+	const loop = $derived<[number, number] | null>(clock('length') > 0 ? [clock('start'), clock('start') + clock('length')] : null);
 	const steer = (to: { playing?: boolean; time?: number }): void => void g.op('clock set', to).catch(fail('Set clock'));
-	const set = (name: string, value: number): void => void g.setVariableValue(`clock.${name}`, value).catch(fail('Set clock'));
-	const fixed = (v: number): number => Number(v.toFixed(3));
-	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
-	const fraction = (p: { clientX: number; clientY: number }, el: Element): [number, number] => {
-		const box = el.getBoundingClientRect();
-		return [(p.clientX - box.left) / box.width, (p.clientY - box.top) / box.height];
-	};
+	/** The loop's start and length as ONE step; a length of 0 clears it. */
+	const setLoop = (start: number, length: number): void =>
+		void history()
+			.transaction(length > 0 ? 'Set loop' : 'Clear loop', async (step) => {
+				await g.op('variable entry edit', { name: 'clock.start', value: fixed(start) }, step);
+				await g.op('variable entry edit', { name: 'clock.length', value: fixed(length) }, step);
+			})
+			.catch(fail('Set loop'));
 
-	// ---- the tracks: an edit is one op on the track; what a panel hides is the panel's state.
+	// ---- the view: the seconds of the axis this panel looks at. It follows the clock: a position
+	// that leaves it takes the view along, unless the view was moved off the position by hand.
+	let view = $state<[number, number]>([0, Math.max(8, contentEnd(Object.values(untrack(() => g.timeline)), 120) * 1.25)]);
+	const width = $derived(view[1] - view[0]);
+	const within = (seconds: number, [from, to]: [number, number]): boolean => seconds >= from && seconds <= to;
+	let followed = true;
+	function look(next: [number, number]): void {
+		view = next;
+		followed = within(clock('time'), next);
+	}
+	$effect(() => {
+		const at = clock('time');
+		const now = untrack(() => view);
+		if (within(at, now)) followed = true;
+		else if (followed && !untrack(() => frozen)) view = [at, at + now[1] - now[0]];
+	});
+	/** Where a second falls on the axis: 0 at the start of the view, 1 at its end. */
+	const along = (seconds: number): number => (seconds - view[0]) / width;
+	/** A pointer over a lane: how far along the axis, and how high across it, 0 the lowest. */
+	function point(p: { clientX: number; clientY: number }, el: Element): [number, number] {
+		const box = el.getBoundingClientRect();
+		const [x, y] = [(p.clientX - box.left) / box.width, (p.clientY - box.top) / box.height];
+		return vertical ? [y, x] : [x, 1 - y];
+	}
+	/** Where what sits `low` up a lane, `size` high, begins across it: a row counts from its top,
+	 * a column from its left. */
+	const across = (low: number, size = 0): string => share(vertical ? low : 1 - low - size);
+	/** What the range bar stands for: the view, and everything there is to see. */
+	const total = $derived<[number, number]>([Math.min(0, view[0]), Math.max(view[1], 8, contentEnd(Object.values(g.timeline), clock('bpm')) * 1.25, loop?.[1] ?? 0, clock('time'))]);
+
+	/** A press on the ruler puts the clock there; a drag along it marks the section the clock loops in. */
+	let section = $state<[number, number] | null>(null);
+	function onRuler(e: PointerEvent): void {
+		const lane = e.currentTarget as HTMLElement;
+		const at = (p: { clientX: number; clientY: number }): number => Math.max(0, view[0] + point(p, lane)[0] * width);
+		const from = at(e);
+		drag = beginDrag(lane, e.pointerId, {
+			move: (p) => {
+				if (section || Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) >= MOVE_TOLERANCE_PX) section = [Math.min(from, at(p)), Math.max(from, at(p))];
+			},
+			commit: () => {
+				if (section) setLoop(section[0], section[1] - section[0]);
+				else steer({ time: from });
+				section = null;
+			},
+			cancel: () => (section = null)
+		});
+	}
+	const band = $derived(section ?? loop);
+
+	// ---- the tracks: an edit is one op on the track; what a panel hides and how large it draws a
+	// track are the panel's state.
 	const edit = (track: string, patch: Record<string, unknown>): void => void g.op('timeline track edit', { track, ...patch }).catch(fail('Edit track'));
-	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind, beats: view.beats === true }).catch(fail('Add track'));
+	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind, beats: own.beats === true }).catch(fail('Add track'));
 	const hide = (ids: string[], label: string): void => setState({ hidden: ids }, 'authored', label);
 	const rename = (id: string, to: string): void => {
 		if (to !== g.timeline[id].name && isValidIdentifier(to)) edit(id, { to });
@@ -78,69 +141,93 @@
 		const items = [entry('this', 'Hide Track'), entry('above', 'Hide Tracks Above'), entry('below', 'Hide Tracks Below'), entry('others', 'Hide Other Tracks')];
 		menu = { x, y, items: [...items, { separator: true }, { label: 'Delete Track…', icon: 'x', action: () => (asked = id) }] };
 	}
-	/** A menu that drops from the bar button that opened it. */
+	/** A menu that drops from the button that opened it. */
 	function drop(e: MouseEvent, items: MenuItem[]): void {
 		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		menu = { x: box.left, y: box.bottom, items };
 	}
+	const addMenu = (e: MouseEvent): void => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }]);
 	// The touch door onto a track's menu.
 	let pressed = '';
 	const press = createLongPress((at) => trackMenu(pressed, at.clientX, at.clientY));
 
-	// ---- the notes and the keyframes: what a lane holds, a note track's lane being the empty name.
-	let picked = $state<{ track: string; lane: string; index: number } | null>(null);
+	/** A track's edge dragged: how large this panel draws it, and nothing of the track. */
+	let sizing = $state<{ id: string; size: number; sent?: boolean } | null>(null);
+	function resize(e: PointerEvent, id: string): void {
+		e.stopPropagation();
+		const lane = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
+		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
+			move: (p) => (sizing = { id, size: Math.max(24, Math.round(vertical ? lane.width + p.clientX - e.clientX : lane.height + p.clientY - e.clientY)) }),
+			commit: () => {
+				if (!sizing) return;
+				sizing.sent = true;
+				setState({ sizes: { ...own.sizes, [id]: sizing.size } }, 'authored', 'Resize Track');
+			},
+			cancel: () => (sizing = null)
+		});
+	}
+	// The size dragged stands until the panel's state holds it.
+	$effect(() => {
+		void own.sizes;
+		if (untrack(() => sizing?.sent)) sizing = null;
+	});
+
+	// ---- the notes and the keyframes.
+	let picked = $state<{ track: string; index: number } | null>(null);
 	/** Pick a note or a keyframe, or nothing. The focus leaves first, so a field that shows the one
 	 * picked before commits to that one. */
 	function pick(next: typeof picked): void {
 		(document.activeElement as HTMLElement | null)?.blur();
 		picked = next;
 	}
-	const held = (t: Track | undefined, lane: string): (Note | Key)[] => (t?.kind === 'note' ? t.notes : (t?.attributes[lane]?.keys ?? []));
-	const put = (t: Track, lane: string, items: unknown[]): Record<string, unknown> =>
-		t.kind === 'note' ? { notes: items } : { attributes: { [lane]: { ...t.attributes[lane], keys: items } } };
-	const range = (t: Track, lane: string): [number, number] => (t.kind === 'note' ? pitches(t.notes) : t.attributes[lane].range);
-	const units = (t: Track): number => span / unit(t.beats, clock('bpm'));
+	const held = (t: Track | undefined): (Note | Key)[] => (t?.kind === 'note' ? t.notes : (t?.keys ?? []));
+	const put = (t: Track, items: unknown[]): Record<string, unknown> => (t.kind === 'note' ? { notes: items } : { keys: items });
+	const range = (t: Track): [number, number] => (t.kind === 'note' ? pitches(t.notes) : t.range);
+	/** The seconds one of a track's time units lasts. */
+	const secs = (t: Track): number => unit(t.beats, clock('bpm'));
+	/** What a drag holds still, so its own previews do not move it: its lane's range. */
+	let frozen = $state<{ track: string; index: number; range: [number, number] } | null>(null);
 	/** Change the picked note or keyframe, or with null remove it. */
 	function change(id: string, t: Track, to: Partial<Note & Key> | null): void {
-		const { lane, index } = picked!;
+		const { index } = picked!;
 		if (!to) picked = null;
-		edit(id, put(t, lane, held(t, lane).flatMap((o, k) => (k !== index ? [o] : to ? [{ ...o, ...to }] : []))));
+		edit(id, put(t, held(t).flatMap((o, k) => (k !== index ? [o] : to ? [{ ...o, ...to }] : []))));
 	}
 	/** A double click on a lane's own ground adds a note or a keyframe there. */
-	function addAt(e: MouseEvent, id: string, t: Track, lane: string): void {
+	function addAt(e: MouseEvent, id: string, t: Track): void {
 		if (e.target !== e.currentTarget) return;
-		const [fx, fy] = fraction(e, e.currentTarget as Element);
-		const [lo, hi] = range(t, lane);
-		const at = fixed(fx * units(t));
-		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: clamp(hi - Math.floor(fy * (hi - lo + 1)), lo, hi), velocity: 0.8 } : { at, value: fixed(clamp(hi - fy * (hi - lo), lo, hi)), curve: 'linear' };
-		edit(id, put(t, lane, [...held(t, lane), born]));
+		const [f, v] = point(e, e.currentTarget as Element);
+		const [lo, hi] = range(t);
+		const at = fixed(Math.max(0, view[0] + f * width) / secs(t));
+		const born = t.kind === 'note' ? { at, length: t.beats ? 1 : 0.5, pitch: clamp(lo + Math.floor(v * (hi - lo + 1)), lo, hi), velocity: 0.8 } : { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
+		edit(id, put(t, [...held(t), born]));
 	}
 	/** A drag of one note or keyframe by as much as the pointer moves: each move previews the lane
 	 * as it stands with that one moved, and the release sends the last of them as the edit. A press
 	 * that does not move is a pick alone. */
 	let drag: (() => void) | undefined;
-	function dragItem(e: PointerEvent, id: string, t: Track, lane: string, index: number): void {
+	function dragItem(e: PointerEvent, id: string, t: Track, index: number): void {
 		e.stopPropagation();
-		pick({ track: id, lane, index });
+		pick({ track: id, index });
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
-		const [x0, y0] = fraction(e, ground);
-		const [lo, hi] = range(t, lane);
-		const [o, per] = [held(t, lane)[index], units(t)];
-		const now = (): (Note | Key)[] => held(g.timeline[id], lane);
+		const [f0, v0] = point(e, ground);
+		const [lo, hi] = range(t);
+		const [o, per] = [held(t)[index], width / secs(t)];
+		const now = (): (Note | Key)[] => held(g.timeline[id]);
 		/** The lane as it stands, with the dragged one where `to` puts it. */
-		const moved = (to: Partial<Note & Key>): Record<string, unknown> => put(g.timeline[id] ?? t, lane, now().map((it, k) => (k === index ? { ...it, ...to } : it)));
+		const moved = (to: Partial<Note & Key>): Record<string, unknown> => put(t, now().map((it, k) => (k === index ? { ...it, ...to } : it)));
 		let patch: Record<string, unknown> | null = null;
 		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
 			move: (p) => {
 				if (!patch && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
-				frozen ??= { span, track: id, lane, index, range: [lo, hi] };
-				const [fx, fy] = fraction(p, ground);
-				const at = o.at + (fx - x0) * per;
-				// A keyframe stays between its neighbours and inside the attribute's range.
+				frozen ??= { track: id, index, range: [lo, hi] };
+				const [f, v] = point(p, ground);
+				const at = o.at + (f - f0) * per;
+				// A keyframe stays between its neighbours and inside the curve's range.
 				patch = moved(
 					'pitch' in o
-						? { at: fixed(Math.max(0, at)), pitch: clamp(o.pitch - Math.round((fy - y0) * (hi - lo + 1)), lo, hi) }
-						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value - (fy - y0) * (hi - lo), lo, hi)) }
+						? { at: fixed(Math.max(0, at)), pitch: clamp(o.pitch + Math.round((v - v0) * (hi - lo + 1)), lo, hi) }
+						: { at: fixed(clamp(at, Math.max(0, (now()[index - 1]?.at ?? -1) + 0.001), (now()[index + 1]?.at ?? Infinity) - 0.001)), value: fixed(clamp(o.value + (v - v0) * (hi - lo), lo, hi)) }
 				);
 				g.previewTrack(id, patch);
 			},
@@ -157,151 +244,138 @@
 	}
 	// A drag ends with the panel, and with the note or keyframe it holds.
 	$effect(() => {
-		if (frozen && !held(g.timeline[frozen.track], frozen.lane)[frozen.index]) drag?.();
+		if (frozen && !held(g.timeline[frozen.track])[frozen.index]) drag?.();
 	});
 	$effect(() => () => {
 		press.cancel();
 		drag?.();
 	});
-	/** A new attribute on a curve track, under the first free name. */
-	function addAttribute(id: string, t: Extract<Track, { kind: 'curve' }>): void {
-		const names = Object.values(t.attributes).map((l) => l.name);
-		const name = Array.from({ length: names.length + 1 }, (_, n) => `attr${n}`).find((n) => !names.includes(n))!;
-		edit(id, { attributes: { [name]: { name, range: [0, 1], keys: [] } } });
-	}
 </script>
 
-<div class="timeline" data-testid="timeline-panel">
+<div class="timeline" class:vertical bind:clientWidth={wide} bind:clientHeight={tall} data-testid="timeline-panel">
 	<Bar style="--bar-wrap: wrap">
 		{#snippet start()}
-			<IconButton label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
-			<IconButton label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
-			<NumberInput aria-label="Position" title="The clock's position" data-testid="clock-time" value={Number((clock('time') / mark).toFixed(2))} min={0} onChange={(v) => steer({ time: v * mark })} />
-			<Segmented aria-label="Ruler unit" value={view.beats ? 'beats' : 's'} segments={UNITS} data-testid="timeline-unit" onChange={(u) => setState({ beats: u === 'beats' }, 'authored', 'Set ruler unit')} />
+			<IconButton variant="ghost" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
+			<IconButton variant="ghost" label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
+			<NumberInput class="position" aria-label="Position" title="The clock's position" data-testid="clock-time" value={Number((clock('time') / mark).toFixed(2))} min={0} onChange={(v) => steer({ time: v * mark })} />
+			<Segmented aria-label="Ruler unit" value={own.beats ? 'beats' : 's'} segments={UNITS} data-testid="timeline-unit" onChange={(u) => setState({ beats: u === 'beats' }, 'authored', 'Set ruler unit')} />
 		{/snippet}
 		{#snippet end()}
-			<NumberInput aria-label="Tempo" title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => set('bpm', v)} />
-			<Segmented value={clock('loop') > 0 ? 'loop' : null} segments={[{ id: 'loop', label: 'loop', title: 'Restart the clock at the length', testid: 'clock-loop' }]} onChange={() => set('loop', clock('loop') > 0 ? 0 : 1)} />
-			<NumberInput aria-label="Length" title="Where the clock restarts while it loops" data-testid="clock-length" value={Number((clock('length') / mark).toFixed(2))} min={0} onChange={(v) => set('length', v * mark)} />
+			<label class="labeled">bpm <NumberInput title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => void g.setVariableValue('clock.bpm', v).catch(fail('Set tempo'))} /></label>
+			{#if loop}
+				<Segmented value="loop" segments={[{ id: 'loop', label: 'loop', title: 'The clock loops in the section marked on the ruler: press to clear it', testid: 'clock-loop' }]} onChange={() => setLoop(clock('start'), 0)} />
+			{/if}
 			{#if stowed.length > 0}
 				<Button size="sm" data-testid="timeline-hidden" title="Hidden tracks: pick one to show it" onclick={(e) => drop(e, stowed.map((id) => ({ label: g.timeline[id].name, action: () => hide(hidden.filter((h) => h !== id), 'Show Track') })))}>
 					{stowed.length} hidden <Icon name="chevron-down" />
 				</Button>
 			{/if}
-			<IconButton label="Add track" data-testid="timeline-add" onclick={(e) => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }])}><Icon name="plus" /></IconButton>
+			<IconButton variant="ghost" label="Add track" data-testid="timeline-add" onclick={addMenu}><Icon name="plus" /></IconButton>
 		{/snippet}
 	</Bar>
-	<ScrollArea>
-		<div class="stack">
-			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<div class="row ruler" data-testid="timeline-ruler">
-				<span></span>
-				<div class="lane" onclick={(e) => steer({ time: fraction(e, e.currentTarget)[0] * span })} title="Click to put the clock's position here">
-					{#each ticks(span / mark) as tick (tick)}<span class="tick" style:left={`${(100 * tick * mark) / span}%`}>{tick}</span>{/each}
+	<div class="body">
+		<div class="scroll thin-scrollbar">
+			<div class="stack">
+				<div class="row ruler" data-testid="timeline-ruler">
+					<span class="info"></span>
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div class="lane" onpointerdown={onRuler} title="Press to put the clock here; drag to mark the section it loops in">
+						{#each ticks(view[0] / mark, view[1] / mark) as tick (tick)}<span class="tick" style:--a={share(along(tick * mark))}>{tick}</span>{/each}
+					</div>
 				</div>
-			</div>
-			{#each shown as id (id)}
-				{@const t = g.timeline[id]}
-				{@const mine = picked?.track === id ? held(t, picked.lane)[picked.index] : undefined}
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<section
-					class="track"
-					data-testid={`track-${t.name}`}
-					oncontextmenu={(e) => {
-						e.preventDefault();
-						trackMenu(id, e.clientX, e.clientY);
-					}}
-					onpointerdown={(e) => {
-						pressed = id;
-						if (e.pointerType !== 'mouse') press.start(e);
-					}}
-					onpointermove={press.move}
-					onpointerup={press.cancel}
-					onpointercancel={press.cancel}
-				>
-					<header>
-						<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
-						<Segmented aria-label="Time unit" value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
-						{#if t.kind === 'curve'}
-							<IconButton size="sm" label="Add attribute" data-testid="track-add-attribute" onclick={() => addAttribute(id, t)}><Icon name="plus" /></IconButton>
-						{/if}
-						<span class="grow"></span>
-						{#if mine && picked}
-							{#if 'pitch' in mine}
-								<NumberInput aria-label="Length" title="How long the note lasts" value={mine.length} min={0.01} step={0.25} onChange={(length) => change(id, t, { length })} />
-								<NumberInput aria-label="Velocity" title="The note's velocity, 0 to 1" value={mine.velocity} min={0} max={1} step={0.05} onChange={(velocity) => change(id, t, { velocity })} />
-							{:else}
-								{@const [min, max] = range(t, picked.lane)}
-								<NumberInput aria-label="Value" title="The keyframe's value" value={mine.value} {min} {max} step={0.01} onChange={(value) => change(id, t, { value })} />
-								<CurvePicker value={mine.curve} onChange={(curve) => change(id, t, { curve })} />
+				{#each shown as id (id)}
+					{@const t = g.timeline[id]}
+					{@const mine = picked?.track === id ? held(t)[picked.index] : undefined}
+					{@const [lo, hi] = frozen?.track === id ? frozen.range : range(t)}
+					{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<section
+						class="row track"
+						data-testid={`track-${t.name}`}
+						style:--size={size ? `${size}px` : null}
+						style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
+						oncontextmenu={(e) => {
+							e.preventDefault();
+							trackMenu(id, e.clientX, e.clientY);
+						}}
+						onpointerdown={(e) => {
+							pressed = id;
+							if (e.pointerType !== 'mouse') press.start(e);
+						}}
+						onpointermove={press.move}
+						onpointerup={press.cancel}
+						onpointercancel={press.cancel}
+					>
+						<div class="info">
+							<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
+							<Segmented aria-label="Time unit" value={t.beats ? 'beats' : 's'} segments={UNITS} onChange={(u) => edit(id, { beats: u === 'beats' })} />
+							<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
+							{#if t.kind === 'curve'}
+								{#each [0, 1] as end (end)}
+									<NumberInput aria-label={end ? 'Maximum' : 'Minimum'} title={end ? 'The highest value' : 'The lowest value'} value={t.range[end]} step={0.1} onChange={(v) => edit(id, { range: t.range.with(end, v) })} />
+								{/each}
 							{/if}
-							<IconButton size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
-						{/if}
-						<IconButton size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
-					</header>
-					{#if t.kind === 'note'}
-						{@const [lo, hi] = frozen?.track === id ? frozen.range : pitches(t.notes)}
-						<div class="row">
-							<span class="side">{t.notes.length} notes</span>
-							<div class="lane">
-								<!-- svelte-ignore a11y_no_static_element_interactions -->
-								<div class="ground" style:--rows={hi - lo + 1} data-testid="track-lane" ondblclick={(e) => addAt(e, id, t, '')} onpointerdown={() => pick(null)}>
+							{#if mine}
+								{#if 'pitch' in mine}
+									<NumberInput aria-label="Length" title="How long the note lasts" value={mine.length} min={0.01} step={0.25} onChange={(length) => change(id, t, { length })} />
+									<NumberInput aria-label="Velocity" title="The note's velocity, 0 to 1" value={mine.velocity} min={0} max={1} step={0.05} onChange={(velocity) => change(id, t, { velocity })} />
+								{:else}
+									<NumberInput aria-label="Value" title="The keyframe's value" value={mine.value} min={lo} max={hi} step={0.01} onChange={(value) => change(id, t, { value })} />
+									<CurvePicker value={mine.curve} onChange={(curve) => change(id, t, { curve })} />
+								{/if}
+								<IconButton variant="ghost" size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
+							{/if}
+						</div>
+						<div class="lane">
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div class="ground" data-testid="track-lane" ondblclick={(e) => addAt(e, id, t)} onpointerdown={() => pick(null)}>
+								{#if t.kind === 'note'}
 									{#each t.notes as n, i}
 										<div
 											class="note"
 											class:picked={mine === n}
-											style:left={`${(100 * n.at) / units(t)}%`}
-											style:width={`${(100 * n.length) / units(t)}%`}
-											style:top={`${(100 * (hi - n.pitch)) / (hi - lo + 1)}%`}
-											style:height={`${100 / (hi - lo + 1)}%`}
+											style:--a={share(along(n.at * secs(t)))}
+											style:--l={share((n.length * secs(t)) / width)}
+											style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
+											style:--s={share(1 / (hi - lo + 1))}
 											style:opacity={0.4 + 0.6 * n.velocity}
-											onpointerdown={(e) => dragItem(e, id, t, '', i)}
+											onpointerdown={(e) => dragItem(e, id, t, i)}
 										></div>
 									{/each}
-								</div>
+								{:else}
+									<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
+										<path d={lanePath(t.keys, t.range, (at) => along(at * secs(t)), vertical)} vector-effect="non-scaling-stroke" />
+									</svg>
+									{#each t.keys as k, i}
+										<span class="key" class:picked={mine === k} style:--a={share(along(k.at * secs(t)))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
+									{/each}
+								{/if}
 							</div>
 						</div>
-					{:else}
-						{#each Object.entries(t.attributes) as [aid, lane] (aid)}
-							<div class="row">
-								<span class="side">
-									<TextInput class="name" aria-label="Attribute name" value={lane.name} onChange={(name) => isValidIdentifier(name) && edit(id, { attributes: { [aid]: { ...lane, name } } })} />
-									{#each [0, 1] as end (end)}
-										<NumberInput aria-label={end ? 'Maximum' : 'Minimum'} title={end ? 'The highest value' : 'The lowest value'} value={lane.range[end]} step={0.1} onChange={(v) => edit(id, { attributes: { [aid]: { ...lane, range: lane.range.with(end, v) } } })} />
-									{/each}
-									<IconButton size="sm" label="Remove attribute" onclick={() => edit(id, { attributes: { [aid]: null } })}><Icon name="x" /></IconButton>
-								</span>
-								<div class="lane">
-									<!-- svelte-ignore a11y_no_static_element_interactions -->
-									<div class="ground" data-testid={`track-lane-${lane.name}`} ondblclick={(e) => addAt(e, id, t, aid)} onpointerdown={() => pick(null)}>
-										<svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><path d={lanePath(lane, units(t), 1000, 100)} vector-effect="non-scaling-stroke" /></svg>
-										{#each lane.keys as k, i}
-											<span
-												class="key"
-												class:picked={mine === k}
-												style:--x={`${(100 * k.at) / units(t)}%`}
-												style:--y={`${(100 * (lane.range[1] - k.value)) / (lane.range[1] - lane.range[0] || 1)}%`}
-												onpointerdown={(e) => dragItem(e, id, t, aid, i)}
-											></span>
-										{/each}
-									</div>
-								</div>
-							</div>
-						{/each}
+						<span class="grip" data-testid="track-grip" title="Drag to resize the track" onpointerdown={(e) => resize(e, id)}></span>
+					</section>
+				{/each}
+				<!-- The loop's section and the clock's position, across the ruler and every track. -->
+				{#if band && band[1] > view[0] && band[0] < view[1]}
+					{@const from = clamp(along(band[0]), 0, 1)}
+					<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
+				{/if}
+				{#if within(clock('time'), view)}
+					<div class="playhead" data-testid="timeline-playhead" style:--a={along(clock('time'))}></div>
+				{/if}
+			</div>
+			{#if shown.length === 0}
+				<EmptyState>
+					{#snippet title()}{stowed.length > 0 ? 'Every track is hidden' : 'No tracks'}{/snippet}
+					{#snippet hint()}{stowed.length > 0 ? 'Show one from the hidden tracks in the bar.' : 'Add a note track or a curve track.'}{/snippet}
+					{#if stowed.length === 0}
+						<IconButton variant="ghost" label="Add track" data-testid="timeline-add-first" onclick={addMenu}><Icon name="plus" /></IconButton>
 					{/if}
-				</section>
-			{/each}
-			{#if clock('time') <= span}
-				<div class="playhead" data-testid="timeline-playhead" style:--at={clock('time') / span}></div>
+				</EmptyState>
 			{/if}
 		</div>
-		{#if shown.length === 0}
-			<EmptyState>
-				{#snippet title()}{stowed.length > 0 ? 'Every track is hidden' : 'No tracks'}{/snippet}
-				{#snippet hint()}{stowed.length > 0 ? 'Show one from the hidden tracks in the bar.' : 'Add a note track or a curve track with + in the bar.'}{/snippet}
-			</EmptyState>
-		{/if}
-	</ScrollArea>
+		<div class="range"><RangeBar {view} {total} {vertical} onChange={look} /></div>
+	</div>
 </div>
 
 {#if menu}
@@ -326,9 +400,11 @@
 </ConfirmDialog>
 
 <style>
+	/* Along the axis a thing is placed by `--a` and is `--l` long; across it, by `--c` and `--s`.
+	   A row reads them as left, width, top and height; a column the other way round. */
 	.timeline {
-		/* The column beside the lanes: what a row says about itself. A pitch's row in a note lane. */
-		--side: calc(var(--space-8) * 6);
+		/* What a track says about itself, beside its lane. A pitch's row in a note lane. */
+		--side: calc(var(--space-8) * 7);
 		--row: var(--space-3);
 		--number-width: calc(var(--space-8) * 2.5);
 		display: flex;
@@ -336,54 +412,73 @@
 		height: 100%;
 		min-height: 0;
 	}
-	.stack {
-		position: relative;
+	/* Room for an hour of seconds, to the hundredth. */
+	.timeline :global(.position) {
+		--number-width: calc(var(--space-8) * 4);
 	}
-	.track {
-		border-top: 1px solid var(--border);
-	}
-	header,
-	.side {
+	.labeled {
 		display: flex;
 		align-items: center;
-		flex-wrap: wrap;
 		gap: var(--space-2);
-		min-width: 0;
-		padding: var(--space-1) var(--space-2);
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 	}
-	/* A row's side: the name on a line of its own, the range and the ✕ under it. */
-	.side {
-		--number-width: max(calc(var(--space-8) * 1.75), var(--hit));
+	.body {
+		flex: 1 1 auto;
+		display: grid;
+		grid-template-rows: minmax(0, 1fr) auto;
+		min-height: 0;
 	}
-	.side :global(.name) {
-		flex: 1 1 100%;
-	}
-	header :global(.name) {
-		flex: 0 1 calc(var(--side) - var(--space-4));
+	.scroll {
 		min-width: 0;
+		min-height: 0;
+		overflow: auto;
 	}
-	.grow {
-		flex: 1 1 0;
+	.range {
+		padding-left: var(--side);
+	}
+	.stack {
+		position: relative;
 	}
 	.row {
 		display: grid;
 		grid-template-columns: var(--side) minmax(0, 1fr);
 	}
-	/* The room above and under the ground shows a keyframe at the end of its range whole. */
+	.track {
+		position: relative;
+		border-top: 1px solid var(--border);
+	}
+	/* It takes the room its lane gives it, and scrolls what does not fit. */
+	.info {
+		contain: size;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		align-content: flex-start;
+		gap: var(--space-2);
+		--number-width: max(calc(var(--space-8) * 1.75), var(--hit));
+		padding: var(--space-2);
+		overflow: auto;
+		font-size: var(--fs-small);
+		color: var(--text-muted);
+	}
+	.info :global(.name) {
+		flex: 1 1 100%;
+	}
+	/* The room before and after the ground shows a keyframe at the end of its range whole. */
 	.lane {
 		position: relative;
+		display: flex;
+		min-height: var(--size, calc(var(--rows, 24) * var(--row)));
 		padding: var(--space-3) 0;
 		background: var(--surface-2);
-		border-bottom: 1px solid var(--bg);
 		overflow: hidden;
 		touch-action: none;
 		user-select: none;
 	}
 	.ground {
 		position: relative;
-		height: calc(var(--rows, 10) * var(--row));
+		flex: 1 1 auto;
 	}
 	.ruler {
 		position: sticky;
@@ -392,14 +487,14 @@
 		background: var(--surface-1);
 	}
 	.ruler .lane {
-		height: var(--space-8);
+		min-height: var(--space-8);
 		padding: 0;
+		background: none;
 		cursor: pointer;
 	}
 	.tick {
 		position: absolute;
-		top: 0;
-		bottom: 0;
+		inset: 0 auto 0 var(--a);
 		padding-left: var(--space-1);
 		border-left: 1px solid var(--border-strong);
 		font-family: var(--font-mono);
@@ -409,6 +504,10 @@
 	}
 	.note {
 		position: absolute;
+		left: var(--a);
+		top: var(--c);
+		width: var(--l);
+		height: var(--s);
 		min-width: var(--space-2);
 		border-radius: var(--radius-sm);
 		background: var(--accent);
@@ -430,8 +529,8 @@
 	/* Placed by its centre with no transform: a transform would keep its hit area above the other dots. */
 	.key {
 		position: absolute;
-		left: calc(var(--x) - var(--space-5) / 2);
-		top: calc(var(--y) - var(--space-5) / 2);
+		left: calc(var(--a) - var(--space-5) / 2);
+		top: calc(var(--c) - var(--space-5) / 2);
 		width: var(--space-5);
 		height: var(--space-5);
 		border-radius: 50%;
@@ -441,17 +540,105 @@
 	.picked {
 		outline: var(--focus-width) solid var(--focus-ink);
 	}
+	.grip {
+		position: absolute;
+		inset: auto 0 0 0;
+		height: var(--space-2);
+		cursor: ns-resize;
+		touch-action: none;
+	}
+	.band,
 	.playhead {
 		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: calc(var(--side) + (100% - var(--side)) * var(--at));
-		width: 1px;
-		background: var(--danger);
+		inset: 0 auto 0 calc(var(--side) + (100% - var(--side)) * var(--a));
+		z-index: 1;
 		pointer-events: none;
 	}
-	/* Under a finger a row is taller, and a keyframe takes a press a hit-size wide, behind every
-	   keyframe's own dot. */
+	.band {
+		width: calc((100% - var(--side)) * var(--l));
+		background: var(--accent-fill);
+	}
+	.playhead {
+		width: max(2px, var(--space-1));
+		background: var(--danger);
+	}
+
+	/* ---- a panel taller than wide: the time runs down, the tracks stand as columns. */
+	.vertical .body {
+		grid-template-rows: none;
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.vertical .range {
+		display: flex;
+		padding: var(--side) 0 0;
+	}
+	.vertical .stack {
+		display: flex;
+		width: max-content;
+		min-width: 100%;
+		height: 100%;
+	}
+	.vertical .row {
+		grid-template-columns: none;
+		grid-template-rows: var(--side) minmax(0, 1fr);
+	}
+	.vertical .track {
+		flex: none;
+		width: var(--size, calc(var(--space-8) * 6));
+		border-top: 0;
+		border-left: 1px solid var(--border);
+	}
+	.vertical .lane {
+		min-height: 0;
+		padding: 0 var(--space-3);
+	}
+	.vertical .ruler {
+		top: auto;
+		left: 0;
+		flex: none;
+		width: calc(var(--space-8) * 2);
+	}
+	.vertical .ruler .lane {
+		padding: 0;
+	}
+	.vertical .tick {
+		inset: var(--a) 0 auto 0;
+		border-left: 0;
+		border-top: 1px solid var(--border-strong);
+	}
+	.vertical .note {
+		left: var(--c);
+		top: var(--a);
+		width: var(--s);
+		height: var(--l);
+		min-width: 0;
+		min-height: var(--space-2);
+	}
+	.vertical .key {
+		left: calc(var(--c) - var(--space-5) / 2);
+		top: calc(var(--a) - var(--space-5) / 2);
+	}
+	.vertical .grip {
+		inset: 0 0 0 auto;
+		width: var(--space-2);
+		height: auto;
+		cursor: ew-resize;
+	}
+	.vertical .band,
+	.vertical .playhead {
+		inset: calc(var(--side) + (100% - var(--side)) * var(--a)) 0 auto 0;
+	}
+	.vertical .band {
+		width: auto;
+		height: calc((100% - var(--side)) * var(--l));
+	}
+	.vertical .playhead {
+		width: auto;
+		height: max(2px, var(--space-1));
+	}
+
+	/* Under a finger a row is taller, a track's edge is thicker, and a keyframe takes a press a
+	   hit-size wide, behind every keyframe's own dot. */
 	@media (hover: none) and (pointer: coarse) {
 		.timeline {
 			--row: var(--space-5);
@@ -464,6 +651,13 @@
 			position: absolute;
 			inset: calc((100% - var(--hit)) / 2);
 			z-index: -1;
+		}
+		.grip {
+			height: var(--space-5);
+		}
+		.vertical .grip {
+			width: var(--space-5);
+			height: auto;
 		}
 	}
 </style>

@@ -668,7 +668,7 @@ export class GraphStore {
 		this.ctl.preview(`machine ${machine}`, 'machine state edit', { machine, name, ...patch });
 	}
 
-	/** A note or a keyframe drag in flight: the track's notes or attributes, previewed under its key. */
+	/** A note or a keyframe drag in flight: the track's notes or keyframes, previewed under its key. */
 	previewTrack(track: string, patch: Record<string, unknown>): void {
 		this.ctl.preview(`track ${track}`, 'timeline track edit', { track, ...patch });
 	}

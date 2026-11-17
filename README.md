@@ -234,21 +234,27 @@ chain tool wires every box it crosses.
 ## The clock and the timeline
 
 A patch plays on one clock from the moment it loads, and by default it never ends. `t` in an
-expression is its position in seconds, and so is `vars.clock.time`; `vars.clock.progress` is the
-position along the length, 0 to 1.
-`goofi clock set --no-playing` pauses the position and `--time 12` puts it at a second; the
-engines run on through a pause, and a recording never stops. `vars.clock.bpm` is the tempo;
-with `vars.clock.loop` on, the position restarts at `vars.clock.length`.
+expression is its position in seconds, and so is `vars.clock.time`. `goofi clock set --no-playing`
+pauses the position and `--time 12` puts it at a second; the engines run on through a pause, and
+a recording never stops. `vars.clock.bpm` is the tempo. With `vars.clock.length` above 0 the
+clock loops: the position restarts at `vars.clock.start` when it reaches the end of that section,
+and `vars.clock.progress` is how far along the section it is, 0 to 1.
 
 The timeline holds tracks on that position. A `note` track holds notes; it writes the held
 velocities to `vars.<track>.notes`, and the audio `MidiIn` node lists it as a port
-(`timeline: <track>`), so its notes play an instrument as a keyboard does. A `curve` track holds
-attributes, each a line through keyframes: the value eases from a keyframe to the next by that
-keyframe's curve, holds outside them, and is `vars.<track>.<attribute>`. A track counts its times
-in seconds or in beats of the tempo. `goofi timeline track add note` and `timeline track edit`
-build one from the CLI or an agent; the same ops drive the timeline panel, which stacks the
-tracks on one time axis, edits notes and keyframes by gesture, and steers the clock. A panel
-hides the tracks it is told to, so two panels show different sets of one timeline.
+(`timeline: <track>`), so its notes play an instrument as a keyboard does. A `curve` track is one
+line through keyframes: the value eases from a keyframe to the next by that keyframe's curve,
+holds outside them, and is `vars.<track>.value`. A track counts its times in seconds or in beats
+of the tempo. `goofi timeline track add note` and `timeline track edit` build one from the CLI or
+an agent; the same ops drive the timeline panel.
+
+The panel puts every track on one time axis, each beside what it says about itself, with a line
+across them where the clock is. A double click makes a note or a keyframe and a drag moves it. A
+press on the ruler places the clock, and a drag along it marks the section the clock loops in.
+The bar under the lanes is the view: drag it to move along the axis, drag either end of it to
+zoom, as far out as you like. A track's edge resizes it, and a panel hides the tracks it is told
+to, so two panels show one timeline in different ways. In a panel taller than wide the time runs
+down and the tracks stand as columns.
 
 ## Testing
 

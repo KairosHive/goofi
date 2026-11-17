@@ -7,13 +7,13 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 
 ## Open
 
-- What a machine does when the position goes back (a jump, a restart at the length). Today a
+- What a machine does when the position goes back (a jump, a restart at the end of the loop). Today a
   position that went back starts every run over, as a load does; that rule holds until decided.
 - A node's `now` is the run time, so a node runs on through a pause and never sees time go
   back; a node that follows the position reads `t` in an expression. Whether a node gets the
   position too.
-- A curve attribute's functional nests one conditional per keyframe: the interpreter refuses
-  to compile some thousands of them. Whether a lane gets a ceiling or a flat table.
+- A curve track's functional nests one conditional per keyframe: the interpreter refuses
+  to compile some thousands of them. Whether a curve gets a ceiling or a flat table.
 - A control panel that draws a playhead's or a track's group is not re-aimed when the owner is
   renamed.
 - A note reaches `MidiIn` at the block after the machines' thread wakes for it, as a device's
@@ -26,8 +26,12 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A note ring that is full drops the note, an end included. Not examined: whether the audio
   thread can stop draining a node's ring while the node is in the plan.
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
-- The panel's axis fits the clock's length, or else the tracks' content: it has no zoom, no
-  scroll and no snap to a grid.
+- The panel has no snap to a grid, and its view zooms by the range bar alone: no wheel and no
+  pinch.
+- The panel's view follows the clock by a page; whether it scrolls with it.
+- A curve track's variable is `vars.<track>.value`, because every variable is in a group.
+  Whether a track's value takes the track's name alone.
+- A position put past the end of the loop folds into it; whether it plays on outside it.
 - The panel edits one note or keyframe at a time: no selection of several, no copy.
 - The panel has no keyboard path to a note, a keyframe or a track's menu.
 - Under a finger a note is one row high: it takes no hit-size press, because the rows beside

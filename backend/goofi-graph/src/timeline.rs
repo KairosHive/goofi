@@ -1,6 +1,6 @@
 //! The timeline: tracks of notes and of keyframed curves on the patch clock's position. A track
-//! is a group of variables: a curve attribute is ONE functional of `t` over the whole track, and
-//! a note track is the velocities held at the position.
+//! is a group of variables: a curve track is ONE functional of `t` over the whole track, and a
+//! note track is the velocities held at the position.
 
 use std::sync::Arc;
 
@@ -12,11 +12,13 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::machine::{functional_code, names, AttributeKind, Keyed, Leg, Motion};
+use crate::machine::{functional_code, AttributeKind, Keyed, Leg, Motion};
 
 /// The one element of a note track's group, and its width: each held note's velocity, where a
 /// MIDI device's `notes` has its channel 1, so a reader of a device reads a track.
 const NOTES: (&str, usize) = MIDI_ENTRIES[1];
+/// The one element of a curve track's group.
+const VALUE: &str = "value";
 
 /// A track: its name, which is its variable group's; whether its times are beats of `clock.bpm`
 /// and not seconds; and what it holds.
@@ -29,7 +31,8 @@ pub struct Track {
     pub lanes: Lanes,
 }
 
-/// What a track holds: notes, or attributes by id, each a curve through its keyframes.
+/// What a track holds: notes, or one curve through its keyframes, in time order, over a range.
+/// The curve's value holds outside the keyframes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Lanes {
@@ -38,8 +41,10 @@ pub enum Lanes {
         notes: Vec<Note>,
     },
     Curve {
+        #[serde(default = "unit")]
+        range: [f64; 2],
         #[serde(default)]
-        attributes: IndexMap<String, Lane>,
+        keys: Vec<Key>,
     },
 }
 
@@ -52,13 +57,8 @@ pub struct Note {
     pub velocity: f64,
 }
 
-/// A curve attribute: its range, and its keyframes in time order. Its value holds outside them.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-pub struct Lane {
-    pub name: String,
-    pub range: [f64; 2],
-    #[serde(default)]
-    pub keys: Vec<Key>,
+fn unit() -> [f64; 2] {
+    [0.0, 1.0]
 }
 
 /// A keyframe: the value at `at`, and the curve from it to the next one.
@@ -70,7 +70,7 @@ pub struct Key {
     pub curve: Curve,
 }
 
-crate::machine::named!(Track, Lane);
+crate::machine::named!(Track);
 
 impl Track {
     /// Whether the record holds together.
@@ -81,10 +81,9 @@ impl Track {
                 let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
                 (notes.iter().all(whole), "a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
-            Lanes::Curve { attributes } => {
-                names("attribute", attributes)?;
-                let keyed = |l: &Lane| l.keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && l.keys.windows(2).all(|k| k[0].at < k[1].at);
-                (attributes.values().all(|l| keyed(l) && l.range.iter().all(|v| v.is_finite())), "an attribute has a finite range and keyframes of finite numbers, each later than the one before")
+            Lanes::Curve { range, keys } => {
+                let whole = keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && keys.windows(2).all(|k| k[0].at < k[1].at);
+                (whole && range.iter().all(|v| v.is_finite()), "a curve has a finite range and keyframes of finite numbers, each later than the one before")
             }
         };
         ok.then_some(()).ok_or_else(|| format!("track `{}`: {why}", self.name))
@@ -94,11 +93,11 @@ impl Track {
     pub fn entries(&self) -> Keyed {
         match &self.lanes {
             Lanes::Note { .. } => vec![(NOTES.0.into(), (format!("{}.{}", self.name, NOTES.0), Data::numbers(std::iter::repeat_n(0.0, NOTES.1)), None))],
-            Lanes::Curve { attributes } => attributes.iter().map(|(id, lane)| {
-                let kind = AttributeKind::Num { vmin: lane.range[0], vmax: lane.range[1], int: false, face: Face::Plain };
-                let born = Data::number(lane.keys.last().map_or(lane.range[0], |k| k.value));
-                (id.clone(), (format!("{}.{}", self.name, lane.name), born.clone(), Some(kind.control(&born))))
-            }).collect(),
+            Lanes::Curve { range, keys } => {
+                let kind = AttributeKind::Num { vmin: range[0], vmax: range[1], int: false, face: Face::Plain };
+                let born = Data::number(keys.last().map_or(range[0], |k| k.value));
+                vec![(VALUE.into(), (format!("{}.{VALUE}", self.name), born.clone(), Some(kind.control(&born))))]
+            }
         }
     }
 }
@@ -123,13 +122,11 @@ impl Timeline {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();
                     out.notes.push((track.name.clone(), notes));
                 }
-                Lanes::Curve { attributes } => {
-                    for lane in attributes.values() {
-                        let leg = |k: &[Key]| Leg { start: seconds(k[0].at), end: seconds(k[1].at), from: Data::number(k[0].value), to: Data::number(k[1].value), curve: k[0].curve };
-                        let motion = Motion { legs: lane.keys.windows(2).map(leg).collect(), rest: Data::number(lane.keys.last().map_or(lane.range[0], |k| k.value)) };
-                        let value = motion.source().map_or(motion.rest.clone(), |source| Data::functional(functional_code(evaluator, &source), Meta::default()));
-                        out.curves.push((format!("{}.{}", track.name, lane.name), value));
-                    }
+                Lanes::Curve { range, keys } => {
+                    let leg = |k: &[Key]| Leg { start: seconds(k[0].at), end: seconds(k[1].at), from: Data::number(k[0].value), to: Data::number(k[1].value), curve: k[0].curve };
+                    let motion = Motion { legs: keys.windows(2).map(leg).collect(), rest: Data::number(keys.last().map_or(range[0], |k| k.value)) };
+                    let value = motion.source().map_or(motion.rest.clone(), |source| Data::functional(functional_code(evaluator, &source), Meta::default()));
+                    out.curves.push((format!("{}.{VALUE}", track.name), value));
                 }
             }
         }

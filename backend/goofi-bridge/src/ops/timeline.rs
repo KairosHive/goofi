@@ -1,17 +1,16 @@
 //! The timeline: tracks of notes and of keyframed curves on the patch clock, each a group of
-//! variables. A track and an attribute are named by id or by name, as a machine's records are.
+//! variables. A track is named by id or by name, as a machine's records are.
 
 use serde_json::{json, Value};
 
 use super::machine::id_of;
 use super::{op, NoArgs, ReadOp, WriteOp};
 use crate::Txn;
-use goofi_graph::machine::find;
-use goofi_graph::timeline::{Lane, Lanes, Note, Track};
+use goofi_graph::timeline::{Key, Lanes, Note, Track};
 
 op!(List, "timeline list", 0, NoArgs,
-    "Every track of the timeline, under its id, in the order the panel stacks them. A track plays on the patch clock's position (`clock set`): its times are seconds, or beats of `clock.bpm` where `beats` is true. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds `attributes` by id, each `{name, range: [min, max], keys: [{at, value, curve}]}`, and writes `vars.<track>.<attribute>`: the value eases from each keyframe to the next by that keyframe's `curve` (see `machine attribute add`), and holds before the first and after the last.",
-    "{tracks: {id: {name, beats, kind: note, notes} | {name, beats, kind: curve, attributes}}}");
+    "Every track of the timeline, under its id, in the order the panel stacks them. A track plays on the patch clock's position (`clock set`): its times are seconds, or beats of `clock.bpm` where `beats` is true. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds one curve, `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve` (see `machine attribute add`), and holds before the first and after the last.",
+    "{tracks: {id: {name, beats, kind: note, notes} | {name, beats, kind: curve, range, keys}}}");
 
 op!(TrackAdd, "timeline track add", 1, TrackAddArgs {
     pub kind: String,
@@ -27,9 +26,11 @@ op!(TrackEdit, "timeline track edit", 1, TrackEditArgs {
     pub beats: Option<bool>,
     #[schemars(with = "Option<Value>")]
     pub notes: Option<Vec<Note>>,
-    pub attributes: Option<serde_json::Map<String, Value>>,
+    pub range: Option<[f64; 2]>,
+    #[schemars(with = "Option<Value>")]
+    pub keys: Option<Vec<Key>>,
 },
-    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `beats` changes what its times are read in, the numbers as they are. `notes` replaces a note track's notes whole. `attributes` is `{attribute: {name, range, keys} | null}` on a curve track: each replaces the attribute it names whole, by its id or its name — a new name in it renames the attribute — a key that names none adds one, and `null` removes it. Previewable: a drag sends the notes or an attribute as a preview.",
+    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `beats` changes what its times are read in, the numbers as they are. `notes` replaces a note track's notes whole. `range` and `keys` replace a curve track's range and its keyframes whole. Previewable: a drag sends the notes or the keyframes as a preview.",
     "{name}");
 
 op!(TrackRemove, "timeline track remove", 1, TrackRemoveArgs {
@@ -75,22 +76,17 @@ impl WriteOp for TrackEdit {
         let (id, mut track) = track_of(tx, &a.track)?;
         track.name = a.to.unwrap_or(track.name);
         track.beats = a.beats.unwrap_or(track.beats);
-        match (&mut track.lanes, a.notes, a.attributes) {
-            (_, None, None) => {}
-            (Lanes::Note { notes }, Some(next), None) => *notes = next,
-            (Lanes::Curve { attributes }, None, Some(edits)) => {
-                for (given, lane) in edits {
-                    let held = find(attributes, &given).map(str::to_string);
-                    if lane.is_null() {
-                        attributes.shift_remove(&held.ok_or_else(|| format!("no attribute `{given}` in track `{}`", track.name))?);
-                        continue;
-                    }
-                    let mut lane: Lane = serde_json::from_value(lane).map_err(|e| format!("attribute `{given}`: {e}"))?;
-                    lane.keys.sort_by(|a, b| a.at.total_cmp(&b.at));
-                    attributes.insert(held.unwrap_or_else(|| tx.g.mint_id("a", |id| attributes.contains_key(id))), lane);
+        match (&mut track.lanes, a.notes, a.range, a.keys) {
+            (_, None, None, None) => {}
+            (Lanes::Note { notes }, Some(next), None, None) => *notes = next,
+            (Lanes::Curve { range, keys }, None, next_range, next_keys) => {
+                *range = next_range.unwrap_or(*range);
+                if let Some(mut next) = next_keys {
+                    next.sort_by(|a, b| a.at.total_cmp(&b.at));
+                    *keys = next;
                 }
             }
-            _ => return Err(format!("track `{}`: a note track takes `notes`, a curve track `attributes`", track.name)),
+            _ => return Err(format!("track `{}`: a note track takes `notes`, a curve track `range` and `keys`", track.name)),
         }
         let out = json!({ "name": track.name });
         set(tx, &id, Some(track))?;

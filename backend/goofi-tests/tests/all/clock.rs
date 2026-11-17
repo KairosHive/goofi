@@ -44,9 +44,8 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     assert_eq!(g.call("clock set", j!({ "playing": false, "time": 0.0 })), j!({ "playing": false, "time": 0.0 }));
     assert!(g.refuse("clock set", j!({ "time": -1.0 })).contains("at least 0"));
 
-    // With a length and the loop on, the position restarts at the length; progress is its share.
+    // With a length, the position restarts when it reaches the loop's end; progress is its share.
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.2 }));
-    g.call("variable entry edit", j!({ "name": "clock.loop", "value": 1.0 }));
     g.call("clock set", j!({ "playing": true }));
     let mut last = time(&g);
     g.until("the position to restart at the length", |g| {
@@ -55,24 +54,31 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     });
     let progress = |g: &Goofi| number(g, "clock.progress");
     assert!(g.stays(|g| time(g) < 0.2 && (0.0..1.0).contains(&progress(g))), "the position stays under its length");
+    // A loop that begins later: the position plays up to its start, and stays in it from there.
+    g.call("clock set", j!({ "playing": false, "time": 0.0 }));
+    g.call("variable entry edit", j!({ "name": "clock.start", "value": 1.0 }));
+    assert_eq!((time(&g), progress(&g)), (0.0, 0.0), "before the loop the position is its own, and no share of it");
+    g.call("clock set", j!({ "playing": true, "time": 0.9 }));
+    g.until("the position to reach the loop", |g| (time(g) >= 1.0).then_some(()));
+    assert!(g.stays(|g| (1.0..1.2).contains(&time(g)) && (0.0..1.0).contains(&progress(g))), "the position stays in the loop");
+    g.call("variable entry edit", j!({ "name": "clock.start", "value": 0.0 }));
     // Endless again, it goes on from where it stands, past the length; it does not jump to the
     // run time, which is a thousand seconds on after the restart below.
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 1000.0 }));
     g.call("clock set", j!({ "time": 999.9 }));
     g.until("the position to restart at a thousand seconds", |g| (time(g) < 999.0).then_some(()));
-    g.call("variable entry edit", j!({ "name": "clock.loop", "value": 0.0 }));
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.0 }));
     assert!(time(&g) < 999.0, "the position went on from where it stood");
-    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.2 }));
-    g.until("the endless position to pass the length", |g| (time(g) > 0.2).then_some(()));
-    assert_eq!(progress(&g), 1.0, "progress runs to the end of a length the position does not restart at");
+    assert_eq!(progress(&g), 0.0, "an endless clock has no share of a loop");
 
     // A paused clock plays again from zero on a load: the clock is the patch's.
+    g.call("variable entry edit", j!({ "name": "clock.start", "value": 3.0 }));
     g.call("clock set", j!({ "playing": false, "time": 50.0 }));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("clock.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     g.call("session load", j!({ "path": path.to_string_lossy() }));
-    assert_eq!((number(&g, "clock.playing"), number(&g, "clock.length")), (1.0, 0.2), "the clock plays, and its length rode the file");
+    assert_eq!((number(&g, "clock.playing"), number(&g, "clock.start")), (1.0, 3.0), "the clock plays, and its loop rode the file");
     assert!(time(&g) < 50.0, "the position began again");
 }
 

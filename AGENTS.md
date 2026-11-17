@@ -88,8 +88,9 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   (`goofi-machines`) on the clock's position. A record there (a machine, a state, an attribute,
   a playhead, a track) is keyed by a minted id and its name is an attribute: an op takes either,
   and a rename moves the name and nothing of the run. A playhead and a track each own a group of
-  variables. A curve attribute of a track is one functional of `t`; a note track holds the
-  velocities at the position, and is a MIDI port of the audio `MidiIn` (`goofi_audio::TrackPorts`).
+  variables. A curve track is one functional of `t`, `vars.<track>.value`; a note track holds
+  the velocities at the position, and is a MIDI port of the audio `MidiIn`
+  (`goofi_audio::TrackPorts`).
 - Every frame carries engine stamps: the run's `procstart` and `procend`, the node's `index` and
   `ufreq`, the `node` and `slot` it left by, and its `source`: per input slot, the frame held
   there, named by those same five. The immediate inputs only, never the history behind them.
@@ -129,7 +130,7 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   `sleep_until`, `wait_readable`). Nothing else sleeps in a loop, sets a socket timeout, rounds
   a deadline to a tick or keeps a clock of its own. `Time` has two readings. The run time counts
   from the load and never stops: every stamp, recording and tie reads it, and it is a node's
-  `now`. The position plays from the load and can pause, jump and restart at a length
+  `now`. The position plays from the load and can pause, jump and loop in a section
   (`clock set`, the `clock` variables): an expression's `t`, a functional, the machines and the
   timeline read it. A pause stops the position alone; the engines run on.
 - `goofi_supervisor::ready` is how a component is built: compilation and configuration (a node's

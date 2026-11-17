@@ -3257,11 +3257,12 @@ impl Graph {
         let number = |name: &str| self.variables().get(name).map_or(0.0, goofi_core::control::number_of);
         // A length under a millisecond is no length: nothing could read a position that short.
         let length = Some(number("clock.length")).filter(|l| *l >= 1e-3).unwrap_or(0.0);
-        self.runtime.time.set_length(if number("clock.loop") != 0.0 { length } else { 0.0 });
+        let start = number("clock.start").max(0.0);
+        self.runtime.time.set_loop(start, length);
         if self.runtime.evaluator.is_none() {
             return;
         }
-        let progress = if length > 0.0 { format!("min(t / {length:?}, 1.0)") } else { "0.0".to_string() };
+        let progress = if length > 0.0 { format!("min(max(t - {start:?}, 0.0) / {length:?}, 1.0)") } else { "0.0".to_string() };
         // Compiled before the store is locked: a compile takes the interpreter.
         let frames = [("clock.time", "t"), ("clock.progress", progress.as_str())].map(|(name, source)| (name, machine::functional_code(&self.runtime.evaluator, source)));
         let mut store = self.variables();
