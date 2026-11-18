@@ -1,0 +1,278 @@
+<!-- What a track says about itself, beside its lane: its name with the actions used most, then
+     its settings in groups, the group in use first. The groups that do not fit in the room the
+     track has go, whole, behind one menu in the title. -->
+<script lang="ts" module>
+	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
+
+	/** A MIDI input port the host lists, and the variable group it is read as. */
+	export interface Port {
+		port: string;
+		group: string;
+	}
+	const PITCHES = Array.from({ length: 128 }, (_, p) => String(p));
+	/** A pitch as a keyboard names it: C4 is 60. */
+	const PITCH_NAMES = Object.fromEntries(PITCHES.map((p) => [p, `${NOTE_NAMES[Number(p) % 12]}${Math.floor(Number(p) / 12) - 1}`]));
+</script>
+
+<script lang="ts">
+	import type { Key, Note, Track } from '$lib/api/generated';
+	import { isValidIdentifier } from '$lib/crdt/graphDoc';
+	import { drag, dropTarget } from '$lib/drag';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
+	import { graph } from '$lib/stores/graph.svelte';
+	import { notify } from '$lib/stores/notify.svelte';
+	import { Button, CurvePicker, Field, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
+
+	let {
+		id,
+		t,
+		item,
+		recording,
+		ports,
+		onRescan,
+		onRecord,
+		onHide,
+		onDelete,
+		onItem
+	}: {
+		id: string;
+		t: Track;
+		/** The note or the keyframe picked in the track, the first of them. */
+		item?: Note | Key;
+		recording: boolean;
+		/** The MIDI devices there are, for a note track's input. */
+		ports: Port[];
+		onRescan: () => void;
+		onRecord: (e: MouseEvent) => void;
+		onHide: () => void;
+		onDelete: () => void;
+		/** Change what is picked, or with `null` take it out. */
+		onItem: (to: Partial<Note & Key> | null) => void;
+	} = $props();
+
+	const g = graph();
+	const engine = drag();
+	const edit = (patch: Record<string, unknown>): void => void g.op('timeline track edit', { track: id, ...patch }).catch((e) => notify().failure('Edit track', e));
+	const rename = (to: string): void => {
+		if (to !== t.name && isValidIdentifier(to)) edit({ to });
+	};
+
+	/** A track's groups of settings, in the order they stand: what is picked first, while
+	 * something is, then what is set most. */
+	const TITLES = { item: 'Selection', keyboard: 'Keyboard', grid: 'Grid', range: 'Range', record: 'Record' };
+	type Group = keyof typeof TITLES;
+	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), ...(t.kind === 'note' ? (['keyboard', 'grid', 'record'] as const) : (['range', 'record'] as const))]);
+	/** The groups the track has no room for. */
+	let more = $state<string[]>([]);
+	/** The title has no room for every action beside the name, so the rarer ones go into the
+	 * menu; and a row none for a label beside its control, so the label goes above it. */
+	let title = $state<HTMLElement | null>(null);
+	let [tight, stacked] = $state([false, false]);
+	$effect(() => {
+		const el = title;
+		if (!el) return;
+		const measure = (): void => {
+			const style = getComputedStyle(el);
+			const button = el.querySelector<HTMLElement>('button')!.offsetWidth + parseFloat(style.columnGap);
+			tight = el.clientWidth < parseFloat(getComputedStyle(el.querySelector('.name')!).minWidth) + 4 * button;
+			stacked = el.clientWidth < 13 * parseFloat(style.fontSize);
+		};
+		const box = new ResizeObserver(measure);
+		box.observe(el);
+		return () => box.disconnect();
+	});
+	/** The devices a note track can record from: those there are, and the one it names. */
+	const devices = $derived(['', ...new Set([...ports.map((p) => p.group), ...(t.input ? [t.input] : [])])]);
+	const deviceNames = $derived(Object.fromEntries(devices.map((d) => [d, d === '' ? 'auto' : (ports.find((p) => p.group === d)?.port ?? `${d} (absent)`)])));
+</script>
+
+{#snippet group(name: Group)}
+	{#if name === 'item' && item}
+		{#if 'pitch' in item}
+			<Field label="length" row doc="How long the note lasts, in beats" data-menu-row>
+				<NumberInput value={item.length} min={0.01} step={0.25} onChange={(length) => onItem({ length })} />
+				{#snippet adornment()}{@render remove('Delete note')}{/snippet}
+			</Field>
+			<Field label="velocity" row doc="The note's velocity, 0 to 1" data-menu-row>
+				<NumberInput value={item.velocity} min={0} max={1} step={0.05} onChange={(velocity) => onItem({ velocity })} />
+			</Field>
+		{:else}
+			<Field label="value" row doc="The keyframe's value" data-menu-row>
+				<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onItem({ value })} />
+				{#snippet adornment()}{@render remove('Delete keyframe')}{/snippet}
+			</Field>
+			<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
+				<CurvePicker value={item.curve} onChange={(curve) => onItem({ curve })} />
+			</Field>
+		{/if}
+	{:else if name === 'keyboard' && t.kind === 'note'}
+		<Field label="keys" row doc="The lowest and the highest pitch the keyboard shows" data-menu-row>
+			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => edit({ range: [Number(p), t.range[1]] })} />
+			<Select aria-label="Highest" value={String(t.range[1])} options={PITCHES.slice(t.range[0] + 1)} labels={PITCH_NAMES} onChange={(p) => edit({ range: [t.range[0], Number(p)] })} />
+		</Field>
+		<Field label="scale" row doc="The scale whose notes the keyboard marks and a note lands on, and the note it starts on" data-menu-row>
+			<Select aria-label="Root" class="root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit({ root })} />
+			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit({ scale })} />
+		</Field>
+	{:else if name === 'grid' && t.kind === 'note'}
+		<Field label="grid" row doc="The lines a note of this track snaps to when it is made or dragged; Shift or Ctrl lets it go free" data-menu-row>
+			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => edit({ grid })} />
+		</Field>
+	{:else if name === 'range' && t.kind === 'curve'}
+		<Field label="range" row doc="The lowest and the highest value the lane shows" data-menu-row>
+			{#each [0, 1] as end (end)}
+				<NumberInput aria-label={end ? 'Highest' : 'Lowest'} value={t.range[end]} step={0.1} onChange={(v) => edit({ range: t.range.with(end, v) })} />
+			{/each}
+		</Field>
+	{:else if name === 'record' && t.kind === 'note'}
+		<Field label="input" row doc="The MIDI device a recording takes its notes from; auto is the one there is, or the one picked when it begins" data-menu-row>
+			<Select aria-label="Input" data-testid="track-device" value={t.input} options={devices} labels={deviceNames} onRefresh={onRescan} onChange={(input) => edit({ input })} />
+		</Field>
+	{:else if name === 'record' && t.kind === 'curve'}
+		<Field label="input" row doc="What a recording takes: an expression, as a param's. Drop a node, a variable or a state on it" data-menu-row>
+			<div
+				class="input"
+				class:armed={engine.source?.tags.includes('number') && engine.source.key !== id}
+				use:dropTarget={{
+					tags: ['number'],
+					accept: (source) => source.key !== id,
+					onDrop: async ({ source, tag, at }) => {
+						const input = await source.expression?.(tag, at);
+						if (input) edit({ input });
+					}
+				}}
+			>
+				<ExprEditor label="Input" value={t.input} placeholder="nd('lfo0')" testid="track-input" onCommit={(input) => edit({ input })} />
+			</div>
+		</Field>
+		<Field label="rate" row doc="The most samples a second a recording takes of the input; a node slower than that gives its own" data-menu-row>
+			<NumberInput aria-label="Rate" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => edit({ rate })} />
+			{#snippet adornment()}Hz{/snippet}
+		</Field>
+	{/if}
+{/snippet}
+
+{#snippet remove(label: string)}
+	<IconButton variant="ghost" size="sm" {label} data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
+{/snippet}
+
+<div class="title" bind:this={title}>
+	<TextInput class="name" aria-label="Track name" value={t.name} onChange={rename} />
+	<IconButton
+		variant="ghost"
+		size="sm"
+		class={recording ? 'live' : ''}
+		label={recording ? 'Stop recording' : 'Record'}
+		title={recording ? 'End the recording: what it took goes into the track' : `Record ${t.kind === 'note' ? 'the keys of a MIDI device' : 'the input'} into the track while the clock plays`}
+		aria-pressed={recording}
+		data-testid="track-record"
+		onclick={onRecord}><Icon name="circle-dot" /></IconButton
+	>
+	{#if more.length > 0 || tight}
+		<SettingsMenu label="More" icon="ellipsis" testid="track-more">
+			{#each groups.filter((name) => more.includes(name)) as name (name)}
+				<section class="rows" aria-label={TITLES[name]}>
+					<h4>{TITLES[name]}</h4>
+					{@render group(name)}
+				</section>
+			{/each}
+			{#if tight}
+				<section class="rows" aria-label="Track">
+					<h4>Track</h4>
+					<div class="acts">
+						<Button size="sm" data-testid="track-hide" onclick={onHide}><Icon name="eye-off" /> Hide</Button>
+						<Button size="sm" data-testid="track-delete" onclick={onDelete}><Icon name="x" /> Delete…</Button>
+					</div>
+				</section>
+			{/if}
+		</SettingsMenu>
+	{/if}
+	{#if !tight}
+		<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={onHide}><Icon name="eye-off" /></IconButton>
+		<IconButton variant="ghost" size="sm" label="Delete track" data-testid="track-delete" onclick={onDelete}><Icon name="x" /></IconButton>
+	{/if}
+</div>
+<div class="groups" use:fit={(hidden) => (more = hidden)}>
+	{#each groups as name (name)}
+		<div class="rows" class:stacked data-fit={name} role="group" aria-label={TITLES[name]}>{@render group(name)}</div>
+	{/each}
+</div>
+
+<style>
+	/* The track's name, then what is done to a track most, each one press. */
+	.title {
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+	}
+	/* The name keeps a width a finger meets, and takes what the buttons leave. */
+	.title :global(.name) {
+		flex: 1 1 var(--number-width);
+		min-width: var(--number-width);
+	}
+	/* The record button while a recording runs. */
+	.title :global(.live) {
+		color: var(--danger);
+		background: var(--danger-fill);
+	}
+	/* The room under the title: the groups that fit, one under the other. */
+	.groups {
+		flex: 1 1 0;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		overflow: hidden;
+	}
+	/* A group: its rows share one label column, as a menu's do. A line parts it from the one before. */
+	.rows {
+		flex: none;
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		gap: var(--space-2) var(--space-3);
+		align-items: center;
+		padding: var(--space-2) 0;
+		--number-width: 100%;
+		--field-label-min: 0px;
+	}
+	.rows + .rows {
+		border-top: 1px solid var(--border);
+	}
+	/* The root is as wide as a note's name, and the scale takes the rest. */
+	.rows :global(.root) {
+		flex: 0 0 auto;
+	}
+	/* Where a track is too narrow for a label beside its control, the label goes above it. */
+	.stacked {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.acts {
+		grid-column: 1 / -1;
+		display: flex;
+		gap: var(--space-3);
+	}
+	/* In the menu a group says its name, and has the menu's own margins. */
+	section.rows {
+		padding: var(--space-3) var(--space-5);
+	}
+	h4 {
+		grid-column: 1 / -1;
+		margin: 0;
+		font-size: var(--fs-micro);
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-dim);
+	}
+	/* A curve track's input: a dragged value it takes outlines it. */
+	.input {
+		flex: 1 1 auto;
+		min-width: 0;
+		cursor: text;
+	}
+	.input.armed {
+		outline: 1px dashed var(--border-strong);
+		outline-offset: -1px;
+	}
+</style>

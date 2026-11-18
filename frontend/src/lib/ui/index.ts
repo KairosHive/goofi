@@ -20,6 +20,7 @@ export { default as Disclosure } from './Disclosure.svelte';
 export { default as Popover } from './Popover.svelte';
 export { default as QuickPick, type PickOption } from './QuickPick.svelte';
 export { default as SettingsMenu } from './SettingsMenu.svelte';
+export { fit } from './fit';
 export { default as Dialog } from './Dialog.svelte';
 export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 

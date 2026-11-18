@@ -42,7 +42,10 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   of it is a long time.
 - A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
   is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
-- In a standing panel a track says what it is in a box of one size: what does not fit scrolls.
+- A track's settings that do not fit beside its lane are in the menu in its title. A node cannot
+  be dropped on a curve's input while that is in the menu: the track is made larger first.
+- A track's edge held at an end of the track area scrolls the area. A note or a keyframe dragged
+  there does not.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.

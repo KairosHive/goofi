@@ -8,12 +8,10 @@
      model and this panel the drawing and the gesture. -->
 <script lang="ts">
 	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
-	import { untrack } from 'svelte';
+	import { flushSync, untrack } from 'svelte';
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
-	import { isValidIdentifier } from '$lib/crdt/graphDoc';
-	import { drag as dragEngine, draggable, dropTarget, type DragSource, type Outcome } from '$lib/drag';
-	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
+	import { draggable, type DragSource, type Outcome } from '$lib/drag';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -21,7 +19,8 @@
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
-	import { Bar, Button, ConfirmDialog, CurvePicker, EmptyState, Icon, IconButton, NumberInput, Segmented, Select, TextInput } from '$lib/ui';
+	import TrackHead, { type Port } from '$lib/timeline/TrackHead.svelte';
+	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
@@ -137,9 +136,6 @@
 	const edit = (track: string, patch: Record<string, unknown>): void => void g.op('timeline track edit', { track, ...patch }).catch(fail('Edit track'));
 	const add = (kind: Track['kind']): void => void g.op('timeline track add', { kind }).catch(fail('Add track'));
 	const hide = (ids: string[], label: string): void => setState({ hidden: ids }, 'authored', label);
-	const rename = (id: string, to: string): void => {
-		if (to !== g.timeline[id].name && isValidIdentifier(to)) edit(id, { to });
-	};
 	/** The track asked to be deleted, until the dialog answers or the track goes. */
 	let asked = $state('');
 	const doomed = $derived(g.timeline[asked]);
@@ -168,16 +164,18 @@
 
 	// ---- a recording: a track takes its input in at the clock's position until it is ended. The
 	// stepping thread says whether one runs, in the track's own group.
-	const engine = dragEngine();
 	const recording = (t: Track): boolean => variableValue(`${t.name}.recording`) === 1;
-	const devices = async (): Promise<{ port: string; group: string }[]> => (await g.op<{ ports: { port: string; group: string }[] }>('midi list', {})).ports;
+	/** The MIDI devices the host lists: read when the panel opens, and again when asked. */
+	let ports = $state<Port[]>([]);
+	const rescan = async (): Promise<Port[]> => (ports = (await g.op<{ ports: Port[] }>('midi list', {})).ports);
+	void rescan().catch(fail('List MIDI devices'));
 	/** The MIDI device a note track records from: the one it names while that is there, else the
 	 * one there is, else one picked at `at` from those there are. */
 	async function device(t: Track, at: { x: number; y: number }): Promise<string | null> {
-		const ports = await devices();
-		if (ports.some((p) => p.group === t.input)) return t.input;
-		if (ports.length <= 1) return ports[0]?.group ?? null;
-		return quickPick().ask(at, ports.map((p) => ({ id: p.group, label: p.port })), `Record ${t.name} from`);
+		const found = await rescan();
+		if (found.some((p) => p.group === t.input)) return t.input;
+		if (found.length <= 1) return found[0]?.group ?? null;
+		return quickPick().ask(at, found.map((p) => ({ id: p.group, label: p.port })), `Record ${t.name} from`);
 	}
 	/** Begin a recording into the track, or end the one that runs. A paused clock plays for it. */
 	async function record(e: MouseEvent, id: string): Promise<void> {
@@ -189,13 +187,6 @@
 		if (input !== t.input) await g.op('timeline track edit', { track: id, input });
 		await g.op('timeline track record', { track: id, on: true });
 		if (!playing) steer({ playing: true });
-	}
-	/** The devices there are, as a menu under the button: the one picked is the track's input. */
-	async function inputMenu(e: MouseEvent, id: string): Promise<void> {
-		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const ports = await devices();
-		const items = ports.map((p) => ({ label: p.port, icon: p.group === g.timeline[id]?.input ? ('piano' as const) : undefined, action: () => edit(id, { input: p.group }) }));
-		menu = { x: box.left, y: box.bottom, items: items.length ? items : [{ label: 'No MIDI device', disabled: true }] };
 	}
 
 	// ---- a track lifted by what it says about itself: let go on another track it takes that
@@ -214,19 +205,58 @@
 		void g.op('timeline track move', { track: id, before }).catch(fail('Move track'));
 	}
 
-	/** A track's edge dragged: how large this panel draws it, and nothing of the track. */
+	/** A track's edge dragged: how large this panel draws it, and nothing of the track. Held at an
+	 * end of the track area, the area scrolls and the edge goes with it, so a track is as large as
+	 * it is dragged, whatever the panel shows of it. */
 	let sizing = $state<{ id: string; size: number; sent?: boolean } | null>(null);
+	const [SMALLEST, EDGE, FASTEST] = [32, 32, 16];
 	function resize(e: PointerEvent, id: string): void {
 		e.stopPropagation();
-		const lane = (e.currentTarget as HTMLElement).parentElement!.querySelector('.lane')!.getBoundingClientRect();
-		drag = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
-			move: (p) => (sizing = { id, size: Math.max(24, Math.round(vertical ? lane.width + p.clientX - e.clientX : lane.height + p.clientY - e.clientY)) }),
+		const grip = e.currentTarget as HTMLElement;
+		const area = grip.closest<HTMLElement>('.scroll')!;
+		const lane = grip.parentElement!.querySelector('.lane')!.getBoundingClientRect();
+		const [client, scroll, from, to] = vertical ? (['clientX', 'scrollLeft', 'left', 'right'] as const) : (['clientY', 'scrollTop', 'top', 'bottom'] as const);
+		let [size, at, frame] = [vertical ? lane.width : lane.height, e[client], 0];
+		const show = (): void => void (sizing = { id, size: Math.max(SMALLEST, Math.round(size)) });
+		// The pixels a frame the area scrolls by: none in its middle, more the further into an end.
+		const pace = (): number => {
+			const box = area.getBoundingClientRect();
+			const into = Math.min(0, at - box[from] - EDGE) + Math.max(0, at - box[to] + EDGE);
+			return Math.sign(into) * Math.min(FASTEST, Math.ceil(Math.abs(into) / 4));
+		};
+		const creep = (): void => {
+			const by = pace();
+			frame = 0;
+			if (by === 0 || (by < 0 && size <= SMALLEST)) return;
+			size += by;
+			show();
+			// The track is that much larger before the area scrolls by as much: the edge stays
+			// under the pointer. What the area could not scroll, the track gives back.
+			flushSync();
+			const was = area[scroll];
+			area[scroll] += by;
+			size -= by - (area[scroll] - was);
+			show();
+			frame = requestAnimationFrame(creep);
+		};
+		const end = (): void => cancelAnimationFrame(frame);
+		drag = beginDrag(grip, e.pointerId, {
+			move: (p) => {
+				size += p[client] - at;
+				at = p[client];
+				show();
+				if (!frame) frame = requestAnimationFrame(creep);
+			},
 			commit: () => {
+				end();
 				if (!sizing) return;
 				sizing.sent = true;
 				setState({ sizes: { ...own.sizes, [id]: sizing.size } }, 'authored', 'Resize Track');
 			},
-			cancel: () => (sizing = null)
+			cancel: () => {
+				end();
+				sizing = null;
+			}
 		});
 	}
 	// The size dragged stands until the panel's state holds it.
@@ -458,58 +488,18 @@
 						onpointercancel={press.cancel}
 					>
 						<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button, .input'), onEnd: (outcome) => place(id, outcome) }}>
-							<div class="title">
-								<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
-								<IconButton
-									variant="ghost"
-									size="sm"
-									class={recording(t) ? 'live' : ''}
-									label={recording(t) ? 'Stop recording' : 'Record'}
-									title={recording(t) ? 'End the recording: what it took goes into the track' : `Record ${t.kind === 'note' ? 'the keys of a MIDI device' : 'the input'} into the track while the clock plays`}
-									aria-pressed={recording(t)}
-									data-testid="track-record"
-									onclick={(e) => void record(e, id).catch(fail('Record'))}><Icon name="circle-dot" /></IconButton
-								>
-								<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
-								<IconButton variant="ghost" size="sm" label="Delete track" data-testid="track-delete" onclick={() => (asked = id)}><Icon name="x" /></IconButton>
-							</div>
-							{#each [0, 1] as end (end)}
-								<NumberInput aria-label={end ? 'Highest' : 'Lowest'} title={`The ${end ? 'highest' : 'lowest'} ${t.kind === 'note' ? 'pitch of the keyboard' : 'value'}`} value={t.range[end]} step={t.kind === 'note' ? 1 : 0.1} onChange={(v) => edit(id, { range: t.range.with(end, v) })} />
-							{/each}
-							{#if t.kind === 'note'}
-								<Select aria-label="Scale" title="The scale whose notes the keyboard marks and a note lands on" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit(id, { scale })} />
-								<Select aria-label="Root" title="The note the scale starts on" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit(id, { root })} />
-								<Select aria-label="Grid" title="The lines a note of this track snaps to when it is made or dragged" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => edit(id, { grid })} />
-								<IconButton variant="ghost" size="sm" label="Input" title={`The MIDI device a recording takes its notes from: ${t.input || 'the one there is'}`} data-testid="track-device" onclick={(e) => void inputMenu(e, id).catch(fail('List MIDI devices'))}><Icon name="piano" /></IconButton>
-							{:else}
-								<!-- What a recording takes in: an expression as a param's, typed or dropped. -->
-								<div
-									class="input"
-									class:armed={engine.source?.tags.includes('number') && engine.source.key !== id}
-									title="The input a recording takes: an expression, as a param's. Drop a node, a variable or a state on it"
-									use:dropTarget={{
-										tags: ['number'],
-										accept: (source) => source.key !== id,
-										onDrop: async ({ source, tag, at }) => {
-											const input = await source.expression?.(tag, at);
-											if (input) edit(id, { input });
-										}
-									}}
-								>
-									<ExprEditor label="Input" value={t.input} placeholder="input: nd('lfo0')" testid="track-input" onCommit={(input) => edit(id, { input })} />
-								</div>
-								<label class="labeled">Hz <NumberInput aria-label="Rate" title="The most samples a second a recording takes of the input; a slower node gives its own" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => edit(id, { rate })} /></label>
-							{/if}
-							{#if mine}
-								{#if 'pitch' in mine}
-									<NumberInput aria-label="Length" title="How long the note lasts" value={mine.length} min={0.01} step={0.25} onChange={(length) => change(id, t, { length })} />
-									<NumberInput aria-label="Velocity" title="The note's velocity, 0 to 1" value={mine.velocity} min={0} max={1} step={0.05} onChange={(velocity) => change(id, t, { velocity })} />
-								{:else}
-									<NumberInput aria-label="Value" title="The keyframe's value" value={mine.value} min={lo} max={hi} step={0.01} onChange={(value) => change(id, t, { value })} />
-									<CurvePicker value={mine.curve} onChange={(curve) => change(id, t, { curve })} />
-								{/if}
-								<IconButton variant="ghost" size="sm" label={'pitch' in mine ? 'Delete note' : 'Delete keyframe'} data-testid="track-delete-picked" onclick={() => change(id, t, null)}><Icon name="x" /></IconButton>
-							{/if}
+							<TrackHead
+								{id}
+								{t}
+								item={mine}
+								recording={recording(t)}
+								{ports}
+								onRescan={() => void rescan().catch(fail('List MIDI devices'))}
+								onRecord={(e) => void record(e, id).catch(fail('Record'))}
+								onHide={() => hide([...hidden, id], 'Hide Track')}
+								onDelete={() => (asked = id)}
+								onItem={(to) => change(id, t, to)}
+							/>
 						</div>
 						{#if t.kind === 'note'}
 							<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
@@ -619,7 +609,7 @@
 	   A row reads them as left, width, top and height; a column the other way round. */
 	.timeline {
 		/* What a track says about itself, beside its lane. A pitch's row in a note lane. */
-		--side: calc(var(--space-8) * 8);
+		--side: calc(var(--space-8) * 10);
 		--keys: calc(var(--space-8) * 1.5);
 		--row: var(--space-3);
 		/* The room before and after a lane's ground: a keyframe at the end of its range shows whole. */
@@ -654,6 +644,12 @@
 		grid-template-rows: auto minmax(0, 1fr);
 		min-height: 0;
 	}
+	/* A narrow panel gives the lanes more of its width. */
+	@container (max-width: 32rem) {
+		.body {
+			--side: calc(var(--space-8) * 8);
+		}
+	}
 	.scroll {
 		min-width: 0;
 		min-height: 0;
@@ -662,8 +658,10 @@
 	.range {
 		padding-left: var(--side);
 	}
+	/* Room after the last track, so its edge is never the panel's own. */
 	.stack {
 		position: relative;
+		margin-bottom: var(--space-8);
 	}
 	.row {
 		display: grid;
@@ -678,50 +676,17 @@
 	.track:nth-of-type(even) {
 		background: var(--surface-3);
 	}
-	/* It takes the room its lane gives it, and scrolls what does not fit. */
+	/* It takes the room its lane gives it: its title, then the settings that fit there. */
 	.info {
 		contain: size;
 		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		align-content: flex-start;
-		gap: var(--space-2);
+		flex-direction: column;
 		--number-width: max(calc(var(--space-8) * 1.75), var(--hit));
 		padding: var(--space-2);
-		overflow: auto;
+		overflow: hidden;
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 		cursor: grab;
-	}
-	/* The track's name, and beside it the buttons that hide it and delete it. */
-	.title {
-		flex: 1 1 100%;
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-1);
-		min-width: 0;
-	}
-	/* The name keeps a width a finger meets: where the buttons do not fit beside it, they wrap. */
-	.title :global(.name) {
-		flex: 1 1 var(--number-width);
-		min-width: var(--number-width);
-	}
-	/* The record button while a recording runs. */
-	.title :global(.live) {
-		color: var(--danger);
-		background: var(--danger-fill);
-	}
-	/* A curve track's input, the width of what the track says about itself; a dragged value it
-	   takes outlines it. */
-	.input {
-		flex: 1 1 100%;
-		min-width: 0;
-		cursor: text;
-	}
-	.input.armed {
-		outline: 1px dashed var(--border-strong);
-		outline-offset: -1px;
 	}
 	/* A note track's keyboard stands between what it says and its lane, a key per row. */
 	.notes .info {
@@ -765,7 +730,7 @@
 	.lane {
 		position: relative;
 		display: flex;
-		min-height: var(--size, calc(var(--rows, 24) * var(--row)));
+		min-height: var(--size, calc(var(--rows, 26) * var(--row)));
 		padding: var(--pad) 0;
 		overflow: hidden;
 		touch-action: none;
@@ -913,6 +878,7 @@
 		width: max-content;
 		min-width: 100%;
 		height: 100%;
+		margin: 0 var(--space-8) 0 0;
 	}
 	.vertical .row {
 		grid-template-columns: none;
@@ -920,7 +886,7 @@
 	}
 	.vertical .track {
 		flex: none;
-		width: var(--size, calc(var(--space-8) * 6));
+		width: var(--size, calc(var(--space-8) * 8));
 		border-top: 0;
 		border-left: 1px solid var(--border);
 	}

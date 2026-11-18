@@ -1,5 +1,6 @@
 <!-- Field — a `<label>` linked to the first live control (see field.ts), with a sibling `adornment`.
-     The row wraps on its own width; `onExpand` makes the label a disclosure summary. -->
+     The row wraps on its own width; `onExpand` makes the label a disclosure summary.
+     `--field-label-min` is the least width the label keeps, for a column too narrow for the default. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -86,7 +87,7 @@
 	}
 	.ui-field-label {
 		flex: 0 1 auto;
-		min-width: 4rem;
+		min-width: var(--field-label-min, 4rem);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;

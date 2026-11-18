@@ -19,6 +19,26 @@ async function trackNamed(page: Page, name: string): Promise<any> {
 const clock = async (page: Page, name: string): Promise<number> =>
 	(await rawCall(page, 'variable list')).result.variables.find((v: any) => v.name === `clock.${name}`)?.value;
 
+/** Where a track's setting is: beside its lane while its group fits there, else in the track's
+ * menu, which this opens. */
+async function settings(page: Page, track: Locator, setting: string): Promise<Locator> {
+	if (await track.locator(setting).first().isVisible()) return track.locator(setting).first();
+	await track.getByTestId('track-more').click();
+	return page.getByTestId('track-more-menu').locator(setting);
+}
+/** Close the track's menu, if one is open: an editor in it may take the first Escape for itself. */
+async function shut(page: Page): Promise<void> {
+	await expect(async () => {
+		await page.keyboard.press('Escape');
+		expect(await page.getByTestId('track-more-menu').count()).toBe(0);
+	}).toPass();
+}
+/** Pick an option of the track's dropdown named `name`, and close the menu it may be in. */
+async function choose(page: Page, track: Locator, name: string, option: string): Promise<void> {
+	await (await settings(page, track, `[aria-label="${name}"] select`)).selectOption(option);
+	await shut(page);
+}
+
 /** A drag of `what` by `dx`, `dy` pixels, from its centre. */
 async function dragBy(page: Page, what: Locator, dx: number, dy: number): Promise<void> {
 	const box = (await what.boundingBox())!;
@@ -136,17 +156,24 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// root dim the keys outside them, and a note made on the lane lands on the scale.
 		const board = keys.getByTestId('track-keyboard').locator('span');
 		await expect(board).toHaveCount(25);
-		await keys.getByLabel('Highest').fill('60');
-		await keys.getByLabel('Highest').press('Enter');
+		// The track's settings stand in groups beside its lane: a pitch is picked by its name.
+		await expect(keys.locator('.groups [role="group"]:visible')).toHaveCount(2);
+		await expect(keys.locator('[aria-label="Lowest"] select option:checked')).toHaveText('C3');
+		await choose(page, keys, 'Highest', '60');
 		await expect(board).toHaveCount(13);
-		await keys.locator('[aria-label="Scale"] select').selectOption('pentatonic_major');
+		// A track an octave high has no room for its groups: they are in the menu in its title,
+		// each whole and under its name, and no setting is cut off.
+		await expect(keys.locator('.groups [role="group"]:visible')).toHaveCount(0);
+		await keys.getByTestId('track-more').click();
+		await expect(page.getByTestId('track-more-menu').locator('h4')).toHaveText(['Keyboard', 'Grid', 'Record']);
+		await shut(page);
+		await choose(page, keys, 'Scale', 'pentatonic_major');
 		await expect(keys.locator('.keys .out')).toHaveCount(7);
-		await keys.locator('[aria-label="Root"] select').selectOption('D');
+		await choose(page, keys, 'Root', 'D');
 		await expect(keys.locator('.keys span:not(.out)').first()).toHaveAttribute('data-pitch', '50');
 		expect(await trackNamed(page, 'track0')).toMatchObject({ range: [48, 60], scale: 'pentatonic_major', root: 'D' });
-		await keys.locator('[aria-label="Root"] select').selectOption('C');
-		await keys.getByLabel('Highest').fill('72');
-		await keys.getByLabel('Highest').press('Enter');
+		await choose(page, keys, 'Root', 'C');
+		await choose(page, keys, 'Highest', '72');
 		await expect(board).toHaveCount(25);
 		const lane = keys.getByTestId('track-lane');
 		const ground = (await lane.boundingBox())!;
@@ -203,7 +230,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// grid before it, and the grid is the track's to choose.
 		await note.first().click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
-		await keys.locator('[aria-label="Grid"] select').selectOption('1 s');
+		await choose(page, keys, 'Grid', '1 s');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
 		expect((await trackNamed(page, 'track2')).grid, 'another note track keeps its own grid').toBe('1/4 beat');
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
@@ -403,6 +430,19 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const [was, tracks] = [await tall(), JSON.stringify((await backendDoc(page)).timeline)];
 		await dragBy(page, curve.getByTestId('track-grip'), 0, 40);
 		await expect.poll(tall).toBeGreaterThan(was + 30);
+		// Held at the end of the track area, the edge goes on: the area scrolls under it, and the
+		// track is larger than the panel shows, with no other track made smaller for it.
+		const area = (await panel.locator('.scroll').boundingBox())!;
+		const others = async (): Promise<number> => (await panel.getByTestId('track-lead').locator('.lane').boundingBox())!.height;
+		const [grip, beside] = [(await curve.getByTestId('track-grip').boundingBox())!, await others()];
+		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(grip.x + grip.width / 2, area.y + area.height - 4, { steps: 6 });
+		await expect.poll(tall).toBeGreaterThan(area.height);
+		await page.mouse.up();
+		expect(await panel.locator('.scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+		expect(await others()).toBe(beside);
+		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
 		expect(JSON.stringify((await backendDoc(page)).timeline)).toBe(tracks);
 
 		// In a panel taller than wide the tracks stand beside each other and the time runs down.
@@ -495,13 +535,16 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		await expect(page.getByText('the track has no input')).toBeVisible();
 		await expect(button).toHaveAttribute('aria-pressed', 'false');
 		// The input is an expression, as a param's; the rate is the track's own.
-		await take.getByTestId('track-input').click();
+		await (await settings(page, take, '[data-testid="track-input"]')).click();
 		await page.keyboard.type('vars.desk.level');
 		await page.keyboard.press('Enter');
 		await expect.poll(async () => (await trackNamed(page, 'take')).input).toBe('vars.desk.level');
-		await take.getByTestId('track-rate').fill('10');
-		await take.getByTestId('track-rate').press('Enter');
+		await shut(page);
+		const rate = await settings(page, take, '[data-testid="track-rate"]');
+		await rate.fill('10');
+		await rate.press('Enter');
 		await expect.poll(async () => (await trackNamed(page, 'take')).rate).toBe(10);
+		await shut(page);
 		// The button begins the recording, lit while it runs, and the paused clock plays for it.
 		await button.click();
 		await expect(button).toHaveAttribute('aria-pressed', 'true');
