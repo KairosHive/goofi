@@ -47,6 +47,7 @@ three files: this file (8.1 the server, 8.2 the shell, 8.3 the workspace), `08-p
   history labels and its selection. The same instance after a short loss reseeds the replica.
 - A client whose protocol version differs from the server shows one banner with a reload
   button and does nothing else.
+- A call made while the connection is lost fails at once. Nothing is queued or sent again.
 
 ### 8.1.3 Events
 
@@ -97,6 +98,12 @@ overlays. There is no menu bar and no status bar.
   active editor (part 8.4.9).
 - An item stays whole or moves whole.
 - The title of the document is the unsaved mark and the file name, or `goofi-pipe`.
+- The `disconnected` badge shows only after an established connection is lost. The paint rate is
+  hidden while nothing paints.
+- A click on an agent row brings the panel of that agent to the front and asks the close
+  question (8.12).
+- The overflow button is accented while multi-select mode is on. With no active editor and
+  exactly one editor panel, the editor commands act on that panel.
 
 ### 8.2.2 Files
 
@@ -113,6 +120,8 @@ overlays. There is no menu bar and no status bar.
   their age. A row recovers one; a row can be discarded; all can be removed; skip is the
   default.
 - **Examples** open from the examples button.
+- In the dialog a click selects a patch file and, in a save, copies its name. A double click
+  enters a folder or opens the file. Save as suggests the present name.
 
 ### 8.2.3 Undo and redo
 
@@ -126,6 +135,7 @@ overlays. There is no menu bar and no status bar.
 
 - Each client has a hue. The pointer of each peer shows as a dot, only for peers on the same
   workspace tab.
+- The dot of a peer leaves when its pointer leaves the window or the window loses focus.
 
 ### 8.2.5 Overlays
 
@@ -138,6 +148,10 @@ overlays. There is no menu bar and no status bar.
 | Quick pick | One transient list at a point, for a choice inside a gesture. |
 | Confirm | A question with named answers. |
 
+- A notification leaves by itself after a short time. Notifications report, among others: a
+  failed save, recover or discard; a refused undo; a failure of a plugin; an unexpected exit of
+  an agent; MIDI learn with no device.
+
 ### 8.2.6 Keys of the shell
 
 | Keys | Action |
@@ -149,8 +163,10 @@ overlays. There is no menu bar and no status bar.
 | Ctrl/Cmd+Shift+Z, Ctrl/Cmd+Y | Redo |
 | Escape | The innermost thing that is open closes first; the shell (panel maximize) is last. |
 
-- Keys stand down while a text field has the focus and while a dialog is open. There is one
-  test for each of the two conditions.
+- Undo, redo and Escape stand down while a text field has the focus. Every key of the shell
+  stands down while a dialog is open. There is one test for each of the two conditions.
+- Save and Open act also while a text field has the focus, and always suppress the dialog of the
+  browser.
 
 ## 8.3 The workspace
 
@@ -206,6 +222,12 @@ overlays. There is no menu bar and no status bar.
 - **A side pane** inside a panel (the inspector in an editor, the score in a machine panel)
   takes its space from the canvas, at the right when the panel is wide and at the bottom when it
   is tall, with a seam that resizes it.
+- A new tab is named `Tab N`. To close the front tab selects its neighbour. A new or moved panel
+  becomes active. The close control is disabled on the last panel of a tab.
+- Keys of the tab strip: Left, Right, Home and End select a tab. A rename commits on Enter or
+  blur; Escape cancels it.
+- The node list of a bound panel has an empty choice that unbinds. A new binding resets the
+  slot.
 
 ### 8.3.4 Where state lives
 

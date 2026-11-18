@@ -13,6 +13,7 @@ This file holds sections 8.8 to 8.14.
 - The viewer panel is bound to a node (8.3.3). It has a slot select, the kind select and the
   settings menu.
 - The viewer components belong to the shared UI library (part 09.5).
+- A slot that does not exist falls back to the first output.
 
 ### 8.8.2 Kinds
 
@@ -34,6 +35,8 @@ This file holds sections 8.8 to 8.14.
 - A frame the kind cannot draw shows its shape, dtype and its minimum, maximum and mean. Each
   failure to draw has a message that says what is missing.
 - Empty states: no output slots; no data yet; the browser cannot draw.
+- Channel names match without case and include the older names T3 to T6, A1 and A2. A square
+  matrix with names on one axis uses them for both. A ring needs two known channels.
 
 ### 8.8.3 Settings
 
@@ -51,6 +54,8 @@ This file holds sections 8.8 to 8.14.
   name, an image cell with its channels, an electrode, an edge with its strongest partner. Axis
   names come from the channel labels of the frame.
 - The inspector shows the stats of a stream: arrivals and drops per second.
+- The corner labels show the y maximum, the y minimum and the x maximum: on hover, on a selected
+  node, on touch, and always in a viewer panel.
 
 ### 8.8.5 Drawing
 
@@ -68,6 +73,7 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
 ### 8.9.1 Bar
 
 - Tabs of the machines: select, add, rename, remove. A seed field and a reset button.
+- To remove the last machine adds a new one in the same step.
 
 ### 8.9.2 Canvas
 
@@ -87,6 +93,7 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
   machine holds, weights included.
 - A card drag previews and commits one op.
 - A card dragged onto a param row binds the row to that attribute of the playhead.
+- Alt held during a drag acts as the chain tool.
 
 ### 8.9.3 Score
 
@@ -151,6 +158,7 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
 - Closing a view asks: detach (the harness keeps running), kill, or cancel.
 - An unexpected exit is a notification.
 - A free panel shows an instance that no other panel shows.
+- A detached panel stays on its launcher.
 
 ## 8.13 Plugin panels
 

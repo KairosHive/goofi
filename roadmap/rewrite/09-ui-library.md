@@ -48,7 +48,7 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 | Popover | Anchored, clamped to the viewport, closes on an outside press or Escape; only the topmost reacts. |
 | Menu | A list at a point or under a button, with optional search. |
 | Quick pick | A transient list for a choice inside a gesture. |
-| Dialog, confirm | Modal; the owner holds the open state. |
+| Dialog, confirm | Modal; the owner holds the open state; Escape or a press on the backdrop asks the owner to close. |
 | Field | A label tied to its control; it can be a disclosure. |
 | Others | Disclosure, bar, badge, chip, status dot, empty state, scroll area, busy indicator, tooltip, notification. |
 | Terminal | A terminal view on a byte stream. |
@@ -72,6 +72,7 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
   scrolls into view.
 - **One key rule:** a key belongs to a focused text editor first, to an open dialog second, to
   the active panel third, to the shell last. A handler that consumes Escape says so.
+- During a drag, a disabled control does not block a drop on its row.
 
 ## 9.5 Panel mechanics, plotting, viewers
 

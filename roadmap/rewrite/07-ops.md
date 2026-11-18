@@ -168,6 +168,8 @@ home, loaded at the start. No plugin loads in demo mode.
 - A plugin frontend can subscribe to the events of the program; it does not poll.
 - Authored panel state is part of the patch; credentials and data never go there.
 - The names of the SDK use one case convention.
+- An error in a handler of a plugin is caught and reported as a notification. A header entry can
+  be disabled.
 
 ### 7.4.4 Nodes
 
@@ -177,9 +179,11 @@ home, loaded at the start. No plugin loads in demo mode.
 
 - **latency**: two nodes dropped on its panel; it records every node on the path between them
   and writes, per target tick, the total latency and the wait and run time per hop, from the
-  `source` stamps of the frames.
+  `source` stamps of the frames. Its panel has start, stop, statistics and the path of the
+  result; stop disarms what the run armed.
 - **virtual-cables** (Linux): creates virtual audio devices and points `AudioIn` and `AudioOut`
-  nodes at them by drag and drop.
+  nodes at them by drag and drop. Its panel has a form with a name and a channel count; each
+  cable row takes a dropped node and has a remove control.
 - **session and corpus** (planned): people, corpora, acquisition sessions, tags and a catalogue,
   with an upload queue and a playback node. Its data side becomes goofi-data.
 

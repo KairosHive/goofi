@@ -99,6 +99,7 @@ work and can change with the design.
 - One selected node opens the side inspector of the panel.
 - "Select for reference" is one app-wide pick (a variable or a node output) that a param row can
   take as its source.
+- A click on the canvas with Shift, or in multi-select mode, does not clear the selection.
 
 ### 8.4.6 Clipboard
 
@@ -110,6 +111,7 @@ work and can change with the design.
   multiple.
 - Paste works without a secure context.
 - Delete removes the selected nodes and cables in one step.
+- Paste from the menu reads the system clipboard and reports a refusal of the browser.
 
 ### 8.4.7 Sub-patches
 
@@ -120,6 +122,7 @@ work and can change with the design.
   out far beyond the fit zoom. When the entered scope disappears, the editor climbs out.
 - The scope path is navigation: it does not dirty the patch. Enter and exit fit the view.
 - A duplicate of a sub-patch is an independent copy.
+- The sub-patch that a group makes is selected.
 
 ### 8.4.8 Camera
 
@@ -168,6 +171,7 @@ work and can change with the design.
   the right edge when the panel is wide, as a bottom sheet when it is tall. The pane resizes by
   a drag, between 10 % and 90 % of the panel. A switch keeps it shut.
 - **Inspector panel:** a panel bound to one node, chosen from a list or by a node dropped on it.
+- A close control hides the side pane until the selection changes.
 
 ### 8.5.2 Content for a node
 
@@ -186,6 +190,9 @@ work and can change with the design.
 8. **Metadata:** an output slot select; the update rate; dropped frames per second; then shape,
    dtype and every meta entry of the newest frame.
 9. **Error:** the message and a restart button.
+
+- A search hides the group tabs and ranks by name, then group, then doc. Escape clears it.
+- A rate with no subscription shows as absent, not as zero.
 
 ### 8.5.3 Param faces
 
@@ -209,6 +216,7 @@ work and can change with the design.
 - A vector has two views: one source for all elements, or one row per element (`R G B A`,
   `A D S R`, `[i]`) with its own value, source, MIDI learn and error.
 - A source error shows under its row at all times.
+- A pulse button stays active while its param is driven.
 
 ### 8.5.4 Groups, sections, lists, show rules
 
@@ -237,6 +245,9 @@ work and can change with the design.
   the reference to that variable. It ends on timeout, on a second click, or when the devices
   leave.
 - The common params of a node (part 04.3) are ordinary rows in their own group.
+- The completion window marks the present argument. Tab or a click accepts; Escape closes the
+  window first; Ctrl+Space opens it again.
+- A dropped node with several fitting outputs asks which one by a quick pick.
 
 ## 8.6 The control panel
 
@@ -258,6 +269,9 @@ work and can change with the design.
   dimmed and does not take input. A broken one is marked.
 - **Play mode:** widgets are live. A drag previews without history; the release commits.
 - Edit mode is part of the state of the panel.
+- The menu of a widget holds: copy name, select for reference.
+- Cells can overlap and cannot leave the right edge. A new panel starts in edit mode. A widget
+  with a locked value takes no input.
 
 ## 8.7 The variables panel
 
@@ -270,3 +284,5 @@ work and can change with the design.
   entry. Device, machine and system groups are locked.
 - A row has a grip that carries the reference for a drag, the name, the value, the form and a
   delete button. Buttons add an entry and add a group.
+- A group of a control panel is locked in configuration in this panel. A group shows its lock and
+  its entry count. A locked or computed value is read-only.
