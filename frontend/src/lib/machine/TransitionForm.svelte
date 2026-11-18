@@ -3,13 +3,13 @@
      how long the move takes; each attribute eases over it by its own curve. -->
 <script lang="ts">
 	import type { Machine } from '$lib/api/generated';
-	import { ContextMenu, type MenuItem } from 'panelty';
+	import { type MenuItem } from 'panelty';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Button, Field, Icon, under } from '$lib/ui';
+	import { Button, Field, Icon, under, ContextMenu } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
 	import { stateOf } from './model';
 

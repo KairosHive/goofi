@@ -1,13 +1,13 @@
 <!-- Recorder panel — the name, the root and the start/stop of one recording, over the streams that
      are armed. What is armed lives in the document; the session lives in `record status`. -->
 <script lang="ts">
-	import { ContextMenu, type MenuItem, type PanelProps } from 'panelty';
+	import { type MenuItem, type PanelProps } from 'panelty';
 	import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { dropTarget, DropHint, type Point } from '$lib/drag';
 	import { byName } from './nodeChoices';
-	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput, under } from '$lib/ui';
+	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput, under, ContextMenu } from '$lib/ui';
 
 	const { panelId }: PanelProps = $props();
 

@@ -378,7 +378,7 @@
 
 {#if live}
 	{@const w = live.what}
-	<Popover anchor={live.anchor} open onDismiss={() => (pick = null)} catcher flip role="dialog" aria-label="settings" style="--popover-min-width: 18rem; --popover-max-width: 24rem" data-testid="score-popover" data-kind={w.kind}>
+	<Popover anchor={live.anchor} open onDismiss={() => (pick = null)} flip role="dialog" aria-label="settings" style="--popover-min-width: 18rem; --popover-max-width: 24rem" data-testid="score-popover" data-kind={w.kind}>
 		<div class="pop">
 			{#if w.kind === 'cell'}
 				{@const a = m.attributes[w.attr]}

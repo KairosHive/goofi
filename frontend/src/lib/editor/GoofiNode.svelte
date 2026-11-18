@@ -7,11 +7,11 @@
 	import { ui } from '$lib/stores/ui.svelte';
 	import { flash } from '$lib/stores/flash.svelte';
 	import { inputPorts, inputUnits, outputTops } from './nodeMetrics';
-	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
+	import { createLongPress, type MenuItem } from 'panelty';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph, readExpression } from '$lib/stores/graph.svelte';
 	import { nodeHealth } from './nodeHealth';
-	import { StatusDot } from '$lib/ui';
+	import { StatusDot, ContextMenu } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { provideAnchor } from '$lib/viewers/plotHost';

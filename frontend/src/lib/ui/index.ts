@@ -19,6 +19,7 @@ export { default as Toggle } from './Toggle.svelte';
 export { default as Disclosure } from './Disclosure.svelte';
 
 export { default as Popover } from './Popover.svelte';
+export { default as ContextMenu } from './ContextMenu.svelte';
 export { default as QuickPick, type PickOption } from './QuickPick.svelte';
 export { default as SettingsMenu } from './SettingsMenu.svelte';
 export { fit } from './fit';

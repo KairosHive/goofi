@@ -12,10 +12,9 @@
 	import { sameKeys } from './slotProximity';
 	import { tick, untrack, type Snippet } from 'svelte';
 	import type { MenuItem } from 'panelty';
-	import { ContextMenu } from 'panelty';
-	import PerfHud from './PerfHud.svelte';
+		import PerfHud from './PerfHud.svelte';
 	import { createWidthCache, planOverflow, type OverflowItem } from 'panelty';
-	import { IconButton, Badge, Button, Icon, StatusDot } from '$lib/ui';
+	import { IconButton, Badge, Button, Icon, StatusDot, ContextMenu } from '$lib/ui';
 
 	// The header holds APP-GLOBAL actions only; anything acting on one panel belongs to that panel.
 	type Props = {

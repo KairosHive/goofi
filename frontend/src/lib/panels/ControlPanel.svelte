@@ -3,7 +3,8 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
-	import { asStateObject, beginDrag, ContextMenu, type MenuItem } from 'panelty';
+	import { asStateObject, beginDrag, type MenuItem } from 'panelty';
+	import { ContextMenu } from '$lib/ui';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
@@ -502,10 +503,13 @@
 		{@const pc = pv.control as ControlView}
 		{@const pheld = effectiveLock(pv, groupLock)}
 		{#key `${pv.name}:${placed(pv).x},${placed(pv).y}`}
+			<!-- No catcher: the widget these settings are of is dragged, on the board and onto a param,
+			     while they are open. -->
 			<Popover
 				{anchor}
 				open={anchor !== null}
 				onDismiss={() => (picked = null)}
+				catcher={false}
 				flip
 				role="dialog"
 				aria-label={`${pv.element} settings`}

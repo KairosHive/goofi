@@ -264,6 +264,17 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		expect((await trackNamed(page, 'track0')).notes[0]).toMatchObject({ at: 2, length: 1 });
+		// A drag along the ground makes a note in each cell it goes through, as one edit.
+		await page.mouse.move(ground.x + ground.width * 0.5, ground.y + ground.height * 0.25);
+		await page.mouse.down();
+		await page.mouse.move(ground.x + ground.width * 0.9, ground.y + ground.height * 0.25, { steps: 12 });
+		await expect.poll(async () => lane.locator('.note').count(), 'the notes show as they are made').toBeGreaterThan(2);
+		await page.mouse.up();
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBeGreaterThan(2);
+		const row = (await trackNamed(page, 'track0')).notes.slice(1);
+		expect(new Set(row.map((n: any) => n.pitch)).size === 1 && new Set(row.map((n: any) => n.at)).size === row.length, 'one note a cell, along one pitch').toBe(true);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length, 'the drag is one step back').toBe(1);
 		// A drag with Shift held draws a box that picks every note it touches: they move as one,
 		// a field sets them all, and the ✕ takes them all out.
 		const ats = async (): Promise<number[]> => (await trackNamed(page, 'track0')).notes.map((n: any) => n.at);
@@ -303,6 +314,28 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(async () => (await keysOf()).length).toBe(2);
 		const [first, last] = await keysOf();
 		expect(first.at < last.at && first.value < last.value, 'the keyframes are where they were made').toBe(true);
+		// A keyframe eases as the one before it does, else as the one after; with neither, in and out.
+		expect([first.curve, last.curve]).toEqual(['in_out', 'in_out']);
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [{ ...first, curve: 'step' }, { ...last, curve: 'out' }] });
+		await attr.click({ position: { x: box.width * 0.4, y: box.height * 0.5 } });
+		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'out']);
+		await attr.click({ position: { x: box.width * 0.05, y: box.height * 0.5 } });
+		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'step', 'out']);
+		// A drag along the lane's ground makes a keyframe in each stretch it goes through, as one edit.
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [] });
+		await expect(attr.locator('.key')).toHaveCount(0);
+		await page.mouse.move(box.x + box.width * 0.1, box.y + box.height * 0.8);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.2, { steps: 10 });
+		await expect.poll(async () => attr.locator('.key').count(), 'the keyframes show as they are made').toBeGreaterThan(2);
+		await page.mouse.up();
+		await expect.poll(async () => (await keysOf()).length).toBeGreaterThan(2);
+		const painted = await keysOf();
+		expect(painted.every((k, i) => i === 0 || (k.at > painted[i - 1].at && k.value > painted[i - 1].value)), 'they follow the drag').toBe(true);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(async () => (await keysOf()).length, 'the drag is one step back').toBe(0);
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [first, last] });
+		await expect(attr.locator('.key')).toHaveCount(2);
 		await dragBy(page, attr.locator('.key').nth(1), box.width * 0.1, box.height * 0.2);
 		await expect.poll(async () => (await keysOf())[1].value).toBeLessThan(last.value);
 		expect((await keysOf())[1].at).toBeGreaterThan(last.at);
@@ -315,6 +348,13 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.up();
 		await expect(curve.getByLabel('Value')).toHaveValue(String(held.value));
 		expect((await keysOf())[1]).toEqual(held);
+		// Its curve opens in a popover. A press beside the popover closes it and does nothing else:
+		// the lane under the press gets no keyframe.
+		await curve.locator('.ui-curve-button').click();
+		await expect(page.getByTestId('curve-preset')).toBeVisible();
+		await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
+		await expect(page.getByTestId('curve-preset')).toHaveCount(0);
+		expect((await keysOf()).length, 'the press that closed the popover made nothing').toBe(2);
 		// A keyframe held near the end of the lane stays under the pointer.
 		await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2);
 		await page.mouse.down();

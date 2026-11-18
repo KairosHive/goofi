@@ -683,6 +683,9 @@ test('a colour param is picked, and its alpha slid', async ({ page, hasTouch }) 
 		// Opened, a colour shows its list as one row; as a VECTOR it shows one row per element, and
 		// each element takes a source of its own that drives that dimension alone.
 		await expect(above.getByTestId('param-view-individual'), 'the L/I switch sits on the row itself').toBeVisible();
+		// The picker closes first: a press beside it would close it and do nothing else.
+		await page.keyboard.press('Escape');
+		await expect(page.getByTestId('color-hex')).toHaveCount(0);
 		await above.getByRole('button', { name: 'above', exact: true }).click();
 		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0, 0.4]');
 		await above.getByTestId('param-view-individual').click();

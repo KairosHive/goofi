@@ -7,7 +7,7 @@
      Every change is a `timeline` or a `clock` op or a clock variable, so the manager owns the
      model and this panel the drawing and the gesture. -->
 <script lang="ts">
-	import { ContextMenu, MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
+	import { MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
 	import { flushSync, untrack } from 'svelte';
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
@@ -21,7 +21,7 @@
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
-	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under, ContextMenu } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
@@ -314,15 +314,49 @@
 	}
 	/** The cell the pointer is over, to light it. */
 	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
-	/** A click on a lane's own ground adds a note in that cell, or a keyframe there. The note
-	 * added is the one picked. */
-	function addAt(e: MouseEvent, id: string, t: Track): void {
+	/** The pixels along the axis between two keyframes a drag paints. */
+	const PAINT_EVERY = 16;
+	/** A press on a lane's own ground makes a note in that cell, or a keyframe there, and a drag
+	 * from it one more in each cell the pointer goes through, or each stretch of the axis: shown
+	 * as they come, and one edit when the pointer is let go. The notes made are the ones picked.
+	 * A keyframe eases as the keyframe before it does, else as the one after, else in and out. */
+	function paint(e: PointerEvent, id: string, t: Track): void {
 		if (e.target !== e.currentTarget) return;
-		const [f, v] = point(e, e.currentTarget as Element);
-		const [lo, hi] = t.range;
-		const born = t.kind === 'note' ? { ...cellAt(e, e.currentTarget as Element, t), length: exact(gridOf(t)), velocity: 0.8 } : { at: exact(Math.max(0, view[0] + f * width)), value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: 'linear' };
-		if (t.kind === 'note') picked = [{ track: id, index: t.notes.length }];
-		edit(id, put(t, [...held(t), born]));
+		pick([]);
+		const ground = e.currentTarget as HTMLElement;
+		const [base, made, lo, hi] = [held(t), [] as (Note | Key)[], ...t.range];
+		const length = (vertical ? ground.clientHeight : ground.clientWidth) || 1;
+		let last = -Infinity;
+		const add = (p: { clientX: number; clientY: number }): void => {
+			if (t.kind === 'note') {
+				const cell = cellAt(p, ground, t);
+				if ([...base, ...made].some((n) => n.at === cell.at && (n as Note).pitch === cell.pitch)) return;
+				return void made.push({ ...cell, length: exact(gridOf(t)), velocity: 0.8 });
+			}
+			const [f, v] = point(p, ground);
+			const [at, all] = [exact(Math.max(0, view[0] + f * width)), [...base, ...made] as Key[]];
+			if (Math.abs(f - last) * length < PAINT_EVERY || all.some((k) => k.at === at)) return;
+			last = f;
+			const near = (side: Key[]): Key | undefined => side.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at))[0];
+			const shape = (near(all.filter((k) => k.at < at)) ?? near(all.filter((k) => k.at > at)))?.curve ?? 'in_out';
+			made.push({ at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: shape });
+		};
+		const lane = (): Record<string, unknown> => put(t, [...base, ...made].sort((a, b) => (t.kind === 'curve' ? a.at - b.at : 0)));
+		add(e);
+		g.previewTrack(id, lane());
+		drag = beginDrag(ground, e.pointerId, {
+			move: (p) => {
+				const had = made.length;
+				add(p);
+				if (made.length > had) g.previewTrack(id, lane());
+			},
+			commit: () => {
+				if (t.kind === 'note') picked = made.map((_, i) => ({ track: id, index: base.length + i }));
+				edit(id, lane());
+			},
+			// Put back, where the track is still there.
+			cancel: () => void (g.timeline[id] && g.previewTrack(id, put(t, base)))
+		});
 	}
 	/** A drag of a note or a keyframe, and with it of everything picked, by as much as the pointer
 	 * moves, a note onto the grid: each move previews every lane it touches as it stands with those
@@ -537,12 +571,11 @@
 						</div>
 					{/if}
 					<div class="lane">
-						<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div
 							class="ground"
 							data-testid="track-lane"
-							onclick={(e) => addAt(e, id, t)}
-							onpointerdown={() => pick([])}
+							onpointerdown={(e) => paint(e, id, t)}
 							onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
 							onpointerleave={() => (over = null)}
 						>

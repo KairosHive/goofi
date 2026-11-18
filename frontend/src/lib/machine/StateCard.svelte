@@ -4,7 +4,8 @@
      column in the score, and the score's column lights it. Its menu wires a selected group. -->
 <script lang="ts">
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
-	import { ContextMenu, createLongPress, type MenuItem } from 'panelty';
+	import { createLongPress, type MenuItem } from 'panelty';
+	import { ContextMenu } from '$lib/ui';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';

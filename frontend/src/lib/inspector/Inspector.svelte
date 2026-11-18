@@ -11,7 +11,8 @@
 	import { numValue, PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import { getControl, type NodeInstanceInfo } from '$lib/api/control';
 	import type { MenuItem } from 'panelty';
-	import { ContextMenu, createLongPress } from 'panelty';
+	import { createLongPress } from 'panelty';
+	import { ContextMenu } from '$lib/ui';
 	import { graph, paramLive } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { selection } from '$lib/stores/selection.svelte';

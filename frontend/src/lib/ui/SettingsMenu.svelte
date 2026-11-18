@@ -98,7 +98,7 @@
 	</IconButton>
 </span>
 
-<Popover {anchor} {open} onDismiss={dismiss} catcher role="group" aria-label={label} class="sm-menu" data-testid={menuTestid}>
+<Popover {anchor} {open} onDismiss={dismiss} role="group" aria-label={label} class="sm-menu" data-testid={menuTestid}>
 	<!-- Popover owns the surface's style, so the width rides a body inside it. -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="sm-body" style={`width: ${width}px`} tabindex="-1" bind:this={body} onkeydown={onArrow} use:land>

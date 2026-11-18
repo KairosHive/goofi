@@ -4,13 +4,14 @@
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { portal, clampToViewport, overlayViewport } from 'panelty';
+	import Catcher from './Catcher.svelte';
 
 	let {
 		anchor,
 		open,
 		onDismiss,
 		flip = false,
-		catcher = false,
+		catcher = true,
 		class: klass = '',
 		children,
 		...rest
@@ -21,7 +22,9 @@
 		onDismiss: () => void;
 		/** Let the surface flip ABOVE a bottom-anchored trigger rather than shift up and cover it. */
 		flip?: boolean;
-		/** Render a full-screen catcher under the surface so a dismissing click ONLY dismisses. */
+		/** The layer under the surface that takes the press which dismisses it, so that press does
+		 * nothing else. Off for a surface that is no place to act in, a tooltip, and for one whose
+		 * anchor is typed into while it is open, a combobox's list. */
 		catcher?: boolean;
 		children?: Snippet;
 	} = $props();
@@ -96,9 +99,7 @@
 <!-- One portalled element per block: Svelte tears a block down by walking siblings from its first
      node to its last, so a moved LAST node would take the anchor's neighbours instead. -->
 {#if open && catcher}
-	<!-- Handler-free by design: the layer only ABSORBS the pointer event, so a dismissing click
-	     does not also act on what it landed on. The window listener above dismisses. -->
-	<div class="ui-popover-catcher" use:portal></div>
+	<Catcher />
 {/if}
 {#if open}
 	<div
@@ -114,11 +115,6 @@
 {/if}
 
 <style>
-	.ui-popover-catcher {
-		position: fixed;
-		inset: 0;
-		z-index: calc(var(--popover-z, var(--z-menu)) - 1);
-	}
 	.ui-popover {
 		position: fixed;
 		z-index: var(--popover-z, var(--z-menu));

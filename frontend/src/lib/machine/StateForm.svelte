@@ -4,7 +4,7 @@
      from a column's cog in the score; the attributes are the score's own rows. -->
 <script lang="ts">
 	import type { Decision, Machine } from '$lib/api/generated';
-	import { ContextMenu, type MenuItem } from 'panelty';
+	import { type MenuItem } from 'panelty';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
@@ -12,7 +12,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Badge, Button, ColorPicker, Field, FieldGrid, Icon, IconButton, Segmented, Select, under } from '$lib/ui';
+	import { Badge, Button, ColorPicker, Field, FieldGrid, Icon, IconButton, Segmented, Select, under, ContextMenu } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
 	import { DECISIONS, editEach, mixed, outgoing as outgoingOf, relink, shares, stateOf, summary as transitionSummary, weightsOf } from './model';

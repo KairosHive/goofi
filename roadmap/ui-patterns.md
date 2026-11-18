@@ -2,7 +2,10 @@
 
 An audit of every panel against `$lib/ui` and `panelty`. Shipped: `FieldGrid` (the grid a block
 of `Field row`s stands on, six users), `under` (where a menu drops from its button, five users),
-`fit` (the parts that fit, the others reported for a menu), MIDI learn and the console's run
+`fit` (the parts that fit, the others reported for a menu), `Catcher` (the layer under every
+popover, pick list and context menu that takes the press which closes it, so that press does
+nothing else; a tooltip, a combobox's list and the settings of a widget that is dragged while
+they are open have none), MIDI learn and the console's run
 button on the library's buttons, icons for text glyphs, and a stated reason at each native
 element that stays (the score's cog, the console's filter and prompt, the rename field). This
 file holds what is open. Each item below is from a read of the code; an item marked "survey" was

@@ -14,6 +14,7 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { untrack } from 'svelte';
 	import { portal, clampToViewport, overlayViewport } from 'panelty';
+	import Catcher from './Catcher.svelte';
 	import { reveal, stepWrapped } from './listNav';
 
 	let {
@@ -87,6 +88,8 @@
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydowncapture={onWindowKeydown} />
+
+<Catcher />
 
 <div
 	{...rest}

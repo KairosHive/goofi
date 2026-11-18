@@ -67,7 +67,7 @@
 	});
 </script>
 
-<Popover anchor={tip?.el ?? null} open={!!tip} onDismiss={hide} flip role="tooltip" data-testid="title-tip" class="title-tip"
+<Popover anchor={tip?.el ?? null} open={!!tip} onDismiss={hide} catcher={false} flip role="tooltip" data-testid="title-tip" class="title-tip"
 	>{tip?.text}</Popover
 >
 

@@ -118,7 +118,7 @@
 	<span class="ui-combo-caret" aria-hidden="true"><Icon name="chevron-down" /></span>
 </div>
 {#if open}
-	<Popover anchor={box} open onDismiss={close} class="ui-combo-list" data-testid={`${testid}-list`}>
+	<Popover anchor={box} open onDismiss={close} catcher={false} class="ui-combo-list" data-testid={`${testid}-list`}>
 		<div role="listbox" id={`${ownId}-list`} aria-label={placeholder || 'options'}>
 			{#each shown as o, i (o.label)}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
