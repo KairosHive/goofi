@@ -606,7 +606,10 @@ impl Machines {
     /// Begin a recording into the track `id`: every advance from the next on takes what the
     /// track's input holds. One that runs already runs on.
     pub fn record(&mut self, id: &str) {
-        self.recording.entry(id.to_string()).or_default();
+        // A track that went since the op read it has nothing to record into.
+        if self.timed.0.contains_key(id) {
+            self.recording.entry(id.to_string()).or_default();
+        }
     }
 
     /// End the recording into the track `id` at the position `now`, which it takes too: what it
@@ -632,7 +635,7 @@ impl Machines {
         let (beat, every) = (self.beat(now), self.beat(1.0));
         let ctx = Ctx::new(&self.heard, &self.evaluator, read, now);
         for (id, taking) in &mut self.recording {
-            let track = &self.timed.0[id];
+            let Some(track) = self.timed.0.get(id) else { continue };
             let taken = match &track.lanes {
                 Lanes::Note { .. } => read(&Target::Variable { key: format!("{}.{}", track.input, NOTES.0) }).map(|held| {
                     if let Local::Frame(held) = held {

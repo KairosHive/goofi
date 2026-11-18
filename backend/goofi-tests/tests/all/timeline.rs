@@ -245,6 +245,13 @@ fn a_recording_goes_into_its_track() {
     assert_eq!((&played["notes"][0], &note["at"], &note["pitch"], &note["velocity"]), (&there, &j!(1.0), &j!(80), &j!(0.75)), "the note is added to those there");
     assert!(near(note["length"].as_f64().unwrap(), lifted - 1.0), "{note} for a key that came up at {lifted}");
     assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
+    // A track is a group with `notes` too, so another records from it by its name, and a
+    // rename of it follows there.
+    g.call("timeline track add", j!({ "kind": "note", "name": "copy" }));
+    g.call("timeline track edit", j!({ "track": "copy", "input": "played" }));
+    g.call("timeline track edit", j!({ "track": "played", "to": "lead" }));
+    assert_eq!(track(&g, "copy")["input"], j!("lead"));
+    g.call("timeline track edit", j!({ "track": "lead", "to": "played" }));
     // A key still down when the recording ends is a note until there.
     at(&g, 4.0);
     press(&g, 60, 1.0);
@@ -271,7 +278,7 @@ fn a_take_becomes_the_keyframes_that_follow_it() {
     let curve = || Track { name: "wave".into(), order: 0, input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
     let merged = |passes: Vec<Vec<Sample>>| {
         let mut track = curve();
-        track.merge(Take::Samples(passes));
+        track.merge(&Take::Samples(passes)).unwrap();
         track.check().unwrap();
         let Lanes::Curve { range, keys, .. } = track.lanes else { unreachable!() };
         (range, keys)
@@ -294,25 +301,26 @@ fn a_take_becomes_the_keyframes_that_follow_it() {
     let (range, keys) = merged(vec![wave.clone()]);
     assert!(keys.len() < 16 && keys.iter().any(|k| matches!(k.curve, Curve::Custom(_))), "a smooth wave takes few keyframes: {}", keys.len());
     assert!((range[0] + 1.0).abs() < 1e-9 && (range[1] - 1.0).abs() < 1e-9, "the range holds the wave: {range:?}");
-    assert!(furthest(&keys, &wave) <= 0.04, "the curve follows the wave: {}", furthest(&keys, &wave));
+    assert!(furthest(&keys, &wave) <= 0.02, "the curve follows the wave: {}", furthest(&keys, &wave));
     // A take whose samples lie in pairs far apart, as a level that jumps: a cubic through the
     // four of them would swing far past both levels in between.
     let jump = vec![sample(0.0, 0.0), sample(1.95, 0.0), sample(2.0, 10.0), sample(3.95, 10.0)];
     let (range, keys) = merged(vec![jump.clone()]);
-    assert!(furthest(&keys, &jump) <= 0.2 && range == [0.0, 10.0], "the curve stays on the take between its samples: {} off, {keys:?}", furthest(&keys, &jump));
+    assert!(furthest(&keys, &jump) <= 0.1 && range == [0.0, 10.0], "the curve stays on the take between its samples: {} off, {keys:?}", furthest(&keys, &jump));
     // A sample the input held is a step: the value stays until the next keyframe.
     let (_, keys) = merged(vec![vec![Sample { held: true, ..sample(0.0, 0.0) }, sample(2.0, 10.0)]]);
     assert_eq!((keys[0].curve.clone(), level(&keys, 1.99), level(&keys, 2.0)), (Curve::Step, 0.0, 10.0));
     // Each pass is in place of the stretch it covers, the later over the earlier.
     let mut track = curve();
-    track.merge(Take::Samples(vec![wave]));
-    track.merge(Take::Samples(vec![vec![sample(1.5, 0.0), sample(2.0, 0.0)], vec![sample(0.0, 0.5), sample(1.0, 0.5)]]));
+    track.merge(&Take::Samples(vec![wave])).unwrap();
+    track.merge(&Take::Samples(vec![vec![sample(1.5, 0.0), sample(2.0, 0.0)], vec![sample(0.0, 0.5), sample(1.0, 0.5)]])).unwrap();
     let Lanes::Curve { keys, .. } = &track.lanes else { unreachable!() };
     let held: Vec<(f64, f64)> = keys.iter().map(|k| (k.at, k.value)).collect();
     assert_eq!((&held[..2], &held[held.len() - 2..]), (&[(0.0, 0.5), (1.0, 0.5)][..], &[(1.5, 0.0), (2.0, 0.0)][..]), "{held:?}");
-    // A take no curve of a thousand keyframes follows closely is followed as closely as one does.
-    let (_, keys) = merged(vec![(0..3000).map(|i| sample(f64::from(i), f64::from(i % 2))).collect()]);
-    assert!(keys.len() <= 1000, "{}", keys.len());
+    // A take that needs more keyframes than a pass becomes is refused, and the track is as it was.
+    let was = track.clone();
+    let refusal = track.merge(&Take::Samples(vec![(0..3000).map(|i| sample(f64::from(i), f64::from(i % 2))).collect()]));
+    assert!(refusal.is_err_and(|why| why.contains("more than 2000 keyframes")) && track == was);
 }
 
 #[test]

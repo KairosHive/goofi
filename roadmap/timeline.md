@@ -42,10 +42,12 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   of it is a long time.
 - A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
   is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
-- A track's settings that do not fit beside its lane are in the menu in its title. A node cannot
-  be dropped on a curve's input while that is in the menu: the track is made larger first.
+- A node cannot be dropped on a curve's input while that is in the track's menu: the track is
+  made larger first. A press on the expression editor's completion window may close that menu
+  before the completion is taken; not tried.
 - A track's edge held at an end of the track area scrolls the area. A note or a keyframe dragged
   there does not.
+- The edge-held resize has a fixture in a lying panel alone; a standing one is not tried.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
@@ -73,9 +75,12 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - An input that reads no node holds its value between two changes, so a recording of it steps;
   one that reads a node is joined from frame to frame. The fit is to within a hundredth of the
   track's range, and the tolerance is not a setting.
-- One pass of a recording is at most a thousand keyframes: a take no such curve follows closely
-  is followed loosely. A curve of that many keyframes is still one functional, compiled again
-  on every edit of any track.
+- A pass of a recording that needs more than two thousand keyframes is refused, and the take
+  is lost: a curve is one functional, and one of 4000 fitted keyframes plays where one of 8000
+  does not compile (two probe runs each). A long take of a fast wave is such a pass. Whether a
+  curve becomes a table a reader looks up, so a take has no ceiling. A curve of thousands of
+  keyframes is compiled again on every edit of any track.
+- The fit of a take is slow where its cuts fall one sample apart; it runs with nothing held.
 - A recording whose input cannot be read, an unset variable or a node with no frame yet, shows
   as recording: the reason is in the log alone, and the end changes nothing.
 - A recording ends when it is told to: a patch that is closed, or a track that is removed,

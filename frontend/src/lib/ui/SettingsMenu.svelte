@@ -19,6 +19,7 @@
 		placeholder,
 		onEnter,
 		width = 232,
+		open = $bindable(false),
 		children
 	}: {
 		label: string;
@@ -35,10 +36,11 @@
 		onEnter?: (query: string) => void;
 		/** The menu's width in px. */
 		width?: number;
+		/** Whether the menu shows; an owner closes it when a row in it ends the menu's business. */
+		open?: boolean;
 		children: Snippet;
 	} = $props();
 
-	let open = $state(false);
 	let anchor = $state<HTMLElement | null>(null);
 
 	function toggle(e: MouseEvent): void {
@@ -60,10 +62,16 @@
 			onEnter?.(query);
 		}
 	}
-	const focus = (el: HTMLInputElement): void => void requestAnimationFrame(() => el.focus({ preventScroll: true }));
+	const focus = (el: HTMLElement): void => void requestAnimationFrame(() => el.focus({ preventScroll: true }));
+	/** A menu with no search field takes the focus itself when it opens, so Tab and the arrows go
+	 * into its rows; no control is focused for it, which would raise a keyboard under a finger. */
+	const land = (el: HTMLElement): void => {
+		if (placeholder === undefined) focus(el);
+	};
 
 	const FOCUSABLE = 'input, select, textarea, button, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 	let body = $state<HTMLDivElement | null>(null);
+
 	/** Up and down step through the stops: the search, then each row's first control. */
 	function onArrow(e: KeyboardEvent): void {
 		if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || !body) return;
@@ -88,7 +96,7 @@
 <Popover {anchor} {open} onDismiss={dismiss} catcher role="group" aria-label={label} class="sm-menu" data-testid={menuTestid}>
 	<!-- Popover owns the surface's style, so the width rides a body inside it. -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="sm-body" style={`width: ${width}px`} bind:this={body} onkeydown={onArrow}>
+	<div class="sm-body" style={`width: ${width}px`} tabindex="-1" bind:this={body} onkeydown={onArrow} use:land>
 		{#if placeholder !== undefined}
 			<!-- Native, not `TextInput`: it filters per keystroke and owns Enter and Escape. -->
 			<input {...MODE_ATTRS.search} class="sm-search" bind:value={query} {placeholder} autocomplete="off" aria-label={placeholder}
@@ -131,6 +139,9 @@
 		max-height: 70dvh;
 		display: flex;
 		flex-direction: column;
+	}
+	.sm-body:focus {
+		outline: none;
 	}
 	.sm-body {
 		display: flex;

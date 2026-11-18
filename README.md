@@ -268,8 +268,10 @@ takes it out, and a drag moves one; a note snaps to its track's grid. A press on
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
 view: drag it to move along the axis, drag either end of it to zoom, as far out as you like; a
-double click on the ruler looks at everything again. A track's edge resizes it, and a panel
-hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
+double click on the ruler looks at everything again. A track's edge resizes it, as far as it is
+dragged: held at the end of the track area, the area scrolls. Beside its lane a track says its
+name and its settings in groups, and the groups that do not fit there are in the menu in its
+title. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
 taller than wide the time runs down and the tracks stand as columns.
 
 ## Testing

@@ -11,7 +11,8 @@
 	}
 	const PITCHES = Array.from({ length: 128 }, (_, p) => String(p));
 	/** A pitch as a keyboard names it: C4 is 60. */
-	const PITCH_NAMES = Object.fromEntries(PITCHES.map((p) => [p, `${NOTE_NAMES[Number(p) % 12]}${Math.floor(Number(p) / 12) - 1}`]));
+	export const pitchName = (pitch: number): string => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
+	const PITCH_NAMES = Object.fromEntries(PITCHES.map((p) => [p, pitchName(Number(p))]));
 </script>
 
 <script lang="ts">
@@ -19,8 +20,6 @@
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { drag, dropTarget } from '$lib/drag';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { graph } from '$lib/stores/graph.svelte';
-	import { notify } from '$lib/stores/notify.svelte';
 	import { Button, CurvePicker, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
 
 	let {
@@ -30,6 +29,7 @@
 		recording,
 		ports,
 		onRescan,
+		onEdit,
 		onRecord,
 		onHide,
 		onDelete,
@@ -43,6 +43,8 @@
 		/** The MIDI devices there are, for a note track's input. */
 		ports: Port[];
 		onRescan: () => void;
+		/** Change the track's own settings: one `timeline track edit`. */
+		onEdit: (patch: Record<string, unknown>) => void;
 		onRecord: (e: MouseEvent) => void;
 		onHide: () => void;
 		onDelete: () => void;
@@ -50,11 +52,9 @@
 		onItem: (to: Partial<Note & Key> | null) => void;
 	} = $props();
 
-	const g = graph();
 	const engine = drag();
-	const edit = (patch: Record<string, unknown>): void => void g.op('timeline track edit', { track: id, ...patch }).catch((e) => notify().failure('Edit track', e));
 	const rename = (to: string): void => {
-		if (to !== t.name && isValidIdentifier(to)) edit({ to });
+		if (to !== t.name && isValidIdentifier(to)) onEdit({ to });
 	};
 
 	/** A track's groups of settings, in the order they stand: what is picked first, while
@@ -62,8 +62,14 @@
 	const TITLES = { item: 'Selection', keyboard: 'Keyboard', grid: 'Grid', range: 'Range', record: 'Record' };
 	type Group = keyof typeof TITLES;
 	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), ...(t.kind === 'note' ? (['keyboard', 'grid', 'record'] as const) : (['range', 'record'] as const))]);
-	/** The groups the track has no room for. */
+	/** The groups the track has no room for, and whether the menu that holds them is open. */
 	let more = $state<string[]>([]);
+	let menu = $state(false);
+	/** An action taken from the menu: the menu's business is done. */
+	const leave = (act: () => void) => (): void => {
+		menu = false;
+		act();
+	};
 	/** The title has no room for every action beside the name, so the rarer ones go into the
 	 * menu; and a row none for a label beside its control, so the label goes above it. */
 	let title = $state<HTMLElement | null>(null);
@@ -107,26 +113,26 @@
 		{/if}
 	{:else if name === 'keyboard' && t.kind === 'note'}
 		<Field label="keys" row doc="The lowest and the highest pitch the keyboard shows" data-menu-row>
-			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => edit({ range: [Number(p), t.range[1]] })} />
-			<Select aria-label="Highest" value={String(t.range[1])} options={PITCHES.slice(t.range[0] + 1)} labels={PITCH_NAMES} onChange={(p) => edit({ range: [t.range[0], Number(p)] })} />
+			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [Number(p), t.range[1]] })} />
+			<Select aria-label="Highest" value={String(t.range[1])} options={PITCHES.slice(t.range[0] + 1)} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [t.range[0], Number(p)] })} />
 		</Field>
 		<Field label="scale" row doc="The scale whose notes the keyboard marks and a note lands on, and the note it starts on" data-menu-row>
-			<Select aria-label="Root" class="root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit({ root })} />
-			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit({ scale })} />
+			<Select aria-label="Root" class="root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => onEdit({ root })} />
+			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => onEdit({ scale })} />
 		</Field>
 	{:else if name === 'grid' && t.kind === 'note'}
 		<Field label="grid" row doc="The lines a note of this track snaps to when it is made or dragged; Shift or Ctrl lets it go free" data-menu-row>
-			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => edit({ grid })} />
+			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => onEdit({ grid })} />
 		</Field>
 	{:else if name === 'range' && t.kind === 'curve'}
 		<Field label="range" row doc="The lowest and the highest value the lane shows" data-menu-row>
 			{#each [0, 1] as end (end)}
-				<NumberInput aria-label={end ? 'Highest' : 'Lowest'} value={t.range[end]} step={0.1} onChange={(v) => edit({ range: t.range.with(end, v) })} />
+				<NumberInput aria-label={end ? 'Highest' : 'Lowest'} value={t.range[end]} step={0.1} onChange={(v) => onEdit({ range: t.range.with(end, v) })} />
 			{/each}
 		</Field>
 	{:else if name === 'record' && t.kind === 'note'}
 		<Field label="input" row doc="The MIDI device a recording takes its notes from; auto is the one there is, or the one picked when it begins" data-menu-row>
-			<Select aria-label="Input" data-testid="track-device" value={t.input} options={devices} labels={deviceNames} onRefresh={onRescan} onChange={(input) => edit({ input })} />
+			<Select aria-label="Input" data-testid="track-device" value={t.input} options={devices} labels={deviceNames} onRefresh={onRescan} onChange={(input) => onEdit({ input })} />
 		</Field>
 	{:else if name === 'record' && t.kind === 'curve'}
 		<Field label="input" row doc="What a recording takes: an expression, as a param's. Drop a node, a variable or a state on it" data-menu-row>
@@ -138,15 +144,15 @@
 					accept: (source) => source.key !== id,
 					onDrop: async ({ source, tag, at }) => {
 						const input = await source.expression?.(tag, at);
-						if (input) edit({ input });
+						if (input) onEdit({ input });
 					}
 				}}
 			>
-				<ExprEditor label="Input" value={t.input} placeholder="nd('lfo0')" testid="track-input" onCommit={(input) => edit({ input })} />
+				<ExprEditor label="Input" value={t.input} placeholder="nd('lfo0')" testid="track-input" onCommit={(input) => onEdit({ input })} />
 			</div>
 		</Field>
 		<Field label="rate" row doc="The most samples a second a recording takes of the input; a node slower than that gives its own" data-menu-row>
-			<NumberInput aria-label="Rate" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => edit({ rate })} />
+			<NumberInput aria-label="Rate" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => onEdit({ rate })} />
 			{#snippet adornment()}Hz{/snippet}
 		</Field>
 	{/if}
@@ -169,7 +175,7 @@
 		onclick={onRecord}><Icon name="circle-dot" /></IconButton
 	>
 	{#if more.length > 0 || tight}
-		<SettingsMenu label="More" icon="ellipsis" testid="track-more">
+		<SettingsMenu label="More" icon="ellipsis" testid="track-more" bind:open={menu}>
 			{#each groups.filter((name) => more.includes(name)) as name (name)}
 				<section aria-label={TITLES[name]}>
 					<h4>{TITLES[name]}</h4>
@@ -179,9 +185,9 @@
 			{#if tight}
 				<section aria-label="Track">
 					<h4>Track</h4>
-					<div class="acts">
-						<Button size="sm" data-testid="track-hide" onclick={onHide}><Icon name="eye-off" /> Hide</Button>
-						<Button size="sm" data-testid="track-delete" onclick={onDelete}><Icon name="x" /> Delete…</Button>
+					<div class="acts" data-menu-row>
+						<Button size="sm" data-testid="track-hide" onclick={leave(onHide)}><Icon name="eye-off" /> Hide</Button>
+						<Button size="sm" data-testid="track-delete" onclick={leave(onDelete)}><Icon name="x" /> Delete…</Button>
 					</div>
 				</section>
 			{/if}
@@ -200,9 +206,11 @@
 
 <style>
 	/* The track's name, then what is done to a track most, each one press. */
+	/* A track narrower than its name and two buttons wraps them: nothing of the title is cut. */
 	.title {
 		flex: none;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-1);
 		min-width: 0;

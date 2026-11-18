@@ -157,31 +157,28 @@ impl Track {
     /// Take a recording in. Notes are added to those the track holds. Each pass of samples
     /// becomes the keyframes that follow it, in place of those the track held in the pass's
     /// stretch, to within a hundredth of the track's range, which grows to hold what came. A
-    /// pass that would take more than [`MOST`] keyframes is followed more loosely.
-    pub fn merge(&mut self, take: Take) {
+    /// pass that needs more than [`MOST`] keyframes is refused, and the track is as it was.
+    pub fn merge(&mut self, take: &Take) -> Result<(), String> {
         match (&mut self.lanes, take) {
             (Lanes::Note { range, notes, .. }, Take::Notes(taken)) => {
                 *range = taken.iter().fold(*range, |r, n| [r[0].min(n.pitch), r[1].max(n.pitch)]);
-                notes.extend(taken);
+                notes.extend(taken.iter().cloned());
             }
             (Lanes::Curve { range, keys, .. }, Take::Samples(passes)) => {
-                *range = passes.iter().flatten().fold(*range, |r, s| [r[0].min(s.value), r[1].max(s.value)]);
-                for pass in passes.iter().filter(|pass| !pass.is_empty()) {
-                    let mut tolerance = (range[1] - range[0]) / 100.0;
-                    let mut fitted = fit(pass, tolerance);
-                    // Past the range itself nothing is left to give: what remains are its steps.
-                    while fitted.len() > MOST && tolerance < range[1] - range[0] {
-                        tolerance *= 2.0;
-                        fitted = fit(pass, tolerance);
-                    }
-                    let (from, to) = (pass[0].at, pass[pass.len() - 1].at);
+                let wide = passes.iter().flatten().fold(*range, |r, s| [r[0].min(s.value), r[1].max(s.value)]);
+                let passes = passes.iter().filter(|pass| !pass.is_empty());
+                let fitted: Option<Vec<_>> = passes.map(|pass| Some((pass[0].at, pass[pass.len() - 1].at, fit(pass, (wide[1] - wide[0]) / 100.0)?))).collect();
+                let refused = || format!("track `{}`: the take needs more than {MOST} keyframes, the most one pass of a recording becomes: record a shorter stretch, a slower rate or a smoother input", self.name);
+                for (from, to, fitted) in fitted.ok_or_else(refused)? {
                     keys.retain(|k| k.at < from || k.at > to);
                     keys.extend(fitted);
                     keys.sort_by(|a, b| a.at.total_cmp(&b.at));
                 }
+                *range = wide;
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// The expression a recording into the track evaluates: a curve track's input, where it has one.
@@ -212,7 +209,7 @@ impl Track {
 
 /// The variables a curve track's input reads: an expression as a param's, but with no node of
 /// its own, so no `me`. A playhead's element is the variable it is published as.
-pub(crate) fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
+pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
     let (rewritten, mut refs) = crate::expr_rewrite::rewrite(text)?;
     for r in &mut refs {
         match &r.target {
@@ -224,9 +221,9 @@ pub(crate) fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite:
     Ok((rewritten, refs))
 }
 
-/// The most keyframes one pass of a recording becomes: a curve is one functional, and a reader
-/// compiles it whole.
-const MOST: usize = 1000;
+/// The most keyframes one pass of a recording becomes. A curve is one functional that a reader
+/// compiles whole: one of 4000 fitted keyframes plays, and one of 8000 does not.
+pub const MOST: usize = 2000;
 
 /// One sample of a curve's input: the beat it was taken at, the value, and whether the input
 /// held that value until the next sample, a step, where it did not move there.
@@ -347,15 +344,19 @@ impl Recording {
 
 /// The keyframes that follow one pass of a recording to within `tolerance`: as few as do it,
 /// each eased to the next by one cubic bezier, or held until the next where the input held.
-fn fit(pass: &[Sample], tolerance: f64) -> Vec<Key> {
+/// None where that is more than [`MOST`].
+fn fit(pass: &[Sample], tolerance: f64) -> Option<Vec<Key>> {
     let mut keys = Vec::new();
     // A held sample ends a run: nothing is fitted across a step.
     for run in pass.chunk_by(|before, _| !before.held) {
         spans(run, tolerance, &mut keys);
         let last = run[run.len() - 1];
         keys.push(Key { at: last.at, value: last.value, curve: if last.held { Curve::Step } else { Curve::Linear } });
+        if keys.len() > MOST {
+            return None;
+        }
     }
-    keys
+    Some(keys)
 }
 
 /// The keyframes of a run of samples, but for its last sample. Between two samples the take is
@@ -371,7 +372,8 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
     // The stretches still to fit, the earliest on top, each from one sample to a later one.
     let mut open = vec![(0, run.len() - 1)];
     while let Some((from, to)) = open.pop() {
-        if to <= from {
+        // Past the most a pass becomes, the rest is not fitted: the caller refuses the pass.
+        if to <= from || keys.len() > MOST {
             continue;
         }
         let (first, last) = (run[from], run[to]);

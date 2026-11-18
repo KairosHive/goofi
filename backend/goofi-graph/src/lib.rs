@@ -830,7 +830,7 @@ impl Graph {
             }
         }
         for track in self.patch.stepped.tracks.values().filter(|t| !t.input.is_empty()) {
-            match track.expression().map(expr_rewrite::rewrite_machine) {
+            match track.expression().map(timeline::input_refs) {
                 None => drop(out.insert(track.input.clone())),
                 Some(read) => out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
                     expr_rewrite::Target::Variable { key } => group_of(&key),
@@ -3072,21 +3072,18 @@ impl Graph {
         self.param_value_of(uid, name, group, param)
     }
 
-    /// Every expression of what steps on the clock: the machines', then the input of each
-    /// curve track.
-    pub fn stepped_expressions(&self) -> impl Iterator<Item = &str> {
+    /// What the expressions of what steps on the clock refer to, each read as its owner reads
+    /// it: a machine's, then the input of each curve track, in the order the texts come.
+    pub fn stepped_refs(&self) -> Vec<expr_rewrite::Target> {
         let stepped = &self.patch.stepped;
-        stepped.machines.values().flat_map(machine::Machine::expressions).chain(stepped.tracks.values().filter_map(timeline::Track::expression))
+        let machines = stepped.machines.values().flat_map(machine::Machine::expressions).map(expr_rewrite::rewrite_machine);
+        let tracks = stepped.tracks.values().filter_map(timeline::Track::expression).map(timeline::input_refs);
+        machines.chain(tracks).flatten().flat_map(|(_, refs)| refs).map(|r| r.target).collect()
     }
 
-    /// Every node reference the stepped expressions make, in the order the texts come.
+    /// Every node reference the stepped expressions make.
     fn machine_node_refs(&self) -> Vec<expr_rewrite::Target> {
-        let mut out = Vec::new();
-        for text in self.stepped_expressions() {
-            let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
-            out.extend(refs.into_iter().map(|r| r.target).filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })));
-        }
-        out
+        self.stepped_refs().into_iter().filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })).collect()
     }
 
     /// The producer outputs the machines read through `nd()`: what rings the machines' door.

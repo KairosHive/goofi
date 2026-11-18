@@ -14,14 +14,14 @@ export function fit(el: HTMLElement, onChange: (hidden: string[]) => void): Acti
 		if (hidden.join() !== said) onChange(hidden);
 		said = hidden.join();
 	};
-	// The room moves with the element's box, what it takes with what is inside it. A part's own
-	// style is an attribute, which is not watched, so a measure never calls for another.
+	// The room moves with the element's box, what it takes with what is inside it: a child that
+	// comes or goes, a text, a class that lays rows out another way. A part's own style is not
+	// watched, so a measure never calls for another.
 	const box = new ResizeObserver(measure);
 	const inside = new MutationObserver(measure);
 	box.observe(el);
-	inside.observe(el, { childList: true, subtree: true, characterData: true });
+	inside.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class'] });
 	return {
-		update: (next) => void (onChange = next),
 		destroy: () => {
 			box.disconnect();
 			inside.disconnect();

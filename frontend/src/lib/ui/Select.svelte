@@ -17,6 +17,7 @@
 		disabled = false,
 		density = 'comfortable',
 		class: klass = '',
+		'aria-label': name,
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: string;
@@ -43,9 +44,11 @@
 </script>
 
 <div {...rest} class={`ui-select ${density === 'chrome' ? 'd-chrome ' : ''}${klass}`.trim()}>
+	<!-- The accessible name is the control's, not its wrapper's: a second dropdown of one field has none else. -->
 	<select
 		id={fieldId}
 		class="ui-select-input"
+		aria-label={name}
 		{value}
 		disabled={disabled || refreshing}
 		onchange={(e) => onChange((e.currentTarget as HTMLSelectElement).value)}

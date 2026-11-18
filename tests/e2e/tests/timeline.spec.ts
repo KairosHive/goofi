@@ -2,8 +2,10 @@
 // bar's list, a track's menu with its five entries, a delete that asks first, a note and a keyframe
 // made by a click and moved by a drag, the clock steered from the bar and looped in a
 // section dragged on the ruler, the view zoomed by its range bar, a track resized, and the whole
-// stood on its side in a panel taller than wide. On a phone, a
-// held finger is the door onto the menu and a tap makes the note. A track records its input.
+// stood on its side in a panel taller than wide. A track's settings stand in groups beside its
+// lane, and those that do not fit are in the menu in its title; its edge held at the end of the
+// track area scrolls the area and goes on. On a phone, a held finger is the door onto the menu, a
+// tap makes the note, and the title's menu holds hide and delete. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -35,7 +37,7 @@ async function shut(page: Page): Promise<void> {
 }
 /** Pick an option of the track's dropdown named `name`, and close the menu it may be in. */
 async function choose(page: Page, track: Locator, name: string, option: string): Promise<void> {
-	await (await settings(page, track, `[aria-label="${name}"] select`)).selectOption(option);
+	await (await settings(page, track, `select[aria-label="${name}"]`)).selectOption(option);
 	await shut(page);
 }
 
@@ -158,7 +160,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(board).toHaveCount(25);
 		// The track's settings stand in groups beside its lane: a pitch is picked by its name.
 		await expect(keys.locator('.groups [role="group"]:visible')).toHaveCount(2);
-		await expect(keys.locator('[aria-label="Lowest"] select option:checked')).toHaveText('C3');
+		await expect(keys.locator('select[aria-label="Lowest"] option:checked')).toHaveText('C3');
 		await choose(page, keys, 'Highest', '60');
 		await expect(board).toHaveCount(13);
 		// A track an octave high has no room for its groups: they are in the menu in its title,
@@ -516,6 +518,15 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 		await expect(fade.getByLabel('Value')).toBeVisible();
 		expect(await dots.nth(0).getAttribute('class'), 'the dot under the finger is the one picked').toContain('picked');
 		await expectIntact(page, 'the timeline panel on a phone');
+		// A title too narrow for every action keeps hide and delete in its menu, which closes when
+		// one of them is taken.
+		await fade.getByTestId('track-more').click();
+		const more = page.getByTestId('track-more-menu');
+		await expect(more.getByTestId('track-delete')).toBeVisible();
+		await more.getByTestId('track-hide').click();
+		await expect(more).toHaveCount(0);
+		await expect(fade).toHaveCount(0);
+		await expect(page.getByTestId('timeline-hidden')).toBeVisible();
 	} finally {
 		await rawCall(page, 'clock set', { playing: true });
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
@@ -563,8 +574,11 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		const taken = await trackNamed(page, 'take');
 		expect([taken.keys[0].value, taken.range], 'from the level it began at').toEqual([0, [0, 5]]);
 		await expect(take.locator('.key').first()).toBeVisible();
-		// A note track records a MIDI device, and this host has none to offer.
+		// A note track records a MIDI device, and this host has none to offer: its input is the one
+		// there will be.
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'played' });
+		await expect(await settings(page, page.getByTestId('track-played'), '[data-testid="track-device"] option:checked')).toHaveText('auto');
+		await shut(page);
 		await page.getByTestId('track-played').getByTestId('track-record').click();
 		await expect(page.getByText('no MIDI device is connected')).toBeVisible();
 		await expectIntact(page, 'the timeline panel with a track that recorded');

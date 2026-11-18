@@ -19,7 +19,7 @@
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
-	import TrackHead, { type Port } from '$lib/timeline/TrackHead.svelte';
+	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
 	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under } from '$lib/ui';
 
 	interface TimelineState {
@@ -208,15 +208,18 @@
 	 * end of the track area, the area scrolls and the edge goes with it, so a track is as large as
 	 * it is dragged, whatever the panel shows of it. */
 	let sizing = $state<{ id: string; size: number; sent?: boolean } | null>(null);
-	const [SMALLEST, EDGE, FASTEST] = [32, 32, 16];
+	/** The least a track is across the axis, lying and standing: its title's height, and a width
+	 * that holds its name. Then how near an end of the area scrolls it, and how fast. */
+	const [LOWEST, NARROWEST, EDGE, FASTEST] = [32, 64, 32, 16];
 	function resize(e: PointerEvent, id: string): void {
 		e.stopPropagation();
 		const grip = e.currentTarget as HTMLElement;
 		const area = grip.closest<HTMLElement>('.scroll')!;
 		const lane = grip.parentElement!.querySelector('.lane')!.getBoundingClientRect();
 		const [client, scroll, from, to] = vertical ? (['clientX', 'scrollLeft', 'left', 'right'] as const) : (['clientY', 'scrollTop', 'top', 'bottom'] as const);
-		let [size, at, frame] = [vertical ? lane.width : lane.height, e[client], 0];
-		const show = (): void => void (sizing = { id, size: Math.max(SMALLEST, Math.round(size)) });
+		const [least, start] = [vertical ? NARROWEST : LOWEST, e[client]];
+		let [size, at, frame] = [vertical ? lane.width : lane.height, start, 0];
+		const show = (): void => void (sizing = { id, size: Math.max(least, Math.round(size)) });
 		// The pixels a frame the area scrolls by: none in its middle, more the further into an end.
 		const pace = (): number => {
 			const box = area.getBoundingClientRect();
@@ -226,14 +229,17 @@
 		const creep = (): void => {
 			const by = pace();
 			frame = 0;
-			if (by === 0 || (by < 0 && size <= SMALLEST)) return;
-			size += by;
-			show();
+			// A track that went mid-drag ends it. The area scrolls only toward the end the pointer
+			// was moved to: a press that began near an end and moved away scrolls nothing.
+			if (!grip.isConnected) return void drag?.();
+			if (by === 0 || Math.sign(by) !== Math.sign(at - start) || (by < 0 && size <= least)) return;
 			// The track is that much larger before the area scrolls by as much: the edge stays
 			// under the pointer. What the area could not scroll, the track gives back.
-			flushSync();
 			const was = area[scroll];
-			area[scroll] += by;
+			size += by;
+			show();
+			flushSync();
+			area[scroll] = was + by;
 			size -= by - (area[scroll] - was);
 			show();
 			frame = requestAnimationFrame(creep);
@@ -353,7 +359,8 @@
 					// A time moved by `d` beats: where the pointer is when free, else on the grid, and
 					// where it was while the move is less than half a cell.
 					const on = (from: number, d: number): number => (free.time ? from + d : onGrid(d, grid) === 0 ? from : onGrid(from + d, grid));
-					if (stretch) return { ...it, length: exact(on(n.at + n.length, by) === n.at + n.length ? n.length : Math.max(free.time ? 0.01 : grid, on(n.at + n.length, by) - n.at)) };
+					const end = on(n.at + n.length, by);
+					if (stretch) return { ...it, length: exact(end === n.at + n.length ? n.length : Math.max(free.time ? 0.01 : grid, end - n.at)) };
 					const semitones = t.kind === 'note' ? Math.round(dv * rows) : 0;
 					return { ...it, at: exact(on(n.at, shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...was.range) : snap(was, n.pitch + semitones) };
 				}))
@@ -496,6 +503,7 @@
 								recording={recording(t)}
 								{ports}
 								onRescan={() => void rescan().catch(fail('List MIDI devices'))}
+								onEdit={(patch) => edit(id, patch)}
 								onRecord={(e) => void record(e, id).catch(fail('Record'))}
 								onHide={() => hide([...hidden, id], 'Hide Track')}
 								onDelete={() => (asked = id)}
@@ -506,7 +514,7 @@
 							<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
 							<div class="keys" data-testid="track-keyboard" aria-hidden="true">
 								{#each board as p (p)}
-									<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === t.root}<b>{t.root}{Math.floor(p / 12) - 1}</b>{/if}</span>
+									<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === t.root}<b>{pitchName(p)}</b>{/if}</span>
 								{/each}
 							</div>
 						{/if}
@@ -887,6 +895,7 @@
 	}
 	.vertical .track {
 		flex: none;
+		min-width: calc(var(--space-8) * 2 + var(--space-7));
 		width: var(--size, calc(var(--space-8) * 8));
 		border-top: 0;
 		border-left: 1px solid var(--border);

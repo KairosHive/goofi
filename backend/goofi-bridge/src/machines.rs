@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use goofi_core::indexmap::IndexMap;
 use goofi_core::{Data, Param};
-use goofi_graph::expr_rewrite::{self, Target};
+use goofi_graph::expr_rewrite::Target;
 use goofi_graph::machine::{Machine, Machines};
 use goofi_graph::timeline::{Lanes, Take, Track};
 use goofi_graph::Graph;
@@ -89,20 +89,17 @@ impl Driver {
 /// Every `nd()` term of the stepped expressions, resolved as a param's binding resolves it.
 fn node_reads(g: &Graph) -> NodeReads {
     let mut out = NodeReads::default();
-    for text in g.stepped_expressions() {
-        let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
-        for r in refs {
-            match r.target {
-                Target::Node { name, slot } => {
-                    let service = g.machine_stream(&name, slot.as_deref()).map(|(uid, s)| output_service(&service_base(g.instance(), uid, g.node_generation(uid)), s));
-                    out.streams.insert((name, slot), service);
-                }
-                Target::NodeParam { name, group, param } => {
-                    let value = g.machine_param(&name, &group, &param);
-                    out.params.insert((name, group, param), value);
-                }
-                _ => {}
+    for target in g.stepped_refs() {
+        match target {
+            Target::Node { name, slot } => {
+                let service = g.machine_stream(&name, slot.as_deref()).map(|(uid, s)| output_service(&service_base(g.instance(), uid, g.node_generation(uid)), s));
+                out.streams.insert((name, slot), service);
             }
+            Target::NodeParam { name, group, param } => {
+                let value = g.machine_param(&name, &group, &param);
+                out.params.insert((name, group, param), value);
+            }
+            _ => {}
         }
     }
     out

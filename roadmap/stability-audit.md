@@ -67,6 +67,11 @@ Found by reading; each fix lands with a fixture that fails on the broken variant
   window listener and highlight tags; a side pane that closes unpainted keeps a stale inspector and
   its sockets; Ctrl+F refits the canvas; touch placement commits on the first lift under a pinch;
   machine multi-delete is N history steps.
+- `recording::arming_survives_a_rewire_and_rides_the_document` failed once in a run of the whole
+  suite: after `node restart` the manifest said the first file closed because `disarmed`, where
+  the fixture wants `reborn` (`goofi_record::Recorder::arm` saw a settled set without the
+  stream). It then passed five times alone, ten times beside twelve busy loops, and in the next
+  whole run. No cause is known, and no base commit was built to compare.
 
 ## Not read
 
