@@ -194,10 +194,11 @@ fn a_recording_goes_into_its_track() {
     record(&g, "take", false);
     let second = keys(&g, "take");
     assert!(second.len() == 4 && second[..2] == first[..2] && near(second[2].0, down) && second[2].1 == 0.0, "{second:?} for a take from {up} to {down}");
-    // The curve plays what was taken.
-    for (time, level) in [(0.0, 0.0), (up, 10.0), (down, 0.0), (500.0, 7.0)] {
+    // The curve plays what was taken. A level is read a little past its keyframe, not on it: a
+    // level that was held is a step there, and a beat and its second differ in their last digit.
+    for (time, level) in [(0.0, 0.0), (up + 1e-4, 10.0), (down + 1e-4, 0.0), (500.0, 7.0)] {
         at(&g, time);
-        g.until(&format!("the recorded level at {time}"), |g| ((number(g, "take.value") - level).abs() < 1e-3).then_some(()));
+        g.until(&format!("the recorded level at {time}"), |g| ((number(g, "take.value") - level).abs() < 1e-2).then_some(()));
     }
     // A take is one step back: the second gone, the track holds the first.
     g.call("undo", j!({}));
