@@ -38,6 +38,9 @@ pub const GRIDS: [(&str, f64, bool); 10] = [
 const VALUE: &str = "value";
 /// The element of every track's group that says whether a recording into it runs: 1 or 0.
 pub(crate) const RECORDING: &str = "recording";
+/// The element of every track's group that holds what a recording has taken so far, for a panel
+/// to draw while it runs: nothing while none runs.
+pub(crate) const TAKE: &str = "take";
 
 /// A track: its name, which is its variable group's, and what it holds. Its times are beats of
 /// `clock.bpm`, so a change of the tempo moves them all together.
@@ -195,8 +198,9 @@ impl Track {
     /// recording into it runs.
     pub fn entries(&self) -> Keyed {
         let recording = (RECORDING.to_string(), (format!("{}.{RECORDING}", self.name), Data::number(0.0), None));
+        let take = (TAKE.to_string(), (format!("{}.{TAKE}", self.name), Data::numbers([]), None));
         let mut held = self.played();
-        held.push(recording);
+        held.extend([recording, take]);
         held
     }
 
@@ -268,6 +272,8 @@ pub(crate) struct Recording {
 impl Recording {
     /// The shortest a recorded note is: one whose key went down and up at one beat.
     const SHORTEST: f64 = 0.01;
+    /// The most notes or samples of a take that a panel is handed to draw.
+    const SHOWN: usize = 256;
 
     /// End the pass at the last look: every key still down ends there, and the input's value
     /// there is the pass's last sample. What comes next is another pass.
@@ -333,6 +339,23 @@ impl Recording {
             self.frame = frame;
             pass.push(Sample { at, value, held: false });
         }
+    }
+
+    /// What the recording has taken so far, as flat numbers a panel draws while it runs: each
+    /// note as `at, length, pitch, velocity`, a key still down as long as until the last look;
+    /// or each sample as `at, value`. The newest [`Self::SHOWN`] notes, or that many samples
+    /// spread over the take.
+    pub(crate) fn live(&self, notes: bool) -> Data {
+        if notes {
+            let mut down: Vec<_> = self.held.iter().map(|(key, down)| Self::note(*key, *down, self.last)).collect();
+            down.sort_by(|a, b| a.at.total_cmp(&b.at).then(a.pitch.cmp(&b.pitch)));
+            let all: Vec<Note> = self.notes.iter().cloned().chain(down).collect();
+            let newest = &all[all.len().saturating_sub(Self::SHOWN)..];
+            return Data::numbers(newest.iter().flat_map(|n| [n.at, n.length, f64::from(n.pitch), n.velocity]));
+        }
+        let all: Vec<&Sample> = self.passes.iter().flatten().collect();
+        let (every, last) = (all.len().div_ceil(Self::SHOWN).max(1), all.len().saturating_sub(1));
+        Data::numbers(all.iter().enumerate().filter(|(i, _)| i % every == 0 || *i == last).flat_map(|(_, s)| [s.at, s.value]))
     }
 
     /// End at the beat `at`, which is the last look.

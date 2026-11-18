@@ -76,3 +76,15 @@ export function barPoint(on: number, span: number): number {
 	const unfold = (by: number): number => (FOLD * Math.min(by, FOLD * 0.999)) / (FOLD - Math.min(by, FOLD * 0.999));
 	return span * (on < 0 ? -unfold(-on) : on > 1 ? 1 + unfold(on - 1) : on);
 }
+
+/** What a recording has taken so far, flat `at, value` pairs, as a path in the box `lanePath`
+ * draws in: a line from each sample to the next, begun again where the time goes back, as
+ * another pass of the recording does. */
+export function takePath(flat: number[], [lo, hi]: [number, number], along: (at: number) => number, flip = false): string {
+	const points: string[] = [];
+	for (let i = 0; i + 1 < flat.length; i += 2) {
+		const [a, c] = [Number((1000 * along(flat[i])).toFixed(1)), Number((100 * ((flat[i + 1] - lo) / (hi - lo || 1))).toFixed(1))];
+		points.push(`${i === 0 || flat[i] < flat[i - 2] ? 'M' : 'L'}${flip ? `${c} ${a}` : `${a} ${100 - c}`}`);
+	}
+	return points.join(' ');
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from './model';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks } from './model';
 
 const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -59,5 +59,12 @@ describe('the timeline model', () => {
 		for (const at of [-40, -1, 0, 3, 8, 9, 100]) expect(barPoint(barPlace(at, 8), 8)).toBeCloseTo(at, 6);
 		// Past where a fold ends, the place is the furthest point a fold holds.
 		expect(barPoint(2, 8)).toBe(barPoint(1.5, 8));
+	});
+
+	it('draws a take as a line through its samples, begun again at each pass', () => {
+		const along = (at: number): number => at / 4;
+		expect(takePath([], [0, 1], along)).toBe('');
+		expect(takePath([0, 0, 2, 1, 1, 0.5, 3, 0.5], [0, 1], along)).toBe('M0 100 L500 0 M250 50 L750 50');
+		expect(takePath([0, 0, 2, 1], [0, 1], along, true)).toBe('M0 0 L100 500');
 	});
 });

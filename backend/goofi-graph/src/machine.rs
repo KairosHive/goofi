@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::expr_rewrite::{self, Target, VarRef};
-use crate::timeline::{Lanes, Recording, Take, Timeline, Track, NOTES, RECORDING};
+use crate::timeline::{Lanes, Recording, Take, Timeline, Track, NOTES, RECORDING, TAKE};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name: where
 /// it is, and how far along its transition. Where it came from and when it arrived are no
@@ -856,8 +856,13 @@ impl Machines {
         self.functionals = used;
         self.capture(now, read);
         out.extend(self.timeline.writes(now));
-        let recording = |(id, track): (&String, &Track)| (format!("{}.{RECORDING}", track.name), Data::number(f64::from(u8::from(self.recording.contains_key(id)))));
-        out.extend(self.timed.0.iter().map(recording));
+        // Whether each track records, and what its recording has taken so far.
+        for (id, track) in &self.timed.0 {
+            let taking = self.recording.get(id);
+            let take = taking.map_or_else(|| Data::numbers([]), |taking| taking.live(matches!(track.lanes, Lanes::Note { .. })));
+            out.push((format!("{}.{RECORDING}", track.name), Data::number(f64::from(u8::from(taking.is_some())))));
+            out.push((format!("{}.{TAKE}", track.name), take));
+        }
         out
     }
 

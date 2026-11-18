@@ -260,7 +260,8 @@ frames; an input that reads no node holds its value between two changes, a step.
 recording puts keyframes with fitted bezier curves that follow what came, in place of the
 keyframes of the stretch it covered. A loop or a seek begins another pass, so what a seek jumps
 over stays as it was. `vars.<track>.recording` is 1 while a
-recording runs.
+recording runs, and `vars.<track>.take` holds what it has taken so far, which the panel draws in
+the lane, in the recording's colour, until the take is the track's.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in

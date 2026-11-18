@@ -373,11 +373,18 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
     for i in 0..=60u32 {
         let now = f64::from(i) / 30.0;
         frame.set((levels[(i / 15) as usize], f64::from(i / 15) * 0.5));
-        assert!(says(&m.advance(now, &read), 1.0), "the track says it records");
+        let said = m.advance(now, &read);
+        assert!(says(&said, 1.0), "the track says it records");
+        // What it has taken so far is told at every pass, for a panel to draw: the first sample
+        // and the newest one are in it.
+        let so_far: Vec<f64> = said.iter().find(|(name, _)| name == "wave.take").map(|(_, take)| goofi_core::control::numbers(take).collect()).unwrap();
+        let newest = f64::from(i / 15);
+        assert_eq!((&so_far[..2], &so_far[so_far.len() - 2..]), (&[0.0, 0.0][..], &[newest * 0.5, f64::from(levels[newest as usize])][..]));
         assert_eq!(m.next_deadline(), Some(now + 1.0 / 30.0), "a recording curve is looked at again at its rate");
     }
     assert_eq!(samples(m.recorded("k1", 2.0, &read)), [[sample(0.0, 0.0), sample(0.5, 1.0), sample(1.0, 1.0), sample(1.5, 3.0), sample(2.0, 4.0)]]);
-    assert!(says(&m.advance(2.0, &read), 0.0), "and that it stopped");
+    let after = m.advance(2.0, &read);
+    assert!(says(&after, 0.0) && after.iter().any(|(name, take)| name == "wave.take" && goofi_core::control::numbers(take).count() == 0), "and that it stopped, with nothing taken");
 
     // A node of a hundred frames a second gives no more than the track's rate.
     let mut m = curve("nd('lfo')");
@@ -420,9 +427,17 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
         keys.borrow_mut()[128 + 60] = velocity;
         m.advance(now, &read);
     }
+    // The notes so far are told while the recording runs, a key still down among them.
+    keys.borrow_mut()[128 + 60] = 0.5;
+    let said = m.advance(3.75, &read);
+    let so_far: Vec<f64> = said.iter().find(|(name, _)| name == "wave.take").map(|(_, take)| goofi_core::control::numbers(take).collect()).unwrap();
+    assert_eq!(so_far, [1.0, 0.5, 60.0, 0.5, 3.0, 0.5, 60.0, 0.5, 3.75, 0.01, 60.0, 0.5]);
+    keys.borrow_mut()[128 + 60] = 0.0;
+    m.advance(3.8, &read);
     // A track the stepper does not hold records nothing.
     m.record("gone");
     assert!(m.recorded("gone", 4.0, &read).is_none());
     let Some(Take::Notes(notes)) = m.recorded("k1", 4.0, &read) else { panic!("a note track takes notes") };
-    assert_eq!(notes.iter().map(|n| (n.at, n.length, n.pitch, n.velocity)).collect::<Vec<_>>(), [(1.0, 0.5, 60, 0.5), (3.0, 0.5, 60, 0.5)]);
+    let taken: Vec<_> = notes.iter().map(|n| (n.at, n.pitch, n.velocity)).collect();
+    assert_eq!((taken, notes[0].length, notes[1].length), (vec![(1.0, 60, 0.5), (3.0, 60, 0.5), (3.75, 60, 0.5)], 0.5, 0.5));
 }

@@ -94,3 +94,7 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A section of a track's settings is unfolded or folded for as long as its panel shows the track:
   the panel's state does not keep it.
 - A curve's input that is a number alone is the row's constant, which records a level line.
+- What a recording has taken shows in the lane while it runs, from `vars.<track>.take`: the
+  newest 256 notes, or 256 samples spread over the take, so a long take is drawn more coarsely
+  than it is kept. A note recording was not seen in a browser: the test host has no device.
+- A keyframe a drag paints is every 16 pixels along the axis, whatever the view.

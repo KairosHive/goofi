@@ -9,6 +9,9 @@
 <script lang="ts">
 	import { MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
 	import { flushSync, untrack } from 'svelte';
+	import { bindViewer } from '$lib/api/frames';
+	import type { ArrayData } from '$lib/codec/decode';
+	import type { ViewSpec } from '$lib/viewers/module';
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { draggable, type DragSource, type Outcome } from '$lib/drag';
@@ -17,7 +20,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
+	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
@@ -163,6 +166,20 @@
 	// ---- a recording: a track takes its input in at the clock's position until it is ended. The
 	// stepping thread says whether one runs, in the track's own group.
 	const recording = (t: Track): boolean => variableValue(`${t.name}.recording`) === 1;
+	/** What each recording has taken so far, by its track, while it runs: the stepping thread's
+	 * `vars.<track>.take`, every number of it, drawn over the lane until the take is the track's. */
+	const WHOLE: ViewSpec[] = [{ dtype: 'array', ndim: [['eq', 1]], reduce: [{ dim: 0, max: 'whole' }] }];
+	let takes = $state<Record<string, number[]>>({});
+	$effect(() => {
+		const live = Object.entries(g.timeline).filter(([, t]) => recording(t));
+		const offs = live.map(([id, t]) => bindViewer('variables', `${t.name}.take`, `timeline-take:${id}`, WHOLE, (frame) => void (takes[id] = Array.from((frame.data as ArrayData).values ?? []))));
+		return () => {
+			for (const off of offs) off();
+			takes = {};
+		};
+	});
+	/** A flat take of notes, each `at, length, pitch, velocity`. */
+	const taken = (flat: number[] = []): number[][] => Array.from({ length: Math.floor(flat.length / 4) }, (_, i) => flat.slice(4 * i, 4 * i + 4));
 	/** The MIDI devices the host lists: read when the panel opens, and again when asked. */
 	let ports = $state<Port[]>([]);
 	const rescan = async (): Promise<Port[]> => (ports = (await g.op<{ ports: Port[] }>('midi list', {})).ports);
@@ -605,9 +622,14 @@
 										<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
 									</div>
 								{/each}
+								<!-- What a recording has taken so far, until the take is the track's. -->
+								{#each taken(takes[id]) as [at, length, pitch]}
+									<div class="note taking" data-testid="track-taking" style:--a={share(along(at))} style:--l={share(length / width)} style:--c={across((pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+								{/each}
 							{:else}
 								<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
 									<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
+									<path class="taking" data-testid="track-taking" d={takePath(takes[id] ?? [], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#each t.keys as k, i}
 									<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
@@ -887,6 +909,14 @@
 	.cell {
 		background: var(--hover-fill);
 		pointer-events: none;
+	}
+	/* What a recording has taken so far wears the recording's colour, and takes no press. */
+	.note.taking {
+		background: var(--danger);
+		pointer-events: none;
+	}
+	path.taking {
+		stroke: var(--danger);
 	}
 	.end {
 		position: absolute;

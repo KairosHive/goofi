@@ -186,6 +186,9 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
                 machines.keys().iter().filter_map(|k| Some((k.clone(), store.get(k)?.clone()))).collect()
             };
             streams.drain();
+            // The position is read after the values: what a pass reads was there by the instant
+            // the pass is of, so a value is never dated before it was written.
+            let now = time.position();
             let read = |target: &Target| -> Result<Local, String> {
                 match target {
                     Target::Variable { key } => frames.get(key).cloned().map(Local::Frame).ok_or_else(|| format!("variable `{key}` is not defined")),

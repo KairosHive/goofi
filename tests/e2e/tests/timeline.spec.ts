@@ -658,11 +658,14 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		await expect(await record(take)).toHaveAttribute('aria-pressed', 'true');
 		await expect.poll(() => clock(page, 'playing')).toBe(1);
 		await rawCall(page, 'variable entry edit', { name: 'desk.level', value: 5 });
+		// What the recording takes shows in the lane while it runs: a line through its samples so far.
+		await expect(take.getByTestId('track-taking')).toHaveAttribute('d', /^M.+L/);
 		// The button again ends it: the keyframes follow what the input held, and the range holds it.
 		await (await record(take)).click();
 		await expect(await record(take)).toHaveAttribute('aria-pressed', 'false');
 		await shut(page);
 		await expect.poll(async () => (await trackNamed(page, 'take')).keys.at(-1)?.value).toBe(5);
+		await expect(take.getByTestId('track-taking'), 'the take is the track\'s now').toHaveAttribute('d', '');
 		const taken = await trackNamed(page, 'take');
 		expect([taken.keys[0].value, taken.range], 'from the level it began at').toEqual([0, [0, 5]]);
 		await expect(take.locator('.key').first()).toBeVisible();
