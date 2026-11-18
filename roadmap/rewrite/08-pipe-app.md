@@ -2,8 +2,8 @@
 
 goofi-pipe is the real-time program. One binary serves the app and is its CLI. This part is in
 three files: this file (8.1 the server, 8.2 the shell, 8.3 the workspace), `08-pipe-editor.md`
-(8.4 to 8.7) and `08-pipe-panels.md` (8.8 to 8.15). Sections 8.1.2 and 8.1.3 hold for the server of every program
-of the ecosystem.
+(8.4 to 8.7) and `08-pipe-panels.md` (8.8 to 8.15). Sections 8.1.2 and 8.1.3 hold for the server
+of every program of the ecosystem.
 
 ## 8.1 The server
 

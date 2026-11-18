@@ -48,6 +48,7 @@ a client as events or as variable frames.
   are added, and sources and cables on params and slots that no longer exist are removed.
 - When a leaf is removed, each of its consumers is rewired to the first source of the removed
   leaf whose kind fits. Panels bound to a removed node are unbound.
+- `node add` with an illegal or taken name gives the node a minted name.
 
 ## 3.3 Slots, cables, sub-patches
 
@@ -139,6 +140,13 @@ a client as events or as variable frames.
 - **MIDI:** a controller comes in as a variable group with the entries `cc` (16 × 128), `notes`
   (16 × 128), `bend` (16) and `pressure` (16). MIDI learn creates the group for a port. A
   `Variable` node of each engine puts a variable on a cable.
+- The name of a variable, a group, a machine, a state, an attribute or a playhead is a letter
+  or an underscore, then letters, digits and underscores.
+- A rename of a variable, a group, an attribute, a state, a playhead or a port rewrites every
+  expression that spells the old name. A rename of a variable can move it to another group.
+- A computed variable is evaluated at most at the viewer rate. A value written by an expression
+  or by an owner makes no history step and does not make the patch unsaved.
+- A MIDI port is open only while the patch reads its group, or during a learn.
 
 ## 3.6 State machines
 
@@ -157,6 +165,8 @@ a client as events or as variable frames.
 - A state can set exit values, applied when a playhead leaves.
 - A transition can be internal (from a state to itself without a new arrival).
 - A duration or an interval can be a random range `{min, max}`, drawn once from the seed.
+- An attribute cannot be named `state` or `progress`. A playhead cannot share a name with a
+  state. A state is not removed while a playhead starts there.
 
 ### 3.6.2 Decisions
 
@@ -175,6 +185,7 @@ a client as events or as variable frames.
 - Machine expressions are the expressions of 3.4, plus `me` (the playhead the expression is
   read for: its name, state, arrival and attributes) and `sm('state')` (its residents and the
   arrivals and departures of the instant).
+- `fire` takes only a transition that leaves the present state or the target state of the playhead.
 
 ### 3.6.3 Runtime
 
@@ -281,6 +292,12 @@ a client as events or as variable frames.
 - The state of a node that the node owns (the state of a VST3 plugin, a painted image) is saved
   in the workspace per node at save and at removal, and read at birth.
 - The shipped examples open from a menu and from the CLI.
+- A load or a new patch clears the history, stops a running take and stops the agents of the
+  replaced workspace.
+- A file of another format version is refused, and the refusal names the version that wrote it.
+  A pack refuses two names that are equal when case is ignored.
+- A node that could not be built keeps its saved state. The saved state of a node that the patch
+  no longer holds is removed.
 
 ## 3.11 Open decisions
 

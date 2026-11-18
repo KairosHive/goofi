@@ -38,6 +38,12 @@ Situations of the goofi layer and goofi-pipe (the present situations, kept as su
 | agent, cli, mcp | The harness on a PTY; the CLI styles; the MCP tool. |
 | shipped | Every shipped node loads; every example patch loads without a warning. |
 | kahn | One patch over one recording twice at different speeds: equal outputs (part 06.5). |
+| io | LSL and OSC over loopback. |
+| audio priority | The real-time grant of the clock threads. |
+| probes | The cost and latency probes build and run. |
+
+Fixtures: hidden test nodes, node files that must be refused, an example plugin, a fixture VST3
+plugin, a virtual MIDI keyboard.
 
 Situations of goofi-data: dataset file (append, footer protocol under a crash, tombstone,
 compact, shard merge, validator); adapters (range reads against a local stand-in); search
@@ -187,10 +193,28 @@ were read and applied, not verified line by line.
 | --- | --- | --- |
 | Frontend coverage | The three frontend surveys against parts 08 and 09. | 32 behaviours that the spec did not state; all are now in parts 07 to 09. The auditor estimates that about 390 of about 450 survey statements were covered before the additions. |
 | Fresh-context review | A reader with the spec alone looked for contradictions, broken references, unclear terms, gaps and structure problems. | 16 contradictions corrected; the references repaired; one word per thing in the glossary; the dataset file placed in the goofi layer; decisions and parts named per stage in part 13.1. |
-| Backend coverage | The four backend surveys against parts 01 to 07, 12 and the appendices. | See 12.10. |
+| Backend coverage | The four backend surveys against parts 01 to 07, 12 and the appendices. | 28 gaps, all added; see 12.10. |
 
 Findings of the fresh-context review that stay open: the spec gives no control protocol, document
 schema, file layout or shared-memory layout (they are implementation, read from the present
 program before the stage that needs them; part 13.1); appendix A lists nodes without their slots
 and params (the node files are the reference); the rename table for the conventions of part 04.9
 does not exist yet.
+
+## 12.10 The backend coverage audit
+
+The audit compared the four backend surveys with parts 01 to 07, 12 and the appendices. It found
+28 gaps: side effects of a load; renames that rewrite expressions; the name rule of variables;
+computed variables; the guard rules; details of the audio engine, MIDI and VST3; machine rules;
+CLI rules; nine op arguments that appendix B had lost (overwrite and adopt flags, the workspace
+folder, the resolution of a paint widget, a clear of a stored view, a position for a group, the
+arguments of the directory listing, the content of the agent list); and four situations. All are
+now in the spec. The auditor estimates that about 90 % of the feature and rule statements of the
+surveys were covered before these additions. One argument was not resolved: the purpose of
+`node add --member_uid` in the present program is not verified.
+
+Rules that the spec states in two parts, which a later edit must keep equal: the coupling (6.1,
+6.4, 8.4.2); the stamps (2.6.2, 6.1); the initialization of a node (4.5, 5.1); the Python probe
+(4.6, 5.1); the body of a shader (4.4.3, 5.3.2); the dataset recorder type (2.9.4, 10.5);
+replication (6.3.5, 10.4.1); variables (3.5, 8.7).
+

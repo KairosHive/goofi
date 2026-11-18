@@ -77,6 +77,8 @@ A node declares, in constants that are read once without running the node:
   | audio | none. |
 
 - A param edit never runs a node.
+- A node can declare a common param itself; its declaration replaces the default and the range.
+- A show rule on a section applies to every param of the section.
 
 ## 4.4 The three languages
 
@@ -171,6 +173,8 @@ class Smooth(goofi.Node):
 - A library refresh builds and scans again, restarts the nodes of changed types, and reports the
   types added, changed and removed.
 - `library get <type> --source` returns the source of any node, to copy.
+- At the start and at a load, the Rust node files of the roots and of the workspace are built
+  before the scan.
 
 ## 4.7 Dependencies
 
@@ -247,8 +251,8 @@ class Smooth(goofi.Node):
 - Structural nodes of every plane: a crossing node per pair of planes, named after the source
   plane and living on the receiving plane (`signal:AudioIn`, `signal:GraphicsIn`,
   `audio:SignalIn`, `audio:GraphicsIn`, `graphics:SignalIn`, `graphics:AudioIn`); one `Variable`
-  node per plane; pass-through anchors for expressions (one per kind on the signal plane, one on the audio
-  plane); one `Feedback`
+  node per plane; pass-through anchors for expressions (one per kind on the signal plane, one on
+  the audio plane); one `Feedback`
   node per plane; playback nodes for recorded arrays, strings, tables and audio.
 - **Loader and writer nodes** connect a graph to a dataset (part 10.4): a loader emits the
   frames of a sample between markers; a writer writes blobs and samples.

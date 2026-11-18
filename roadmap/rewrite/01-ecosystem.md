@@ -23,8 +23,9 @@ marketplace for autopoietic research and arts.
 - **The goofi layer** holds what does not know an application: time, paths and tools, the
   session, the build of components, logging, configuration, payload types and their metadata,
   the codec, the transport, the recorder, the dataset file (its format, its reader and its
-  writer), the graph and the document, the node contract and the SDKs, the node library, the three engines, the op framework, the agent harness, the account
-  client, and the shared UI library.
+  writer), the graph and the document, the node contract and the SDKs, the node library, the
+  three engines, the op framework, the agent harness, the account client, and the shared UI
+  library.
 - **goofi-pipe** holds the live runtime mode, its server and ops, the patch editor and its
   panels.
 - **goofi-data** holds the Kahn runtime mode, the management of datasets (locations, adapters,
@@ -99,6 +100,9 @@ marketplace for autopoietic research and arts.
 - A demo mode withholds every door a public instance cannot offer (part 08.1). It is not a
   sandbox.
 - A plugin is trusted local code. It runs with the permissions of the user.
+- The guard allows a document navigation, a request without an origin, and an origin on
+  localhost or loopback. It allows another IP address, and in demo mode a DNS name, only when it
+  equals the Host. It refuses the rest with the reason.
 
 ## 1.7 The account and the online library
 

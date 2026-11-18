@@ -15,8 +15,8 @@ rules. A cable crosses between them through a node that declares the crossing.
 - An engine is planned from settled state only. A plan is compiled when the patch settles, with
   a cost that follows the change.
 - A clock thread (the audio callback, the render tick) never allocates, never takes a lock that
-  another thread can hold, and never waits for another thread. Everything crosses to it without a lock and without
-  allocation. Objects are freed on a thread that may take time.
+  another thread can hold, and never waits for another thread. Everything crosses to it without
+  a lock and without allocation. Objects are freed on a thread that may take time.
 - A slow build (a device open, a plugin birth, a shader compile, a node setup) is prepared apart
   and lands whole at a settle (part 02.4).
 - No op waits on a tick of an engine.
@@ -89,6 +89,8 @@ rules. A cable crosses between them through a node that declares the crossing.
   `audio.hosts` as variables.
 - Status: clock, device, rate, channels, callbacks, underruns, contended callbacks, the longest
   render, late renders, pool waits, and per node its mean and maximum cost.
+- A stream opens in the sample format of the device and is converted. One ASIO driver serves a
+  process; a node on a second driver shows an error.
 
 ### 5.2.2 Cables and params
 
@@ -114,6 +116,7 @@ rules. A cable crosses between them through a node that declares the crossing.
   `[channels, samples]` with `sfreq`, only while a reader exists.
 - **Recording tap**: each armed block is one frame with its block number, so a lost block is a
   gap.
+- At a plan change, a param that stays continues from its last value.
 
 ### 5.2.3 Built-in nodes of the engine
 
@@ -130,6 +133,10 @@ rules. A cable crosses between them through a node that declares the crossing.
   channel per voice, with a voice count and a bend range. Voices are allocated round robin. The
   sustain pedal and the pitch wheel apply.
 - The engine treats a built-in node through the node contract, never through its type name.
+- `MidiIn` also has the output `voices`: the pitch of every voice, then the velocity of every
+  voice.
+- `AudioPlayback` reads PCM of 8 to 32 bits and float32, resamples to the rate of the engine, and
+  seeks when its position moves.
 
 ### 5.2.4 Polyphony
 
@@ -153,6 +160,9 @@ rules. A cable crosses between them through a node that declares the crossing.
   the patch go to the editor. A preset change reads every value back.
 - The state of a plugin is saved per node in the workspace (part 03.10).
 - The engine reports the latency of a plugin.
+- The host reports a playing transport with a tempo and a metre to a plugin.
+- A hidden, read-only or bypass param of a plugin is left out. A program list is a param with
+  options. When the count of params passes the limit, the doc of the type says so.
 
 ### 5.2.6 Errors
 

@@ -102,8 +102,8 @@ document and in the workspace.
 preparation; review or signing of published bundles.
 
 **Engines (part 05.7):** isolation of plugin processing; a self-clocked audio engine; drift
-between devices; MIDI input extent; VST3 silence and bend proofs; late renders in the interface; a control-rate
-param that reads an audio output and the width of a spectral port.
+between devices; MIDI input extent; VST3 silence and bend proofs; late renders in the interface;
+a control-rate param that reads an audio output and the width of a spectral port.
 
 **Modes (part 06.6):** the default coupling **(1)**; the depth of a queue; pairing by index as
 a coupling; the cases the model does not cover.

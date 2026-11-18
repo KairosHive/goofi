@@ -238,6 +238,7 @@ know the recorder type.
     is never overwritten.
 - **Dataset**: the recorder writes a dataset file directly (part 10.1): one blob per
   stream, one sample for the take, paired and synchronized, with tags and annotations.
+- A functional frame is not recorded.
 
 ### 2.9.5 Status
 

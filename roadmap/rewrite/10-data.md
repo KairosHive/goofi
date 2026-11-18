@@ -195,7 +195,8 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 - Cardinality: one-to-one (bandpass filter); one-to-many (one stretch in, several stretches out:
   windows of a recording); many-to-one (a `zip` over streams whose stretches are paired by
   index: correlation of two samples).
-- The graph is acyclic apart from declared feedback (one frame of delay; part 06.3.2). A block of the graph can repeat: n times on the same inputs with n seeds
+- The graph is acyclic apart from declared feedback (one frame of delay; part 06.3.2). A block
+  of the graph can repeat: n times on the same inputs with n seeds
   (n random derivative samples, for bootstrapping), or n times with its output fed back as its
   input. A fed-back repetition is unrolled before scheduling and shown collapsed.
 - A stateless transform is replicated when its input queue backs up: k workers read one queue and

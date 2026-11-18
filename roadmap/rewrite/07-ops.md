@@ -75,6 +75,7 @@ goofi-data. Appendix B maps every op of the present program to this vocabulary.
 - A binary result (an array snapshot) is written as raw bytes on a pipe.
 - Completion scripts for the common shells call the server for candidates.
 - Exit codes: 0 success, 1 refusal, 2 usage.
+- A noun alone runs its `list`. `--help` after a phrase gives the help of that op.
 
 ### 7.2.2 The console prompt
 
@@ -127,6 +128,9 @@ goofi-data. Appendix B maps every op of the present program to this vocabulary.
   kills. An exited instance is removed from the roster by the plane, not by a client.
 - All instances are stopped at shutdown.
 - Demo mode has no agents.
+- `agent list` answers the instances, the offered entries and an error of the configuration. An
+  entry whose name starts with an underscore can be started but is not offered.
+- An instance gets a colour terminal type and a UTF-8 locale. A view receives the exit code.
 
 ## 7.4 Plugins
 
@@ -203,7 +207,7 @@ These nouns exist in every program of the ecosystem with the same meaning.
 | `account` | `status`, `login`, `logout` | The goofi account. |
 | `library` | see 7.6 | The node library. |
 | `record` | see 7.6 | The recorder. |
-| `dir` | `list`, `get` | Directory browsing for the file dialogs. |
+| `dir` | `list`, `get` | Directory browsing for the file dialogs. `list` takes `--hidden --sort --reverse`. |
 
 ## 7.6 The op vocabulary of goofi-pipe
 
@@ -212,11 +216,11 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 ### patch — the open patch
 | Op | Kind | Meaning |
 | --- | --- | --- |
-| `patch status` | R | Save path, unsaved flag, errors of nodes with their age. |
+| `patch status` | R | Save path, unsaved flag, errors of nodes with their age. Also the workspace folder. |
 | `patch get` | R | The whole document; `--manifest` gives the text of the file. |
 | `patch new` | E | An empty patch. Clears the history. |
-| `patch load [path]` | E | Replace the patch from a file, from `--content`, or from `--example`. `--missing install\|skip\|cancel` decides about unavailable nodes (part 04.8). |
-| `patch save [path]` | E | Pack the patch and its workspace. A given path becomes the remembered file. |
+| `patch load [path]` | E | Replace the patch from a file, from `--content`, or from `--example`. `--missing install\|skip\|cancel` decides about unavailable nodes (part 04.8). `--no-adopt` leaves the remembered file alone. |
+| `patch save [path]` | E | Pack the patch and its workspace. A given path becomes the remembered file. `--no-overwrite` refuses an existing file. |
 | `patch recovery list` | R | The recovery copies. |
 | `patch recovery load <id>` | E | Load one as unsaved work. |
 | `patch recovery remove <id>` | E | Discard one, or all. |
@@ -232,7 +236,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | `node restart <node>` | E | Rebuild in place. |
 | `node copy <node>…` | R | A fragment. |
 | `node paste` | W | `--doc --pos --scope`. Fresh identities and names. |
-| `node group <node>…` | W | A new sub-patch. |
+| `node group <node>…` | W | A new sub-patch. `--pos`. |
 | `node ungroup <node>` | W | Dissolve a sub-patch. |
 | `node arrange` | W | `--scope`. Lay out by dataflow. |
 | `node param edit <node> <param>` | W P | `--value --expression --mode`. One param or one element. |
@@ -240,7 +244,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | `node param pulse <node> <param>` | E | Fire a pulse. |
 | `node param refresh <node> <param>` | E | List the options again. |
 | `node slot edit <node> <slot>` | W | `--coupling each\|zip\|hold --group`. |
-| `node view edit <output>` | W P | The inline viewer: `--kind --settings --collapsed`. |
+| `node view edit <output>` | W P | The inline viewer: `--kind --settings --collapsed`. `--clear` removes the stored view. |
 | `node output get <output>` | R | The newest frame once: shape and range, or the raw array. |
 | `node editor open <node>`, `node editor close <node>` | E | The native editor window of a plugin node. |
 
@@ -255,8 +259,8 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | Op | Kind | Meaning |
 | --- | --- | --- |
 | `variable list` | R | Variables with values, locks, widgets, expressions, errors; `--group` narrows. |
-| `variable add [name]` | W | `--group --value --widget --range --step --options --cell`. A widget makes it a control. |
-| `variable edit <name>` | W P | `--name --value --expression --widget --range --step --options --cell --lock`. |
+| `variable add [name]` | W | `--group --value --widget --range --step --options --cell`. A widget makes it a control. `--resolution` for a paint widget. |
+| `variable edit <name>` | W P | `--name --value --expression --widget --range --step --options --cell --lock`. Also `--resolution`. |
 | `variable remove <name>` | W | |
 | `variable paint <name>` | W P | Draw on an image variable with the drawing script (strokes, fills, clear). |
 | `variable group add [group]`, `variable group edit <group>`, `variable group remove <group>` | W | `edit` takes `--name --lock`. |
@@ -292,7 +296,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | `record stop` | E | |
 | `library list` | R | The catalog; `--full` for the palette; selectors of part 04.8. |
 | `library get <type>` | R | One entry with its language, tier, origin and path; `--source` for the file text. |
-| `library save <type>` | E | Move a node file of the patch into the private bundle. |
+| `library save <type>` | E | Move a node file of the patch into the private bundle. `--name --overwrite`. |
 | `library refresh` | E | Build and scan again; restart the nodes of changed types. |
 | `library source list\|add\|remove`, `library bundle list\|add\|remove\|update` | R / E | Sources and bundles (part 04.8). |
 | `library publish <bundle>`, `library search <text>` | E / R | The online library (part 04.8). |
