@@ -65,36 +65,54 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
 
 ### 6.3.2 The rules
 
+The rules below include the corrections that a model of the rules made necessary (part 12.4).
+
 1. **Time is data time.** The patch clock does not advance by itself. The time of a run is the
    instant of the event that caused it. Stamps and the `t` of an expression carry that instant.
    A timer keeps its meaning in data time: a 10 Hz timer emits at instants 0.1 s apart.
 2. **A cable is a queue.** It carries every frame in order. A producer ahead of its consumer waits
    and never drops.
 3. **A node runs once per event, in instant order.** With several `each` slots, the node takes
-   the events in the order of their instants, not of their arrival. Equal instants are ordered by
-   the declared order of the slots.
-4. **A `hold` slot is read by instant.** At an event at instant t, a hold slot gives the latest
-   frame with an instant ≤ t.
+   the events in the order of their instants, not of their arrival.
+4. **Equal instants have a total order.** Events at one instant run in the declared order of
+   the slots, then in queue order within a slot. A `zip` group counts at its first slot.
+5. **A `hold` slot is read by instant.** At an event at instant t, a hold slot gives the latest
+   frame with an instant ≤ t. The read waits until the progress of that input has reached t.
    A param source that reads a node, a variable or a playhead is the same read: it gives the
    value at the instant of the event.
-5. **A feedback edge is one frame of delay.** At instant t it gives the latest frame of the
-   producer with an instant < t.
-6. **Randomness is seeded per run and per node.** A repetition block with n seeds gives n
+6. **A `zip` event is defined by instant.** It occurs at the instant at which the last slot of
+   the group gets a frame newer than the previous zip event. Each slot gives its latest frame at
+   or before that instant, and the frames at or before it are consumed.
+7. **A feedback edge is one frame of delay.** At instant t it gives the latest frame of the
+   producer with an instant < t. The read waits until the progress of the edge says that no
+   frame before t follows.
+8. **Randomness is seeded per run and per node.** A repetition block with n seeds gives n
    reproducible samples.
-7. **Sources are the streams of the dataset**, and timers in data time. A stream ends, the end
-   propagates, and the run finishes.
+9. **Sources are the streams of the dataset**, and timers in data time. A stream ends, the end
+   propagates, and the run finishes. A timer and an engine end at the horizon of the run: the
+   last instant of the streams of the dataset.
 
-### 6.3.3 Progress
+### 6.3.3 Progress and back-pressure
 
-- Each queue carries, beside its frames, the progress of its producer: the instant up to which no
-  further frame follows. The producer advances it after every run, whether or not the run
-  emitted a frame, and sets it to the end when its stream closes.
+- Each queue carries, beside its frames, the progress of its producer: a bound on the next
+  frame. It has two forms: "no further frame before t" and "no further frame at or before t".
+- A node publishes "none before t" when it takes an event at t, before it sends a frame. It
+  publishes "none at or before t" when no other event at t can occur. A node without a pending
+  event forwards the lowest bound of its event inputs: the instant at the head of a queue, else
+  the progress of the input. A node sets the progress to the end when its stream closes.
+- The progress of a timer or an engine is its next tick. It does not depend on a slow `hold`
+  input.
 - A node takes its earliest pending event at instant t when the progress of every input has
-  reached t. A feedback input needs progress only to the previous instant of the node.
-- A node without a pending event forwards the lowest progress of its inputs, so a consumer
-  downstream does not starve.
-- The graph is acyclic apart from feedback edges, and every node advances its progress, so no
-  node waits forever.
+  reached t.
+- **A sender never waits inside one instant.** The bound of a queue counts instants: a frame
+  with the instant of the newest frame in the queue is always admitted.
+- **A `hold` queue and a feedback queue drain by progress.** The node removes the frames it can
+  no longer need: all but the latest at or before the lower bound of its next event.
+- **A slot that can cause no further event discards its frames.** A node whose streams have
+  ended discards all of its inputs. A `zip` group ends when one of its slots has ended and is
+  empty, and then discards the frames of its other slots.
+- With these rules the graph has no deadlock and no dependence on the schedule, for every queue
+  depth from 1.
 
 ### 6.3.4 Engines, machines, hosted nodes
 
@@ -109,8 +127,10 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
 
 ### 6.3.5 Replication
 
-- A stateless node can run as k workers on one queue. The outputs are put in frame order again
-  before the next queue.
+- A stateless node can run as k workers on one queue. The outputs are put in the order of the
+  input events again before the next queue.
+- The stage that restores the order owns the progress of the replicated node: it is the bound of
+  the oldest event that has not left.
 - The scheduler of goofi-data (part 10.4.2) sets k, the depth of each queue and the number of
   network instances.
 
@@ -125,10 +145,20 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
 
 - A situation runs one patch over one recording twice at different speeds and asserts equal
   outputs.
-- A model of the rules was run against random graphs and random schedules (part 12.4 holds the
-  result).
+- A model of the rules was run against random graphs and random schedules. Part 12.4 holds the
+  result. The cases of the model that failed under the first wording of the rules become
+  fixtures of the situation.
 
 ## 6.6 Open decisions
 
 1. The default coupling of an input slot.
-2. The depth of a queue: fixed, or set by the scheduler from its memory limit.
+2. The depth of a queue: fixed, or set by the scheduler from its memory limit. A burst of
+   frames at one instant is not bounded by the depth (6.3.3); its memory cost is not measured.
+3. Pairing by index. The model shows that a `zip` that pairs the n-th frame of each slot
+   deadlocks on bounded queues when the slots differ in rate, and that a `zip` by instant does
+   not. A recipe pairs the samples of a tuple by index (part 10.4.1); the two sides then have
+   equal counts by construction. Decide whether pairing by index exists as a coupling of its
+   own for that case.
+4. Not covered by the model: real threads (a torn read of a frame and its progress), instants
+   as floating point numbers, a feedback slot with `each` coupling, replication of a node with
+   a `hold` or feedback input, several `zip` groups on one node, hosted nodes and the machines.

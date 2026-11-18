@@ -70,6 +70,7 @@ confirmed.
 | 24 | A library view in the app; a patch load that offers to install missing nodes. | Decided in `library.md`; not built. | 04.8 |
 | 25 | A viewpoint per client that also holds the camera and the side-pane sizes. | One global blob; pane sizes in the browser. | 08.3.4 |
 | 26 | The dtype of an array frame. | Float32 only. Open. | 02.12 |
+| 27 | The Kahn rules as corrected by the model: a total order of equal instants, progress as a bound on the next frame, `zip` by instant, strict progress on feedback, drain and discard rules, a horizon for timers. | The first wording in `node-triggering.md` deadlocks in the model. | 06.3, 12.4 |
 
 ## 13.3 Open decisions
 
@@ -94,7 +95,8 @@ preparation; review or signing of published bundles.
 **Engines (part 05.7):** isolation of plugin processing; a self-clocked audio engine; drift
 between devices; MIDI input extent; VST3 silence and bend proofs; late renders in the interface.
 
-**Modes (part 06.6):** the default coupling **(1)**; the depth of a queue.
+**Modes (part 06.6):** the default coupling **(1)**; the depth of a queue; pairing by index as
+a coupling; the cases the model does not cover.
 
 **Ops (part 07.7):** confirmation of the vocabulary **(1)**; `agent attach`; shared graph ops in
 goofi-data.

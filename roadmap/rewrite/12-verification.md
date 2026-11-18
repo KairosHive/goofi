@@ -66,7 +66,47 @@ sample); ops.
 
 ## 12.4 Validation of the Kahn rules
 
-See the end of this file (12.9).
+A discrete-event model of the Kahn rules (part 06.3) was run on 2026-11-18. It is a probe in
+Python, not the implementation. A scheduler picks at random, at each step, one node among those
+that can progress; queues are bounded with a random depth from 1 to 8; a sender on a full queue
+waits. Nodes: finite sources with irregular and equal instants, timers, periodic engines with
+`hold` inputs, an accumulator that depends on order, a filter, a node that emits 0 to 3 frames
+per event, seeded noise, and a replicated stateless node. 60 random graphs of 10 to 25 nodes with
+mixed couplings, 60 % of them with a feedback edge; 200 schedules per graph; 12 000 runs per rule
+set.
+
+| Rule set | Runs that end | Deadlocks | Graphs with more than one output |
+| --- | --- | --- | --- |
+| The first wording of the rules (`node-triggering.md`) | 324 | 11 676 | 16 of 60 |
+| The rules of part 06.3 | 12 000 | 0 | 0 of 60 |
+
+Each correction was removed alone from the full rule set, to show that it is needed:
+
+| Removed correction | Deadlocks | Graphs with more than one output |
+| --- | --- | --- |
+| A total order of equal instants (ties by arrival instead) | 0 | 60 |
+| Progress as a bound on the next frame (progress as the instant of the last run instead) | 9 495 | 15 |
+| Progress published before the sends | 1 877 | 0 |
+| A sender does not wait inside one instant | 1 959 | 0 |
+| `hold` queues drain by progress | 7 584 | 0 |
+| An ended node discards its inputs | 5 080 | 0 |
+| A `zip` group ends when one slot ends | 10 200 | 0 |
+| `zip` by instant (pairing by index instead) | 6 539 | 47 |
+| Strict progress on a feedback edge ("previous instant" instead) | 4 000 | 6 |
+| A `hold` read waits for progress | 373 | 60 |
+| The reorder stage owns the progress of a replicated node | 187 | 18 |
+| Timers end at the horizon of the run | all 160 runs of 8 graphs did not end | — |
+
+Minimal graphs reproduce each failure and pass under the full rules at every depth from 1 to 8
+(200 schedules each): a burst into a diamond; a dense `hold` input; two sources with equal
+instants into two `each` slots (191 to 194 different outputs with ties by arrival, 1 with the
+total order); a feedback on itself with two events at one instant; a loop with a second source;
+a `zip` of two rates; an ended node with a `hold` input.
+
+Limits of the result: the campaign is a report of a subagent, read from its output file; the
+minimal graphs were run again in this session with the same counts. Seeds are fixed. A step of
+the model is atomic, so the behaviour of real threads is not covered. The open points are in
+part 06.6.
 
 ## 12.5 Coverage checks of this spec against the present program
 
@@ -76,7 +116,8 @@ Run on 2026-11-18 against the working tree.
 | --- | --- | --- |
 | Every node file is in appendix A | The stems of the `.rs`, `.py` and `.wgsl` files under `node-bundles/` (hidden files excluded) are looked up in the names of appendix A, ignoring case and underscores. | 215 files, 0 missing. |
 | Every op is in appendix B | The phrases of the op declarations under the bridge's `ops` folder are looked up in the first column of appendix B. | 101 ops, 0 without a row. |
-| Feature surveys | Seven surveys read the whole code (shell, editor, viewers and panels, bridge and ops, model and foundation, engines, nodes and tests). Two audits compared their reports with this spec. | Part 12.8. |
+| Feature surveys | Seven surveys read the whole code (shell, editor, viewers and panels, bridge and ops, model and foundation, engines, nodes and tests). Two audits compared their reports with this spec, and a third read the spec alone. | Part 12.9. |
+| Cross-references | Every "part N.x" reference is looked up in the section headings of the spec. | 0 broken. |
 
 The surveys and the audits are reports of subagents. They were not verified line by line.
 
