@@ -41,7 +41,7 @@ op!(TrackRecord, "timeline track record", 1, TrackRecordArgs {
     pub track: String,
     pub on: bool,
 },
-    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key of its device, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate, and any other input holds its value between two changes, a `step` — and the end puts keyframes that follow the take to within a hundredth of the track's `range`, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. A pass that needs more than two thousand keyframes is refused whole, and the track stays as it was. A position that goes back or is put elsewhere begins another pass, so a seek leaves what it jumped over as it was. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
+    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key of its device, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate, and any other input holds its value between two changes, a `step` — and the end puts keyframes that follow the take to within a hundredth of the track's `range`, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. A take that leaves the curve more than two thousand keyframes is refused whole: the op answers the refusal, and the track stays as it was. A position that goes back or is put elsewhere begins another pass, so a seek leaves what it jumped over as it was. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
     "{name, recording}");
 
 op!(TrackMove, "timeline track move", 1, TrackMoveArgs {
@@ -155,20 +155,20 @@ impl EffectOp for TrackRecord {
         let (answer, taken) = std::sync::mpsc::channel();
         state.machines.send(Msg::Recorded(id.clone(), answer));
         if let Ok(take) = taken.recv() {
-            // The fit runs with nothing held; the write is on the track as it stands, so the
-            // fit is made again where the track moved meanwhile.
-            loop {
-                let (_, before) = track_of(&Txn::begin(state, caller, false, false), &id)?;
-                let mut merged = before.clone();
-                merged.merge(&take)?;
-                let mut tx = Txn::begin(state, caller, false, true);
-                if track_of(&tx, &id)?.1 != before {
-                    continue;
-                }
-                tx.label("Record into track".into());
-                set(&mut tx, &id, Some(merged))?;
-                break tx.commit();
+            // The fit runs with nothing held. Where the track moved meanwhile, it is made once
+            // more on the track as it stands, in the write itself.
+            let (_, before) = track_of(&Txn::begin(state, caller, false, false), &id)?;
+            let mut merged = before.clone();
+            merged.merge(&take)?;
+            let mut tx = Txn::begin(state, caller, false, true);
+            let (_, mut now) = track_of(&tx, &id)?;
+            if now != before {
+                now.merge(&take)?;
+                merged = now;
             }
+            tx.label("Record into track".into());
+            set(&mut tx, &id, Some(merged))?;
+            tx.commit();
         }
         Ok(json!({ "name": track.name, "recording": false }))
     }

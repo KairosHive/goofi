@@ -157,7 +157,8 @@ impl Track {
     /// Take a recording in. Notes are added to those the track holds. Each pass of samples
     /// becomes the keyframes that follow it, in place of those the track held in the pass's
     /// stretch, to within a hundredth of the track's range, which grows to hold what came. A
-    /// pass that needs more than [`MOST`] keyframes is refused, and the track is as it was.
+    /// take that leaves the curve more than [`MOST`] keyframes is refused, and the track is as
+    /// it was.
     pub fn merge(&mut self, take: &Take) -> Result<(), String> {
         match (&mut self.lanes, take) {
             (Lanes::Note { range, notes, .. }, Take::Notes(taken)) => {
@@ -166,15 +167,19 @@ impl Track {
             }
             (Lanes::Curve { range, keys, .. }, Take::Samples(passes)) => {
                 let wide = passes.iter().flatten().fold(*range, |r, s| [r[0].min(s.value), r[1].max(s.value)]);
-                let passes = passes.iter().filter(|pass| !pass.is_empty());
-                let fitted: Option<Vec<_>> = passes.map(|pass| Some((pass[0].at, pass[pass.len() - 1].at, fit(pass, (wide[1] - wide[0]) / 100.0)?))).collect();
-                let refused = || format!("track `{}`: the take needs more than {MOST} keyframes, the most one pass of a recording becomes: record a shorter stretch, a slower rate or a smoother input", self.name);
-                for (from, to, fitted) in fitted.ok_or_else(refused)? {
-                    keys.retain(|k| k.at < from || k.at > to);
-                    keys.extend(fitted);
-                    keys.sort_by(|a, b| a.at.total_cmp(&b.at));
+                let refused = || format!("track `{}`: the take leaves the curve more than {MOST} keyframes, the most it holds: record a shorter stretch, a slower rate or a smoother input", self.name);
+                let mut merged = keys.clone();
+                for pass in passes.iter().filter(|pass| !pass.is_empty()) {
+                    let fitted = fit(pass, (wide[1] - wide[0]) / 100.0).ok_or_else(refused)?;
+                    let (from, to) = (pass[0].at, pass[pass.len() - 1].at);
+                    merged.retain(|k| k.at < from || k.at > to);
+                    merged.extend(fitted);
+                    merged.sort_by(|a, b| a.at.total_cmp(&b.at));
                 }
-                *range = wide;
+                if merged.len() > MOST {
+                    return Err(refused());
+                }
+                (*range, *keys) = (wide, merged);
             }
             _ => {}
         }
@@ -221,8 +226,9 @@ pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef
     Ok((rewritten, refs))
 }
 
-/// The most keyframes one pass of a recording becomes. A curve is one functional that a reader
-/// compiles whole: one of 4000 fitted keyframes plays, and one of 8000 does not.
+/// The most keyframes a recording leaves a curve with. A curve is one functional that a reader
+/// compiles whole: one of 4000 fitted keyframes played in three probe runs, and one of 8000 did
+/// not in two.
 pub const MOST: usize = 2000;
 
 /// One sample of a curve's input: the beat it was taken at, the value, and whether the input
@@ -344,7 +350,7 @@ impl Recording {
 
 /// The keyframes that follow one pass of a recording to within `tolerance`: as few as do it,
 /// each eased to the next by one cubic bezier, or held until the next where the input held.
-/// None where that is more than [`MOST`].
+/// None where that is more than [`MOST`], which no curve holds.
 fn fit(pass: &[Sample], tolerance: f64) -> Option<Vec<Key>> {
     let mut keys = Vec::new();
     // A held sample ends a run: nothing is fitted across a step.
@@ -372,7 +378,7 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
     // The stretches still to fit, the earliest on top, each from one sample to a later one.
     let mut open = vec![(0, run.len() - 1)];
     while let Some((from, to)) = open.pop() {
-        // Past the most a pass becomes, the rest is not fitted: the caller refuses the pass.
+        // Past the most a curve holds, the rest is not fitted: the caller refuses the take.
         if to <= from || keys.len() > MOST {
             continue;
         }

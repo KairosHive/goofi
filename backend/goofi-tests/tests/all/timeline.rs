@@ -245,8 +245,8 @@ fn a_recording_goes_into_its_track() {
     assert_eq!((&played["notes"][0], &note["at"], &note["pitch"], &note["velocity"]), (&there, &j!(1.0), &j!(80), &j!(0.75)), "the note is added to those there");
     assert!(near(note["length"].as_f64().unwrap(), lifted - 1.0), "{note} for a key that came up at {lifted}");
     assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
-    // A track is a group with `notes` too, so another records from it by its name, and a
-    // rename of it follows there.
+    // A track is a group with `notes` too, so another can name it as its input, and a rename
+    // of it follows there.
     g.call("timeline track add", j!({ "kind": "note", "name": "copy" }));
     g.call("timeline track edit", j!({ "track": "copy", "input": "played" }));
     g.call("timeline track edit", j!({ "track": "played", "to": "lead" }));
@@ -317,10 +317,14 @@ fn a_take_becomes_the_keyframes_that_follow_it() {
     let Lanes::Curve { keys, .. } = &track.lanes else { unreachable!() };
     let held: Vec<(f64, f64)> = keys.iter().map(|k| (k.at, k.value)).collect();
     assert_eq!((&held[..2], &held[held.len() - 2..]), (&[(0.0, 0.5), (1.0, 0.5)][..], &[(1.5, 0.0), (2.0, 0.0)][..]), "{held:?}");
-    // A take that needs more keyframes than a pass becomes is refused, and the track is as it was.
+    // A take that leaves the curve more keyframes than it holds is refused, and the track is as
+    // it was: one pass too many, or two that are each within it.
     let was = track.clone();
-    let refusal = track.merge(&Take::Samples(vec![(0..3000).map(|i| sample(f64::from(i), f64::from(i % 2))).collect()]));
-    assert!(refusal.is_err_and(|why| why.contains("more than 2000 keyframes")) && track == was);
+    let zigzag = |from: i32, to: i32| -> Vec<Sample> { (from..to).map(|i| sample(f64::from(i), f64::from(i % 2))).collect() };
+    for take in [vec![zigzag(0, 3000)], vec![zigzag(5000, 6200), zigzag(3000, 4200)]] {
+        let refusal = track.merge(&Take::Samples(take));
+        assert!(refusal.is_err_and(|why| why.contains("more than 2000 keyframes")) && track == was);
+    }
 }
 
 #[test]
@@ -415,6 +419,9 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
         keys.borrow_mut()[128 + 60] = velocity;
         m.advance(now, &read);
     }
+    // A track the stepper does not hold records nothing.
+    m.record("gone");
+    assert!(m.recorded("gone", 4.0, &read).is_none());
     let Some(Take::Notes(notes)) = m.recorded("k1", 4.0, &read) else { panic!("a note track takes notes") };
     assert_eq!(notes.iter().map(|n| (n.at, n.length, n.pitch, n.velocity)).collect::<Vec<_>>(), [(1.0, 0.5, 60, 0.5), (3.0, 0.5, 60, 0.5)]);
 }

@@ -231,7 +231,7 @@
 			frame = 0;
 			// A track that went mid-drag ends it. The area scrolls only toward the end the pointer
 			// was moved to: a press that began near an end and moved away scrolls nothing.
-			if (!grip.isConnected) return void drag?.();
+			if (!grip.isConnected) return stop();
 			if (by === 0 || Math.sign(by) !== Math.sign(at - start) || (by < 0 && size <= least)) return;
 			// The track is that much larger before the area scrolls by as much: the edge stays
 			// under the pointer. What the area could not scroll, the track gives back.
@@ -245,7 +245,7 @@
 			frame = requestAnimationFrame(creep);
 		};
 		const end = (): void => cancelAnimationFrame(frame);
-		drag = beginDrag(grip, e.pointerId, {
+		const stop = (drag = beginDrag(grip, e.pointerId, {
 			move: (p) => {
 				size += p[client] - at;
 				at = p[client];
@@ -262,7 +262,7 @@
 				end();
 				sizing = null;
 			}
-		});
+		}));
 	}
 	// The size dragged stands until the panel's state holds it.
 	$effect(() => {

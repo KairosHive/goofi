@@ -65,6 +65,10 @@
 	/** The groups the track has no room for, and whether the menu that holds them is open. */
 	let more = $state<string[]>([]);
 	let menu = $state(false);
+	// A menu that goes while it is open is closed: the next one does not come back open.
+	$effect(() => {
+		if (more.length === 0 && !tight) menu = false;
+	});
 	/** An action taken from the menu: the menu's business is done. */
 	const leave = (act: () => void) => (): void => {
 		menu = false;

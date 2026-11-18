@@ -12,8 +12,12 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A node's `now` is the run time, so a node runs on through a pause and never sees time go
   back; a node that follows the position reads `t` in an expression. Whether a node gets the
   position too.
-- A curve track's functional nests one conditional per keyframe: the interpreter refuses
-  to compile some thousands of them. Whether a curve gets a ceiling or a flat table.
+- A curve track's functional nests one conditional per keyframe, and the interpreter refuses
+  to compile some thousands of them: a curve of 4000 fitted keyframes played in three probe
+  runs, and one of 8000 did not in two. A recording that would leave a curve more than two
+  thousand is refused, and the take is lost; an edit by an op has no such ceiling, and a curve
+  past what compiles plays nothing and says nothing. Whether a curve becomes a table a reader
+  looks up. A curve of thousands of keyframes is compiled again on every edit of any track.
 - A control panel that draws a playhead's or a track's group is not re-aimed when the owner is
   renamed.
 - A note reaches `MidiIn` at the block after the machines' thread wakes for it, as a device's
@@ -75,12 +79,9 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - An input that reads no node holds its value between two changes, so a recording of it steps;
   one that reads a node is joined from frame to frame. The fit is to within a hundredth of the
   track's range, and the tolerance is not a setting.
-- A pass of a recording that needs more than two thousand keyframes is refused, and the take
-  is lost: a curve is one functional, and one of 4000 fitted keyframes plays where one of 8000
-  does not compile (two probe runs each). A long take of a fast wave is such a pass. Whether a
-  curve becomes a table a reader looks up, so a take has no ceiling. A curve of thousands of
-  keyframes is compiled again on every edit of any track.
-- The fit of a take is slow where its cuts fall one sample apart; it runs with nothing held.
+- The fit of a take is slow where its cuts fall one sample apart. It runs with nothing held,
+  but for a track that was edited while it ran: then it is made again in the write.
+- A track that goes while its edge is held leaves the size the drag had until the drag ends.
 - A recording whose input cannot be read, an unset variable or a node with no frame yet, shows
   as recording: the reason is in the log alone, and the end changes nothing.
 - A recording ends when it is told to: a patch that is closed, or a track that is removed,

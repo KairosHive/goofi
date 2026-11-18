@@ -522,7 +522,10 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 		// one of them is taken.
 		await fade.getByTestId('track-more').click();
 		const more = page.getByTestId('track-more-menu');
-		await expect(more.getByTestId('track-delete')).toBeVisible();
+		await more.getByTestId('track-delete').click();
+		await expect(more).toHaveCount(0);
+		await page.getByTestId('track-delete-dialog').getByRole('button', { name: 'Cancel' }).click();
+		await fade.getByTestId('track-more').click();
 		await more.getByTestId('track-hide').click();
 		await expect(more).toHaveCount(0);
 		await expect(fade).toHaveCount(0);

@@ -50,6 +50,8 @@
 		if (!open) query = '';
 	}
 	function dismiss(): void {
+		// The focus that was in the menu goes back to its button, not to nowhere.
+		if (body?.contains(document.activeElement)) anchor?.querySelector('button')?.focus({ preventScroll: true });
 		open = false;
 		query = '';
 	}
@@ -78,9 +80,12 @@
 		const search = body.querySelector<HTMLElement>('.sm-search');
 		const rows = [...body.querySelectorAll<HTMLElement>('[data-menu-row]')].map((row) => ({ row, stop: row.querySelector<HTMLElement>(FOCUSABLE) }));
 		const stops = [...(search ? [{ row: search, stop: search }] : []), ...rows].filter((s) => s.stop !== null);
-		if (stops.length < 2) return;
-		const at = Math.max(0, stops.findIndex((s) => s.row.contains(document.activeElement)));
-		const next = stops[(at + (e.key === 'ArrowDown' ? 1 : stops.length - 1)) % stops.length].stop!;
+		// From the menu itself, which holds the focus when it opens, down is the first stop and up
+		// the last.
+		const at = stops.findIndex((s) => s.row.contains(document.activeElement));
+		if (stops.length === 0 || (at >= 0 && stops.length < 2)) return;
+		const to = at < 0 ? (e.key === 'ArrowDown' ? 0 : stops.length - 1) : (at + (e.key === 'ArrowDown' ? 1 : stops.length - 1)) % stops.length;
+		const next = stops[to].stop!;
 		e.preventDefault();
 		next.focus();
 		next.scrollIntoView({ block: 'nearest' });
