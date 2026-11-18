@@ -170,11 +170,12 @@
 	const rescan = async (): Promise<Port[]> => (ports = (await g.op<{ ports: Port[] }>('midi list', {})).ports);
 	void rescan().catch(fail('List MIDI devices'));
 	/** The MIDI device a note track records from: the one it names while that is there, else the
-	 * one there is, else one picked at `at` from those there are. */
+	 * one there is, else one picked at `at` from those there are, or none where the pick is let go. */
 	async function device(t: Track, at: { x: number; y: number }): Promise<string | null> {
 		const found = await rescan();
+		if (found.length === 0) throw new Error('no MIDI device is connected');
 		if (found.some((p) => p.group === t.input)) return t.input;
-		if (found.length <= 1) return found[0]?.group ?? null;
+		if (found.length === 1) return found[0].group;
 		return quickPick().ask(at, found.map((p) => ({ id: p.group, label: p.port })), `Record ${t.name} from`);
 	}
 	/** Begin a recording into the track, or end the one that runs. A paused clock plays for it. */
@@ -183,7 +184,7 @@
 		if (recording(t)) return void (await g.op('timeline track record', { track: id, on: false }));
 		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		const input = t.kind === 'note' ? await device(t, { x: box.left, y: box.bottom }) : t.input;
-		if (!input) throw new Error(t.kind === 'note' ? 'no MIDI device is connected' : 'the track has no input: type an expression, or drop a node on it');
+		if (input === null) return;
 		if (input !== t.input) await g.op('timeline track edit', { track: id, input });
 		await g.op('timeline track record', { track: id, on: true });
 		if (!playing) steer({ playing: true });
@@ -351,10 +352,12 @@
 					const shift = clamp(by, least, most);
 					if (was.kind === 'curve') return { ...it, at: exact(o.at + shift), value: t.kind === 'curve' ? fixed(clamp((o as Key).value + dv * (was.range[1] - was.range[0]), ...was.range)) : (o as Key).value };
 					const [n, grid] = [o as Note, gridOf(was)];
-					const on = (at: number): number => (free.time || onGrid(shift, grid) === 0 ? at : onGrid(at, grid));
-					if (stretch) return { ...it, length: exact(Math.max(free.time ? 0.01 : grid, on(n.at + n.length + by) - n.at)) };
+					// A time moved by `d` beats: where the pointer is when free, else on the grid, and
+					// where it was while the move is less than half a cell.
+					const on = (from: number, d: number): number => (free.time ? from + d : onGrid(d, grid) === 0 ? from : onGrid(from + d, grid));
+					if (stretch) return { ...it, length: exact(on(n.at + n.length, by) === n.at + n.length ? n.length : Math.max(free.time ? 0.01 : grid, on(n.at + n.length, by) - n.at)) };
 					const semitones = t.kind === 'note' ? Math.round(dv * rows) : 0;
-					return { ...it, at: exact(free.time ? n.at + shift : on(n.at + shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...was.range) : snap(was, n.pitch + semitones) };
+					return { ...it, at: exact(on(n.at, shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...was.range) : snap(was, n.pitch + semitones) };
 				}))
 			]);
 		let patches: [string, Record<string, unknown>][] | null = null;

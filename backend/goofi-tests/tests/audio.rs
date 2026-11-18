@@ -273,8 +273,10 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(peak(&quiet), 0.0, "nothing arrives before the delay is up");
     g.set_param(delay, "delay", "time", 0.01);
     heard(&g, delay, "…and the echo once the delay is short", |x| peak(x) > 0.5);
-    // A delay told in beats reads the patch's tempo: two beats at 120 are a second, so a new
-    // delay is silent for the half second driven here, where its quarter second would not be.
+    // A delay told in beats reads the patch's tempo: two beats at 60 are two seconds, so a new
+    // delay is silent for the second and a half driven here, where at the tempo a patch opens
+    // with, 120, it would sound after one.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
     let synced = g.add("audio:Delay");
     g.set_param(synced, "delay", "mix", 1.0);
     g.set_param(synced, "delay", "unit", "beats");
@@ -282,11 +284,12 @@ fn a_patch_sounds_under_the_external_clock() {
     goofi_tests::applied(&g);
     g.link(tone, "out", synced, "input");
     let echo = g.probe(synced, "out");
-    for tenth in 0..5 {
+    for tenth in 0..15 {
         drive(&g, TENTH);
         assert!(echo.latest().is_none_or(|d| peak(&f32s(&d)) == 0.0), "two beats are not up after {tenth} tenths");
     }
     heard(&g, synced, "…the echo after its two beats", |x| peak(x) > 0.5);
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
     // A note division is beats too: a sixteenth of a beat is short, and the echo is there at once.
     g.set_param(synced, "delay", "unit", "division");
     g.set_param(synced, "delay", "division", "1/16");

@@ -82,9 +82,13 @@ impl Curve {
     }
 
     /// [`Self::at`] as Python over `x`, for a functional a reader runs in the interpreter: a
-    /// custom curve as `np.interp` over its samples.
+    /// custom curve as `np.interp` over its samples, but for one bezier whose handles stand a
+    /// third and two thirds along, which is a cubic in `x` itself, as a recording fits them.
     pub fn python(&self) -> String {
         match self {
+            Curve::Custom(points) if matches!(points[..], [a, b] if a[4] == 1.0 / 3.0 && b[2] == -1.0 / 3.0) => {
+                format!("(3.0 * (1.0 - x) * (1.0 - x) * x * {:?} + 3.0 * (1.0 - x) * x * x * {:?} + x * x * x)", points[0][5], 1.0 + points[1][3])
+            }
             Curve::Step => "(1.0 if x >= 1.0 else 0.0)".into(),
             Curve::Linear => "x".into(),
             Curve::In => "x * x".into(),

@@ -144,34 +144,40 @@ impl Track {
             }
         };
         ok.then_some(()).ok_or_else(|| format!("track `{}`: {why}", self.name))?;
-        // What it records from: a device's group by name, or an expression that reads no machine.
-        let free = |refs: &[crate::expr_rewrite::VarRef]| !refs.iter().any(|r| matches!(r.target, Target::Playhead | Target::State { .. }));
+        // What it records from: a device's group by name, or an expression as a param's, which
+        // has no `me` to read.
         let heard = match &self.lanes {
             _ if self.input.is_empty() => true,
             Lanes::Note { .. } => goofi_core::variables::is_valid_identifier(&self.input),
-            Lanes::Curve { .. } => crate::expr_rewrite::rewrite_machine(&self.input).is_ok_and(|(_, refs)| free(&refs)),
+            Lanes::Curve { .. } => input_refs(&self.input).is_ok(),
         };
-        heard.then_some(()).ok_or_else(|| format!("track `{}`: a note track's `input` is the group of a MIDI device, a curve track's an expression that reads no playhead and no state", self.name))
+        heard.then_some(()).ok_or_else(|| format!("track `{}`: a note track's `input` is the group of a MIDI device, a curve track's an expression as a param's, without `me`", self.name))
     }
 
     /// Take a recording in. Notes are added to those the track holds. Each pass of samples
-    /// becomes the keyframes that follow it to within a hundredth of what the take spans, in
-    /// place of those the track held in the pass's stretch. The track's range grows to hold
-    /// what came.
+    /// becomes the keyframes that follow it, in place of those the track held in the pass's
+    /// stretch, to within a hundredth of the track's range, which grows to hold what came. A
+    /// pass that would take more than [`MOST`] keyframes is followed more loosely.
     pub fn merge(&mut self, take: Take) {
         match (&mut self.lanes, take) {
             (Lanes::Note { range, notes, .. }, Take::Notes(taken)) => {
                 *range = taken.iter().fold(*range, |r, n| [r[0].min(n.pitch), r[1].max(n.pitch)]);
                 notes.extend(taken);
             }
-            (Lanes::Curve { range, keys, .. }, Take::Samples(samples)) => {
-                let [low, high] = samples.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |[low, high], s| [low.min(s.1), high.max(s.1)]);
-                for pass in samples.chunk_by(|a, b| a.0 < b.0) {
-                    let (from, to) = (pass[0].0, pass[pass.len() - 1].0);
+            (Lanes::Curve { range, keys, .. }, Take::Samples(passes)) => {
+                *range = passes.iter().flatten().fold(*range, |r, s| [r[0].min(s.value), r[1].max(s.value)]);
+                for pass in passes.iter().filter(|pass| !pass.is_empty()) {
+                    let mut tolerance = (range[1] - range[0]) / 100.0;
+                    let mut fitted = fit(pass, tolerance);
+                    // Past the range itself nothing is left to give: what remains are its steps.
+                    while fitted.len() > MOST && tolerance < range[1] - range[0] {
+                        tolerance *= 2.0;
+                        fitted = fit(pass, tolerance);
+                    }
+                    let (from, to) = (pass[0].at, pass[pass.len() - 1].at);
                     keys.retain(|k| k.at < from || k.at > to);
-                    keys.extend(fit(pass, (high - low) / 100.0));
+                    keys.extend(fitted);
                     keys.sort_by(|a, b| a.at.total_cmp(&b.at));
-                    *range = [range[0].min(low), range[1].max(high)];
                 }
             }
             _ => {}
@@ -204,12 +210,39 @@ impl Track {
     }
 }
 
-/// What a recording into a track took: notes, or samples of its input, each with the beat it
-/// was taken at. Samples whose beat goes back begin another pass, as a clock that loops makes.
+/// The variables a curve track's input reads: an expression as a param's, but with no node of
+/// its own, so no `me`. A playhead's element is the variable it is published as.
+pub(crate) fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
+    let (rewritten, mut refs) = crate::expr_rewrite::rewrite(text)?;
+    for r in &mut refs {
+        match &r.target {
+            Target::MeOut { .. } | Target::MeParam { .. } => return Err(goofi_node::ExprError("a track has no `me`".into())),
+            Target::PlayheadField { playhead, field } => r.target = Target::Variable { key: format!("{playhead}.{field}") },
+            _ => {}
+        }
+    }
+    Ok((rewritten, refs))
+}
+
+/// The most keyframes one pass of a recording becomes: a curve is one functional, and a reader
+/// compiles it whole.
+const MOST: usize = 1000;
+
+/// One sample of a curve's input: the beat it was taken at, the value, and whether the input
+/// held that value until the next sample, a step, where it did not move there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sample {
+    pub at: f64,
+    pub value: f64,
+    pub held: bool,
+}
+
+/// What a recording into a track took: notes, or the samples of its input, pass by pass. A
+/// position that went back or was put elsewhere, as a loop and a seek do, begins another pass.
 #[derive(Debug, PartialEq)]
 pub enum Take {
     Notes(Vec<Note>),
-    Samples(Vec<(f64, f64)>),
+    Samples(Vec<Vec<Sample>>),
 }
 
 /// A recording into a track, while it runs.
@@ -219,23 +252,40 @@ pub(crate) struct Recording {
     /// and how hard.
     held: HashMap<usize, (f64, f64)>,
     notes: Vec<Note>,
-    samples: Vec<(f64, f64)>,
-    /// The stamp of the node frame the last sample is of, the input's newest value, taken or
-    /// not, and the last beat seen.
+    passes: Vec<Vec<Sample>>,
+    /// The last pass is ended: the next sample begins another.
+    ended: bool,
+    /// The stamp of the node frame the last sample is of.
     frame: Option<f64>,
-    latest: Option<f64>,
+    /// The last look: its beat, and the value the input had there, taken or not.
     last: f64,
+    latest: Option<f64>,
 }
 
 impl Recording {
     /// The shortest a recorded note is: one whose key went down and up at one beat.
     const SHORTEST: f64 = 0.01;
 
+    /// End the pass at the last look: every key still down ends there, and the input's value
+    /// there is the pass's last sample. What comes next is another pass.
+    pub(crate) fn cut(&mut self) {
+        let (at, held) = (self.last, std::mem::take(&mut self.held));
+        self.notes.extend(held.into_iter().map(|(key, down)| Self::note(key, down, at)));
+        if let (Some(value), false, Some(pass)) = (self.latest.take(), self.ended, self.passes.last_mut()) {
+            match pass.last_mut() {
+                Some(taken) if at > taken.at => pass.push(Sample { at, value, held: false }),
+                Some(taken) => taken.value = value,
+                None => {}
+            }
+        }
+        (self.ended, self.frame) = (true, None);
+    }
+
     /// The device's keys at the beat `at`: one that went down begins a note, one that came up
-    /// ends it. A position that went back ends every note where it was.
+    /// ends it.
     pub(crate) fn keys(&mut self, at: f64, velocities: impl Iterator<Item = f64>) {
         if at < self.last {
-            self.lift(self.last);
+            self.cut();
         }
         self.last = at;
         for (key, velocity) in velocities.enumerate() {
@@ -252,45 +302,41 @@ impl Recording {
 
     /// The input's value at the beat `at`, and `frame`, the stamp of the newest node frame it
     /// read. A sample is taken where the input is new and `every` beats have gone by since the
-    /// last one: an input that reads a node is new with each frame of the node, so a node slower
-    /// than the rate gives a sample a frame; any other is new when its value is another, and
-    /// held what it had until then. One beat holds one value, the newest, and a position that
-    /// went back begins another pass.
+    /// last one. An input that reads a node is new with each frame of the node, so a node slower
+    /// than the rate gives a sample a frame. Any other is new when its value is another; where a
+    /// look between found it the same, it held that value until now, a step. One beat holds one
+    /// value, the newest.
     pub(crate) fn sample(&mut self, at: f64, value: f64, frame: Option<f64>, every: f64) {
+        if at < self.last {
+            self.cut();
+        }
+        let looked = std::mem::replace(&mut self.last, at);
         if !value.is_finite() {
             return;
         }
-        self.latest = Some(value);
-        self.last = at;
-        let Some(taken) = self.samples.last_mut().filter(|taken| at >= taken.0) else {
+        let before = self.latest.replace(value);
+        if std::mem::take(&mut self.ended) || self.passes.is_empty() {
+            self.passes.push(Vec::new());
+        }
+        let pass = self.passes.last_mut().expect("a pass");
+        let Some(taken) = pass.last_mut() else {
             self.frame = frame;
-            return self.samples.push((at, value));
+            return pass.push(Sample { at, value, held: false });
         };
-        if at == taken.0 {
-            (taken.1, self.frame) = (value, frame);
-        } else if at >= taken.0 + every && (if frame.is_some() { frame != self.frame } else { value != taken.1 }) {
-            let held = (frame.is_none() && at - every > taken.0 + every).then_some((at - every, taken.1));
+        if at == taken.at {
+            (taken.value, self.frame) = (value, frame);
+        } else if at >= taken.at + every && (if frame.is_some() { frame != self.frame } else { value != taken.value }) {
+            taken.held = frame.is_none() && looked > taken.at && before == Some(taken.value);
             self.frame = frame;
-            self.samples.extend(held.into_iter().chain([(at, value)]));
+            pass.push(Sample { at, value, held: false });
         }
     }
 
-    /// End at the beat `at`: every key still down ends there, and the input's newest value is
-    /// the curve's there, whatever the rate.
+    /// End at the beat `at`, which is the last look.
     pub(crate) fn end(mut self, at: f64, notes: bool) -> Take {
-        let at = at.max(self.last);
-        self.lift(at);
-        match (self.latest, self.samples.last_mut()) {
-            (Some(value), Some(taken)) if at > taken.0 => self.samples.push((at, value)),
-            (Some(value), Some(taken)) => taken.1 = value,
-            _ => {}
-        }
-        if notes { Take::Notes(self.notes) } else { Take::Samples(self.samples) }
-    }
-
-    fn lift(&mut self, at: f64) {
-        let held: Vec<_> = self.held.drain().collect();
-        self.notes.extend(held.into_iter().map(|(key, down)| Self::note(key, down, at)));
+        self.last = at.max(self.last);
+        self.cut();
+        if notes { Take::Notes(self.notes) } else { Take::Samples(self.passes) }
     }
 
     /// A key of the device as a note: its place there is 128 pitches a channel.
@@ -299,53 +345,66 @@ impl Recording {
     }
 }
 
-/// The keyframes that follow the samples `(at, value)` of a recording, in time order, to within
-/// `tolerance` of every value: as few as do it, each eased to the next by one cubic bezier.
-/// Between two keyframes the curve is the cubic nearest the samples there; where that is off by
-/// more than the tolerance, the sample furthest off becomes a keyframe, and each half is fitted
-/// again.
-pub fn fit(samples: &[(f64, f64)], tolerance: f64) -> Vec<Key> {
-    let Some(last) = samples.last() else { return Vec::new() };
+/// The keyframes that follow one pass of a recording to within `tolerance`: as few as do it,
+/// each eased to the next by one cubic bezier, or held until the next where the input held.
+fn fit(pass: &[Sample], tolerance: f64) -> Vec<Key> {
     let mut keys = Vec::new();
-    span(samples, tolerance, &mut keys);
-    keys.push(Key { at: last.0, value: last.1, curve: Curve::Linear });
+    // A held sample ends a run: nothing is fitted across a step.
+    for run in pass.chunk_by(|before, _| !before.held) {
+        spans(run, tolerance, &mut keys);
+        let last = run[run.len() - 1];
+        keys.push(Key { at: last.at, value: last.value, curve: if last.held { Curve::Step } else { Curve::Linear } });
+    }
     keys
 }
 
-/// The keyframes of one stretch of samples, its last sample left to the stretch after it.
-fn span(samples: &[(f64, f64)], tolerance: f64, keys: &mut Vec<Key>) {
-    let (Some(&(t0, v0)), Some(&(t1, v1))) = (samples.first(), samples.last()) else { return };
-    if samples.len() < 2 {
-        return;
-    }
-    let (dt, dv) = (t1 - t0, v1 - v0);
+/// The keyframes of a run of samples, but for its last sample. Between two samples the take is
+/// the straight line between them, and a cubic is judged against that line all along a stretch,
+/// not at the samples alone. Where the cubic nearest a stretch is off by more than the tolerance,
+/// the sample nearest the worst of it becomes a keyframe, and each half is fitted again.
+fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
+    /// The points of each line between two samples that a cubic is held to.
+    const POINTS: usize = 4;
     // A cubic from (0, 0) to (1, 1) with its handles a third and two thirds along is a cubic in
-    // the progress itself, so the two handle heights nearest the samples are a least squares.
+    // the progress itself, so the two handle heights nearest the take are a least squares.
     let basis = |x: f64| (3.0 * (1.0 - x) * (1.0 - x) * x, 3.0 * (1.0 - x) * x * x, x * x * x);
-    let progress = |t: f64| (t - t0) / dt;
-    let level = dv.abs() <= tolerance;
-    let (mut a, mut b, mut c, mut p, mut q) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    for &(t, v) in samples.iter().filter(|_| !level) {
-        let (b1, b2, rest) = basis(progress(t));
-        let want = (v - v0) / dv - rest;
-        (a, b, c, p, q) = (a + b1 * b1, b + b1 * b2, c + b2 * b2, p + b1 * want, q + b2 * want);
+    // The stretches still to fit, the earliest on top, each from one sample to a later one.
+    let mut open = vec![(0, run.len() - 1)];
+    while let Some((from, to)) = open.pop() {
+        if to <= from {
+            continue;
+        }
+        let (first, last) = (run[from], run[to]);
+        let (dt, dv) = (last.at - first.at, last.value - first.value);
+        // Each point by the sample it lies nearest, its beat and the take's value there.
+        let line = (from..to).flat_map(|i| (0..POINTS).map(move |k| (i, k as f64 / POINTS as f64)));
+        let take = || line.clone().map(|(i, f)| (i + usize::from(f >= 0.5), run[i].at + (run[i + 1].at - run[i].at) * f, run[i].value + (run[i + 1].value - run[i].value) * f));
+        let level = dv.abs() <= tolerance / 100.0;
+        let (mut a, mut b, mut c, mut p, mut q) = (0.0, 0.0, 0.0, 0.0, 0.0);
+        if !level && to > from + 1 {
+            for (_, t, v) in take() {
+                let (b1, b2, rest) = basis((t - first.at) / dt);
+                let want = (v - first.value) / dv - rest;
+                (a, b, c, p, q) = (a + b1 * b1, b + b1 * b2, c + b2 * b2, p + b1 * want, q + b2 * want);
+            }
+        }
+        let det = a * c - b * b;
+        let (y1, y2) = if det.abs() > 1e-12 { ((p * c - q * b) / det, (q * a - p * b) / det) } else { (1.0 / 3.0, 2.0 / 3.0) };
+        let off = |(i, t, v): (usize, f64, f64)| {
+            let (b1, b2, rest) = basis((t - first.at) / dt);
+            (i, (first.value + dv * (b1 * y1 + b2 * y2 + rest) - v).abs())
+        };
+        let (worst, error) = take().map(off).fold((from, 0.0), |far, now| if now.1 > far.1 { now } else { far });
+        if error <= tolerance || to == from + 1 {
+            let straight = (y1 - 1.0 / 3.0).abs() < 1e-6 && (y2 - 2.0 / 3.0).abs() < 1e-6;
+            let curve = if straight { Curve::Linear } else { Curve::Custom(vec![[0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, y1], [1.0, 1.0, -1.0 / 3.0, y2 - 1.0, 0.0, 0.0]]) };
+            keys.push(Key { at: first.at, value: first.value, curve });
+            continue;
+        }
+        let cut = worst.clamp(from + 1, to - 1);
+        open.push((cut, to));
+        open.push((from, cut));
     }
-    let det = a * c - b * b;
-    let (y1, y2) = if det.abs() > 1e-12 { ((p * c - q * b) / det, (q * a - p * b) / det) } else { (1.0 / 3.0, 2.0 / 3.0) };
-    let off = |&(t, v): &(f64, f64)| {
-        let (b1, b2, rest) = basis(progress(t));
-        (v0 + dv * (b1 * y1 + b2 * y2 + rest) - v).abs()
-    };
-    let (worst, error) = samples.iter().map(off).enumerate().fold((0, 0.0), |far, now| if now.1 > far.1 { now } else { far });
-    if error <= tolerance || samples.len() == 2 {
-        let straight = level || ((y1 - 1.0 / 3.0).abs() < 1e-6 && (y2 - 2.0 / 3.0).abs() < 1e-6);
-        let curve = if straight { Curve::Linear } else { Curve::Custom(vec![[0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, y1], [1.0, 1.0, -1.0 / 3.0, y2 - 1.0, 0.0, 0.0]]) };
-        keys.push(Key { at: t0, value: v0, curve });
-        return;
-    }
-    let cut = worst.clamp(1, samples.len() - 2);
-    span(&samples[..=cut], tolerance, keys);
-    span(&samples[cut..], tolerance, keys);
 }
 
 /// The timeline as it runs: what every track writes at a position, built whole from the tracks

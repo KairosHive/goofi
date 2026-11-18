@@ -34,14 +34,14 @@ op!(TrackEdit, "timeline track edit", 1, TrackEditArgs {
     pub input: Option<String>,
     pub rate: Option<f64>,
 },
-    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `notes` replaces a note track's notes whole; `range`, `scale`, `root` and `grid` set its keyboard. `range` and `keys` replace a curve track's range and its keyframes whole. `input` is what a recording takes in (see `timeline track record`), and an empty one is none: for a note track the variable group of a MIDI device, a `group` of `midi list`; for a curve track an expression, as a param's, such as `nd('lfo0')` or `vars.pads.cc[7]`, whose first number is the value. `rate` is the most samples a second a curve track's recording takes, 1..120. Previewable: a drag sends the notes or the keyframes as a preview.",
+    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `notes` replaces a note track's notes whole; `range`, `scale`, `root` and `grid` set its keyboard. `range` and `keys` replace a curve track's range and its keyframes whole. `input` is what a recording takes in (see `timeline track record`), and an empty one is none: for a note track the variable group of a MIDI device, a `group` of `midi list`; for a curve track an expression, as a param's but with no `me`, such as `nd('lfo0')`, `vars.pads.cc[7]` or `sm('head').gain`, whose first number is the value. `rate` is the most samples a second a curve track's recording takes, 1..120. Previewable: a drag sends the notes or the keyframes as a preview.",
     "{name}");
 
 op!(TrackRecord, "timeline track record", 1, TrackRecordArgs {
     pub track: String,
     pub on: bool,
 },
-    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key of its device, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate — and the end puts keyframes that follow the take to within a hundredth of what it spans, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
+    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key of its device, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate, and any other input holds its value between two changes, a `step` — and the end puts keyframes that follow the take to within a hundredth of the track's `range`, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. A position that goes back or is put elsewhere begins another pass, so a seek leaves what it jumped over as it was. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
     "{name, recording}");
 
 op!(TrackMove, "timeline track move", 1, TrackMoveArgs {
@@ -142,12 +142,7 @@ impl WriteOp for TrackRemove {
 
 impl EffectOp for TrackRecord {
     fn run(state: &AppState, a: TrackRecordArgs, caller: &Caller) -> Result<Value, String> {
-        let held = |state: &AppState| -> Result<(String, Track), String> {
-            let g = state.graph.lock();
-            let id = id_of("track", g.timeline(), &a.track)?;
-            Ok((id.clone(), g.timeline()[&id].clone()))
-        };
-        let (id, track) = held(state)?;
+        let (id, track) = track_of(&Txn::begin(state, caller, false, false), &a.track)?;
         if a.on {
             if track.input.is_empty() {
                 return Err(format!("track `{}` has no `input` to record from: `timeline track edit` sets one", track.name));
@@ -155,22 +150,19 @@ impl EffectOp for TrackRecord {
             state.machines.send(Msg::Record(id));
             return Ok(json!({ "name": track.name, "recording": true }));
         }
-        // The thread ends the recording with this instant in it, and answers what it took.
+        // The thread ends the recording with this instant in it, and answers what it took; one
+        // that never ran hangs up.
         let (answer, taken) = std::sync::mpsc::channel();
         state.machines.send(Msg::Recorded(id.clone(), answer));
         if let Ok(take) = taken.recv() {
-            // The track as it stands now: an edit made while the recording ran is kept.
-            let (_, mut track) = held(state)?;
-            let before = track.clone();
+            // Into the track as it stands now, in one write: an edit made while the recording
+            // ran is kept.
+            let mut tx = Txn::begin(state, caller, false, true);
+            let (_, mut track) = track_of(&tx, &id)?;
             track.merge(take);
-            if track != before {
-                let mut edit = match &track.lanes {
-                    Lanes::Note { range, notes, .. } => json!({ "range": range, "notes": notes }),
-                    Lanes::Curve { range, keys, .. } => json!({ "range": range, "keys": keys }),
-                };
-                edit["track"] = json!(id);
-                state.call_as("timeline track edit", edit, &Caller { label: Some("Record into track".into()), ..caller.clone() }, false)?;
-            }
+            tx.label("Record into track".into());
+            set(&mut tx, &id, Some(track))?;
+            tx.commit();
         }
         Ok(json!({ "name": track.name, "recording": false }))
     }

@@ -571,8 +571,10 @@ pub struct Machines {
     sounding: Vec<(String, usize, u8, f64)>,
     /// The position went back since the last strike: what sounds is struck again.
     again: bool,
-    /// The recordings that run, each by the id of the track it goes into.
+    /// The recordings that run, each by the id of the track it goes into, and the curve tracks'
+    /// inputs, compiled as a param's expression is.
     recording: HashMap<String, Recording>,
+    heard: HashMap<String, Expr>,
 }
 
 impl Machines {
@@ -610,28 +612,34 @@ impl Machines {
     /// End the recording into the track `id` at the position `now`, which it takes too: what it
     /// took, where one ran.
     pub fn recorded(&mut self, id: &str, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) -> Option<Take> {
+        if now < self.last {
+            self.recording.values_mut().for_each(Recording::cut);
+        }
         self.capture(now, read);
         let notes = matches!(self.timed.0.get(id)?.lanes, Lanes::Note { .. });
-        Some(self.recording.remove(id)?.end(now * self.timed.1 / 60.0, notes))
+        Some(self.recording.remove(id)?.end(self.beat(now), notes))
+    }
+
+    /// The beat the position `now` is, at the tempo the timeline plays at.
+    fn beat(&self, now: f64) -> f64 {
+        now * self.timed.1.max(1e-9) / 60.0
     }
 
     /// Take what the input of every track with a recording holds at the position `now`. Notes
     /// are the keys of the input's device as they go down and up; a curve takes its input's
     /// value at most `rate` times a second.
     fn capture(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) {
-        let (tracks, bpm) = &self.timed;
-        self.recording.retain(|id, _| tracks.contains_key(id));
-        let beat = now * bpm / 60.0;
-        let ctx = Ctx::new(&self.compiled, &self.evaluator, read, now);
+        let (beat, every) = (self.beat(now), self.beat(1.0));
+        let ctx = Ctx::new(&self.heard, &self.evaluator, read, now);
         for (id, taking) in &mut self.recording {
-            let track = &tracks[id];
+            let track = &self.timed.0[id];
             let taken = match &track.lanes {
                 Lanes::Note { .. } => read(&Target::Variable { key: format!("{}.{}", track.input, NOTES.0) }).map(|held| {
                     if let Local::Frame(held) = held {
                         taking.keys(beat, control::numbers(&held));
                     }
                 }),
-                Lanes::Curve { rate, .. } => ctx.eval(&track.input, None).map(|value| taking.sample(beat, control::number_of(&value), ctx.stamp(&track.input), bpm / 60.0 / rate)),
+                Lanes::Curve { rate, .. } => ctx.eval(&track.input, None).map(|value| taking.sample(beat, control::number_of(&value), ctx.stamp(&track.input), every / rate)),
             };
             if let Err(why) = taken {
                 self.errors.push(format!("track `{}`: its input: {why}", track.name));
@@ -645,55 +653,67 @@ impl Machines {
     pub fn configure(&mut self, config: IndexMap<String, Machine>, timed: (IndexMap<String, Track>, f64), evaluator: Option<Arc<dyn ExprEvaluator>>) {
         let same_evaluator = evaluator.as_ref().map(Arc::as_ptr) == self.evaluator.as_ref().map(Arc::as_ptr);
         let (same_config, same_tracks) = (config == self.config, timed == self.timed);
-        if !same_evaluator || !same_tracks {
-            self.timeline = Timeline::new(&timed.0, timed.1, &evaluator);
-            self.timed = timed;
-        }
         if same_evaluator && same_config && same_tracks {
             return;
         }
         if !same_evaluator {
             self.release_all();
         }
+        if !same_evaluator || !same_tracks {
+            self.timeline = Timeline::new(&timed.0, timed.1, &evaluator);
+            self.timed = timed;
+            // A recording goes with its track.
+            self.recording.retain(|id, _| self.timed.0.contains_key(id));
+        }
         self.evaluator = evaluator;
-        let tracks = self.timed.0.values();
-        let wanted: HashSet<String> = config.values().flat_map(Machine::expressions).chain(tracks.clone().filter_map(Track::expression)).map(str::to_string).collect();
-        let gone: Vec<String> = self.compiled.keys().filter(|k| !wanted.contains(*k)).cloned().collect();
-        for text in gone {
-            if let (Some(ev), Some(id)) = (&self.evaluator, self.compiled.remove(&text).and_then(|e| e.id)) {
-                ev.release(id);
-            }
+        if !(same_evaluator && same_config) {
+            let wanted = config.values().flat_map(Machine::expressions).map(str::to_string).collect();
+            let held = std::mem::take(&mut self.compiled);
+            self.compiled = self.compile_all(held, wanted, expr_rewrite::rewrite_machine);
+            self.config = config;
+            self.reconcile = true;
         }
-        for text in wanted {
-            if !self.compiled.contains_key(&text) {
-                let expr = self.compile(&text);
-                self.compiled.insert(text, expr);
-            }
-        }
-        let variables = self.compiled.values().flat_map(|e| e.refs.iter()).filter_map(|r| match &r.target {
+        let wanted = self.timed.0.values().filter_map(Track::expression).map(str::to_string).collect();
+        let held = std::mem::take(&mut self.heard);
+        self.heard = self.compile_all(held, wanted, crate::timeline::input_refs);
+        let variables = self.compiled.values().chain(self.heard.values()).flat_map(|e| e.refs.iter()).filter_map(|r| match &r.target {
             Target::Variable { key } => Some(key.clone()),
             _ => None,
         });
         // The keys of a device a note track records from are read as a variable is.
-        let devices = tracks.filter(|t| matches!(t.lanes, Lanes::Note { .. }) && !t.input.is_empty()).map(|t| format!("{}.{}", t.input, NOTES.0));
+        let devices = self.timed.0.values().filter(|t| matches!(t.lanes, Lanes::Note { .. }) && !t.input.is_empty()).map(|t| format!("{}.{}", t.input, NOTES.0));
         self.keys = variables.chain(devices).collect();
         self.keys.sort();
         self.keys.dedup();
-        self.config = config;
-        self.reconcile |= !(same_evaluator && same_config);
+    }
+
+    /// The expressions `wanted`, each compiled once: one `held` already is kept, one no longer
+    /// wanted is released.
+    fn compile_all(&self, mut held: HashMap<String, Expr>, wanted: HashSet<String>, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_node::ExprError>) -> HashMap<String, Expr> {
+        held.retain(|text, e| {
+            let keep = wanted.contains(text);
+            if let (false, Some(ev), Some(id)) = (keep, &self.evaluator, e.id) {
+                ev.release(id);
+            }
+            keep
+        });
+        for text in wanted {
+            held.entry(text).or_insert_with_key(|text| self.compile(text, &rewrite));
+        }
+        held
     }
 
     fn release_all(&mut self) {
-        for (_, e) in self.compiled.drain() {
+        for (_, e) in self.compiled.drain().chain(self.heard.drain()) {
             if let (Some(ev), Some(id)) = (&self.evaluator, e.id) {
                 ev.release(id);
             }
         }
     }
 
-    fn compile(&self, text: &str) -> Expr {
+    fn compile(&self, text: &str, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_node::ExprError>) -> Expr {
         let none = |error: String| Expr { rewritten: String::new(), refs: Vec::new(), id: None, error: Some(error) };
-        let (rewritten, refs) = match expr_rewrite::rewrite_machine(text) {
+        let (rewritten, refs) = match rewrite(text) {
             Ok(r) => r,
             Err(e) => return none(e.0),
         };
@@ -770,6 +790,7 @@ impl Machines {
         // starts, and a request stamped past `now` goes with them.
         if now < self.last {
             self.again = true;
+            self.recording.values_mut().for_each(Recording::cut);
             self.runs.clear();
             self.requests.retain(|(at, _)| *at <= now);
             self.functionals.clear();

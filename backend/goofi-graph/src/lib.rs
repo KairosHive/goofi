@@ -1100,6 +1100,12 @@ impl Graph {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
         self.rewrite_stepped(|e| expr_rewrite::rename_variables(e, rename));
+        // A note track names the group it records from, which is that group's `notes`.
+        for track in Arc::make_mut(&mut self.patch.stepped).tracks.values_mut().filter(|t| t.expression().is_none()) {
+            if let Some((group, _)) = rename(&format!("{}.notes", track.input)).as_deref().and_then(goofi_core::variables::split_variable) {
+                track.input = group.to_string();
+            }
+        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })

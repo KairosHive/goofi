@@ -256,8 +256,10 @@ MIDI device: the one there is, or the one picked where there are several. The no
 added to the notes the track holds. A curve track's input is an expression, as a param's, typed
 or dropped on it: a node, a variable, a state. The track takes the input's value at most `rate`
 times a second (30 unless set), and a node slower than that gives a sample for each of its
-frames. The end of the recording puts keyframes with fitted bezier curves that follow what came,
-in place of the keyframes of the stretch it covered. `vars.<track>.recording` is 1 while a
+frames; an input that reads no node holds its value between two changes, a step. The end of the
+recording puts keyframes with fitted bezier curves that follow what came, in place of the
+keyframes of the stretch it covered. A loop or a seek begins another pass, so what a seek jumps
+over stays as it was. `vars.<track>.recording` is 1 while a
 recording runs.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line

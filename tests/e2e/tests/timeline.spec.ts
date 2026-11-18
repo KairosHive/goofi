@@ -189,6 +189,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dragBy(page, note, ground.width * 0.2, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(born.at);
 		expect((await trackNamed(page, 'track0')).notes[0].pitch, 'a level drag keeps the pitch').toBe(born.pitch);
+		// A drag across the lane that drifts less than half a cell along it changes the pitch,
+		// and leaves the note on the line it had.
+		const level = (await trackNamed(page, 'track0')).notes[0];
+		await dragBy(page, note, ground.width * 0.004, -ground.height * 0.2);
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].pitch).toBeGreaterThan(level.pitch);
+		expect((await trackNamed(page, 'track0')).notes[0].at, 'the drift is no move in time').toBe(level.at);
 		// A note's end dragged makes it longer, by whole cells.
 		await dragBy(page, note.locator('.end'), ground.width * 0.1, 0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].length).toBeGreaterThan(born.length);
@@ -532,7 +538,7 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		const button = take.getByTestId('track-record');
 		// A track with no input says so, and records nothing.
 		await button.click();
-		await expect(page.getByText('the track has no input')).toBeVisible();
+		await expect(page.getByText('has no `input` to record from')).toBeVisible();
 		await expect(button).toHaveAttribute('aria-pressed', 'false');
 		// The input is an expression, as a param's; the rate is the track's own.
 		await (await settings(page, take, '[data-testid="track-input"]')).click();

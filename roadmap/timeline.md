@@ -71,10 +71,15 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A curve recording replaces the keyframes of the stretch it covered; it has no way to add to
   them, and no way to keep one pass of a loop and drop another.
 - An input that reads no node holds its value between two changes, so a recording of it steps;
-  one that reads a node is joined from frame to frame. The fit is to within a hundredth of what
-  the take spans, and the tolerance is not a setting.
+  one that reads a node is joined from frame to frame. The fit is to within a hundredth of the
+  track's range, and the tolerance is not a setting.
+- One pass of a recording is at most a thousand keyframes: a take no such curve follows closely
+  is followed loosely. A curve of that many keyframes is still one functional, compiled again
+  on every edit of any track.
+- A recording whose input cannot be read, an unset variable or a node with no frame yet, shows
+  as recording: the reason is in the log alone, and the end changes nothing.
 - A recording ends when it is told to: a patch that is closed, or a track that is removed,
-  drops what the recording took.
+  drops what the recording took, and so does a write of the take that is refused.
 - No recording was made from a MIDI device: the test host has no sequencer. The fixture drives
   a device's group by hand.
 - The panel's record button plays a paused clock; the op leaves the clock alone. A recording

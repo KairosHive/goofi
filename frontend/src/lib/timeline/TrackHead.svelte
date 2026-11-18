@@ -162,7 +162,7 @@
 		variant="ghost"
 		size="sm"
 		class={recording ? 'live' : ''}
-		label={recording ? 'Stop recording' : 'Record'}
+		label="Record"
 		title={recording ? 'End the recording: what it took goes into the track' : `Record ${t.kind === 'note' ? 'the keys of a MIDI device' : 'the input'} into the track while the clock plays`}
 		aria-pressed={recording}
 		data-testid="track-record"
