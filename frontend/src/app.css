@@ -65,6 +65,10 @@
 	--danger: #f06080;
 	--info: #6ab0ff;
 	--accent-fill: color-mix(in srgb, var(--accent) 18%, transparent);
+	/* The accent held back: a mark that says a state and does not call for the eye, as the fold
+	   of a range bar past an end of its axis and the still part of a spinner's ring. Stronger
+	   than --accent-fill, which is a ground. */
+	--accent-muted: color-mix(in srgb, var(--accent) 40%, transparent);
 	--danger-fill: color-mix(in srgb, var(--danger) 16%, transparent);
 	--info-fill: color-mix(in srgb, var(--info) 16%, transparent);
 	--success-fill: color-mix(in srgb, var(--success) 16%, transparent);

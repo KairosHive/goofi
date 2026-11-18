@@ -122,7 +122,7 @@
 		height: 0.85em;
 		border-radius: 50%;
 		box-sizing: border-box;
-		border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+		border: 1.5px solid var(--accent-muted);
 		border-top-color: var(--accent);
 		animation: ui-select-spin 0.8s linear infinite;
 	}

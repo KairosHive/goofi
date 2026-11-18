@@ -962,9 +962,9 @@
 		background: var(--accent-fill);
 		pointer-events: none;
 	}
-	/* What is picked wears the second accent around it, clear of its own fill. */
+	/* What is picked wears a thin line of the second accent around it, clear of its own fill. */
 	.picked {
-		outline: var(--focus-width) solid var(--accent-2);
+		outline: 1px solid var(--accent-2);
 		outline-offset: 1px;
 	}
 	.grip {

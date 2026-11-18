@@ -508,7 +508,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(lastMark).toBeLessThan(6);
 		await expect(thumb).toHaveAttribute('data-folded', 'false');
 		// Its end dragged past the end of the bar folds there: the thumb stays on the bar and its
-		// end takes the accent, while the view goes on past everything there is.
+		// end takes a muted accent, while the view goes on past everything there is.
 		await dragBy(page, panel.getByTestId('range-to'), bar.width * 0.6, 0);
 		await expect.poll(lastMark).toBeGreaterThan(marked);
 		await expect(thumb).toHaveAttribute('data-folded', 'true');

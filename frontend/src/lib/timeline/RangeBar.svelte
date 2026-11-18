@@ -95,13 +95,13 @@
 		background: var(--surface-4);
 		cursor: grab;
 	}
-	/* A fold is an end of the thumb itself, in the accent, under the handle there. */
+	/* A fold is an end of the thumb itself, in the accent held back, under the handle there. */
 	.fold {
 		position: absolute;
 		inset: 0 auto 0 0;
 		width: var(--before);
 		border-radius: 999px 0 0 999px;
-		background: var(--accent);
+		background: var(--accent-muted);
 		pointer-events: none;
 	}
 	.fold.after {

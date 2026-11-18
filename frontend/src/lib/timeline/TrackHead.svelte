@@ -281,15 +281,12 @@
 		overflow-x: visible;
 		overflow-y: clip;
 	}
-	/* A section, parted by a line from the one before; a label in it is as narrow as its word,
-	   and its rows stand under its name with no margin of their own. */
+	/* A section under its own name; a label in it is as narrow as its word, and its rows stand
+	   under the name with no margin of their own. */
 	.group {
 		flex: none;
 		--field-label-min: 0px;
 		--disclosure-body-pad: 0 0 var(--space-2);
-	}
-	.group + .group {
-		border-top: 1px solid var(--border);
 	}
 	/* The root is as wide as a note's name, and the scale takes the rest. */
 	.group :global(.root),
