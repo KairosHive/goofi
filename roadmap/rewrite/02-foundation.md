@@ -12,7 +12,7 @@ foundation knows a graph, a node, an engine or an application.
   instant, and a restart.
 - The patch clock has three sources: the wall clock (live mode), data time (Kahn mode, part 06),
   and an external driver (a test harness that advances time by hand).
-- Waiting primitives: an event with ids that says which source rang; a deadline; a pace (a
+- Waiting primitives: a wake-up with ids that says which source rang; a deadline; a pace (a
   period that does not catch up after an overrun); a grid (instants on a fixed lattice); a rate
   meter; a sleep until an instant; a wait for a readable descriptor.
 - Every wait has a ceiling, and the ceiling is a value the owner states. The one exception is the
@@ -88,8 +88,8 @@ foundation knows a graph, a node, an engine or an application.
   - **texture**: pixels (width, height, format: 8-bit or float, RGB or RGBA, top row first,
     straight alpha), at most 8192 per side.
   - **functional**: a value as a function of patch time, evaluated by whoever consumes it.
-  - **event**: something that happened once at an instant, with an identity and an optional
-    payload.
+  - **event**: something that happened once at one instant, with a name and a small payload.
+    It is delivered once to each listener and read as true once (part 03.7).
 - A zero-dimensional array becomes shape `[1]`.
 - The meta of a frame is an ordered map with string keys. Value types: null, boolean, integer,
   float, string, list, map, bytes.
@@ -225,6 +225,7 @@ know the recorder type.
   - array → flat NPY (float32; a killed writer leaves every whole value readable);
   - table → CSV (a time column and the columns of the first frame; new columns open a new file);
   - string → text, one line per frame;
+  - event → a table with one row per event: instant, name, payload;
   - audio → WAV, float32 interleaved, a new file at the size limit of the format;
   - texture → video, with a quality of `small`, `high` or `very_high`; a resize or a quality
     change opens a new file.
@@ -239,6 +240,7 @@ know the recorder type.
 - **Dataset**: the recorder writes a dataset file directly (part 10.1): one blob per
   stream, one sample for the take, paired and synchronized, with tags and annotations.
 - A functional frame is not recorded.
+- In a dataset an event stream is one stream of the sample, on the time base of the sample.
 
 ### 2.9.5 Status
 

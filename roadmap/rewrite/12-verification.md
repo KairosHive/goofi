@@ -28,7 +28,8 @@ Situations of the goofi layer and goofi-pipe (the present situations, kept as su
 | nodes | Node files of a workspace, bundles, selection, archives. |
 | python | Both Python tiers, the probe, the GIL rule. |
 | engines, audio, graphics | Each engine under its external clock; crossings; readback. |
-| machine | State machines and events. |
+| machine | State machines and their events. |
+| events | Each event once per listener at any rate; a read true once per reader; one run per event by a slot, a pulse and the common trigger; a drop counted as a gap; a gate edge; the same result in the Kahn mode. |
 | recording | Takes, files, sidecars, manifests, the dataset type, no loss. |
 | session | Save, load, recovery, patch files. |
 | inspect | The text an agent reads. |
@@ -77,7 +78,7 @@ Python, not the implementation. A scheduler picks at random, at each step, one n
 that can progress; queues are bounded with a random depth from 1 to 8; a sender on a full queue
 waits. Nodes: finite sources with irregular and equal instants, timers, periodic engines with
 `hold` inputs, an accumulator that depends on order, a filter, a node that emits 0 to 3 frames
-per event, seeded noise, and a replicated stateless node. 60 random graphs of 10 to 25 nodes with
+per trigger, seeded noise, and a replicated stateless node. 60 random graphs of 10 to 25 nodes with
 mixed couplings, 60 % of them with a feedback edge; 200 schedules per graph; 12 000 runs per rule
 set.
 
@@ -106,7 +107,7 @@ Each correction was removed alone from the full rule set, to show that it is nee
 Minimal graphs reproduce each failure and pass under the full rules at every depth from 1 to 8
 (200 schedules each): a burst into a diamond; a dense `hold` input; two sources with equal
 instants into two `each` slots (191 to 194 different outputs with ties by arrival, 1 with the
-total order); a feedback on itself with two events at one instant; a loop with a second source;
+total order); a feedback on itself with two triggers at one instant; a loop with a second source;
 a `zip` of two rates; an ended node with a `hold` input.
 
 Limits of the result: the campaign is a report of a subagent, read from its output file; the
@@ -163,13 +164,14 @@ The rewrite is at parity when each list holds.
 
 - **Panels (10):** empty, node editor, inspector, viewer, control, variables, state machine,
   recorder, console, agent; plus plugin panels.
-- **Viewer kinds (5):** line, image, brain, string, table.
+- **Viewer kinds (5):** line, image, brain, string, table; the rewrite adds event.
 - **Slot kinds:** array, string, table, audio, texture; the rewrite adds event.
 - **Param faces:** number, integer with options, vector, colour, envelope, boolean, string,
   string with options, pulse, list section, colormap.
 - **Control widgets (10):** knob, slider, number, text, toggle, dropdown, paint, vector, colour,
-  envelope.
-- **Expression terms:** `nd`, `me`, `vars`, `sm`, `t`, `np`, math, `lfo`, `nse`, `qtz`, `gte`.
+  envelope; the rewrite adds button.
+- **Expression terms:** `nd`, `me`, `vars`, `sm`, `t`, `np`, math, `lfo`, `nse`, `qtz`, `gte`; the
+  rewrite adds reads of events with the same terms.
 - **Engines and tiers:** signal (Rust in process, Rust hosted, Python in process, Python
   subprocess), audio (Rust, VST3), graphics (WGSL, Rust and Python texture sources).
 - **Recorder files:** NPY, CSV, text, WAV, video, sidecar, manifest, annotations.

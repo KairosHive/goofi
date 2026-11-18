@@ -33,7 +33,8 @@ work and can change with the design.
   - The header is tinted with the colour of the engine of the node: signal, audio, graphics, and
     a colour for VST3 plugins.
 - **Inputs:** one pill per input slot on the left border. The colour of a pill is the colour of
-  its data type (array, string, table, audio, texture, event). A filled pill takes one source; a
+  its data type (array, string, table, audio, texture, event). The pill of an event slot flashes
+  when an event passes. A filled pill takes one source; a
   hollow pill takes a list of sources. The name of a slot shows on hover, on focus, and while a
   cable in flight is near.
 - **Coupling bar:** a vertical bar on the left side holds one control per input slot that sets
@@ -206,7 +207,7 @@ work and can change with the design.
 | Boolean | A toggle. |
 | String with options | A select, with a rescan button when the node can refresh its options. |
 | String | A text field. |
-| Pulse | A button. |
+| Pulse | A button. A press fires one event. It flashes at each event that its source fires. |
 | Unknown | A JSON text field. |
 
 - The face of a param never changes with its source. A driven param shows its live value,
@@ -248,6 +249,8 @@ work and can change with the design.
 - The completion window marks the present argument. Tab or a click accepts; Escape closes the
   window first; Ctrl+Space opens it again.
 - A dropped node with several fitting outputs asks which one by a quick pick.
+- A pulse row takes an event as its source: drop an event output, an event variable or a card of
+  a machine on it. A value as the source of a pulse is a gate, with its edge mode.
 
 ## 8.6 The control panel
 
@@ -255,7 +258,8 @@ work and can change with the design.
   group: add, rename, close. To close a tab removes the group and its variables in one undo
   step.
 - A widget is a variable with a control record: kind, range, step, options and its cell.
-- Kinds: knob, slider, number, text, toggle, dropdown, paint, vector, colour, envelope.
+- Kinds: knob, slider, number, text, toggle, dropdown, paint, vector, colour, envelope, and
+  button. A button fires an event variable (part 03.7); it holds no value.
 - The layout is a grid of 16 columns. Rows are near square with a touch floor. A cell snaps to
   the grid.
 - **Edit mode:** a palette of widget kinds (tap places one; drag places it at a cell); drag a
@@ -278,7 +282,8 @@ work and can change with the design.
 - A variable is `group.element`. Every expression reads it as `vars.group.element`.
 - The document holds the configuration of a variable. Values travel as frames, and only for
   groups that a client has open.
-- Forms: number, text, list, image (a paint pad).
+- Forms: number, text, list, image (a paint pad), event (a fire button and the instant of the
+  last event).
 - Groups collapse. A group shows its origin: state machine, control panel, MIDI device, system.
 - Locks: a configuration lock (name, widget, membership) and a value lock, on a group and on an
   entry. Device, machine and system groups are locked.

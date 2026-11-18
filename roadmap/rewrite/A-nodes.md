@@ -149,7 +149,11 @@ Marks: (R) Rust, (P) Python, (W) WGSL.
 
 - Loader and writer nodes for datasets (part 04.9).
 - A `Feedback` node on the signal plane.
-- Event sources: a threshold edge, a MIDI note (part 03.6.4).
+- Event nodes (part 03.7): an edge node (a value to events), a gate node (events to a value), a
+  playback node for recorded events.
+- Event outputs on present nodes whose output says "it happened": the tick of `Clock`, the edge
+  of `Threshold`, the notes of the MIDI inputs, the end of the playback nodes. Present pulse
+  inputs (the `take` of `Hold`, every `reset`) take events.
 
 ## A.15 Candidates named in the present roadmap, outside the rewrite
 

@@ -28,7 +28,7 @@ of every program of the ecosystem.
 
 | Connection | Content |
 | --- | --- |
-| Control (WebSocket, JSON) | Op calls with their replies; previews; events (8.1.3). |
+| Control (WebSocket, JSON) | Op calls with their replies; previews; push events (8.1.3). |
 | Data (WebSocket, binary, one per node output) | Frames in the wire format; the client declares what it can draw (part 02.10). Variable values use the same connection kind. |
 | Presence (WebSocket) | The peers and their pointers. |
 | Terminal (WebSocket, one per agent instance) | PTY bytes both ways; resize messages. |
@@ -50,9 +50,10 @@ of every program of the ecosystem.
   button and does nothing else.
 - A call made while the connection is lost fails at once. Nothing is queued or sent again.
 
-### 8.1.3 Events
+### 8.1.3 Push events
 
-The server pushes: the hello (the protocol version, the instance, demo, examples, history
+A push event is a message from the server to a client. It is not an event of the patch (part
+03.7). The server pushes: the hello (the protocol version, the instance, demo, examples, history
 labels); the document seed and its deltas; node stages, health and rates; evaluated param values
 and source errors; log batches; the unsaved flag and the save path; the status of a recording;
 the catalog of node types; the roster of agents; the history labels.
@@ -126,7 +127,7 @@ overlays. There is no menu bar and no status bar.
 
 ### 8.2.3 Undo and redo
 
-- One history serves all clients (part 03.8). The client shows only the labels.
+- One history serves all clients (part 03.9). The client shows only the labels.
 - An undo or a redo restores the navigation context of the step: the tab, the panel, the scope
   and the selection. The nodes it touched flash.
 - A refused undo is a toast.
@@ -174,7 +175,7 @@ overlays. There is no menu bar and no status bar.
 ### 8.3.1 Model
 
 - In this part "workspace" means the panel workspace of the app. It is the arrangement of the
-  patch (part 03.7): tabs, and in each tab a tree of splits and panels. It is part of the patch:
+  patch (part 03.8): tabs, and in each tab a tree of splits and panels. It is part of the patch:
   saved, shared by all clients, undoable. The folder of a patch is the patch workspace (part
   03.1).
 - There are no floating panels and no separate windows.

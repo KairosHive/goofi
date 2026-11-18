@@ -117,7 +117,7 @@ A check asserts that every present op has a row (part 12.5).
 ## B.2 Ops the rewrite adds
 
 `node slot edit`, `link list`, `history get`, `agent send`, `account status`, `account login`,
-`account logout`, `machine event`, `library source list|add|remove`,
+`account logout`, `machine event`, `variable fire`, `library source list|add|remove`,
 `library bundle list|add|remove|update`, `library publish`, `library search`.
 
 ## B.3 Inconsistencies of the present vocabulary that the shape of part 07.1.4 removes

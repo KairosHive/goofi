@@ -13,10 +13,10 @@ part 00.5.
 | 1 | The slice: time, paths, session, log; frames; the wire format; a `latest` connection in process; one node contract in Rust; the signal engine with one oscillator node; the op framework with `node add`; a server; the op client, the replica and one line viewer. | The oscillator runs and its line moves in the browser; a situation and a browser test prove it. | 02.1–02.3, 02.5–02.8, 03.2–03.3, 04.1–04.5, 05.1, 06.2, 07.1, 08.1, 08.8, 09.6 |
 | 2 | Foundation in full: the transport with every delivery and channel; building of components; the recorder with the files type; value descriptions; shared codecs. | Situations of timing, transport, codec, children, ready, logging, recording. | 02 |
 | 3 | The patch in full: graph, sub-patches, params and sources, expressions, variables, history, previews, settle, replication, patch files, recovery. The CLI and its styles. | Situations of editing, subpatches, session, contracts, inspect, cli. A patch is built from the CLI alone. | 03, 07.1–07.2, 07.5–07.6, B |
-| 4 | The node library: Rust, Python and WGSL contracts; discovery; the builder; both Python tiers; hosted nodes on the transport; the bundles `signal` and `eeg`. | Situations of nodes, python, running, param modulation. The EEG examples run headless. | 04, 05.0–05.1, 06.1–06.2, A |
+| 4 | The node library: Rust, Python and WGSL contracts; discovery; the builder; both Python tiers; hosted nodes on the transport; the bundles `signal` and `eeg`. | Situations of nodes, python, running, param modulation. The EEG examples run headless. | 04, 05.0–05.1, 06.1–06.2, 03.7, A |
 | 5 | The shared UI library and the goofi-pipe app: shell, workspace, node editor, inspector, viewers, console. | Situation of browser. The browser suite on desktop, phone and tablet. | 09, 08.1–08.5, 08.8, 08.11 |
 | 6 | The audio engine with its bundle, MIDI and VST3. The graphics engine with its bundle and windows. Crossings between the planes. | Situations of audio, graphics, engines. Every example runs. | 05, A |
-| 7 | Variables panel, control panel, MIDI learn, state machines and events, the machine panel. | Situation of machine; the browser specs of machine, variables and MIDI learn. | 03.5–03.6, 08.6–08.7, 08.9 |
+| 7 | Variables panel, control panel, MIDI learn, state machines and events, the machine panel. | Situations of machine and events; the browser specs of machine, variables and MIDI learn. | 03.5–03.7, 08.6–08.7, 08.9 |
 | 8 | Recorder panel, agent harness and panel, guides, MCP, plugins and the two shipped plugins, demo mode. | Situations of agent, mcp, plugins, demo, headless. | 07.2–07.4, 08.10, 08.12–08.13, 08.1.4 |
 | 9 | The library with sources and bundles; the remaining bundles of appendix A ported under the conventions of part 04.9. | Situation of shipped: every node and every example loads. goofi-pipe is at parity (part 12.8). | 04.8–04.9, 08.14, A, 12.8 |
 | 10 | The Kahn mode over the same graph and engines (the first part of goofi-data), driven over a recording of the files type; loader and writer nodes follow with stage 11. | Situation of kahn. | 06.3–06.5 |
@@ -59,7 +59,7 @@ confirmed.
 | 6 | The library under `~/.goofi/library/`, the private bundle as `_local`. | `~/.goofi/custom/`; the present roadmap says `~/.goofi/nodes/`. | 04.8 |
 | 7 | A small manifest per bundle (name, author, description, licence). | A bundle is a bare folder. | 04.1 |
 | 8 | Naming conventions for every shipped node, with renamed slots, params and some types (`Lfo`, `Llm`). | Mixed conventions. | 04.9 |
-| 9 | An event kind for slots and frames. | Decided in `triggers.md` as triggers; not built. | 02.6, 03.6.4 |
+| 9 | Events as a native kind: frames, slots, cables, pulse params and variables; delivery once per listener; a read that is true once; one run per event. | Directed on 2026-11-18. `triggers.md` decided delivery once and queues; nothing is built. | 03.7 |
 | 10 | A `Feedback` node on the signal plane and one way to declare feedback. | Audio and graphics have one each, declared two ways. | 04.2 |
 | 11 | A library refresh picks up a changed node in every engine, a replaced VST3 bundle included. | A replaced VST3 bundle needs a restart. | 05.0 |
 | 12 | Reduction for viewers that keeps what is seen (minimum and maximum for lines, area average for images) in one place. | Strided subsampling on the server and a second fold in the browser. | 02.10 |
@@ -80,6 +80,8 @@ confirmed.
 | 27 | The Kahn rules as corrected by the model: a total order of equal instants, progress as a bound on the next frame, `zip` by instant, strict progress on feedback, drain and discard rules, a horizon for timers. | The first wording in `node-triggering.md` deadlocks in the model. | 06.3, 12.4 |
 | 28 | The dataset file in the goofi layer. | Not decided; it follows from the layer rule. | 01.2 |
 | 29 | The dashboard views of goofi-data. | The frontend organization is open. | 10.6 |
+| 30 | Details of events that this spec chose: an event is read with the ordinary terms (no `nd().on(...)`); a pulse param is an event input; a clocked plane reads a count per block or tick; the machine events `arrived`, `departed`, `due`; event variables with a button widget and MIDI `note_on` and `note_off`; an event viewer; a flash on the pill; the op `variable fire`; an edge node and a gate node. | None of these exists. | 03.7 |
+| 31 | The cause of a run is called a trigger; the word event is kept for the kind of part 03.7. | `node-triggering.md` calls the cause of a run an event. | 06.1 |
 
 ## 13.3 Open decisions
 
@@ -94,9 +96,10 @@ present program runs **(1)**.
 limit of the recorder queue; the channel of the recorder interface as a process; the unbounded
 queue across processes; the default recorder type of goofi-pipe.
 
-**Patch (part 03.11):** an event at the block or at the sample in audio; an event with or
-without a payload; exact step onsets in audio; the limit between a variable value in the
-document and in the workspace.
+**Patch (part 03.12):** an event at the block or at the sample in audio; how much an event
+carries; the form in which an event is read (the ordinary terms, or `nd().on(...)`); the depth of
+the event queue of a listener; exact step onsets in audio; the limit between a variable value in
+the document and in the workspace.
 
 **Nodes (part 04.10):** shared graphics policies; private repositories and dependency
 preparation; review or signing of published bundles.

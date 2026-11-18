@@ -24,9 +24,11 @@ This file holds sections 8.8 to 8.15.
 | brain | EEG arrays with channel names. | `topomap` (one value per channel, interpolated on a head), `ring` and `3d` (a matrix between channels as edges), `auto`. |
 | string | Strings. | Plain text or sanitized Markdown. |
 | table | Tables. | A tree of keys; nested tables collapse. |
+| event | Events. | A raster of the recent events over time; the name and the payload of the newest. |
 
-- The kind follows the slot: a string slot shows the string viewer and a table slot the table
-  viewer. An array slot defaults to line, an audio slot to line, a texture slot to image, and
+- The kind follows the slot: a string slot shows the string viewer, a table slot the table
+  viewer and an event slot the event viewer. An array slot defaults to line, an audio slot to
+  line, a texture slot to image, and
   the user can choose line, image or brain.
 - An image with a log scale and a colormap is a spectrogram. A texture output is shown from the
   readback of the graphics engine.
@@ -94,6 +96,8 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
 - A card drag previews and commits one op.
 - A card dragged onto a param row binds the row to that attribute of the playhead.
 - Alt held during a drag acts as the chain tool.
+- A card shows the events of its state as it emits them. A card or a playhead dragged onto a
+  pulse row binds the row to an event of the machine.
 
 ### 8.9.3 Score
 
@@ -130,6 +134,7 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
   state, `node/slot`, its format, frames written, the fill of its queue, a disarm control, and a
   quality select for a texture stream.
 - Playback of a recording is by the playback nodes, not by the panel.
+- An armed event output is recorded as one row per event (part 02.9.4).
 
 ## 8.11 The console panel
 

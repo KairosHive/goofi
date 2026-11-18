@@ -6,7 +6,7 @@ rules. A cable crosses between them through a node that declares the crossing.
 
 | Engine | Frames of | Runs on |
 | --- | --- | --- |
-| signal | Array, string and table data at whatever rate the source runs. | Each node by itself, on its own events. |
+| signal | Array, string and table data at whatever rate the source runs. | Each node by itself, on its own triggers. |
 | audio | Audio blocks at the device rate. | One ordered plan on the audio clock. |
 | graphics | Textures. | One ordered plan on the GPU, at the frame rate. |
 
@@ -32,10 +32,12 @@ rules. A cable crosses between them through a node that declares the crossing.
 - A changed node source runs after a library refresh without a restart of the program, in every
   engine.
 - Each engine has a group of common params (part 04.3) declared in one place.
+- Events (part 03.7) cross every plane. An engine with a clock applies the pending events at
+  the start of a block or a tick and never merges two of them.
 
 ## 5.1 The signal engine
 
-- A signal node runs on its own events (part 06). It never waits for another node.
+- A signal node runs on its own triggers (part 06). It never waits for another node.
 - The engine sends each changed node its new wiring, sources and armed outputs at a settle.
 - A node is initialized as one unit: construction, the replay of every param through the
   param-changed hook, then setup. A failure leaves the node in the setup stage with the error.
@@ -105,7 +107,8 @@ rules. A cable crosses between them through a node that declares the crossing.
   - a direct reference to an audio output is modulation at audio rate;
   - an expression is evaluated beside the clock and arrives as values per block;
   - a functional is evaluated at the time of the block and ramped;
-  - a pulse is high for one block.
+  - a pulse carries the count of its events for one block and is zero in every other block
+    (part 03.7.3).
 - A node declares which of its params take audio-rate sources.
 - A value that cannot be applied is an error on the param, never a silent drop.
 - **Crossing in** (an array input on an audio node): the newest frame plays as a waveform (it
@@ -158,7 +161,7 @@ rules. A cable crosses between them through a node that declares the crossing.
   note tuning. The bend range is learned per plugin and cached with the scan.
 - The editor of a plugin opens in a native window. Edits in the editor go to the patch; edits of
   the patch go to the editor. A preset change reads every value back.
-- The state of a plugin is saved per node in the workspace (part 03.10).
+- The state of a plugin is saved per node in the workspace (part 03.11).
 - The engine reports the latency of a plugin.
 - The host reports a playing transport with a tempo and a metre to a plugin.
 - A hidden, read-only or bypass param of a plugin is left out. A program list is a param with

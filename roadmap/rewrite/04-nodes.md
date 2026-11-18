@@ -39,6 +39,8 @@ A node declares, in constants that are read once without running the node:
 - A slot name and a param name follow the name rule of nodes (part 03.2).
 - A discovery refuses a manifest with an unknown tag, an illegal name, a duplicate name or an
   output of the kind of another engine. The type is then unavailable with the reason.
+- Slot kinds are those of part 03.3. An input or an output of kind event carries events (part
+  03.7). The default coupling of an event input is `each`.
 
 ## 4.3 Params
 
@@ -46,7 +48,7 @@ A node declares, in constants that are read once without running the node:
   expression, a section, show rules and a role.
 - Kinds: **number** (scalar or vector; float or integer; a soft range; options; a face: plain,
   colour, envelope), **boolean**, **string** (free, or with options, or with options the node
-  refreshes at run time), **pulse**.
+  refreshes at run time), **pulse** (an event input in the form of a param; part 03.7).
 - The range of a number is the range its values can take. It guides the widgets. It is not a
   clamp.
 - A colour is four numbers from 0 to 1. An envelope is attack, decay, sustain and release;
@@ -79,6 +81,8 @@ A node declares, in constants that are read once without running the node:
 - A param edit never runs a node.
 - A node can declare a common param itself; its declaration replaces the default and the range.
 - A show rule on a section applies to every param of the section.
+- A pulse param receives events. Its hook runs once per event. A node reads a pulse inside a
+  run as true once per event.
 
 ## 4.4 The three languages
 
@@ -91,6 +95,8 @@ an efficient Python package already implements. A shader is WGSL.
   line. The node module forbids unsafe code. A node uses the SDK and a fixed list of crates.
 - **Signal and texture-source interface:** setup; process (inputs, outputs, context, params);
   hooks for a changed param, refreshed options and a pulse; teardown when the node is dropped.
+  An output of kind event is emitted with a name and a payload; an input of kind event gives the
+  event of the run, or with `hold` coupling the next pending event once.
 - **Audio interface:** the channel widths of the ports; prepare (rate); process (block);
   save and load of state. `process` does not allocate, lock or make a system call. A numeric
   param arrives as a lane of values per sample or as one value per block. Helpers cover
@@ -122,8 +128,9 @@ class Smooth(goofi.Node):
   its meta, a dictionary (a table), an array (it takes the meta of the first input when the
   shape matches), or a texture.
 - Methods: `setup`, `process`, `stop`; one refresh method and one pulse method per param that
-  needs it. Members: the params, the patch time, the seeded random generator, the log, and the
-  clearing of an input.
+  needs it. `goofi.DataType.EVENT` declares an event slot; `goofi.Event(name, **payload)` is the
+  value a node returns to emit one. Members: the params, the patch time, the seeded random
+  generator, the log, and the clearing of an input.
 - A group that is a list of dictionaries has one section per dictionary. A show rule is a pair
   of a controller and its values.
 - The package gives: frames with meta helpers; a stream with history; the geometry encoder; the
@@ -138,6 +145,8 @@ class Smooth(goofi.Node):
   buffers. The one output is `out`.
 - The body defines `shade(uv)` and one `next_<buffer>(uv)` per state buffer (part 05.3.2).
 - A param is read as `p.<name>`; a list as `p.<name>[i]` with its count.
+- A pulse param and an event input of a shader read the count of the events of the tick: zero
+  on every tick without an event.
 
 ## 4.5 Lifecycle and context
 
@@ -150,6 +159,7 @@ class Smooth(goofi.Node):
 - A node that reads only the context for time and randomness is deterministic in the Kahn mode.
 - A panic or an exception in any hook is the error of the node and never crosses into the
   engine.
+- The context gives the event that caused the run, when an event caused it.
 
 ## 4.6 Discovery and build
 
@@ -253,7 +263,9 @@ class Smooth(goofi.Node):
   `audio:SignalIn`, `audio:GraphicsIn`, `graphics:SignalIn`, `graphics:AudioIn`); one `Variable`
   node per plane; pass-through anchors for expressions (one per kind on the signal plane, one on
   the audio plane); one `Feedback`
-  node per plane; playback nodes for recorded arrays, strings, tables and audio.
+  node per plane; playback nodes for recorded arrays, strings, tables, events and audio; an edge
+  node that turns a value into events (rising, falling, change), and a gate node that turns
+  events into a value (a gate of a set length, a toggle, a count).
 - **Loader and writer nodes** connect a graph to a dataset (part 10.4): a loader emits the
   frames of a sample between markers; a writer writes blobs and samples.
 - Conventions every shipped node follows:
@@ -270,6 +282,7 @@ class Smooth(goofi.Node):
   | Seeds | An integer; −1 is random. |
   | Lists | A vector or a list param, not a string to parse. |
   | Run control | `running` (boolean) and `reset` (pulse). |
+  | Momentary outputs | An output that says "it happened" is an event output, not a value that is 1 for one frame. |
   | Files | `file` or `folder`; a bare name resolves in the home; a path is absolute or relative to the workspace. |
   | Images | A texture on every plane that takes images. |
   | Axis | `axis`, default −1 (time). |

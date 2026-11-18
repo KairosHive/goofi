@@ -35,7 +35,7 @@ The parts are in five groups:
 | 00 | `00-principles.md` | Design principles, policy, method, tests, definition of done, conventions of the spec. |
 | 01 | `01-ecosystem.md` | Programs, layers, repository, running, home and session, trust, account, licence. |
 | 02 | `02-foundation.md` | Time, paths, session, building, log, payload and stamps, wire format, transport, recorder, browser data plane, pitch. |
-| 03 | `03-patch.md` | The patch: nodes, slots, cables, sub-patches, params, expressions, variables, state machines, arrangement, history, replication, files. |
+| 03 | `03-patch.md` | The patch: nodes, slots, cables, sub-patches, params, expressions, variables, state machines, events, arrangement, history, replication, files. |
 | 04 | `04-nodes.md` | The node contract, manifest, params, the three languages, discovery and build, the library, conventions. |
 | 05 | `05-engines.md` | Signal, audio and graphics engines; devices, MIDI, VST3, windows. |
 | 06 | `06-modes.md` | The live mode and the Kahn mode. |
@@ -81,7 +81,10 @@ The parts are in five groups:
 | plane | The data of one engine: signal, audio, graphics. |
 | crossing | A node that takes the data of another plane. |
 | coupling | What an input slot does with a frame: `each`, `zip` or `hold`. |
-| event | Something that happened once, delivered once to each listener: a kind of frame. Also the cause of a run of a node (part 06.1). A message the server pushes to a client is called a push event. |
+| event | Something that happened once at one instant. It is delivered once to each listener and read as true once (part 03.7). |
+| trigger | What causes one run of a node: a frame on an `each` slot, a complete `zip` group, a timer tick, or an event (part 06.1). |
+| pulse param | An event input of a node in the form of a param. |
+| push event | A message that the server sends to a client (part 08.1.3). It is not an event of the patch. |
 | settle | The one point after a batch where all consequences are decided from the change. |
 | arrangement | The layout of tabs, splits and panels of a patch; the panel workspace of the app. |
 | workspace | The folder of a patch: its node files, node state and skills. |

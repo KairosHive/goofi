@@ -17,13 +17,13 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 - Fonts: one for the interface and one monospaced for data, both shipped with the app.
 - Icons: one vendored set drawn by one renderer. No text glyph stands in for an icon.
 - One focus ring. Contrast is tested.
-- The node metrics and the grid are generated from the backend constants (part 03.7).
+- The node metrics and the grid are generated from the backend constants (part 03.8).
 
 ## 9.2 The edit model
 
 - Every control follows one model: input previews, change commits. A control shows its own
   value until its source echoes. Focus and blur without a change are not an edit.
-- A primitive does not import application state. It takes values and reports events.
+- A primitive does not import application state. It takes values and reports changes.
 - Every text field goes through one text input that sets the keyboard of the device: prose,
   identifier (no capitals, no correction) or path.
 
@@ -36,6 +36,7 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 | Number input | Enter or blur commits; Up and Down step; it clamps only when bounds are given. |
 | Text input | Blur commits; Enter commits one line; a multi-line field keeps Enter. |
 | Toggle | A switch. |
+| Button | A momentary control: one press is one event. It can flash. |
 | Select | A list of options with labels; an optional rescan control with a busy state; a stale value stays selectable. |
 | Combobox | Filters by typing; only a listed name commits. |
 | Segmented | An exclusive strip; also multi-select; icons, counts, a danger tone. |

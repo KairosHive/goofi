@@ -8,43 +8,50 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
 | --- | --- | --- |
 | Program | goofi-pipe | goofi-data |
 | Time | The patch clock follows the wall clock. | The patch clock is data time. |
-| Cable | One cell: latest wins. | A bounded queue: every frame, in order. |
+| Cable | One cell: latest wins. An event cable is a queue. | A bounded queue: every frame, in order. |
 | Slow consumer | Skips frames. | Holds its producer back. |
 | Purpose | A person plays the patch now. | A recipe runs over a dataset, lossless. |
 | Result | Depends on timing. | The same on every run. |
 
 ## 6.1 What both modes share
 
-- **Events per slot.** Each input slot has a coupling, declared by the node and changed per
+- **A trigger** is what causes one run of a node: a frame on an `each` slot, a complete `zip`
+  group, a tick of the timer of the node, or an event (part 03.7) on an event slot, on a pulse
+  param or on the common `trigger` param.
+- **Triggers per slot.** Each input slot has a coupling, declared by the node and changed per
   instance by the user:
-  - `each`: every frame that arrives on the slot is an event that runs the node.
-  - `zip`: the slot belongs to a group; one event occurs when every slot of the group holds a
+  - `each`: every frame that arrives on the slot is a trigger that runs the node.
+  - `zip`: the slot belongs to a group; one trigger occurs when every slot of the group holds a
     fresh frame.
-  - `hold`: the slot never causes an event; the node reads the value it holds.
-- **Timers.** A node with `autotrigger` runs at its frequency without an input event. The common
-  params of a node (part 04.3) set its rate: the frequency of its timer and the cap on its
-  runs.
-- **A pulse** runs a node once on demand.
+  - `hold`: the slot never causes a trigger; the node reads the value it holds.
+- **Timers.** A node with `autotrigger` runs at its frequency without an input trigger. The
+  common params of a node (part 04.3) set its rate: the frequency of its timer and the cap on
+  its runs.
+- **The common `trigger` param** runs a node once per event that it receives (part 03.7.4).
+- **Events are never merged.** An event slot has the coupling `each` by default and delivers
+  every event, in both modes. A `hold` slot of kind event gives each event once.
 - **One run, one settle.** A run reads its inputs, calls the node, publishes the outputs, stamps
   each frame, and then clears the inputs that the node declares as cleared. Input clearing takes
   effect after a successful run and before the next drain of the inputs.
 - **Stamps.** Every frame carries the stamps of the run that made it (part 02.6). Stamps are
   never inherited.
-- **A change of the patch** reaches a running node at a settle (part 03.8): new wiring, new
+- **A change of the patch** reaches a running node at a settle (part 03.9): new wiring, new
   param sources and new armed outputs are applied whole between two runs.
 - **A failure** in a run goes to the error channel of the node. The node stays in the graph and
-  runs again at its next event.
+  runs again at its next trigger.
 - **A feedback edge** is legal. The mode knows which edges close a loop.
 
 ## 6.2 The live mode
 
-- There is no global tick. Each signal node waits for its own events and its own timer. Audio
+- There is no global tick. Each signal node waits for its own triggers and its own timer. Audio
   and graphics run on clocks of their own (part 05).
 - A cable holds the newest frame only. A node that is slower than its producer sees the newest
   frame at each run and never a backlog.
-- An `each` or `zip` event with several frames waiting delivers the newest.
+- An `each` or `zip` trigger with several data frames waiting delivers the newest. Events are
+  the exception: each event is a trigger of its own and waits in a queue (part 03.7.3).
 - A node never blocks its producer, and a producer never waits for a consumer.
-- The rate of a node caps how often it runs; events that arrive faster coalesce.
+- The rate of a node caps how often it runs. Data triggers that arrive faster coalesce; events
+  wait and do not coalesce.
 - Node processing never runs under the graph lock. An edit of the patch does not wait for a node.
 - A node hosted in another process (a Python subprocess node, a Rust node built after the start)
   behaves as an in-process node: it schedules itself, and its death is seen and repaired by the
@@ -69,21 +76,22 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
 The rules below include the corrections that a model of the rules made necessary (part 12.4).
 
 1. **Time is data time.** The patch clock does not advance by itself. The time of a run is the
-   instant of the event that caused it. Stamps and the `t` of an expression carry that instant.
+   instant of the trigger that caused it. Stamps and the `t` of an expression carry that instant.
    A timer keeps its meaning in data time: a 10 Hz timer emits at instants 0.1 s apart.
 2. **A cable is a queue.** It carries every frame in order. A producer ahead of its consumer waits
    and never drops.
-3. **A node runs once per event, in instant order.** With several `each` slots, the node takes
-   the events in the order of their instants, not of their arrival.
-4. **Equal instants have a total order.** Events at one instant run in the declared order of
+3. **A node runs once per trigger, in instant order.** With several `each` slots, the node takes
+   the triggers in the order of their instants, not of their arrival.
+4. **Equal instants have a total order.** Triggers at one instant run in the declared order of
    the slots, then in queue order within a slot. A `zip` group counts at its first slot.
-5. **A `hold` slot is read by instant.** At an event at instant t, a hold slot gives the latest
+5. **A `hold` slot is read by instant.** At a trigger at instant t, a hold slot gives the latest
    frame with an instant ≤ t. The read waits until the progress of that input has reached t.
    A param source that reads a node, a variable or a playhead is the same read: it gives the
-   value at the instant of the event.
-6. **A `zip` event is defined by instant.** It occurs at the instant at which the last slot of
-   the group gets a frame newer than the previous zip event. Each slot gives its latest frame at
-   or before that instant, and the frames at or before it are consumed.
+   value at the instant of the trigger. A read of an event at instant t takes the pending
+   events with an instant ≤ t, one per read (part 03.7.7).
+6. **A `zip` trigger is defined by instant.** It occurs at the instant at which the last slot of
+   the group gets a frame newer than the previous zip trigger. Each slot gives its latest frame
+   at or before that instant, and the frames at or before it are consumed.
 7. **A feedback edge is one frame of delay.** At instant t it gives the latest frame of the
    producer with an instant < t. The read waits until the progress of the edge says that no
    frame before t follows.
@@ -97,19 +105,20 @@ The rules below include the corrections that a model of the rules made necessary
 
 - Each queue carries, beside its frames, the progress of its producer: a bound on the next
   frame. It has two forms: "no further frame before t" and "no further frame at or before t".
-- A node publishes "none before t" when it takes an event at t, before it sends a frame. It
-  publishes "none at or before t" when no other event at t can occur. A node without a pending
-  event forwards the lowest bound of its event inputs: the instant at the head of a queue, else
-  the progress of the input. A node sets the progress to the end when its stream closes.
+- A node publishes "none before t" when it takes a trigger at t, before it sends a frame. It
+  publishes "none at or before t" when no other trigger at t can occur. A node without a pending
+  trigger forwards the lowest bound of the inputs that can trigger it: the instant at the head of
+  a queue, else the progress of the input. A node sets the progress to the end when its stream
+  closes.
 - The progress of a timer or an engine is its next tick. It does not depend on a slow `hold`
   input.
-- A node takes its earliest pending event at instant t when the progress of every input has
+- A node takes its earliest pending trigger at instant t when the progress of every input has
   reached t.
 - **A sender never waits inside one instant.** The bound of a queue counts instants: a frame
   with the instant of the newest frame in the queue is always admitted.
 - **A `hold` queue and a feedback queue drain by progress.** The node removes the frames it can
-  no longer need: all but the latest at or before the lower bound of its next event.
-- **A slot that can cause no further event discards its frames.** A node whose streams have
+  no longer need: all but the latest at or before the lower bound of its next trigger.
+- **A slot that can cause no further trigger discards its frames.** A node whose streams have
   ended discards all of its inputs. A `zip` group ends when one of its slots has ended and is
   empty, and then discards the frames of its other slots.
 - With these rules the graph has no deadlock and no dependence on the schedule, for every queue
@@ -129,9 +138,9 @@ The rules below include the corrections that a model of the rules made necessary
 ### 6.3.5 Replication
 
 - A stateless node can run as k workers on one queue. The outputs are put in the order of the
-  input events again before the next queue.
+  input triggers again before the next queue.
 - The stage that restores the order owns the progress of the replicated node: it is the bound of
-  the oldest event that has not left.
+  the oldest trigger that has not left.
 - The scheduler of goofi-data (part 10.4.2) sets k, the depth of each queue and the number of
   network instances.
 

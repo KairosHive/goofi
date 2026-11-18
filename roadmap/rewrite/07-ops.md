@@ -35,7 +35,7 @@ goofi-data. Appendix B maps every op of the present program to this vocabulary.
 - A batch runs reads and writes as one transaction: every step is resolved before one runs; one
   settle, one document delta, one history step; a refused step rolls all back.
 - A write is a transaction: it runs on a snapshot; a refusal or a panic restores the snapshot;
-  a success settles once (part 03.8).
+  a success settles once (part 03.9).
 
 ### 7.1.4 Shape of the vocabulary
 
@@ -169,7 +169,8 @@ home, loaded at the start. No plugin loads in demo mode.
   be updated and disposed).
 - A plugin panel is a panel type like a built-in one and is added through the normal panel
   interface. A plugin gives its panel an icon.
-- A plugin frontend can subscribe to the events of the program; it does not poll.
+- A plugin frontend can subscribe to the push events of the program (part 08.1.3); it does not
+  poll.
 - Authored panel state is part of the patch; credentials and data never go there.
 - The names of the SDK use one case convention.
 - An error in a handler of a plugin is caught and reported as a notification. A header entry can
@@ -229,7 +230,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | Op | Kind | Meaning |
 | --- | --- | --- |
 | `node list [--scope]` | R | The nodes and cables of a scope. |
-| `node get <node>` | R | Params, outputs with rates, slots, error. |
+| `node get <node>` | R | Params, outputs with rates, slots, error. Also the events in and out per second and the drops. |
 | `node add <type>` | W | `--name --pos --scope --param`. Returns the name, identity, slots and params. |
 | `node edit <node>` | W P | `--name --pos`. |
 | `node remove <node>…` | W | A leaf, a port, or a whole sub-patch. |
@@ -241,7 +242,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | `node arrange` | W | `--scope`. Lay out by dataflow. |
 | `node param edit <node> <param>` | W P | `--value --expression --mode`. One param or one element. |
 | `node param reset <node>` | W | The present state becomes the zero point. |
-| `node param pulse <node> <param>` | E | Fire a pulse. |
+| `node param pulse <node> <param>` | E | Fire a pulse. One event (part 03.7). |
 | `node param refresh <node> <param>` | E | List the options again. |
 | `node slot edit <node> <slot>` | W | `--coupling each\|zip\|hold --group`. |
 | `node view edit <output>` | W P | The inline viewer: `--kind --settings --collapsed`. `--clear` removes the stored view. |
@@ -263,6 +264,7 @@ W is a write, E an effect, R a read. P marks a write that can be previewed.
 | `variable edit <name>` | W P | `--name --value --expression --widget --range --step --options --cell --lock`. Also `--resolution`. |
 | `variable remove <name>` | W | |
 | `variable paint <name>` | W P | Draw on an image variable with the drawing script (strokes, fills, clear). |
+| `variable fire <name>` | E | Fire an event variable once. |
 | `variable group add [group]`, `variable group edit <group>`, `variable group remove <group>` | W | `edit` takes `--name --lock`. |
 
 ### machine
