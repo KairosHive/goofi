@@ -34,9 +34,10 @@
 		flex-wrap: var(--bar-wrap, nowrap);
 		min-width: 0;
 		min-height: var(--bar-height, var(--panel-header-h));
-		/* No vertical padding: the strip is exactly the panel-header height, and a bar that needs
-		   some asks for it back through `--bar-pad-y`. */
-		padding: var(--bar-pad-y, 0) var(--bar-pad-x, var(--space-4));
+		/* Above and below, the room a focus ring takes: the strip is the panel-header height while
+		   its controls are the chrome's, and as much taller as a taller control needs to keep its
+		   ring inside the strip. A bar that wants more asks through `--bar-pad-y`. */
+		padding: var(--bar-pad-y, var(--focus-reach)) var(--bar-pad-x, var(--space-4));
 		/* Inherited, not reached into: a control is dense by being IN a bar, not by saying so. */
 		--panelty-icon-btn-size: var(--chrome-control-h);
 		--chip-size: var(--chrome-control-h);

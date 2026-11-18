@@ -1,5 +1,6 @@
-<!-- What a track says about itself, beside its lane: its name with the actions used most, then
-     its settings in groups, the group in use first. The groups that do not fit in the room the
+<!-- What a track says about itself, beside its lane: its name with hide and delete, then its
+     settings in named sections that fold: what is picked, the recording with its button on the
+     section's own line, and the lane's own settings. The sections that do not fit in the room the
      track has go, whole, behind one menu in the title. -->
 <script lang="ts" module>
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
@@ -18,9 +19,9 @@
 <script lang="ts">
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
-	import { drag, dropTarget } from '$lib/drag';
-	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Button, CurvePicker, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
+	import ParamField from '$lib/inspector/ParamField.svelte';
+	import { numberDescriptor } from '$lib/machine/attributes';
+	import { Button, CurvePicker, Disclosure, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
 
 	let {
 		id,
@@ -33,7 +34,8 @@
 		onRecord,
 		onHide,
 		onDelete,
-		onItem
+		onItem,
+		onGrow
 	}: {
 		id: string;
 		t: Track;
@@ -50,18 +52,42 @@
 		onDelete: () => void;
 		/** Change what is picked, or with `null` take it out. */
 		onItem: (to: Partial<Note & Key> | null) => void;
+		/** Ask for this much more room across the axis, in pixels; answers whether the track grows. */
+		onGrow: (by: number) => boolean;
 	} = $props();
 
-	const engine = drag();
 	const rename = (to: string): void => {
 		if (to !== t.name && isValidIdentifier(to)) onEdit({ to });
 	};
 
-	/** A track's groups of settings, in the order they stand: what is picked first, while
-	 * something is, then what is set most. */
-	const TITLES = { item: 'Selection', keyboard: 'Keyboard', grid: 'Grid', range: 'Range', record: 'Record' };
+	/** A track's sections of settings, in the order they stand: what is picked first, while
+	 * something is, then the recording, then the lane's own. */
+	const TITLES = { item: 'Selection', record: 'Record', keyboard: 'Keyboard', range: 'Range' };
 	type Group = keyof typeof TITLES;
-	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), ...(t.kind === 'note' ? (['keyboard', 'grid', 'record'] as const) : (['range', 'record'] as const))]);
+	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), 'record', t.kind === 'note' ? 'keyboard' : 'range']);
+	/** The sections that are unfolded: the recording's settings are set once, so it begins folded. */
+	const open = $state<Record<Group, boolean>>({ item: true, record: false, keyboard: true, range: true });
+	/** A section was unfolded by hand and its room is not yet found: until the page has laid the
+	 * section out, which a measure of the room follows at once. */
+	let unfolded = false;
+	function unfold(name: Group, to: boolean): void {
+		open[name] = to;
+		unfolded = to;
+		if (to) requestAnimationFrame(() => (unfolded = false));
+	}
+	let room = $state<HTMLElement | null>(null);
+	/** The sections with no room beside the lane. One that was just unfolded by hand asks the
+	 * track to grow for it first: a section does not leave for the menu because it was opened. */
+	function fitted(hidden: string[]): void {
+		const parts = unfolded && room ? [...room.querySelectorAll<HTMLElement>(':scope > [data-fit]')].filter((part) => part.style.display === 'none') : [];
+		unfolded = false;
+		for (const part of parts) part.style.display = '';
+		const short = room ? room.scrollHeight - room.clientHeight : 0;
+		for (const part of parts) part.style.display = 'none';
+		if (!(short > 0 && onGrow(short))) more = hidden;
+	}
+	/** A curve's input that is no expression: none, or a number alone. */
+	const plain = $derived(t.input.trim() === '' || Number.isFinite(Number(t.input)));
 	/** The groups the track has no room for, and whether the menu that holds them is open. */
 	let more = $state<string[]>([]);
 	let menu = $state(false);
@@ -84,7 +110,7 @@
 		const measure = (): void => {
 			const style = getComputedStyle(el);
 			const button = el.querySelector<HTMLElement>('button')!.offsetWidth + parseFloat(style.columnGap);
-			tight = el.clientWidth < parseFloat(getComputedStyle(el.querySelector('.name')!).minWidth) + 4 * button;
+			tight = el.clientWidth < parseFloat(getComputedStyle(el.querySelector('.name')!).minWidth) + 3 * button;
 			stacked = el.clientWidth < 13 * parseFloat(style.fontSize);
 		};
 		const box = new ResizeObserver(measure);
@@ -124,7 +150,6 @@
 			<Select aria-label="Root" class="root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => onEdit({ root })} />
 			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => onEdit({ scale })} />
 		</Field>
-	{:else if name === 'grid' && t.kind === 'note'}
 		<Field label="grid" row doc="The lines a note of this track snaps to when it is made or dragged; Shift or Ctrl lets it go free" data-menu-row>
 			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => onEdit({ grid })} />
 		</Field>
@@ -139,22 +164,19 @@
 			<Select aria-label="Input" data-testid="track-device" value={t.input} options={devices} labels={deviceNames} onRefresh={onRescan} onChange={(input) => onEdit({ input })} />
 		</Field>
 	{:else if name === 'record' && t.kind === 'curve'}
-		<Field label="input" row doc="What a recording takes: an expression, as a param's. Drop a node, a variable or a state on it" data-menu-row>
-			<div
-				class="input"
-				class:armed={engine.source?.tags.includes('number') && engine.source.key !== id}
-				use:dropTarget={{
-					tags: ['number'],
-					accept: (source) => source.key !== id,
-					onDrop: async ({ source, tag, at }) => {
-						const input = await source.expression?.(tag, at);
-						if (input) onEdit({ input });
-					}
-				}}
-			>
-				<ExprEditor label="Input" value={t.input} placeholder="nd('lfo0')" testid="track-input" onCommit={(input) => onEdit({ input })} />
-			</div>
-		</Field>
+		<!-- What a recording takes is a param's source: an expression typed, learned from a MIDI
+		     control, or a node, a variable or a state dropped on the row. A number alone is the
+		     row's constant, and none is no input. -->
+		<div class="whole"><ParamField
+			paramName="input"
+			descriptor={numberDescriptor(plain ? Number(t.input) || 0 : 0, t.range[0], t.range[1], 0, plain ? '' : t.input)}
+			viewKey={`track/${id}/input`}
+			accept={(source) => source.key !== id}
+			data-testid="track-input"
+			data-menu-row
+			onCommit={(v) => onEdit({ input: String(v) })}
+			onSetSource={(source) => onEdit({ input: source.expression ?? (source.mode === 'constant' ? '' : t.input) })}
+		/></div>
 		<Field label="rate" row doc="The most samples a second a recording takes of the input; a node slower than that gives its own" data-menu-row>
 			<NumberInput aria-label="Rate" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => onEdit({ rate })} />
 			{#snippet adornment()}Hz{/snippet}
@@ -162,13 +184,9 @@
 	{/if}
 {/snippet}
 
-{#snippet remove(label: string)}
-	<IconButton variant="ghost" size="sm" {label} data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
-{/snippet}
-
-<div class="title" bind:this={title}>
-	<TextInput class="name" aria-label="Track name" value={t.name} onChange={rename} />
-	<IconButton
+<!-- The recording's own button: on its section's line, folded or not. -->
+{#snippet recorder()}
+	<span class="rec"><IconButton
 		variant="ghost"
 		size="sm"
 		class={recording ? 'live' : ''}
@@ -177,12 +195,20 @@
 		aria-pressed={recording}
 		data-testid="track-record"
 		onclick={onRecord}><Icon name="circle-dot" /></IconButton
-	>
+	></span>
+{/snippet}
+
+{#snippet remove(label: string)}
+	<IconButton variant="ghost" size="sm" {label} data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
+{/snippet}
+
+<div class="title" bind:this={title}>
+	<TextInput class="name" aria-label="Track name" value={t.name} onChange={rename} />
 	{#if more.length > 0 || tight}
 		<SettingsMenu label="More" icon="ellipsis" testid="track-more" bind:open={menu}>
 			{#each groups.filter((name) => more.includes(name)) as name (name)}
 				<section aria-label={TITLES[name]}>
-					<h4>{TITLES[name]}</h4>
+					<h4>{TITLES[name]}{#if name === 'record'}{@render recorder()}{/if}</h4>
 					<FieldGrid>{@render group(name)}</FieldGrid>
 				</section>
 			{/each}
@@ -202,9 +228,14 @@
 		<IconButton variant="ghost" size="sm" label="Delete track" data-testid="track-delete" onclick={onDelete}><Icon name="x" /></IconButton>
 	{/if}
 </div>
-<div class="groups" use:fit={(hidden) => (more = hidden)}>
+<div class="groups" bind:this={room} use:fit={fitted}>
 	{#each groups as name (name)}
-		<div class="group" data-fit={name} role="group" aria-label={TITLES[name]}><FieldGrid {stacked}>{@render group(name)}</FieldGrid></div>
+		<div class="group" data-fit={name} data-testid={`track-section-${name}`}>
+			<Disclosure bind:open={() => open[name], (to) => unfold(name, to)} aside={name === 'record' ? recorder : undefined}>
+				{#snippet summary()}{TITLES[name]}{/snippet}
+				<FieldGrid {stacked}>{@render group(name)}</FieldGrid>
+			</Disclosure>
+		</div>
 	{/each}
 </div>
 
@@ -224,24 +255,38 @@
 		flex: 1 1 var(--number-width);
 		min-width: var(--number-width);
 	}
+	/* A param's own row is not a label and a control of the grid: it takes the grid's width. */
+	.whole {
+		grid-column: 1 / -1;
+		min-width: 0;
+	}
+	/* The record button stands at the end of its section's line. */
+	.rec {
+		display: inline-flex;
+		margin-left: auto;
+	}
 	/* The record button while a recording runs. */
-	.title :global(.live) {
+	.groups :global(.live),
+	h4 :global(.live) {
 		color: var(--danger);
 		background: var(--danger-fill);
 	}
 	/* The room under the title: the groups that fit, one under the other. */
+	/* It cuts what does not fit below, and not the focus ring of a control at its side. */
 	.groups {
 		flex: 1 1 0;
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
-		overflow: hidden;
+		overflow-x: visible;
+		overflow-y: clip;
 	}
-	/* A group, parted by a line from the one before; a label in it is as narrow as its word. */
+	/* A section, parted by a line from the one before; a label in it is as narrow as its word,
+	   and its rows stand under its name with no margin of their own. */
 	.group {
 		flex: none;
-		padding: var(--space-1) 0;
 		--field-label-min: 0px;
+		--disclosure-body-pad: 0 0 var(--space-2);
 	}
 	.group + .group {
 		border-top: 1px solid var(--border);
@@ -260,6 +305,9 @@
 		border-top: 1px solid var(--border);
 	}
 	h4 {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		margin: 0 0 var(--space-3);
 		font-size: var(--fs-micro);
 		font-weight: 600;
@@ -270,15 +318,5 @@
 	.acts {
 		display: flex;
 		gap: var(--space-3);
-	}
-	/* A curve track's input: a dragged value it takes outlines it. */
-	.input {
-		flex: 1 1 auto;
-		min-width: 0;
-		cursor: text;
-	}
-	.input.armed {
-		outline: 1px dashed var(--border-strong);
-		outline-offset: -1px;
 	}
 </style>

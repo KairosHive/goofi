@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from './model';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from './model';
 
 const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -45,5 +45,19 @@ describe('the timeline model', () => {
 		expect(hiding(shown, 'k-2', 'below')).toEqual(['k-3']);
 		expect(hiding(shown, 'k-2', 'others')).toEqual(['k-1', 'k-3']);
 		expect(hiding(shown, 'k-1', 'above')).toEqual([]);
+	});
+
+	it('folds a view past an end of the axis into the end of its bar', () => {
+		// Inside the axis a point stands where it is: a view of the whole axis is the whole bar.
+		expect([0, 4, 8].map((at) => barPlace(at, 8))).toEqual([0, 0.5, 1]);
+		// Past an end it is that far past at first, then less and less, and never 0.15 of the bar.
+		expect(barPlace(8.08, 8) - 1).toBeCloseTo(0.01, 2);
+		const far = [9, 16, 80, 8000].map((at) => barPlace(at, 8) - 1);
+		expect(far.every((p, i) => p < 0.15 && (i === 0 || p > far[i - 1]))).toBe(true);
+		expect(barPlace(-16, 8)).toBeCloseTo(1 - barPlace(24, 8), 12);
+		// A place on the bar is one point of the axis, there and back.
+		for (const at of [-40, -1, 0, 3, 8, 9, 100]) expect(barPoint(barPlace(at, 8), 8)).toBeCloseTo(at, 6);
+		// Past where a fold ends, the place is the furthest point a fold holds.
+		expect(barPoint(2, 8)).toBe(barPoint(1.5, 8));
 	});
 });

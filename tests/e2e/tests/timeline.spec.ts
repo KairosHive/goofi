@@ -9,6 +9,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { addNode, waitForNode } from '../lib/goofi';
 import { expectIntact } from '../lib/invariants';
 import { backendDoc, rawCall } from '../lib/raw';
 import { touchSession } from '../lib/touch';
@@ -21,12 +22,18 @@ async function trackNamed(page: Page, name: string): Promise<any> {
 const clock = async (page: Page, name: string): Promise<number> =>
 	(await rawCall(page, 'variable list')).result.variables.find((v: any) => v.name === `clock.${name}`)?.value;
 
-/** Where a track's setting is: beside its lane while its group fits there, else in the track's
- * menu, which this opens. */
+/** Where a track's setting is: in its section beside the lane, which this unfolds where it is
+ * folded, else in the menu in the track's title, which this opens. */
 async function settings(page: Page, track: Locator, setting: string): Promise<Locator> {
-	if (await track.locator(setting).first().isVisible()) return track.locator(setting).first();
-	await track.getByTestId('track-more').click();
-	return page.getByTestId('track-more-menu').locator(setting);
+	const [beside, menu, more] = [track.locator(setting).first(), page.getByTestId('track-more-menu'), track.getByTestId('track-more')];
+	if (await beside.isVisible()) return beside;
+	if (await menu.isVisible()) return menu.locator(setting);
+	for (const folded of await track.locator('.groups button[aria-expanded="false"]:visible').all()) await folded.click();
+	// An unfolded section stands beside the lane, where the track grows for it, or is in the menu.
+	await expect.poll(async () => (await beside.isVisible()) || (await more.isVisible())).toBe(true);
+	if (await beside.isVisible()) return beside;
+	await more.click();
+	return menu.locator(setting);
 }
 /** Close the track's menu, if one is open: an editor in it may take the first Escape for itself. */
 async function shut(page: Page): Promise<void> {
@@ -158,17 +165,18 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// root dim the keys outside them, and a note made on the lane lands on the scale.
 		const board = keys.getByTestId('track-keyboard').locator('span');
 		await expect(board).toHaveCount(25);
-		// The track's settings stand in groups beside its lane: a pitch is picked by its name.
-		await expect(keys.locator('.groups [role="group"]:visible')).toHaveCount(2);
+		// The track's settings stand in named sections beside its lane, each one folds, and the
+		// recording's begins folded with its button on its own line. A pitch is picked by its name.
+		const sectionOpen = (name: string): Locator => keys.getByTestId(`track-section-${name}`).locator('button[aria-expanded]');
+		await expect(sectionOpen('record')).toHaveAttribute('aria-expanded', 'false');
+		await expect(keys.getByTestId('track-section-record').getByTestId('track-record')).toBeVisible();
+		await expect(sectionOpen('keyboard')).toHaveAttribute('aria-expanded', 'true');
+		await sectionOpen('keyboard').click();
+		await expect(keys.locator('select[aria-label="Lowest"]')).toHaveCount(0);
+		await sectionOpen('keyboard').click();
 		await expect(keys.locator('select[aria-label="Lowest"] option:checked')).toHaveText('C3');
 		await choose(page, keys, 'Highest', '60');
 		await expect(board).toHaveCount(13);
-		// A track an octave high has no room for its groups: they are in the menu in its title,
-		// each whole and under its name, and no setting is cut off.
-		await expect(keys.locator('.groups [role="group"]:visible')).toHaveCount(0);
-		await keys.getByTestId('track-more').click();
-		await expect(page.getByTestId('track-more-menu').locator('h4')).toHaveText(['Keyboard', 'Grid', 'Record']);
-		await shut(page);
 		await choose(page, keys, 'Scale', 'pentatonic_major');
 		await expect(keys.locator('.keys .out')).toHaveCount(7);
 		await choose(page, keys, 'Root', 'D');
@@ -214,6 +222,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 			await keys.getByLabel(field).press('Enter');
 			await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0][field.toLowerCase()]).toBe(value);
 		}
+		// What is picked takes the room the keyboard's section had: that one is in the menu in the
+		// track's title, whole and under its name, and no setting is cut off.
+		await expect(keys.getByTestId('track-section-keyboard')).toBeHidden();
+		await keys.getByTestId('track-more').click();
+		await expect(page.getByTestId('track-more-menu').locator('h4')).toHaveText(['Keyboard']);
+		await shut(page);
 		// A press on another note picks it: the field that showed the first hands it nothing.
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
 		await expect(note).toHaveCount(2);
@@ -234,9 +248,15 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await keys.getByTestId('track-delete-picked').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
-		// One click on a note takes it out; one on an empty cell puts a note on the line of the
-		// grid before it, and the grid is the track's to choose.
+		// One click on a note picks it, in an outline of the second accent, and takes nothing out;
+		// one on an empty cell puts a note on the line of the grid before it, and the grid is the
+		// track's to choose.
+		await expect(lane.locator('.note.picked')).toHaveCount(0);
 		await note.first().click();
+		await expect(lane.locator('.note.picked')).toHaveCount(1);
+		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(192, 140, 255)');
+		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
+		await keys.getByTestId('track-delete-picked').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
 		await choose(page, keys, 'Grid', '1 s');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
@@ -317,8 +337,18 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await panel.getByTestId('clock-play').click();
 		await expect(panel.getByTestId('clock-play')).toHaveAccessibleName('Play');
 		await panel.getByTestId('clock-stop').click();
-		await expect(panel.getByTestId('clock-time')).toHaveValue('0.0');
+		// The position is a label in the corner beside the ruler, which a click makes a field.
 		const time = panel.getByTestId('clock-time');
+		await expect(time).toHaveText('0.0');
+		// A focused field's ring is inside the bar it stands in: the bar keeps the ring's reach.
+		const ringed = await panel.getByTestId('clock-bpm').evaluate((el) => {
+			(el as HTMLElement).focus();
+			const style = getComputedStyle(el);
+			const reach = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+			const [field, bar] = [el.getBoundingClientRect(), el.closest('.ui-bar')!.getBoundingClientRect()];
+			return reach > 0 && field.top - reach >= bar.top && field.bottom + reach <= bar.bottom;
+		});
+		expect(ringed, 'the bar holds the focus ring').toBe(true);
 		// The line of the position crosses the ruler and every track. Far past what is in view the
 		// view stays where it is and shows no line, and the position's field shows the whole number.
 		const line = panel.getByTestId('timeline-playhead');
@@ -328,14 +358,15 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const lastMark = async (): Promise<number> => Number(await panel.getByTestId('timeline-ruler').locator('.tick').last().innerText());
 		const marked = await lastMark();
 		await rawCall(page, 'clock set', { time: 1234.56 });
-		await expect(time).toHaveValue('1234.6');
+		await expect(time).toHaveText('1234.6');
 		await expect(line).toHaveCount(0);
 		expect(await lastMark(), 'the view stays').toBe(marked);
 		expect(await time.evaluate((el: HTMLInputElement) => el.scrollWidth <= el.clientWidth), 'the field shows the whole position').toBe(true);
 		await rawCall(page, 'clock set', { time: 0 });
-		await expect(time).toHaveValue('0.0');
-		await time.fill('3');
-		await time.press('Enter');
+		await expect(time).toHaveText('0.0');
+		await time.click();
+		await panel.getByTestId('clock-time-input').fill('3');
+		await panel.getByTestId('clock-time-input').press('Enter');
 		await expect.poll(() => clock(page, 'time')).toBe(3);
 		// A focus that types nothing is no edit: the clock stays where another hand put it.
 		await time.click();
@@ -344,7 +375,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await rawCall(page, 'clock set', { time: 5 });
 		await expect.poll(async () => (await playhead.boundingBox())!.x, 'the new position reaches the page under the focus').not.toBe(stood);
 		await panel.getByTestId('clock-bpm').click();
-		await expect(time).toHaveValue('5.0');
+		await expect(time).toHaveText('5.0');
 		expect(await clock(page, 'time')).toBe(5);
 		// A click half way along the ruler puts the position at the time the marks give that place.
 		const ruler = panel.getByTestId('timeline-ruler').locator('.lane');
@@ -424,14 +455,29 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// The range bar is the view: its end dragged in zooms in, and dragged out past the end of
 		// the bar zooms out past everything there is.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
-		await expect(time).toHaveValue('0.0');
+		await expect(time).toHaveText('0.0');
 		await expect.poll(lastMark).toBe(marked);
 		const bar = (await panel.getByTestId('range-bar').boundingBox())!;
 		expect(bar.y + bar.height, 'the range bar is right above the ruler').toBeLessThanOrEqual(axis.y + 1);
+		// The bar is as long as a lane, and a view of everything there is fills it from end to end.
+		const thumb = panel.getByTestId('range-bar').locator('.thumb');
+		const filled = (await thumb.boundingBox())!;
+		expect([Math.round(bar.x), Math.round(bar.width)], 'the bar is as long as the ruler').toEqual([Math.round(axis.x), Math.round(axis.width)]);
+		expect([Math.round(filled.x), Math.round(filled.width)], 'the view of everything fills the bar').toEqual([Math.round(bar.x), Math.round(bar.width)]);
 		await dragBy(page, panel.getByTestId('range-to'), -bar.width / 2, 0);
 		await expect.poll(lastMark).toBeLessThan(6);
-		await dragBy(page, panel.getByTestId('range-to'), bar.width * 1.5, 0);
-		await expect.poll(lastMark).toBeGreaterThan(12);
+		await expect(thumb).toHaveAttribute('data-folded', 'false');
+		// Its end dragged past the end of the bar folds there: the thumb stays on the bar and its
+		// end takes the accent, while the view goes on past everything there is.
+		await dragBy(page, panel.getByTestId('range-to'), bar.width * 0.6, 0);
+		await expect.poll(lastMark).toBeGreaterThan(marked);
+		await expect(thumb).toHaveAttribute('data-folded', 'true');
+		const folded = (await thumb.boundingBox())!;
+		expect(Math.round(folded.x + folded.width), 'the folded thumb ends where the bar ends').toBe(Math.round(bar.x + bar.width));
+		expect(await thumb.locator('.fold.after').evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(0);
+		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
+		await expect.poll(lastMark).toBe(marked);
+		await expect(thumb).toHaveAttribute('data-folded', 'false');
 
 		// A track's edge dragged resizes the track in this panel, and changes nothing of the track.
 		const tall = async (): Promise<number> => (await curve.locator('.lane').boundingBox())!.height;
@@ -476,7 +522,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	}
 });
 
-test('a held finger opens a track\'s menu, and a tap makes a note and takes it out', async ({ page, hasTouch }) => {
+test('a held finger opens a track\'s menu, and a tap makes a note and then picks it', async ({ page, hasTouch }) => {
 	test.skip(!hasTouch, 'the finger walk');
 	await page.goto('/');
 	await waitForApp(page);
@@ -489,10 +535,12 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'keys' });
 		const track = page.getByTestId('track-keys');
 		const lane = (await track.getByTestId('track-lane').boundingBox())!;
-		for (const notes of [1, 0]) {
-			// Inside a cell, clear of the line it begins on and of the end a drag stretches.
+		// Inside a cell, clear of the line it begins on and of the end a drag stretches: the first
+		// tap makes the note, and the second, on it, picks it.
+		for (const tap of ['makes', 'picks']) {
 			await page.touchscreen.tap(lane.x + lane.width * 0.3, lane.y + lane.height * 0.505);
-			await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(notes);
+			await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length, `a tap that ${tap} the note`).toBe(1);
+			await expect(track.locator('.note.picked')).toHaveCount(1);
 		}
 		const head = (await track.locator('.info').boundingBox())!;
 		const finger = await touchSession(page);
@@ -515,7 +563,8 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 		const [a, b] = [(await dots.nth(0).boundingBox())!, (await dots.nth(1).boundingBox())!];
 		expect(Math.hypot(b.x - a.x, b.y - a.y), 'the dots are closer than half a hit area').toBeLessThan(22);
 		await page.touchscreen.tap(a.x + a.width / 2, a.y + a.height / 2);
-		await expect(fade.getByLabel('Value')).toBeVisible();
+		await expect(await settings(page, fade, '[data-testid="track-delete-picked"]')).toBeVisible();
+		await shut(page);
 		expect(await dots.nth(0).getAttribute('class'), 'the dot under the finger is the one picked').toContain('picked');
 		await expectIntact(page, 'the timeline panel on a phone');
 		// A title too narrow for every action keeps hide and delete in its menu, which closes when
@@ -549,16 +598,15 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		await rawCall(page, 'variable entry add', { name: 'desk.level', value: 0 });
 		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'take' });
 		const take = page.getByTestId('track-take');
-		const button = take.getByTestId('track-record');
+		// The record button is on its section's line, beside the lane or in the track's menu.
+		const record = (track: Locator): Promise<Locator> => settings(page, track, '[data-testid="track-record"]');
 		// A track with no input says so, and records nothing.
-		await button.click();
+		await (await record(take)).click();
 		await expect(page.getByText('has no `input` to record from')).toBeVisible();
-		await expect(button).toHaveAttribute('aria-pressed', 'false');
+		await expect(await record(take)).toHaveAttribute('aria-pressed', 'false');
 		// The input is an expression, as a param's; the rate is the track's own.
-		await (await settings(page, take, '[data-testid="track-input"]')).click();
-		await page.keyboard.type('vars.desk.level');
-		await page.keyboard.press('Enter');
-		await expect.poll(async () => (await trackNamed(page, 'take')).input).toBe('vars.desk.level');
+		await rawCall(page, 'timeline track edit', { track: 'take', input: 'vars.desk.level' });
+		await expect(await settings(page, take, '[data-testid="track-input"]')).toContainText('input');
 		await shut(page);
 		const rate = await settings(page, take, '[data-testid="track-rate"]');
 		await rate.fill('10');
@@ -566,13 +614,14 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		await expect.poll(async () => (await trackNamed(page, 'take')).rate).toBe(10);
 		await shut(page);
 		// The button begins the recording, lit while it runs, and the paused clock plays for it.
-		await button.click();
-		await expect(button).toHaveAttribute('aria-pressed', 'true');
+		await (await record(take)).click();
+		await expect(await record(take)).toHaveAttribute('aria-pressed', 'true');
 		await expect.poll(() => clock(page, 'playing')).toBe(1);
 		await rawCall(page, 'variable entry edit', { name: 'desk.level', value: 5 });
 		// The button again ends it: the keyframes follow what the input held, and the range holds it.
-		await button.click();
-		await expect(button).toHaveAttribute('aria-pressed', 'false');
+		await (await record(take)).click();
+		await expect(await record(take)).toHaveAttribute('aria-pressed', 'false');
+		await shut(page);
 		await expect.poll(async () => (await trackNamed(page, 'take')).keys.at(-1)?.value).toBe(5);
 		const taken = await trackNamed(page, 'take');
 		expect([taken.keys[0].value, taken.range], 'from the level it began at').toEqual([0, [0, 5]]);
@@ -580,9 +629,9 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		// A note track records a MIDI device, and this host has none to offer: its input is the one
 		// there will be.
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'played' });
-		await expect(await settings(page, page.getByTestId('track-played'), '[data-testid="track-device"] option:checked')).toHaveText('auto');
+		await expect((await settings(page, page.getByTestId('track-played'), '[data-testid="track-device"] select')).locator('option:checked')).toHaveText('auto');
 		await shut(page);
-		await page.getByTestId('track-played').getByTestId('track-record').click();
+		await (await record(page.getByTestId('track-played'))).click();
 		await expect(page.getByText('no MIDI device is connected')).toBeVisible();
 		await expectIntact(page, 'the timeline panel with a track that recorded');
 	} finally {
@@ -590,5 +639,41 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
 		await rawCall(page, 'variable group remove', { group: 'desk' });
 		await restorePanelType(page);
+	}
+});
+
+test('a node dropped on a curve track\'s input is what the track records', async ({ page, hasTouch }) => {
+	test.skip(hasTouch, 'a node onto a row is a mouse drag between two panels; the phone has one');
+	await page.goto('/');
+	await waitForApp(page);
+	const lfo = await addNode(page, 'LFO', [40, 40]);
+	await waitForNode(page, lfo);
+	try {
+		// The editor on the left with a node in it, the timeline on the right with a curve track.
+		await splitRight(page);
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[1].panelId, 'timeline');
+		});
+		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'take' });
+		const take = page.getByTestId('track-take');
+		// The input is a param's own row, in the recording's section: a node carried over it lights
+		// it, and the drop makes the node's output the input, as it does on a param.
+		const row = await settings(page, take, '[data-testid="track-input"]');
+		const header = page.locator(`.svelte-flow__node[data-id="${lfo}"] .header`);
+		const [a, b] = [(await header.boundingBox())!, (await row.boundingBox())!];
+		await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(a.x + a.width / 2 + 30, a.y + a.height / 2 + 30, { steps: 4 });
+		await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 });
+		await expect(row).toHaveClass(/over/);
+		await page.mouse.up();
+		const name = (await backendDoc(page)).nodes[lfo].name;
+		await expect.poll(async () => (await trackNamed(page, 'take')).input).toBe(`nd('${name}')`);
+	} finally {
+		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
+		await closeSplit(page);
+		await restorePanelType(page);
+		await rawCall(page, 'node remove', { node: lfo });
 	}
 });

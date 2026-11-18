@@ -19,6 +19,7 @@
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
+	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
 	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under } from '$lib/ui';
 
@@ -93,8 +94,6 @@
 	/** Where what sits `low` up a lane, `size` high, begins across it: a row counts from its top,
 	 * a column from its left. */
 	const across = (low: number, size = 0): string => share(vertical ? low : 1 - low - size);
-	/** What the range bar stands for: the view, and everything there is to see. */
-	const total = $derived<[number, number]>([Math.min(0, view[0] - width / 10), Math.max(view[1] + width / 10, reach())]);
 
 	/** A press on the ruler puts the clock there, and outside the loop's section clears it; a drag
 	 * along it marks the section the clock loops in. A double click looks at the section it is on,
@@ -264,6 +263,14 @@
 			}
 		}));
 	}
+	/** A track asks for more room across the axis: a lying track gets it, as a drag of its edge
+	 * gives it; a standing one has the room its panel gives every track. */
+	function grow(id: string, by: number): boolean {
+		const lane = vertical ? null : stack?.querySelector(`[data-track="${id}"] .lane`);
+		if (!lane) return false;
+		setState({ sizes: { ...own.sizes, [id]: Math.ceil(lane.getBoundingClientRect().height + by) } }, 'authored', 'Resize Track');
+		return true;
+	}
 	// The size dragged stands until the panel's state holds it.
 	$effect(() => {
 		void own.sizes;
@@ -320,8 +327,8 @@
 	/** A drag of a note or a keyframe, and with it of everything picked, by as much as the pointer
 	 * moves, a note onto the grid: each move previews every lane it touches as it stands with those
 	 * moved, and the release sends the last of them as the edit. `stretch` drags one note's end and
-	 * not the note. A press that does not move picks a keyframe, and takes a note out. Shift lets a
-	 * note go off its grid, and Ctrl off its scale. */
+	 * not the note. A press that does not move picks what it is on. Shift lets a note go off its
+	 * grid, and Ctrl off its scale. */
 	let drag: (() => void) | undefined;
 	function dragItem(e: PointerEvent, id: string, t: Track, index: number, stretch = false): void {
 		e.stopPropagation();
@@ -384,10 +391,6 @@
 				else if (all) void history().transaction('Move notes and keyframes', async (step) => {
 					for (const [track, patch] of all) await g.op('timeline track edit', { track, ...patch }, step);
 				}).catch(fail('Edit track'));
-				else if (t.kind === 'note') {
-					picked = [{ track: id, index }];
-					change(id, g.timeline[id] ?? t, null);
-				}
 			},
 			// Put back, where the track is still there.
 			cancel: () => {
@@ -439,9 +442,6 @@
 	<Bar>
 		{#snippet start()}
 			<div class="tools">
-			<IconButton variant="ghost" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
-			<IconButton variant="ghost" label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
-			<NumberInput class="position" aria-label="Position" title="The clock's position, in beats" data-testid="clock-time" value={beat} digits={1} min={0} onChange={(v) => steer({ time: v * spb })} />
 			<label class="labeled">bpm <NumberInput title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => void g.setVariableValue('clock.bpm', v).catch(fail('Set tempo'))} /></label>
 			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
 			{#if loop}
@@ -456,139 +456,156 @@
 			</div>
 		{/snippet}
 	</Bar>
-	<div class="body">
-		<div class="range"><RangeBar {view} {total} {vertical} onChange={(next) => (view = next)} /></div>
-		<div class="scroll thin-scrollbar">
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
-				<div class="row ruler" data-testid="timeline-ruler">
-					<span class="info"></span>
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div class="lane" onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
-						{#each ticks(view[0], view[1]) as tick}<span class="tick" style:--a={share(along(tick))}>{tick}</span>{/each}
+	<div class="scroll thin-scrollbar">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
+			<!-- The head: the clock's own controls in the corner, and beside them the view's bar
+			     over the ruler, each as long as a lane. -->
+			<div class="row head">
+				<div class="corner">
+					<IconButton variant="ghost" size="sm" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
+					<IconButton variant="ghost" size="sm" label="Stop" data-testid="clock-stop" onclick={() => steer({ playing: false, time: 0 })}><Icon name="square" /></IconButton>
+					<span class="position" title="The clock's position, in beats: click to put it elsewhere">
+						<RenameField value={beat.toFixed(1)} valid={(text) => text !== '' && Number(text) >= 0} onRename={(text) => steer({ time: Number(text) * spb })} label="Position" testid="clock-time" />
+					</span>
+				</div>
+				<div class="axis">
+					<RangeBar {view} span={reach()} {vertical} onChange={(next) => (view = next)} />
+					<div class="ruler" data-testid="timeline-ruler">
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div class="lane" onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
+							{#each ticks(view[0], view[1]) as tick}<span class="tick" style:--a={share(along(tick))}>{tick}</span>{/each}
+							<!-- The loop's section and the clock's position on the ruler itself: the head
+							     stands over the lines that cross the tracks. -->
+							{#if band && band[1] > view[0] && band[0] < view[1]}
+								<span class="span" style:--a={share(clamp(along(band[0]), 0, 1))} style:--l={share(clamp(along(band[1]), 0, 1) - clamp(along(band[0]), 0, 1))}></span>
+							{/if}
+							{#if within(beat, view)}<span class="now" style:--a={share(along(beat))}></span>{/if}
+						</div>
 					</div>
 				</div>
-				{#each shown as id (id)}
-					{@const t = g.timeline[id]}
-					{@const chosen = pickedIn(id)}
-					{@const mine = held(t)[chosen[0]]}
-					{@const [lo, hi] = t.range}
-					{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
-					{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<section
-						class="row track"
-						class:notes={t.kind === 'note'}
-						data-testid={`track-${t.name}`}
-						data-track={id}
-						style:--size={size ? `${size}px` : null}
-						style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
-						oncontextmenu={(e) => {
-							e.preventDefault();
-							trackMenu(id, e.clientX, e.clientY);
-						}}
-						onpointerdown={(e) => {
-							pressed = id;
-							if (e.pointerType !== 'mouse') press.start(e);
-						}}
-						onpointermove={press.move}
-						onpointerup={press.cancel}
-						onpointercancel={press.cancel}
-					>
-						<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button, .input'), onEnd: (outcome) => place(id, outcome) }}>
-							<TrackHead
-								{id}
-								{t}
-								item={mine}
-								recording={recording(t)}
-								{ports}
-								onRescan={() => void rescan().catch(fail('List MIDI devices'))}
-								onEdit={(patch) => edit(id, patch)}
-								onRecord={(e) => void record(e, id).catch(fail('Record'))}
-								onHide={() => hide([...hidden, id], 'Hide Track')}
-								onDelete={() => (asked = id)}
-								onItem={(to) => change(id, t, to)}
-							/>
-						</div>
-						{#if t.kind === 'note'}
-							<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
-							<div class="keys" data-testid="track-keyboard" aria-hidden="true">
-								{#each board as p (p)}
-									<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === t.root}<b>{pitchName(p)}</b>{/if}</span>
-								{/each}
-							</div>
-						{/if}
-						<div class="lane">
-							<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-							<div
-								class="ground"
-								data-testid="track-lane"
-								onclick={(e) => addAt(e, id, t)}
-								onpointerdown={() => pick([])}
-								onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
-								onpointerleave={() => (over = null)}
-							>
-								{#if t.kind === 'note'}
-									<!-- The cells: a row a pitch, darker off the scale and on a black key; a line a cell. -->
-									<div class="rows" aria-hidden="true">
-										{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)}></span>{/each}
-									</div>
-									<svg class="grid" viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
-										<path d={gridPath(view[0], view[1], gridOf(t), vertical)} vector-effect="non-scaling-stroke" />
-									</svg>
-									{#if over?.track === id}
-										<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(gridOf(t) / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
-									{/if}
-									{#each t.notes as n, i}
-										<div
-											class="note"
-											class:picked={chosen.includes(i)}
-											data-item={i}
-											style:--a={share(along(n.at))}
-											style:--l={share((n.length) / width)}
-											style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
-											style:--s={share(1 / (hi - lo + 1))}
-											style:opacity={0.4 + 0.6 * n.velocity}
-											onpointerdown={(e) => dragItem(e, id, t, i)}
-										>
-											<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
-										</div>
-									{/each}
-								{:else}
-									<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
-										<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
-									</svg>
-									{#each t.keys as k, i}
-										<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
-									{/each}
-								{/if}
-							</div>
-						</div>
-						<span class="grip" data-testid="track-grip" title="Drag to resize the track" onpointerdown={(e) => resize(e, id)}></span>
-					</section>
-				{/each}
-				<!-- The loop's section and the clock's position, across the ruler and every track. -->
-				{#if band && band[1] > view[0] && band[0] < view[1]}
-					{@const from = clamp(along(band[0]), 0, 1)}
-					<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
-				{/if}
-				{#if box}
-					<div class="box" data-testid="timeline-box" style:left={`${box.left}px`} style:top={`${box.top}px`} style:width={`${box.width}px`} style:height={`${box.height}px`}></div>
-				{/if}
-				{#if within(beat, view)}
-					<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
-				{/if}
 			</div>
-			{#if shown.length === 0}
-				<EmptyState>
-					{#snippet title()}{stowed.length > 0 ? 'Every track is hidden' : 'No tracks'}{/snippet}
-					{#snippet hint()}{stowed.length > 0 ? 'Show one from the hidden tracks in the bar.' : 'Add a note track or a curve track.'}{/snippet}
-					{#if stowed.length === 0}
-						<IconButton variant="ghost" label="Add track" data-testid="timeline-add-first" onclick={addMenu}><Icon name="plus" /></IconButton>
+			{#each shown as id (id)}
+				{@const t = g.timeline[id]}
+				{@const chosen = pickedIn(id)}
+				{@const mine = held(t)[chosen[0]]}
+				{@const [lo, hi] = t.range}
+				{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
+				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<section
+					class="row track"
+					class:notes={t.kind === 'note'}
+					data-testid={`track-${t.name}`}
+					data-track={id}
+					style:--size={size ? `${size}px` : null}
+					style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
+					oncontextmenu={(e) => {
+						e.preventDefault();
+						trackMenu(id, e.clientX, e.clientY);
+					}}
+					onpointerdown={(e) => {
+						pressed = id;
+						if (e.pointerType !== 'mouse') press.start(e);
+					}}
+					onpointermove={press.move}
+					onpointerup={press.cancel}
+					onpointercancel={press.cancel}
+				>
+					<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button, .input'), onEnd: (outcome) => place(id, outcome) }}>
+						<TrackHead
+							{id}
+							{t}
+							item={mine}
+							recording={recording(t)}
+							{ports}
+							onRescan={() => void rescan().catch(fail('List MIDI devices'))}
+							onEdit={(patch) => edit(id, patch)}
+							onRecord={(e) => void record(e, id).catch(fail('Record'))}
+							onHide={() => hide([...hidden, id], 'Hide Track')}
+							onDelete={() => (asked = id)}
+							onItem={(to) => change(id, t, to)}
+							onGrow={(by) => grow(id, by)}
+						/>
+					</div>
+					{#if t.kind === 'note'}
+						<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
+						<div class="keys" data-testid="track-keyboard" aria-hidden="true">
+							{#each board as p (p)}
+								<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === t.root}<b>{pitchName(p)}</b>{/if}</span>
+							{/each}
+						</div>
 					{/if}
-				</EmptyState>
+					<div class="lane">
+						<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+						<div
+							class="ground"
+							data-testid="track-lane"
+							onclick={(e) => addAt(e, id, t)}
+							onpointerdown={() => pick([])}
+							onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
+							onpointerleave={() => (over = null)}
+						>
+							{#if t.kind === 'note'}
+								<!-- The cells: a row a pitch, darker off the scale and on a black key; a line a cell. -->
+								<div class="rows" aria-hidden="true">
+									{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)}></span>{/each}
+								</div>
+								<svg class="grid" viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
+									<path d={gridPath(view[0], view[1], gridOf(t), vertical)} vector-effect="non-scaling-stroke" />
+								</svg>
+								{#if over?.track === id}
+									<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(gridOf(t) / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+								{/if}
+								{#each t.notes as n, i}
+									<div
+										class="note"
+										class:picked={chosen.includes(i)}
+										data-item={i}
+										style:--a={share(along(n.at))}
+										style:--l={share((n.length) / width)}
+										style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
+										style:--s={share(1 / (hi - lo + 1))}
+										style:opacity={0.4 + 0.6 * n.velocity}
+										onpointerdown={(e) => dragItem(e, id, t, i)}
+									>
+										<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
+									</div>
+								{/each}
+							{:else}
+								<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
+									<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
+								</svg>
+								{#each t.keys as k, i}
+									<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
+								{/each}
+							{/if}
+						</div>
+					</div>
+					<span class="grip" data-testid="track-grip" title="Drag to resize the track" onpointerdown={(e) => resize(e, id)}></span>
+				</section>
+			{/each}
+			<!-- The loop's section and the clock's position, across the ruler and every track. -->
+			{#if band && band[1] > view[0] && band[0] < view[1]}
+				{@const from = clamp(along(band[0]), 0, 1)}
+				<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
+			{/if}
+			{#if box}
+				<div class="box" data-testid="timeline-box" style:left={`${box.left}px`} style:top={`${box.top}px`} style:width={`${box.width}px`} style:height={`${box.height}px`}></div>
+			{/if}
+			{#if within(beat, view)}
+				<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
 			{/if}
 		</div>
+		{#if shown.length === 0}
+			<EmptyState>
+				{#snippet title()}{stowed.length > 0 ? 'Every track is hidden' : 'No tracks'}{/snippet}
+				{#snippet hint()}{stowed.length > 0 ? 'Show one from the hidden tracks in the bar.' : 'Add a note track or a curve track.'}{/snippet}
+				{#if stowed.length === 0}
+					<IconButton variant="ghost" label="Add track" data-testid="timeline-add-first" onclick={addMenu}><Icon name="plus" /></IconButton>
+				{/if}
+			</EmptyState>
+		{/if}
 	</div>
 </div>
 
@@ -629,10 +646,6 @@
 		height: 100%;
 		min-height: 0;
 	}
-	/* Room for some thousands of beats, to the tenth. */
-	.timeline :global(.position) {
-		--number-width: calc(var(--space-8) * 4);
-	}
 	.tools {
 		display: flex;
 		flex-wrap: wrap;
@@ -647,25 +660,17 @@
 		font-size: var(--fs-small);
 		color: var(--text-muted);
 	}
-	.body {
-		flex: 1 1 auto;
-		display: grid;
-		grid-template-rows: auto minmax(0, 1fr);
-		min-height: 0;
-	}
-	/* A narrow panel gives the lanes more of its width. */
-	@container (max-width: 32rem) {
-		.body {
-			--side: calc(var(--space-8) * 8);
-		}
-	}
 	.scroll {
+		flex: 1 1 auto;
 		min-width: 0;
 		min-height: 0;
 		overflow: auto;
 	}
-	.range {
-		padding-left: var(--side);
+	/* A narrow panel gives the lanes more of its width. */
+	@container (max-width: 32rem) {
+		.scroll {
+			--side: calc(var(--space-8) * 8);
+		}
 	}
 	/* Room after the last track, so its edge is never the panel's own. */
 	.stack {
@@ -745,15 +750,62 @@
 		touch-action: none;
 		user-select: none;
 	}
+	/* A note track is born high enough for its keyboard's settings beside the recording's line. */
+	.notes .lane {
+		min-height: var(--size, max(calc(var(--rows) * var(--row)), calc(var(--space-8) * 9)));
+	}
 	.ground {
 		position: relative;
 		flex: 1 1 auto;
 	}
-	.ruler {
+	/* The head stays while the tracks scroll under it, and stands over the lines that cross them. */
+	.head {
 		position: sticky;
 		top: 0;
-		z-index: 1;
+		z-index: 2;
 		background: var(--surface-1);
+	}
+	/* The corner beside the axis, on the ground the panel's bar has: the clock's own controls. */
+	.corner {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+		padding: 0 var(--space-2);
+		background: var(--bar-bg, var(--surface-2));
+	}
+	/* The position: a number that a click makes a field, each digit as wide as the next. */
+	.position {
+		flex: 1 1 0;
+		min-width: 0;
+		padding: 0 var(--space-2);
+		font-variant-numeric: tabular-nums;
+	}
+	/* The label is a press as large as any control's. */
+	.position :global(.name) {
+		min-width: var(--hit);
+		min-height: var(--hit);
+		text-align: left;
+	}
+	/* The view's bar over the ruler, each as long as a lane. */
+	.axis {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	.span,
+	.now {
+		position: absolute;
+		inset: 0 auto 0 var(--a);
+		pointer-events: none;
+	}
+	.span {
+		width: var(--l);
+		background: var(--accent-fill);
+	}
+	.now {
+		width: max(2px, var(--space-1));
+		background: var(--danger);
 	}
 	.ruler .lane {
 		min-height: var(--space-8);
@@ -847,8 +899,10 @@
 		background: var(--accent-fill);
 		pointer-events: none;
 	}
+	/* What is picked wears the second accent around it, clear of its own fill. */
 	.picked {
-		outline: var(--focus-width) solid var(--focus-ink);
+		outline: var(--focus-width) solid var(--accent-2);
+		outline-offset: 1px;
 	}
 	.grip {
 		position: absolute;
@@ -874,14 +928,6 @@
 	}
 
 	/* ---- a panel taller than wide: the time runs down, the tracks stand as columns. */
-	.vertical .body {
-		grid-template-rows: none;
-		grid-template-columns: auto minmax(0, 1fr);
-	}
-	.vertical .range {
-		display: flex;
-		padding: var(--side) 0 0;
-	}
 	.vertical .stack {
 		display: flex;
 		width: max-content;
@@ -917,14 +963,41 @@
 		min-height: 0;
 		padding: 0 var(--pad);
 	}
-	.vertical .ruler {
+	.vertical .head {
 		top: auto;
 		left: 0;
 		flex: none;
+	}
+	.vertical .corner {
+		flex-direction: column;
+		justify-content: center;
+		padding: var(--space-2) 0;
+	}
+	.vertical .position {
+		flex: none;
+	}
+	.vertical .axis {
+		flex-direction: row;
+	}
+	.vertical .ruler {
+		display: flex;
 		width: calc(var(--space-8) * 2);
 	}
 	.vertical .ruler .lane {
+		flex: 1 1 auto;
 		padding: 0;
+	}
+	.vertical .span,
+	.vertical .now {
+		inset: var(--a) 0 auto 0;
+	}
+	.vertical .span {
+		width: auto;
+		height: var(--l);
+	}
+	.vertical .now {
+		width: auto;
+		height: max(2px, var(--space-1));
 	}
 	.vertical .tick {
 		inset: var(--a) 0 auto 0;

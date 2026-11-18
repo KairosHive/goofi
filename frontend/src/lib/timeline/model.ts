@@ -60,3 +60,19 @@ export function hiding(shown: string[], id: string, which: 'this' | 'above' | 'b
 	const at = shown.indexOf(id);
 	return which === 'this' ? [id] : which === 'above' ? shown.slice(0, at) : which === 'below' ? shown.slice(at + 1) : shown.filter((t) => t !== id);
 }
+
+/** The most of a range bar that a view past an end of the axis folds into. */
+const FOLD = 0.15;
+/** Where a point of an axis from 0 to `span` stands on a bar of the axis's length, 0 the bar's
+ * start and 1 its end. Past an end it is that far past at first, then less and less, and never
+ * as far as `FOLD`: a view with no widest folds into the bar's end. */
+export function barPlace(at: number, span: number): number {
+	const fold = (past: number): number => (FOLD * past) / (past + FOLD);
+	return at < 0 ? -fold(-at / span) : at > span ? 1 + fold(at / span - 1) : at / span;
+}
+/** The point of the axis that stands at a place on the bar: `barPlace` the other way round. A
+ * place past where a fold ends is the furthest point a fold holds. */
+export function barPoint(on: number, span: number): number {
+	const unfold = (by: number): number => (FOLD * Math.min(by, FOLD * 0.999)) / (FOLD - Math.min(by, FOLD * 0.999));
+	return span * (on < 0 ? -unfold(-on) : on > 1 ? 1 + unfold(on - 1) : on);
+}

@@ -53,6 +53,10 @@
 	--text-muted: #7a7a7a;
 	--accent: #50d0a0;
 	--accent-strong: #3fb88a;
+	/* A second accent, for what is picked inside a thing that already wears --accent: the
+	   outline of a picked note on the note's own mint fill. A violet, apart from every semantic
+	   colour. */
+	--accent-2: #c08cff;
 	/* A grass-green shifted off the mint --accent (D-M1) so "healthy/OK" reads distinct from
 	   "selected/accent" where they meet (a selected+healthy node's ring vs its health dot).
 	   Kept above the 3:1 floor on --surface-4; --success-fill color-mixes from it. */
@@ -136,8 +140,13 @@
 	/* The keyboard focus ring (meaning #2 below). Width and ink are the ring; the OFFSET is not,
 	   and stays per-site — it says how far the ring sits off this particular box, which only that
 	   box knows. Named because the ring is restated by every primitive that needs its own offset,
-	   and five hand-written copies of one line is five chances for them to disagree. */
+	   and five hand-written copies of one line is five chances for them to disagree. The offset
+	   named below is the one the app-wide rule gives a control that states none. */
 	--focus-width: 2px;
+	/* The gap between a control and its focus ring, and how far the ring reaches past the control
+	   with it: the room a box that holds controls edge to edge keeps for the ring. */
+	--focus-offset: 1px;
+	--focus-reach: calc(var(--focus-width) + var(--focus-offset));
 	--focus-ink: var(--accent);
 
 	/* Hit-target geometry — documentary fine-pointer defaults. The touch floor only applies under
@@ -401,7 +410,7 @@ textarea:disabled {
    for one state. */
 :focus-visible {
 	outline: var(--focus-width) solid var(--focus-ink);
-	outline-offset: 1px;
+	outline-offset: var(--focus-offset);
 }
 
 /* Ring convention (for P's Panel/Node): the active-panel / selected-node ring MUST paint ABOVE the

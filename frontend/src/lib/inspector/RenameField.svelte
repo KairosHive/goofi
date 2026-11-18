@@ -22,8 +22,10 @@
 	let editing = $state(false);
 	let draft = $state('');
 
+	/** What the field opened on: a draft that is still that was not edited. */
+	let began = '';
 	function start(): void {
-		draft = value;
+		draft = began = value;
 		editing = true;
 	}
 	function commit(): void {
@@ -32,7 +34,8 @@
 		const name = draft.trim();
 		if (!valid(name)) return;
 		editing = false;
-		if (name !== value) onRename(name);
+		// A draft nobody changed renames nothing, whatever the value has become meanwhile.
+		if (name !== began && name !== value) onRename(name);
 	}
 	function focusInput(el: HTMLInputElement): void {
 		el.focus();

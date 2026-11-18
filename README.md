@@ -263,15 +263,21 @@ over stays as it was. `vars.<track>.recording` is 1 while a
 recording runs.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
-across them where the clock is. A click on a lane makes a note or a keyframe, a click on a note
-takes it out, and a drag moves one; a note snaps to its track's grid. A press on the
+across them where the clock is. A click on a lane makes a note or a keyframe, a click on one
+picks it, and a drag moves one; a note snaps to its track's grid. In the corner beside the ruler
+are play, stop and the clock's position, a number that a click makes a field. A press on the
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
-view: drag it to move along the axis, drag either end of it to zoom, as far out as you like; a
-double click on the ruler looks at everything again. A track's edge resizes it, as far as it is
+view, as long as a lane: a view of the whole timeline fills it, a drag of it moves along the
+axis, and a drag of either end of it zooms, as far out as you like: past an end of the timeline
+that end of the bar folds and takes the accent. A double click on the ruler looks at everything
+again. A track's edge resizes it, as far as it is
 dragged: held at the end of the track area, the area scrolls. Beside its lane a track says its
-name and its settings in groups, and the groups that do not fit there are in the menu in its
-title. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
+name and its settings in named sections that fold. The recording's section has the record
+button on its line and begins folded; a curve's input in it is a param's own row, so it takes
+an expression, a MIDI learn, or a node, a variable or a state dropped on it. A section unfolded
+makes its track larger where it needs to, and the sections that do not fit are in the menu in
+the track's title. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
 taller than wide the time runs down and the tracks stand as columns.
 
 ## Testing

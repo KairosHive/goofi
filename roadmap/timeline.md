@@ -46,8 +46,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   of it is a long time.
 - A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
   is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
-- A node cannot be dropped on a curve's input while that is in the track's menu: the track is
-  made larger first. A press on the expression editor's completion window may close that menu
+- A node cannot be dropped on a curve's input while that is in the track's menu, as it is in a
+  standing panel. A press on the expression editor's completion window may close that menu
   before the completion is taken; not tried.
 - A track's edge held at an end of the track area scrolls the area. A note or a keyframe dragged
   there does not.
@@ -60,7 +60,6 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - The panel's view zooms by the range bar alone: no wheel and no pinch.
 - The clock's section is drawn again to change it: it has no edges to drag and cannot be
   moved. A position put past its end folds into it.
-- A click on a note takes it out, so a note is picked for its fields by a drag alone.
 - A track dragged onto a param writes the expression that reads it; no test drops one there.
 - A track dragged over the others shows no line where it will land.
 - A section that lies past the timeline's length is taken as it is: the position leaves the
@@ -90,3 +89,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   a device's group by hand.
 - The panel's record button plays a paused clock; the op leaves the clock alone. A recording
   has no count-in and no metronome.
+- A range bar's end is dragged outward to fold: a bar that ends at the window's edge has no room
+  for that drag, and the view is then widened by the other end or by a longer timeline.
+- A section of a track's settings is unfolded or folded for as long as its panel shows the track:
+  the panel's state does not keep it.
+- A curve's input that is a number alone is the row's constant, which records a level line.
