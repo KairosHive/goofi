@@ -75,6 +75,8 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
    the declared order of the slots.
 4. **A `hold` slot is read by instant.** At an event at instant t, a hold slot gives the latest
    frame with an instant ≤ t.
+   A param source that reads a node, a variable or a playhead is the same read: it gives the
+   value at the instant of the event.
 5. **A feedback edge is one frame of delay.** At instant t it gives the latest frame of the
    producer with an instant < t.
 6. **Randomness is seeded per run and per node.** A repetition block with n seeds gives n

@@ -99,7 +99,8 @@ between devices; MIDI input extent; VST3 silence and bend proofs; late renders i
 **Ops (part 07.7):** confirmation of the vocabulary **(1)**; `agent attach`; shared graph ops in
 goofi-data.
 
-**goofi-pipe (part 08.15, 09.8):** a narrow depth for topomaps; bandwidth to a tablet; the
+**goofi-pipe (part 08.15, 09.8):** the home of the graph canvas and the inspector, now that a
+recipe is a goofi graph **(1)**; a narrow depth for topomaps; bandwidth to a tablet; the
 library view as a panel or a dialog; a light theme; a command palette.
 
 **goofi-data (part 10.8):** the name of the convention and the suffixes; the hash function;

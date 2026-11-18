@@ -64,7 +64,8 @@ marketplace for autopoietic research and arts.
 - Two commands start a clone: one that provisions everything `cargo` cannot provide (the Python
   interpreters, the Python package, the frontend dependencies, the build configuration), and
   `cargo run`. The provisioning command is a program of the workspace, so it is the same command
-  in every shell. It is idempotent.
+  in every shell. It is idempotent. It checks the tools and system libraries a build needs and
+  names each missing one.
 - The web app of a program is compiled into its binary. A build with a stale or missing app
   fails; a binary without its app refuses to start, unless it was built headless.
 - A program prints its URL and does not open a browser.

@@ -185,6 +185,10 @@ a client as events or as variable frames.
   a variable it reads, a frame of a node it reads.
 - A rename of a playhead or of a state keeps the run of the renamed thing.
 - A condition over a value in flight is observed at events, not by polling.
+- Several conditions true at one instant take the first in authored order. A condition goes
+  before a decision. A chain of instant transitions is cut at a limit and logged.
+- A changed model keeps the place and the values of each playhead; a playhead whose state is
+  gone starts again.
 
 ### 3.6.4 Events
 
@@ -255,6 +259,11 @@ a client as events or as variable frames.
 - A patch file (`.gfi`) is an archive of the document and the workspace. The document is text
   (YAML) with a format version and the program version. The pack is deterministic.
 - An ignore file in the workspace excludes names, folders and extensions from the archive.
+- A patch file carries the node files of the private bundle that the patch uses, so the patch
+  opens on another machine. On load, a copy that equals the file of the library is dropped in
+  favour of the library.
+- A change of a file in the workspace makes the patch unsaved.
+- A save writes beside the target and renames. A refused load leaves the open patch untouched.
 - A patch remembers the file it was opened from or saved to. "Unsaved" is answered by a
   fingerprint of the file.
 - Save, save as, open, new, and reset to an example are ops. "Download a copy" and "upload" pass

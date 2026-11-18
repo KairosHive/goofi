@@ -70,7 +70,7 @@ the catalog of node types; the roster of agents; the history labels.
 - Start order: the session; the node library scan with the start screen; the engines; the patch
   (the one named at the start, else a new one); the server. The URL is printed.
 - Stop has one order, executed by the session (part 02.3): takes are closed, agents are stopped,
-  children end, engines stop, the session is released.
+  children end, engines stop, the session is released. A second interrupt forces the exit.
 
 ## 8.2 The shell
 
@@ -177,6 +177,8 @@ overlays. There is no menu bar and no status bar.
 | Plugin panels | Panels that plugins register (8.13). |
 
 - There is no limit on the number of panels of a type.
+- A new control panel gets a new variable group. A new machine panel shows the first machine,
+  or a new one when the patch has none. A panel of an unknown type says so.
 - The panel types are one open registry: a built-in type and a plugin type register the same
   way.
 

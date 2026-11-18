@@ -85,6 +85,8 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
   feed that subscribes a viewer to a stream. A frontend adds a viewer kind through a registry.
 - **Dataset views** of goofi-data build on the same viewers: a sample is shown by the viewer of
   its kind.
+- **Shared views:** the console (log and prompt) and the agent terminal are used by every
+  program.
 
 ## 9.6 The client
 
@@ -107,5 +109,10 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 
 ## 9.8 Open decisions
 
-1. A light theme.
-2. A command palette over the op registry (the console prompt is the present command surface).
+1. **The home of the graph canvas.** An earlier decision keeps the patch editor and the node
+   inspector in the goofi-pipe frontend. A later decision makes every recipe a goofi graph and
+   the recipe view the patch canvas with queue state on its edges (part 10.4.1). The two do not
+   agree: goofi-data then needs the canvas and the inspector. Decide whether both move into
+   the shared library.
+2. A light theme.
+3. A command palette over the op registry (the console prompt is the present command surface).

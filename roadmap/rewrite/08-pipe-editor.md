@@ -172,13 +172,15 @@ work and can change with the design.
 ### 8.5.2 Content for a node
 
 1. **Identity:** the name (click to rename), the type, a state badge with the tier the node runs
-   on, "save to the private library", and "open plugin editor" for a type that has one.
+   on, "save to the private library" (a name that exists asks: overwrite, adapt the name or
+   cancel), and "open plugin editor" for a type that has one.
 2. **Docs:** the first line of the doc; the rest in a disclosure.
 3. **Sub-patch:** the member count and Expand, in place of params.
 4. **Tools:** a search over every group; a "non-default only" toggle with a count; "clear
    non-default" (the present state becomes the zero point of the node); a source filter
    (constants or expressions).
-5. **Group tabs:** one per param group that has a shown param. The main group comes first.
+5. **Group tabs:** one per param group that has a shown param. The main group comes first. The
+   front tab is remembered per node.
 6. **Param rows.**
 7. **Slots:** the coupling of each input slot.
 8. **Metadata:** an output slot select; the update rate; dropped frames per second; then shape,
