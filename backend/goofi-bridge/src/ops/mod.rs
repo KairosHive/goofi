@@ -487,6 +487,7 @@ pub static TREE: &[Entry] = &[
             Leaf(write::<timeline::TrackAdd>()),
             Leaf(write::<timeline::TrackEdit>()),
             Leaf(write::<timeline::TrackMove>()),
+            Leaf(effect::<timeline::TrackRecord>()),
             Leaf(write::<timeline::TrackRemove>()),
         ]),
     ]),

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::expr_rewrite::{self, Target, VarRef};
-use crate::timeline::{Timeline, Track};
+use crate::timeline::{Lanes, Recording, Take, Timeline, Track, NOTES, RECORDING};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name: where
 /// it is, and how far along its transition. Where it came from and when it arrived are no
@@ -571,6 +571,8 @@ pub struct Machines {
     sounding: Vec<(String, usize, u8, f64)>,
     /// The position went back since the last strike: what sounds is struck again.
     again: bool,
+    /// The recordings that run, each by the id of the track it goes into.
+    recording: HashMap<String, Recording>,
 }
 
 impl Machines {
@@ -599,23 +601,63 @@ impl Machines {
         now < self.last
     }
 
+    /// Begin a recording into the track `id`: every advance from the next on takes what the
+    /// track's input holds. One that runs already runs on.
+    pub fn record(&mut self, id: &str) {
+        self.recording.entry(id.to_string()).or_default();
+    }
+
+    /// End the recording into the track `id` at the position `now`, which it takes too: what it
+    /// took, where one ran.
+    pub fn recorded(&mut self, id: &str, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) -> Option<Take> {
+        self.capture(now, read);
+        let notes = matches!(self.timed.0.get(id)?.lanes, Lanes::Note { .. });
+        Some(self.recording.remove(id)?.end(now * self.timed.1 / 60.0, notes))
+    }
+
+    /// Take what the input of every track with a recording holds at the position `now`. Notes
+    /// are the keys of the input's device as they go down and up; a curve takes its input's
+    /// value at most `rate` times a second.
+    fn capture(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) {
+        let (tracks, bpm) = &self.timed;
+        self.recording.retain(|id, _| tracks.contains_key(id));
+        let beat = now * bpm / 60.0;
+        let ctx = Ctx::new(&self.compiled, &self.evaluator, read, now);
+        for (id, taking) in &mut self.recording {
+            let track = &tracks[id];
+            let taken = match &track.lanes {
+                Lanes::Note { .. } => read(&Target::Variable { key: format!("{}.{}", track.input, NOTES.0) }).map(|held| {
+                    if let Local::Frame(held) = held {
+                        taking.keys(beat, control::numbers(&held));
+                    }
+                }),
+                Lanes::Curve { rate, .. } => ctx.eval(&track.input, None).map(|value| taking.sample(beat, control::number_of(&value), ctx.stamp(&track.input), bpm / 60.0 / rate)),
+            };
+            if let Err(why) = taken {
+                self.errors.push(format!("track `{}`: its input: {why}", track.name));
+            }
+        }
+    }
+
     /// Replace the model and the timeline. A playhead it still holds keeps its place and what it
     /// holds; one whose state is gone starts over. Takes effect on the next advance; the same
     /// model again is nothing, and the timeline is built again only when a track or the tempo moved.
     pub fn configure(&mut self, config: IndexMap<String, Machine>, timed: (IndexMap<String, Track>, f64), evaluator: Option<Arc<dyn ExprEvaluator>>) {
         let same_evaluator = evaluator.as_ref().map(Arc::as_ptr) == self.evaluator.as_ref().map(Arc::as_ptr);
-        if !same_evaluator || timed != self.timed {
+        let (same_config, same_tracks) = (config == self.config, timed == self.timed);
+        if !same_evaluator || !same_tracks {
             self.timeline = Timeline::new(&timed.0, timed.1, &evaluator);
             self.timed = timed;
         }
-        if same_evaluator && config == self.config {
+        if same_evaluator && same_config && same_tracks {
             return;
         }
         if !same_evaluator {
             self.release_all();
         }
         self.evaluator = evaluator;
-        let wanted: HashSet<String> = config.values().flat_map(Machine::expressions).map(str::to_string).collect();
+        let tracks = self.timed.0.values();
+        let wanted: HashSet<String> = config.values().flat_map(Machine::expressions).chain(tracks.clone().filter_map(Track::expression)).map(str::to_string).collect();
         let gone: Vec<String> = self.compiled.keys().filter(|k| !wanted.contains(*k)).cloned().collect();
         for text in gone {
             if let (Some(ev), Some(id)) = (&self.evaluator, self.compiled.remove(&text).and_then(|e| e.id)) {
@@ -632,11 +674,13 @@ impl Machines {
             Target::Variable { key } => Some(key.clone()),
             _ => None,
         });
-        self.keys = variables.collect();
+        // The keys of a device a note track records from are read as a variable is.
+        let devices = tracks.filter(|t| matches!(t.lanes, Lanes::Note { .. }) && !t.input.is_empty()).map(|t| format!("{}.{}", t.input, NOTES.0));
+        self.keys = variables.chain(devices).collect();
         self.keys.sort();
         self.keys.dedup();
         self.config = config;
-        self.reconcile = true;
+        self.reconcile |= !(same_evaluator && same_config);
     }
 
     fn release_all(&mut self) {
@@ -686,7 +730,8 @@ impl Machines {
         self.last = f64::INFINITY;
     }
 
-    /// Every variable the machines' expressions read — what an advance wants handed to it.
+    /// Every variable the machines' expressions and the tracks' inputs read — what an advance
+    /// wants handed to it.
     pub fn keys(&self) -> &[String] {
         &self.keys
     }
@@ -707,7 +752,13 @@ impl Machines {
             let due = h.flight.as_ref().map(|f| f.end).or_else(|| h.due.map(|d| d.at).filter(|at| at.is_finite()));
             due.into_iter().chain(h.attrs.values().filter_map(Motion::end))
         });
-        owed.chain(self.requests.iter().map(|(at, _)| *at)).chain(self.timeline.next_deadline(self.last)).fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
+        // A curve that records looks at its input again as often as it samples it.
+        let sampled = self.recording.keys().filter_map(|id| match self.timed.0.get(id)?.lanes {
+            Lanes::Curve { rate, .. } => Some(self.last + 1.0 / rate),
+            Lanes::Note { .. } => None,
+        });
+        let owed = owed.chain(self.requests.iter().map(|(at, _)| *at)).chain(self.timeline.next_deadline(self.last)).chain(sampled);
+        owed.fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))))
     }
 
     /// Step every machine to `now`: every landing, due and request before it is settled at its
@@ -779,7 +830,10 @@ impl Machines {
             }
         }
         self.functionals = used;
+        self.capture(now, read);
         out.extend(self.timeline.writes(now));
+        let recording = |(id, track): (&String, &Track)| (format!("{}.{RECORDING}", track.name), Data::number(f64::from(u8::from(self.recording.contains_key(id)))));
+        out.extend(self.timed.0.iter().map(recording));
         out
     }
 
@@ -907,22 +961,33 @@ impl<'a> Ctx<'a> {
         *self.records.borrow_mut() = run.heads.values().map(|h| (name(h), playhead_record(h, machine, self.now))).collect();
     }
 
-    /// Evaluate `text` for `me`, the playhead of `machine` it is read for.
-    fn eval(&self, text: &str, me: &Head, machine: &Machine) -> Result<Data, String> {
+    /// The instant the newest node frame `text` reads left its node, where it reads one.
+    fn stamp(&self, text: &str) -> Option<f64> {
+        let refs = self.compiled.get(text).into_iter().flat_map(|e| &e.refs).filter(|r| matches!(r.target, Target::Node { .. }));
+        let stamps = refs.filter_map(|r| match (self.read)(&r.target) {
+            Ok(Local::Frame(frame)) => frame.meta().procend(),
+            _ => None,
+        });
+        stamps.reduce(f64::max)
+    }
+
+    /// Evaluate `text` for `me`, the playhead it is read for and its machine. A track's input
+    /// is read for nobody.
+    fn eval(&self, text: &str, me: Option<(&Head, &Machine)>) -> Result<Data, String> {
         let Some(e) = self.compiled.get(text) else { return Err(format!("`{text}` is not compiled")) };
         if let Some(error) = &e.error {
             return Err(error.clone());
         }
         let mut locals: Vec<(String, Local)> = Vec::with_capacity(e.refs.len());
         for r in &e.refs {
-            let local = match &r.target {
-                Target::Playhead => Local::Record(playhead_record(me, machine, self.now)),
+            let local = match (&r.target, me) {
+                (Target::Playhead, Some((me, machine))) => Local::Record(playhead_record(me, machine, self.now)),
                 // A playhead's record under its name, else the census of the state so named.
-                Target::State { name } => Local::Record(match self.records.borrow().get(name) {
+                (Target::State { name }, Some((_, machine))) => Local::Record(match self.records.borrow().get(name) {
                     Some(record) => record.clone(),
                     None => state_record(&self.census.borrow(), find(&machine.states, name).unwrap_or_default(), self.now),
                 }),
-                target => match (self.read)(target)? {
+                (target, _) => match (self.read)(target)? {
                     // A frame holding a functional is read at this instant, as any reader reads it.
                     Local::Frame(frame) if frame.as_functional().is_some() => match self.evaluator {
                         Some(ev) => Local::Frame(goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?),
@@ -946,7 +1011,7 @@ impl<'a> Ctx<'a> {
 
     /// The truth a condition holds now, for `me`; one that cannot be read is false.
     fn gate(&self, text: &str, me: &Head, machine: &Machine) -> bool {
-        match self.eval(text, me, machine) {
+        match self.eval(text, Some((me, machine))) {
             Ok(frame) => control::truth(&frame),
             Err(why) => {
                 self.errors.borrow_mut().push(format!("`{text}`: {why}"));
@@ -1094,7 +1159,7 @@ fn interval_of(head: &Head, machine: &Machine, ctx: &Ctx) -> f64 {
     if s.interval_expression.is_empty() {
         return s.interval;
     }
-    match ctx.eval(&s.interval_expression, head, machine) {
+    match ctx.eval(&s.interval_expression, Some((head, machine))) {
         Ok(frame) => match control::number_of(&frame) {
             v if v.is_nan() => s.interval,
             v if v < 0.0 => -1.0,
@@ -1278,7 +1343,7 @@ fn decide(machine: &Machine, head: &mut Head, ctx: &Ctx, rng: &mut u64) -> Optio
         }
         Decision::Expression if s.expression.is_empty() => None,
         Decision::Expression => {
-            let index = match ctx.eval(&s.expression, head, machine) {
+            let index = match ctx.eval(&s.expression, Some((head, machine))) {
                 Ok(frame) => control::number_of(&frame),
                 Err(why) => {
                     ctx.errors.borrow_mut().push(format!("`{}`: {why}", s.expression));

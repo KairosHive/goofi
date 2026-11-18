@@ -91,7 +91,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   variables. A track's times are beats. A curve track is one functional of `t`,
   `vars.<track>.value`; a note track holds
   the velocities at the position, and is a MIDI port of the audio `MidiIn`
-  (`goofi_audio::TrackPorts`).
+  (`goofi_audio::TrackPorts`). A recording into a track is taken on that thread from the
+  track's `input`, a device's group or an expression, and written by one op when it ends.
 - Every frame carries engine stamps: the run's `procstart` and `procend`, the node's `index` and
   `ufreq`, the `node` and `slot` it left by, and its `source`: per input slot, the frame held
   there, named by those same five. The immediate inputs only, never the history behind them.

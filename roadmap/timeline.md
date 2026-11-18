@@ -54,9 +54,6 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A click on a note takes it out, so a note is picked for its fields by a drag alone.
 - A track dragged onto a param writes the expression that reads it; no test drops one there.
 - A track dragged over the others shows no line where it will land.
-- A panel learns the clock's section when it opens and when it sets one: a section set by
-  another panel or by the CLI is not drawn, and is not cleared by a click, until the panel opens
-  again. The section has no way to every client that is not a variable.
 - A section that lies past the timeline's length is taken as it is: the position leaves the
   length for it.
 - What a box picks moves in time as one; in pitch each note lands on its own scale and keyboard,
@@ -64,3 +61,18 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A track is lifted by the free edge of what it says about itself; under a finger the browser
   may take the press for a scroll. Not tried on a device.
 - `in_out` made custom is one bezier near the preset's shape, not the shape itself.
+- A recording reads a device's `notes` as any reader does, the newest value alone: a key that
+  goes down and up between two looks of the machines' thread is no note, and two strikes of one
+  pitch with no look between are one. Whether a recording takes the device's events instead.
+- A recorded note is where it was played: it is not put on the track's grid or scale.
+- A curve recording replaces the keyframes of the stretch it covered; it has no way to add to
+  them, and no way to keep one pass of a loop and drop another.
+- An input that reads no node holds its value between two changes, so a recording of it steps;
+  one that reads a node is joined from frame to frame. The fit is to within a hundredth of what
+  the take spans, and the tolerance is not a setting.
+- A recording ends when it is told to: a patch that is closed, or a track that is removed,
+  drops what the recording took.
+- No recording was made from a MIDI device: the test host has no sequencer. The fixture drives
+  a device's group by hand.
+- The panel's record button plays a paused clock; the op leaves the clock alone. A recording
+  has no count-in and no metronome.

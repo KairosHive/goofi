@@ -146,3 +146,169 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     assert_eq!(g.doc()["timeline"], j!({}));
     assert!(g.call("variable list", j!({}))["groups"].get("rise").is_none());
 }
+
+#[test]
+fn a_recording_goes_into_its_track() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(PyExprEvaluator::new().unwrap()));
+    at(&g, 0.0);
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
+    let track = |g: &Goofi, name: &str| g.call("timeline list", j!({}))["tracks"].as_object().unwrap().values().find(|t| t["name"] == name).unwrap().clone();
+    let record = |g: &Goofi, name: &str, on: bool| {
+        g.call("timeline track record", j!({ "track": name, "on": on }));
+        g.until("the track to say whether it records", |g| (number(g, &format!("{name}.recording")) == f64::from(u8::from(on))).then_some(()));
+    };
+
+    // A curve track records its input: an expression, as a param's, and none before one is set.
+    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0 }));
+    g.call("timeline track add", j!({ "kind": "curve", "name": "take" }));
+    assert!(g.refuse("timeline track record", j!({ "track": "take", "on": true })).contains("no `input`"));
+    assert!(g.refuse("timeline track edit", j!({ "track": "take", "input": "me.gain" })).contains("reads no playhead"));
+    assert!(g.refuse("timeline track edit", j!({ "track": "take", "rate": 0.0 })).contains("1..120"));
+    let before = j!([{ "at": 0.5, "value": 3.0 }, { "at": 5.0, "value": 7.0 }]);
+    g.call("timeline track edit", j!({ "track": "take", "input": "vars.desk.level", "rate": 20.0, "keys": before }));
+    // The level is 0 from beat 0, 10 from beat 2 and 0 again from beat 4. A recording takes what
+    // its input holds when the thread looks, so each level is one take, ended while it holds:
+    // the second goes in place of the stretch it covers, which is the end of the first.
+    let mut takes = Vec::new();
+    for (time, level) in [(2.0, 10.0), (4.0, 0.0)] {
+        record(&g, "take", true);
+        at(&g, time);
+        g.call("variable entry edit", j!({ "name": "desk.level", "value": level }));
+        record(&g, "take", false);
+        takes.push(track(&g, "take")["keys"].clone());
+    }
+    let taken = track(&g, "take");
+    let times: Vec<f64> = taken["keys"].as_array().unwrap().iter().map(|k| k["at"].as_f64().unwrap()).collect();
+    assert_eq!((times.first(), times.last(), times.contains(&0.5)), (Some(&0.0), Some(&5.0), false), "the take is in place of the keyframes of its stretch, and the one past it stays: {taken}");
+    assert_eq!((&taken["range"], &taken["rate"]), (&j!([0.0, 10.0]), &j!(20.0)), "the range holds what came");
+    // The input held each level until the next: so does the curve.
+    for (time, level) in [(1.0, 0.0), (3.0, 10.0), (4.0, 0.0), (5.0, 7.0)] {
+        at(&g, time);
+        g.until(&format!("the recorded level at {time}"), |g| ((number(g, "take.value") - level).abs() < 0.1).then_some(()));
+    }
+    // A take is one step back: the second gone, the track holds the first.
+    g.call("undo", j!({}));
+    assert_eq!(track(&g, "take")["keys"], takes[0]);
+    // A rename of what the input reads follows into it, as into any expression.
+    g.call("variable entry rename", j!({ "name": "desk.level", "to": "desk.fader" }));
+    assert_eq!(track(&g, "take")["input"], j!("vars.desk.fader"));
+
+    // A note track records the keys of a MIDI device, by the device's group, on any channel.
+    g.graph().variables().grab_midi("pads", "a test port").unwrap();
+    let press = |g: &Goofi, key: usize, velocity: f64| {
+        let mut keys = vec![0.0; 2048];
+        keys[key] = velocity;
+        g.graph().variables().drive("pads.notes", goofi_core::Data::numbers(keys));
+    };
+    g.call("timeline track add", j!({ "kind": "note", "name": "played" }));
+    let there = j!({ "at": 0.0, "length": 1.0, "pitch": 50, "velocity": 0.5 });
+    g.call("timeline track edit", j!({ "track": "played", "input": "pads", "notes": [there] }));
+    // Pitch 80 on channel 2 is down from beat 1 to beat 3.
+    at(&g, 1.0);
+    press(&g, 128 + 80, 0.75);
+    record(&g, "played", true);
+    at(&g, 3.0);
+    press(&g, 0, 0.0);
+    record(&g, "played", false);
+    let played = track(&g, "played");
+    assert_eq!(played["notes"], j!([there, { "at": 1.0, "length": 2.0, "pitch": 80, "velocity": 0.75 }]), "the note is added to those there");
+    assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
+    // A key still down when the recording ends is a note until there.
+    at(&g, 4.0);
+    press(&g, 60, 1.0);
+    record(&g, "played", true);
+    at(&g, 4.5);
+    record(&g, "played", false);
+    assert_eq!(track(&g, "played")["notes"][2], j!({ "at": 4.0, "length": 0.5, "pitch": 60, "velocity": 1.0 }));
+}
+
+#[test]
+fn a_take_becomes_the_keyframes_that_follow_it() {
+    use goofi_graph::timeline::{Lanes, Take, Track};
+    // Two seconds of a sine at 32 samples a second, then a second pass over its first half.
+    let wave = |t: f64| (t * std::f64::consts::TAU).sin();
+    let samples: Vec<(f64, f64)> = (0..=64).map(|i| f64::from(i) / 32.0).map(|t| (t, wave(t))).collect();
+    let mut track = Track { name: "wave".into(), order: 0, input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
+    track.merge(Take::Samples(samples.clone()));
+    let Lanes::Curve { range, keys, .. } = &track.lanes else { unreachable!() };
+    assert!(track.check().is_ok() && keys.len() < 16, "a smooth wave takes few keyframes: {}", keys.len());
+    assert!((range[0] + 1.0).abs() < 1e-9 && (range[1] - 1.0).abs() < 1e-9, "the range holds the wave: {range:?}");
+    // The curve as it plays: from the keyframe at or before `t`, eased to the next by its curve.
+    let level = |t: f64| {
+        let next = keys.iter().position(|k| k.at > t).unwrap_or(keys.len() - 1).max(1);
+        let (from, to) = (&keys[next - 1], &keys[next]);
+        from.value + (to.value - from.value) * from.curve.at((t - from.at) / (to.at - from.at))
+    };
+    let off = samples.iter().map(|&(t, v)| (level(t) - v).abs()).fold(0.0, f64::max);
+    assert!(off <= 0.021, "every sample is within a hundredth of the span: {off}");
+    // A clock that looped records pass after pass: each replaces the stretch it covers.
+    track.merge(Take::Samples(vec![(1.5, 0.0), (2.0, 0.0), (0.0, 0.5), (1.0, 0.5)]));
+    let Lanes::Curve { keys, .. } = &track.lanes else { unreachable!() };
+    let held: Vec<(f64, f64)> = keys.iter().map(|k| (k.at, k.value)).collect();
+    assert_eq!((&held[..2], &held[held.len() - 2..]), (&[(0.0, 0.5), (1.0, 0.5)][..], &[(1.5, 0.0), (2.0, 0.0)][..]), "{held:?}");
+}
+
+#[test]
+fn a_curve_records_a_node_at_the_nodes_pace_and_no_faster_than_its_rate() {
+    use goofi_core::{Data, Meta};
+    use goofi_graph::expr_rewrite::Target;
+    use goofi_graph::machine::Machines;
+    use goofi_graph::timeline::{Lanes, Take, Track};
+    use goofi_node::Local;
+    // The node's newest frame: its value, stamped with the instant it left the node.
+    let frame = std::cell::Cell::new((0.0f32, 0.0));
+    let read = |target: &Target| match target {
+        Target::Node { .. } => {
+            let (value, left) = frame.get();
+            let mut meta = Meta::default();
+            meta.set_procend(Some(left));
+            Ok(Local::Frame(Data::array_f32(vec![1], value.to_le_bytes().to_vec(), meta).unwrap()))
+        }
+        other => Err(format!("{other:?} is not readable here")),
+    };
+    let recorder = || {
+        let track = Track { name: "wave".into(), order: 0, input: "nd('lfo')".into(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
+        let mut m = Machines::default();
+        // At a tempo of 60 a beat is a second.
+        m.configure(Default::default(), ([("k1".to_string(), track)].into_iter().collect(), 60.0), None);
+        m.record("k1");
+        m
+    };
+    let samples = |take: Option<Take>| match take {
+        Some(Take::Samples(samples)) => samples,
+        other => panic!("a curve takes samples: {other:?}"),
+    };
+
+    // A node of two frames a second, looked at thirty times a second, as the stepper asks to:
+    // one sample a frame, a frame that says the same again too.
+    let mut m = recorder();
+    let levels = [0.0, 1.0, 1.0, 3.0, 4.0];
+    for i in 0..=60u32 {
+        let now = f64::from(i) / 30.0;
+        frame.set((levels[(i / 15) as usize], f64::from(i / 15) * 0.5));
+        let said = m.advance(now, &read);
+        assert!(said.iter().any(|(name, value)| name == "wave.recording" && goofi_core::control::number_of(value) == 1.0), "the track says it records");
+        assert_eq!(m.next_deadline(), Some(now + 1.0 / 30.0), "a recording curve is looked at again at its rate");
+    }
+    assert_eq!(samples(m.recorded("k1", 2.0, &read)), [(0.0, 0.0), (0.5, 1.0), (1.0, 1.0), (1.5, 3.0), (2.0, 4.0)]);
+    assert!(m.advance(2.0, &read).iter().any(|(name, value)| name == "wave.recording" && goofi_core::control::number_of(value) == 0.0), "and that it stopped");
+
+    // A node of a hundred frames a second gives no more than the track's rate.
+    let mut m = recorder();
+    for i in 0..=100u32 {
+        let now = f64::from(i) / 100.0;
+        frame.set((i as f32, now));
+        m.advance(now, &read);
+    }
+    let taken = samples(m.recorded("k1", 1.0, &read));
+    assert!(taken.len() > 20 && taken.windows(2).all(|s| s[1].0 - s[0].0 >= 1.0 / 30.0), "{taken:?}");
+
+    // A position that went back is another pass, from where it is.
+    let mut m = recorder();
+    for (now, level) in [(3.0, 1.0), (3.5, 2.0), (1.0, 3.0), (1.5, 4.0)] {
+        frame.set((level, f64::from(level)));
+        m.advance(now, &read);
+    }
+    assert_eq!(samples(m.recorded("k1", 1.5, &read)), [(3.0, 1.0), (3.5, 2.0), (1.0, 3.0), (1.5, 4.0)]);
+}

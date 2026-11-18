@@ -3,7 +3,7 @@
 // made by a click and moved by a drag, the clock steered from the bar and looped in a
 // section dragged on the ruler, the view zoomed by its range bar, a track resized, and the whole
 // stood on its side in a panel taller than wide. On a phone, a
-// held finger is the door onto the menu and a tap makes the note.
+// held finger is the door onto the menu and a tap makes the note. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -473,6 +473,56 @@ test('a held finger opens a track\'s menu, and a tap makes a note and takes it o
 	} finally {
 		await rawCall(page, 'clock set', { playing: true });
 		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
+		await restorePanelType(page);
+	}
+});
+
+test('a track records its input into itself: a curve an expression, notes a MIDI device', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		await rawCall(page, 'clock set', { playing: false, time: 0 });
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
+		});
+		await rawCall(page, 'variable entry add', { name: 'desk.level', value: 0 });
+		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'take' });
+		const take = page.getByTestId('track-take');
+		const button = take.getByTestId('track-record');
+		// A track with no input says so, and records nothing.
+		await button.click();
+		await expect(page.getByText('the track has no input')).toBeVisible();
+		await expect(button).toHaveAttribute('aria-pressed', 'false');
+		// The input is an expression, as a param's; the rate is the track's own.
+		await take.getByTestId('track-input').click();
+		await page.keyboard.type('vars.desk.level');
+		await page.keyboard.press('Enter');
+		await expect.poll(async () => (await trackNamed(page, 'take')).input).toBe('vars.desk.level');
+		await take.getByTestId('track-rate').fill('10');
+		await take.getByTestId('track-rate').press('Enter');
+		await expect.poll(async () => (await trackNamed(page, 'take')).rate).toBe(10);
+		// The button begins the recording, lit while it runs, and the paused clock plays for it.
+		await button.click();
+		await expect(button).toHaveAttribute('aria-pressed', 'true');
+		await expect.poll(() => clock(page, 'playing')).toBe(1);
+		await rawCall(page, 'variable entry edit', { name: 'desk.level', value: 5 });
+		// The button again ends it: the keyframes follow what the input held, and the range holds it.
+		await button.click();
+		await expect(button).toHaveAttribute('aria-pressed', 'false');
+		await expect.poll(async () => (await trackNamed(page, 'take')).keys.at(-1)?.value).toBe(5);
+		const taken = await trackNamed(page, 'take');
+		expect([taken.keys[0].value, taken.range], 'from the level it began at').toEqual([0, [0, 5]]);
+		await expect(take.locator('.key').first()).toBeVisible();
+		// A note track records a MIDI device, and this host has none to offer.
+		await rawCall(page, 'timeline track add', { kind: 'note', name: 'played' });
+		await page.getByTestId('track-played').getByTestId('track-record').click();
+		await expect(page.getByText('no MIDI device is connected')).toBeVisible();
+		await expectIntact(page, 'the timeline panel with a track that recorded');
+	} finally {
+		await rawCall(page, 'clock set', { playing: true });
+		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
+		await rawCall(page, 'variable group remove', { group: 'desk' });
 		await restorePanelType(page);
 	}
 });

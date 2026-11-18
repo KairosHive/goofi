@@ -14,7 +14,7 @@ use goofi_core::indexmap::IndexMap;
 use goofi_core::{Data, Param};
 use goofi_graph::expr_rewrite::{self, Target};
 use goofi_graph::machine::{Machine, Machines};
-use goofi_graph::timeline::{Lanes, Track};
+use goofi_graph::timeline::{Lanes, Take, Track};
 use goofi_graph::Graph;
 use goofi_node::{ExprEvaluator, Local};
 use goofi_transport::{machines_door, output_service, service_base, Door, Hub, Payload, Subscriber, MACHINES_FRAME_ID, MACHINES_INBOX_ID};
@@ -41,6 +41,10 @@ pub enum Msg {
     Jumped,
     /// The section the clock loops in moved: what the thread waits for is another instant.
     Section,
+    /// Begin a recording into the track of this id.
+    Record(String),
+    /// End the recording into the track of this id, and answer what it took.
+    Recorded(String, Sender<Take>),
 }
 
 /// The manager's hand on the thread: a message in its inbox, and a ring on its door for it.
@@ -82,24 +86,22 @@ impl Driver {
     }
 }
 
-/// Every `nd()` term of the machines' expressions, resolved as a param's binding resolves it.
+/// Every `nd()` term of the stepped expressions, resolved as a param's binding resolves it.
 fn node_reads(g: &Graph) -> NodeReads {
     let mut out = NodeReads::default();
-    for m in g.machines().values() {
-        for text in m.expressions() {
-            let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
-            for r in refs {
-                match r.target {
-                    Target::Node { name, slot } => {
-                        let service = g.machine_stream(&name, slot.as_deref()).map(|(uid, s)| output_service(&service_base(g.instance(), uid, g.node_generation(uid)), s));
-                        out.streams.insert((name, slot), service);
-                    }
-                    Target::NodeParam { name, group, param } => {
-                        let value = g.machine_param(&name, &group, &param);
-                        out.params.insert((name, group, param), value);
-                    }
-                    _ => {}
+    for text in g.stepped_expressions() {
+        let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
+        for r in refs {
+            match r.target {
+                Target::Node { name, slot } => {
+                    let service = g.machine_stream(&name, slot.as_deref()).map(|(uid, s)| output_service(&service_base(g.instance(), uid, g.node_generation(uid)), s));
+                    out.streams.insert((name, slot), service);
                 }
+                Target::NodeParam { name, group, param } => {
+                    let value = g.machine_param(&name, &group, &param);
+                    out.params.insert((name, group, param), value);
+                }
+                _ => {}
             }
         }
     }
@@ -152,6 +154,8 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
         let mut reads = NodeReads::default();
         let mut streams = Streams::default();
         let mut logged: HashSet<String> = HashSet::new();
+        // The recordings to end at the next pass, each with who waits for what it took.
+        let mut ended: Vec<(String, Sender<Take>)> = Vec::new();
         loop {
             // Park toward the next instant owed; a ring — a frame read, or the inbox — is the other
             // reason to wake.
@@ -161,7 +165,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             let mut woken = door.wait_until(Instant::now() + wait).has(MACHINES_FRAME_ID);
             loop {
                 match rx.try_recv() {
-                    Ok(msg) => woken |= take(&mut machines, &mut reads, &mut streams, &state.hub, msg),
+                    Ok(msg) => woken |= take(&mut machines, &mut reads, &mut streams, &mut ended, &state.hub, msg),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
                 }
@@ -170,6 +174,8 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
                 return;
             }
             if machines.is_empty() {
+                // No track is left to have recorded: who waits hears that as the answer hung up.
+                ended.clear();
                 continue;
             }
             // The position went back — a jump, a loop's restart — and that is owed too.
@@ -203,6 +209,12 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
                     _ => Err("a machine's own reference".to_string()),
                 }
             };
+            // A recording ends with this instant in it; one that never ran hangs up on who waits.
+            for (track, answer) in ended.drain(..) {
+                if let Some(taken) = machines.recorded(&track, now, &read) {
+                    let _ = answer.send(taken);
+                }
+            }
             let writes = machines.advance(now, &read);
             {
                 let mut store = store.lock();
@@ -223,7 +235,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
 }
 
 /// One message into the machines; whether it is a reason to settle now.
-fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, hub: &Hub, msg: Msg) -> bool {
+fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, ended: &mut Vec<(String, Sender<Take>)>, hub: &Hub, msg: Msg) -> bool {
     match msg {
         Msg::Configure(config, timed, evaluator, node_reads) => {
             machines.configure(config, timed, evaluator);
@@ -237,6 +249,8 @@ fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, h
         Msg::Changed(name) => return name == "clock.playing" || machines.keys().contains(&name),
         Msg::Jumped => machines.restart(),
         Msg::Section => return false,
+        Msg::Record(track) => machines.record(&track),
+        Msg::Recorded(track, answer) => ended.push((track, answer)),
     }
     true
 }

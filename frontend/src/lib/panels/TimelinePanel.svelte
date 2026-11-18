@@ -12,10 +12,12 @@
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
-	import { draggable, type DragSource, type Outcome } from '$lib/drag';
+	import { drag as dragEngine, draggable, dropTarget, type DragSource, type Outcome } from '$lib/drag';
+	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
+	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
@@ -46,7 +48,7 @@
 	const vertical = $derived(tall > wide);
 
 	// ---- the clock: its variables read live, `clock set` to steer it, its loop a section of the axis.
-	watchVariables(() => ['time', 'playing', 'bpm', 'length'].map((n) => `clock.${n}`));
+	watchVariables(() => [...['time', 'playing', 'bpm', 'length'].map((n) => `clock.${n}`), ...Object.values(g.timeline).map((t) => `${t.name}.recording`)]);
 	function clock(name: string): number {
 		const v = variableValue(`clock.${name}`);
 		return typeof v === 'number' ? v : 0;
@@ -163,6 +165,38 @@
 	// The touch door onto a track's menu.
 	let pressed = '';
 	const press = createLongPress((at) => trackMenu(pressed, at.clientX, at.clientY));
+
+	// ---- a recording: a track takes its input in at the clock's position until it is ended. The
+	// stepping thread says whether one runs, in the track's own group.
+	const engine = dragEngine();
+	const recording = (t: Track): boolean => variableValue(`${t.name}.recording`) === 1;
+	const devices = async (): Promise<{ port: string; group: string }[]> => (await g.op<{ ports: { port: string; group: string }[] }>('midi list', {})).ports;
+	/** The MIDI device a note track records from: the one it names while that is there, else the
+	 * one there is, else one picked at `at` from those there are. */
+	async function device(t: Track, at: { x: number; y: number }): Promise<string | null> {
+		const ports = await devices();
+		if (ports.some((p) => p.group === t.input)) return t.input;
+		if (ports.length <= 1) return ports[0]?.group ?? null;
+		return quickPick().ask(at, ports.map((p) => ({ id: p.group, label: p.port })), `Record ${t.name} from`);
+	}
+	/** Begin a recording into the track, or end the one that runs. A paused clock plays for it. */
+	async function record(e: MouseEvent, id: string): Promise<void> {
+		const t = g.timeline[id];
+		if (recording(t)) return void (await g.op('timeline track record', { track: id, on: false }));
+		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const input = t.kind === 'note' ? await device(t, { x: box.left, y: box.bottom }) : t.input;
+		if (!input) throw new Error(t.kind === 'note' ? 'no MIDI device is connected' : 'the track has no input: type an expression, or drop a node on it');
+		if (input !== t.input) await g.op('timeline track edit', { track: id, input });
+		await g.op('timeline track record', { track: id, on: true });
+		if (!playing) steer({ playing: true });
+	}
+	/** The devices there are, as a menu under the button: the one picked is the track's input. */
+	async function inputMenu(e: MouseEvent, id: string): Promise<void> {
+		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		const ports = await devices();
+		const items = ports.map((p) => ({ label: p.port, icon: p.group === g.timeline[id]?.input ? ('piano' as const) : undefined, action: () => edit(id, { input: p.group }) }));
+		menu = { x: box.left, y: box.bottom, items: items.length ? items : [{ label: 'No MIDI device', disabled: true }] };
+	}
 
 	// ---- a track lifted by what it says about itself: let go on another track it takes that
 	// track's place, and on a param it is the expression that reads it.
@@ -423,9 +457,19 @@
 						onpointerup={press.cancel}
 						onpointercancel={press.cancel}
 					>
-						<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button'), onEnd: (outcome) => place(id, outcome) }}>
+						<div class="info" use:draggable={{ source: () => lift(id), allow: (el) => !el.closest('input, select, button, .input'), onEnd: (outcome) => place(id, outcome) }}>
 							<div class="title">
 								<TextInput class="name" aria-label="Track name" value={t.name} onChange={(to) => rename(id, to)} />
+								<IconButton
+									variant="ghost"
+									size="sm"
+									class={recording(t) ? 'live' : ''}
+									label={recording(t) ? 'Stop recording' : 'Record'}
+									title={recording(t) ? 'End the recording: what it took goes into the track' : `Record ${t.kind === 'note' ? 'the keys of a MIDI device' : 'the input'} into the track while the clock plays`}
+									aria-pressed={recording(t)}
+									data-testid="track-record"
+									onclick={(e) => void record(e, id).catch(fail('Record'))}><Icon name="circle-dot" /></IconButton
+								>
 								<IconButton variant="ghost" size="sm" label="Hide track" data-testid="track-hide" onclick={() => hide([...hidden, id], 'Hide Track')}><Icon name="eye-off" /></IconButton>
 								<IconButton variant="ghost" size="sm" label="Delete track" data-testid="track-delete" onclick={() => (asked = id)}><Icon name="x" /></IconButton>
 							</div>
@@ -436,6 +480,25 @@
 								<Select aria-label="Scale" title="The scale whose notes the keyboard marks and a note lands on" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => edit(id, { scale })} />
 								<Select aria-label="Root" title="The note the scale starts on" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => edit(id, { root })} />
 								<Select aria-label="Grid" title="The lines a note of this track snaps to when it is made or dragged" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => edit(id, { grid })} />
+								<IconButton variant="ghost" size="sm" label="Input" title={`The MIDI device a recording takes its notes from: ${t.input || 'the one there is'}`} data-testid="track-device" onclick={(e) => void inputMenu(e, id).catch(fail('List MIDI devices'))}><Icon name="piano" /></IconButton>
+							{:else}
+								<!-- What a recording takes in: an expression as a param's, typed or dropped. -->
+								<div
+									class="input"
+									class:armed={engine.source?.tags.includes('number') && engine.source.key !== id}
+									title="The input a recording takes: an expression, as a param's. Drop a node, a variable or a state on it"
+									use:dropTarget={{
+										tags: ['number'],
+										accept: (source) => source.key !== id,
+										onDrop: async ({ source, tag, at }) => {
+											const input = await source.expression?.(tag, at);
+											if (input) edit(id, { input });
+										}
+									}}
+								>
+									<ExprEditor label="Input" value={t.input} placeholder="input: nd('lfo0')" testid="track-input" onCommit={(input) => edit(id, { input })} />
+								</div>
+								<label class="labeled">Hz <NumberInput aria-label="Rate" title="The most samples a second a recording takes of the input; a slower node gives its own" data-testid="track-rate" value={t.rate} min={1} max={120} step={1} onChange={(rate) => edit(id, { rate })} /></label>
 							{/if}
 							{#if mine}
 								{#if 'pitch' in mine}
@@ -634,13 +697,31 @@
 	.title {
 		flex: 1 1 100%;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-1);
 		min-width: 0;
 	}
+	/* The name keeps a width a finger meets: where the buttons do not fit beside it, they wrap. */
 	.title :global(.name) {
-		flex: 1 1 0;
+		flex: 1 1 var(--number-width);
+		min-width: var(--number-width);
+	}
+	/* The record button while a recording runs. */
+	.title :global(.live) {
+		color: var(--danger);
+		background: var(--danger-fill);
+	}
+	/* A curve track's input, the width of what the track says about itself; a dragged value it
+	   takes outlines it. */
+	.input {
+		flex: 1 1 100%;
 		min-width: 0;
+		cursor: text;
+	}
+	.input.armed {
+		outline: 1px dashed var(--border-strong);
+		outline-offset: -1px;
 	}
 	/* A note track's keyboard stands between what it says and its lane, a key per row. */
 	.notes .info {

@@ -250,6 +250,16 @@ through keyframes: the value eases from a keyframe to the next by that keyframe'
 outside them, and is `vars.<track>.value`. `goofi timeline track add note` and
 `timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
+A track records its `input` into itself while the clock plays: the record button beside its
+name, or `timeline track record`, begins a recording, and ends it. A note track's input is a
+MIDI device: the one there is, or the one picked where there are several. The notes played are
+added to the notes the track holds. A curve track's input is an expression, as a param's, typed
+or dropped on it: a node, a variable, a state. The track takes the input's value at most `rate`
+times a second (30 unless set), and a node slower than that gives a sample for each of its
+frames. The end of the recording puts keyframes with fitted bezier curves that follow what came,
+in place of the keyframes of the stretch it covered. `vars.<track>.recording` is 1 while a
+recording runs.
+
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, a click on a note
 takes it out, and a drag moves one; a note snaps to its track's grid. A press on the

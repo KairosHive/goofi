@@ -73,7 +73,8 @@ naming no node: a reply means the wire is there. Take names from a read, never f
 The patch plays on one clock: `t` is its position, `clock set` pauses and places it, and the
 `clock.*` variables hold its tempo and the timeline's length in beats. `timeline track add`
 and `timeline track edit` put notes and keyframed curves on that position; each track is a group
-of variables, and a note track is a MIDI port of `audio:MidiIn`.
+of variables, and a note track is a MIDI port of `audio:MidiIn`. `timeline track record` takes a
+track's `input`, a MIDI device or an expression, into the track while the clock plays.
 
 ## Custom nodes
 

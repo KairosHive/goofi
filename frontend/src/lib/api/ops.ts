@@ -67,6 +67,7 @@ export type OpName =
 	| 'timeline track add'
 	| 'timeline track edit'
 	| 'timeline track move'
+	| 'timeline track record'
 	| 'timeline track remove'
 	| 'midi list'
 	| 'midi learn'
@@ -173,6 +174,7 @@ export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'timeline track add': 'write',
 	'timeline track edit': 'write',
 	'timeline track move': 'write',
+	'timeline track record': 'effect',
 	'timeline track remove': 'write',
 	'midi list': 'read',
 	'midi learn': 'effect',

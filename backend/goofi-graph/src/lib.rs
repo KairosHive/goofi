@@ -817,8 +817,9 @@ impl Graph {
         out
     }
 
-    /// Every variable group the patch refers to: in a source's text, a feed, or a variable's
-    /// expression. What holds a MIDI device open — a group a device's name resolves to is read.
+    /// Every variable group the patch refers to: in a source's text, a feed, a variable's
+    /// expression, or a track's input. What holds a MIDI device open — a group a device's name
+    /// resolves to is read.
     pub fn referenced_groups(&self) -> HashSet<String> {
         let group_of = |name: &str| goofi_core::variables::split_variable(name).map(|(g, _)| g.to_string());
         let mut out = HashSet::new();
@@ -826,6 +827,15 @@ impl Graph {
         for r in node_refs.chain(self.runtime.variable_binds.values().flat_map(|b| &b.refs)) {
             if let expr_rewrite::Target::Variable { key } = &r.target {
                 out.extend(group_of(key));
+            }
+        }
+        for track in self.patch.stepped.tracks.values().filter(|t| !t.input.is_empty()) {
+            match track.expression().map(expr_rewrite::rewrite_machine) {
+                None => drop(out.insert(track.input.clone())),
+                Some(read) => out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
+                    expr_rewrite::Target::Variable { key } => group_of(&key),
+                    _ => None,
+                })),
             }
         }
         for (_, leaf) in self.leaves() {
@@ -1070,14 +1080,26 @@ impl Graph {
         }
     }
 
+    /// Re-set every expression of what steps on the clock that `edit` rewrites: a machine's, and
+    /// the input of a curve track.
+    fn rewrite_stepped(&mut self, edit: impl Fn(&str) -> Option<String>) {
+        let stepped = Arc::make_mut(&mut self.patch.stepped);
+        for m in stepped.machines.values_mut() {
+            m.rewrite_expressions(&edit);
+        }
+        for track in stepped.tracks.values_mut() {
+            if let Some(next) = track.expression().and_then(&edit) {
+                track.input = next;
+            }
+        }
+    }
+
     /// Follow a set of variable renames into every expression that spells one — a variable's, a
-    /// source's, a machine's — answering the nodes whose source text changed.
+    /// source's, a machine's, a track's input — answering the nodes whose source text changed.
     fn rewrite_variable_reads(&mut self, moved: &[(String, String)]) -> Vec<Uid> {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
-        for m in self.machines_mut().values_mut() {
-            m.rewrite_expressions(|e| expr_rewrite::rename_variables(e, rename));
-        }
+        self.rewrite_stepped(|e| expr_rewrite::rename_variables(e, rename));
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })
@@ -2090,12 +2112,10 @@ impl Graph {
                 (slot == Some(old) && Some(n) == facade.as_deref()).then(|| new.to_string()),
             )
         };
-        // A variable's and a machine's expression spell a producer as a param's does, so the one
-        // rename reaches them.
+        // A variable's, a machine's and a track's expression spell a producer as a param's does,
+        // so the one rename reaches them.
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_refs(e, rename));
-        for m in self.machines_mut().values_mut() {
-            m.rewrite_expressions(|e| expr_rewrite::rename_refs(e, rename));
-        }
+        self.rewrite_stepped(|e| expr_rewrite::rename_refs(e, rename));
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_refs(&s.expression, rename)?, ..s.clone() })
         })
@@ -3046,14 +3066,19 @@ impl Graph {
         self.param_value_of(uid, name, group, param)
     }
 
-    /// Every node reference the machines' expressions make, in the order the texts come.
+    /// Every expression of what steps on the clock: the machines', then the input of each
+    /// curve track.
+    pub fn stepped_expressions(&self) -> impl Iterator<Item = &str> {
+        let stepped = &self.patch.stepped;
+        stepped.machines.values().flat_map(machine::Machine::expressions).chain(stepped.tracks.values().filter_map(timeline::Track::expression))
+    }
+
+    /// Every node reference the stepped expressions make, in the order the texts come.
     fn machine_node_refs(&self) -> Vec<expr_rewrite::Target> {
         let mut out = Vec::new();
-        for m in self.patch.stepped.machines.values() {
-            for text in m.expressions() {
-                let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
-                out.extend(refs.into_iter().map(|r| r.target).filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })));
-            }
+        for text in self.stepped_expressions() {
+            let Ok((_, refs)) = expr_rewrite::rewrite_machine(text) else { continue };
+            out.extend(refs.into_iter().map(|r| r.target).filter(|t| matches!(t, Target::Node { .. } | Target::NodeParam { .. })));
         }
         out
     }
