@@ -149,7 +149,7 @@
 	</Field>
 </div>
 
-<Popover anchor={bar} {open} onDismiss={() => (open = false)} class="cm-pop" role="dialog" aria-label={`${section} colormap`} data-testid="colormap-pop">
+<Popover anchor={bar} {open} onDismiss={() => (open = false)} class="cm-pop thin-scrollbar" role="dialog" aria-label={`${section} colormap`} data-testid="colormap-pop">
 	<div class="cm-presets" aria-label="presets">
 		{#each PRESETS as name (name)}
 			<button

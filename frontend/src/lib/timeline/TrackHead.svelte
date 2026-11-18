@@ -21,7 +21,7 @@
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { Button, CurvePicker, Field, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
+	import { Button, CurvePicker, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
 
 	let {
 		id,
@@ -171,13 +171,13 @@
 	{#if more.length > 0 || tight}
 		<SettingsMenu label="More" icon="ellipsis" testid="track-more">
 			{#each groups.filter((name) => more.includes(name)) as name (name)}
-				<section class="rows" aria-label={TITLES[name]}>
+				<section aria-label={TITLES[name]}>
 					<h4>{TITLES[name]}</h4>
-					{@render group(name)}
+					<FieldGrid>{@render group(name)}</FieldGrid>
 				</section>
 			{/each}
 			{#if tight}
-				<section class="rows" aria-label="Track">
+				<section aria-label="Track">
 					<h4>Track</h4>
 					<div class="acts">
 						<Button size="sm" data-testid="track-hide" onclick={onHide}><Icon name="eye-off" /> Hide</Button>
@@ -194,7 +194,7 @@
 </div>
 <div class="groups" use:fit={(hidden) => (more = hidden)}>
 	{#each groups as name (name)}
-		<div class="rows" class:stacked data-fit={name} role="group" aria-label={TITLES[name]}>{@render group(name)}</div>
+		<div class="group" data-fit={name} role="group" aria-label={TITLES[name]}><FieldGrid {stacked}>{@render group(name)}</FieldGrid></div>
 	{/each}
 </div>
 
@@ -225,45 +225,39 @@
 		min-height: 0;
 		overflow: hidden;
 	}
-	/* A group: its rows share one label column, as a menu's do. A line parts it from the one before. */
-	.rows {
+	/* A group, parted by a line from the one before; a label in it is as narrow as its word. */
+	.group {
 		flex: none;
-		display: grid;
-		grid-template-columns: max-content minmax(0, 1fr);
-		gap: var(--space-2) var(--space-3);
-		align-items: center;
-		padding: var(--space-2) 0;
-		--number-width: 100%;
+		padding: var(--space-1) 0;
 		--field-label-min: 0px;
 	}
-	.rows + .rows {
+	.group + .group {
 		border-top: 1px solid var(--border);
 	}
 	/* The root is as wide as a note's name, and the scale takes the rest. */
-	.rows :global(.root) {
+	.group :global(.root),
+	section :global(.root) {
 		flex: 0 0 auto;
 	}
-	/* Where a track is too narrow for a label beside its control, the label goes above it. */
-	.stacked {
-		grid-template-columns: minmax(0, 1fr);
-	}
-	.acts {
-		grid-column: 1 / -1;
-		display: flex;
-		gap: var(--space-3);
-	}
 	/* In the menu a group says its name, and has the menu's own margins. */
-	section.rows {
+	section {
 		padding: var(--space-3) var(--space-5);
+		--field-label-min: 0px;
+	}
+	section + section {
+		border-top: 1px solid var(--border);
 	}
 	h4 {
-		grid-column: 1 / -1;
-		margin: 0;
+		margin: 0 0 var(--space-3);
 		font-size: var(--fs-micro);
 		font-weight: 600;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
 		color: var(--text-dim);
+	}
+	.acts {
+		display: flex;
+		gap: var(--space-3);
 	}
 	/* A curve track's input: a dragged value it takes outlines it. */
 	.input {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { Icon } from '$lib/ui';
+	import { Icon, IconButton } from '$lib/ui';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 
@@ -12,13 +12,6 @@
 	} = $props();
 	const owner = $props.id();
 	const listening = $derived(midiLearn.target === target);
-
-	/** Stop the press before the control board's direct drag listener sees it. */
-	function stopDrag(button: HTMLButtonElement): { destroy(): void } {
-		const stop = (event: PointerEvent): void => event.stopPropagation();
-		button.addEventListener('pointerdown', stop);
-		return { destroy: () => button.removeEventListener('pointerdown', stop) };
-	}
 
 	async function learn(): Promise<void> {
 		if (listening) return midiLearn.stop();
@@ -32,28 +25,20 @@
 	onDestroy(() => { if (midiLearn.owner === owner) midiLearn.stop(); });
 </script>
 
-<button type="button" class:listening data-testid={testid}
-	aria-label={`MIDI learn for ${label}`} aria-pressed={listening}
-	title={listening ? 'Listening for a MIDI change. Click to cancel.' : 'MIDI learn'}
-	use:stopDrag onclick={() => void learn()}>
-	{#if listening}<span class="spinner" aria-hidden="true"></span>{:else}<Icon name="radio" />{/if}
-</button>
+<!-- The press stops here, before the control board's direct drag listener sees it. -->
+<span class="learn">
+	<IconButton variant="ghost" size="sm" label={`MIDI learn for ${label}`} title={listening ? 'Listening for a MIDI change. Click to cancel.' : 'MIDI learn'}
+		aria-pressed={listening} data-testid={testid} onpointerdown={(e) => e.stopPropagation()} onclick={() => void learn()}>
+		{#if listening}<span class="spinner" aria-hidden="true"></span>{:else}<Icon name="radio" />{/if}
+	</IconButton>
+</span>
 
 <style>
-	button {
+	/* The learn's own ink, through the button's colour hook. */
+	.learn {
 		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-width: var(--hit);
-		min-height: var(--hit);
-		padding: 0;
-		background: transparent;
-		border: none;
-		border-radius: var(--radius-md);
-		color: var(--info);
-		cursor: pointer;
+		--panelty-text: var(--info);
 	}
-	button:focus-visible { outline: var(--focus-width) solid var(--focus-ink); }
 	.spinner {
 		width: 14px;
 		height: 14px;

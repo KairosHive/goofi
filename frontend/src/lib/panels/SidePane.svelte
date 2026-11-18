@@ -6,7 +6,7 @@
 <script lang="ts" generics="T">
 	import { beginDrag } from 'panelty';
 	import { onDestroy, type Snippet } from 'svelte';
-	import { IconButton } from '$lib/ui';
+	import { Icon, IconButton } from '$lib/ui';
 
 	let {
 		subject,
@@ -134,7 +134,7 @@
 		data-testid="inspector-toggle"
 		onclick={onToggle}
 	>
-		◧
+		<Icon name="panel-right" />
 	</IconButton>
 {/if}
 

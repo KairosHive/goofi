@@ -41,6 +41,9 @@
 </script>
 
 {#if editing}
+	<!-- Native, not `TextInput`: a draft that is no valid name stays open and marked at each
+	     keystroke, and Enter on it commits nothing. The name itself is a text button, which no
+	     primitive is. -->
 	<!-- svelte-ignore a11y_autofocus -->
 	<input
 		{...MODE_ATTRS.search}

@@ -12,7 +12,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Badge, Button, ColorPicker, Field, Icon, IconButton, Segmented, Select } from '$lib/ui';
+	import { Badge, Button, ColorPicker, Field, FieldGrid, Icon, IconButton, Segmented, Select, under } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
 	import { dotColor, hexToRgba, rgbaToHex } from './layout';
 	import { DECISIONS, editEach, mixed, outgoing as outgoingOf, relink, shares, stateOf, summary as transitionSummary, weightsOf } from './model';
@@ -73,9 +73,8 @@
 	// ---- a transition out, added here rather than dragged: to a state picked from a menu under the +.
 	let picker = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 	function pickTransition(e: MouseEvent): void {
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		const add = (to: string): void => void g.op('machine transition add', { machine: name, from: one, to }).catch((err) => notify().failure('Add transition', err));
-		picker = { x: r.left, y: r.bottom, items: Object.entries(m.states).map(([to, s]) => ({ label: s.name, action: () => add(to) })) };
+		picker = { ...under(e), items: Object.entries(m.states).map(([to, s]) => ({ label: s.name, action: () => add(to) })) };
 	}
 	/** The one delete path: a playhead starting here refuses it, as the manager says. */
 	const remove = (): void => ids.forEach((id) => call('machine state remove', { name: id }));
@@ -129,11 +128,11 @@
 		<Button variant="danger" size="sm" title="Delete the state and its transitions" data-testid="state-remove" onclick={remove}>delete</Button>
 	</div>
 	<section class="section" data-testid="state-decision">
-		<div class="fields">
+		<FieldGrid>
 			<Field label={tag('mode', states.map((s) => s.mode))} doc={DECISION_HINT[states[0].mode]} row>
 				<Segmented value={states[0].mode} segments={SEGMENTS} onChange={(mode) => editStates({ mode: mode as Decision })} aria-label="decision" data-testid="state-mode" fill />
 			</Field>
-		</div>
+		</FieldGrid>
 		{#if states[0].mode === 'expression'}
 			<Field label="index" doc={DECISION_HINT.expression}>
 				<ExprEditor machine={name} label="index" value={states[0].expression} testid="state-expression"
@@ -197,15 +196,6 @@
 	}
 	.section + .section {
 		border-top: 1px solid var(--border);
-	}
-	/* `:global`, so the forms inside wear the same rows and heads. Field rows sit on a grid, so the
-	   labels of one block share a column. */
-	.state-form :global(.fields) {
-		display: grid;
-		grid-template-columns: max-content minmax(0, 1fr);
-		column-gap: var(--space-5);
-		row-gap: var(--space-3);
-		--number-width: 100%;
 	}
 	header {
 		display: flex;

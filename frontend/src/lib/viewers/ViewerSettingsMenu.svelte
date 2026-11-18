@@ -3,7 +3,7 @@
 	import { MODULES } from './registry';
 	import type { SettingDescriptor } from './module';
 	import type { ViewBinding } from './viewBinding';
-	import { Field, EmptyState, NumberInput, Select, SettingsMenu, Toggle } from '$lib/ui';
+	import { Field, FieldGrid, EmptyState, NumberInput, Select, SettingsMenu, Toggle } from '$lib/ui';
 
 	let { binding }: { binding: ViewBinding } = $props();
 
@@ -22,7 +22,7 @@
 				{#snippet hint()}No settings{/snippet}
 			</EmptyState>
 		{/if}
-		<div class="vs-rows">
+		<FieldGrid>
 			{#each schema.filter(visible) as s (s.key)}
 				<Field label={s.label} row>
 					{#if s.type === 'toggle'}
@@ -44,7 +44,7 @@
 					{/if}
 				</Field>
 			{/each}
-		</div>
+		</FieldGrid>
 	</SettingsMenu>
 </span>
 
@@ -78,14 +78,5 @@
 		.vs-anchor :global(.vs-cog::after) {
 			inset: calc((var(--node-u) - 100%) / -2);
 		}
-	}
-	/* Two columns for every row: the label at its widest, then the control column a stretching
-	   widget fills; a toggle keeps its size and sits at the right end. */
-	.vs-rows {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		column-gap: var(--space-5);
-		row-gap: var(--space-3);
-		--number-width: 100%;
 	}
 </style>

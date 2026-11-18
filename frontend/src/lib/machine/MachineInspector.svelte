@@ -14,7 +14,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { variableFrame, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { Button, ENVELOPE_BORN, EmptyState, EnvelopePicker, Field, Icon, IconButton, Popover, TextInput, Toggle, colorCss, curvePath } from '$lib/ui';
+	import { Button, ENVELOPE_BORN, EmptyState, EnvelopePicker, Field, FieldGrid, Icon, IconButton, Popover, TextInput, Toggle, colorCss, curvePath } from '$lib/ui';
 	import { envelopePoints, pathOf } from '$lib/ui/envelope';
 	import AttributeForm from './AttributeForm.svelte';
 	import { FACES, brief, descriptorFor, envelopeDescriptor, faceOf, fractionOf, literalOf, valueAt } from './attributes';
@@ -285,7 +285,7 @@
 	</div>
 {/snippet}
 
-<div class="score" data-testid="machine-inspector" data-count={selected.length} data-open={subject.open.join(' ')} data-order={order.map((s) => m.states[s].name).join(' ')} bind:clientWidth={scoreW}>
+<div class="score thin-scrollbar" data-testid="machine-inspector" data-count={selected.length} data-open={subject.open.join(' ')} data-order={order.map((s) => m.states[s].name).join(' ')} bind:clientWidth={scoreW}>
 	{#if order.length === 0}
 		<div class="empty">
 			<EmptyState>
@@ -396,12 +396,12 @@
 					onCommit={(x) => editCell(w.state, w.attr, { values: { [w.attr]: literalOf(x) } })}
 					onPreview={(x) => targets.forEach((t) => g.previewState(name, t, { values: { [w.attr]: x } }))} />
 				{#if a.kind.type === 'num'}
-					<div class="fields">
+					<FieldGrid>
 						<Field label="envelope" doc="On arrival the value plays an attack, decay, sustain and release" row>
 							<Toggle value={env !== null} disabled={!isSet(w.state, w.attr)} aria-label="envelope" data-testid="state-envelope"
 								onChange={(on) => editCell(w.state, w.attr, { envelopes: { [w.attr]: on ? ENVELOPE_BORN : null } })} />
 						</Field>
-					</div>
+					</FieldGrid>
 					{#if env}
 						<ParamField paramName={`${a.name} envelope`} label="shape" descriptor={envelopeDescriptor(env, LONGEST)} literal viewKey={`${name}/cell/${w.attr}/envelope`}
 							data-testid="state-attribute-envelope"
@@ -570,7 +570,9 @@
 	.dot.flying {
 		opacity: 0.5;
 	}
-	/* A cog in the corner, small enough that a column's or a cell's middle is never under it. */
+	/* A cog in the corner, small enough that a column's or a cell's middle is never under it. Its
+	   button is native, not `IconButton`: that one takes the hit floor under a finger, which is
+	   wider than the corner a cell has for it. */
 	.cog {
 		position: absolute;
 		right: 2px;
@@ -749,13 +751,6 @@
 		gap: var(--space-3);
 		width: 22rem;
 		max-width: 100%;
-	}
-	.pop :global(.fields) {
-		display: grid;
-		grid-template-columns: max-content minmax(0, 1fr);
-		column-gap: var(--space-5);
-		row-gap: var(--space-3);
-		--number-width: 100%;
 	}
 	.pop-head {
 		display: flex;

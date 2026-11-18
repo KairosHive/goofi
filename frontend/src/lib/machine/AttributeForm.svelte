@@ -1,13 +1,12 @@
 <!-- An attribute of the machine, for every state: its name, kind, range or options, default, the
-     curve it eases by on a transition, and its removal. Opened from its row's cog in the score,
-     dressed by the inspector's `.fields` grid. -->
+     curve it eases by on a transition, and its removal. Opened from its row's cog in the score. -->
 <script lang="ts">
 	import type { Attribute } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
-	import { Button, CurvePicker, Field, NumberInput, Select, TextInput, Toggle } from '$lib/ui';
+	import { Button, CurvePicker, Field, FieldGrid, NumberInput, Select, TextInput, Toggle } from '$lib/ui';
 	import { FACES, descriptorFor, faceOf, literalOf, type Face } from './attributes';
 
 	let { name, attr, a }: { name: string; attr: string; a: Attribute } = $props();
@@ -36,7 +35,7 @@
 		<span class="form-name">definition</span>
 		<Button variant="danger" size="sm" title="Remove the attribute from every state and every playhead" data-testid="attribute-remove" onclick={() => call('machine attribute remove', {})}>remove</Button>
 	</div>
-	<div class="fields">
+	<FieldGrid>
 		<Field label="name" row>
 			<TextInput inputmode="search" value={a.name} aria-label="Attribute name" data-testid="attribute-name" autocomplete="off"
 				onChange={(to) => { if (to.trim() !== a.name && isValidIdentifier(to.trim())) call('machine attribute edit', { to: to.trim() }); }} />
@@ -68,7 +67,7 @@
 				<TextInput inputmode="search" value={a.kind.options.join(', ')} aria-label="options" onChange={setOptions} />
 			</Field>
 		{/if}
-	</div>
+	</FieldGrid>
 	<ParamField paramName={a.name} label="default" descriptor={descriptorFor(a, a.default)} literal viewKey={`${name}/${attr}`}
 		onCommit={(v) => call('machine attribute edit', { value: literalOf(v) })} />
 </div>

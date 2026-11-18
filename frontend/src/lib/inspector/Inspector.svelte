@@ -722,7 +722,7 @@
 							size="sm"
 							onclick={() => send('restart', (uid) => g.restartNode(uid))}
 							title="Restart this node (respawn with the same params + links)"
-							data-testid="inspector-restart">↻ Restart</Button
+							data-testid="inspector-restart"><Icon name="refresh-cw" /> Restart</Button
 						>
 					</div>
 					<pre>{node.error}</pre>

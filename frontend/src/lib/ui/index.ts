@@ -6,6 +6,7 @@ export { default as ScrollArea } from './ScrollArea.svelte';
 export { default as Bar } from './Bar.svelte';
 
 export { default as Field } from './Field.svelte';
+export { default as FieldGrid } from './FieldGrid.svelte';
 export { default as NumberInput } from './NumberInput.svelte';
 export { default as Slider } from './Slider.svelte';
 export { default as Knob } from './Knob.svelte';
@@ -21,6 +22,7 @@ export { default as Popover } from './Popover.svelte';
 export { default as QuickPick, type PickOption } from './QuickPick.svelte';
 export { default as SettingsMenu } from './SettingsMenu.svelte';
 export { fit } from './fit';
+export { under } from './under';
 export { default as Dialog } from './Dialog.svelte';
 export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 

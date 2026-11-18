@@ -7,7 +7,7 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { dropTarget, DropHint, type Point } from '$lib/drag';
 	import { byName } from './nodeChoices';
-	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput } from '$lib/ui';
+	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput, under } from '$lib/ui';
 
 	const { panelId }: PanelProps = $props();
 
@@ -152,10 +152,7 @@
 
 	<div class="add-node">
 		<Button size="sm" disabled={nodeItems.length === 0} data-testid="recorder-add-node"
-			onclick={(event) => {
-				const box = event.currentTarget.getBoundingClientRect();
-				nodeMenu = { x: box.left, y: box.bottom };
-			}}
+			onclick={(event) => (nodeMenu = under(event))}
 		><Icon name="plus" />Add node<Icon name="chevron-down" /></Button>
 	</div>
 

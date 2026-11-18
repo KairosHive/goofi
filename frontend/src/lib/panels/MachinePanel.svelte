@@ -43,7 +43,7 @@
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { Button, EmptyState, Field, Icon, IconButton, NumberInput, Popover, Toggle, isTextEditingTarget } from '$lib/ui';
+	import { Button, EmptyState, Field, FieldGrid, Icon, IconButton, NumberInput, Popover, Toggle, isTextEditingTarget } from '$lib/ui';
 	import InstanceBar from './InstanceBar.svelte';
 	import SidePane from './SidePane.svelte';
 
@@ -580,15 +580,15 @@
 					</ViewportPortal>
 				</SvelteFlow>
 				<Popover anchor={addAnchor} open={adding} onDismiss={() => (adding = false)} flip role="dialog" aria-label="Add states" data-testid="add-states-menu">
-					<div class="add-form">
+					<FieldGrid>
 						<Field label="states" row>
 							<NumberInput value={addCount} min={1} max={64} step={1} aria-label="how many" data-testid="add-states-count" onChange={(v) => (addCount = v)} />
 						</Field>
 						<Field label="chain" doc="Each to the next; from the selected state when one is selected" row>
 							<Toggle value={addChain} aria-label="chain them" data-testid="add-states-chain" onChange={(v) => (addChain = v)} />
 						</Field>
-						<Button size="sm" data-testid="add-states-go" onclick={() => void addMany()}>add</Button>
-					</div>
+						<span class="add-go"><Button size="sm" data-testid="add-states-go" onclick={() => void addMany()}>add</Button></span>
+					</FieldGrid>
 				</Popover>
 				{#if flowNodes.length === 0}
 					<div class="empty-hint">
@@ -668,15 +668,7 @@
 			}
 		}
 	}
-	.add-form {
-		display: grid;
-		grid-template-columns: max-content minmax(0, 1fr);
-		column-gap: var(--space-5);
-		row-gap: var(--space-3);
-		align-items: center;
-		--number-width: 100%;
-	}
-	.add-form > :global(button) {
+	.add-go {
 		grid-column: 2;
 		justify-self: end;
 	}

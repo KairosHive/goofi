@@ -20,7 +20,7 @@
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, ticks } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import TrackHead, { type Port } from '$lib/timeline/TrackHead.svelte';
-	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
@@ -154,8 +154,7 @@
 	}
 	/** A menu that drops from the button that opened it. */
 	function drop(e: MouseEvent, items: MenuItem[]): void {
-		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		menu = { x: box.left, y: box.bottom, items };
+		menu = { ...under(e), items };
 	}
 	const addMenu = (e: MouseEvent): void => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }]);
 	// The touch door onto a track's menu.
@@ -182,8 +181,7 @@
 	async function record(e: MouseEvent, id: string): Promise<void> {
 		const t = g.timeline[id];
 		if (recording(t)) return void (await g.op('timeline track record', { track: id, on: false }));
-		const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const input = t.kind === 'note' ? await device(t, { x: box.left, y: box.bottom }) : t.input;
+		const input = t.kind === 'note' ? await device(t, under(e)) : t.input;
 		if (input === null) return;
 		if (input !== t.input) await g.op('timeline track edit', { track: id, input });
 		await g.op('timeline track record', { track: id, on: true });

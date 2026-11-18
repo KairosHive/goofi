@@ -183,7 +183,7 @@
 		</div>
 	{/if}
 
-	<div class="list" data-testid="add-menu-list">
+	<div class="list thin-scrollbar" data-testid="add-menu-list">
 		{#each filtered as t, idx (t.type)}
 			<button
 				type="button"

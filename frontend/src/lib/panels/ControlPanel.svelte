@@ -364,7 +364,6 @@
 				variant={edit ? 'primary' : 'ghost'}
 				size="sm"
 				data-testid="control-edit-toggle"
-				title={edit ? 'Done editing' : 'Edit this panel'}
 				label={edit ? 'Done editing' : 'Edit this panel'}
 				disabled={!named}
 				onclick={() => setEdit(!edit)}><Icon name={edit ? 'check' : 'pencil'} /></IconButton

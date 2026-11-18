@@ -9,7 +9,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
-	import { Button, Field, Icon } from '$lib/ui';
+	import { Button, Field, Icon, under } from '$lib/ui';
 	import { numberDescriptor } from './attributes';
 	import { stateOf } from './model';
 
@@ -28,8 +28,7 @@
 	function fire(e: MouseEvent): void {
 		const go = (p: string): void => void g.op('machine fire', { machine: name, playhead: p, transition: id }).catch((err) => notify().failure('Fire', err));
 		if (candidates.length === 1) return go(candidates[0]);
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		picker = { x: r.left, y: r.bottom, items: candidates.map((p) => ({ label: m.playheads[p].name, icon: 'circle-dot', action: () => go(p) })) };
+		picker = { ...under(e), items: candidates.map((p) => ({ label: m.playheads[p].name, icon: 'circle-dot', action: () => go(p) })) };
 	}
 </script>
 

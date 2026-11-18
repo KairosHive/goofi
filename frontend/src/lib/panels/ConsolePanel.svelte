@@ -12,7 +12,7 @@
 	import NodeSelect from './NodeSelect.svelte';
 	import { workspace } from 'panelty';
 	import { dropTarget, DropHint } from '$lib/drag';
-	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
+	import { Bar, Button, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
 	import { onDestroy, tick, untrack } from 'svelte';
 
 	let { panelId, state: linkState }: PanelProps = $props();
@@ -226,6 +226,7 @@
 		{/snippet}
 	</Bar>
 
+	<!-- Native, not `TextInput`: it filters at each keystroke, where that one hands over a value on commit. -->
 	<input class="filter" aria-label="Filter messages" placeholder="Filter messages" bind:value={query} />
 
 	<div
@@ -276,7 +277,6 @@
 							size="sm"
 							density="chrome"
 							data-testid="console-copy"
-							title="Copy message"
 							label="Copy message"
 							onmousedown={(ev) => ev.stopPropagation()}
 							onclick={(ev) => {
@@ -295,9 +295,8 @@
 		<IconButton
 			class="to-bottom-fab"
 			data-testid="console-to-bottom"
-			title="Scroll to bottom"
 			label="Scroll to bottom"
-			onclick={scrollToBottom}>↓</IconButton
+			onclick={scrollToBottom}><Icon name="arrow-down" /></IconButton
 		>
 	{/if}
 
@@ -305,9 +304,10 @@
 	{#if commandError}<div class="command-error" role="alert">{commandError}</div>{/if}
 	<form class="prompt" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
 		<span aria-hidden="true">›</span>
+		<!-- Native, not `TextInput`: Tab completes and the arrows walk the history, key by key. -->
 		<input aria-label="Console command" placeholder="Enter an op · Tab to complete" bind:value={command}
 			onkeydown={commandKey} autocomplete="off" spellcheck="false" />
-		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
+		<Button type="submit" variant="ghost" size="sm" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</Button>
 	</form>
 
 	<DropHint id={panelId} />
@@ -324,8 +324,6 @@
 	}
 	.prompt { display: flex; gap: var(--space-5); border-top: 1px solid var(--border); }
 	.prompt input { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; font-family: var(--font-mono); }
-	.prompt button { color: var(--accent); background: transparent; border: 0; cursor: pointer; }
-	.prompt button:disabled { opacity: 0.5; }
 	.command-error { color: var(--danger); }
 	.command-error, .completions { padding: var(--space-5); overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
 	time { color: var(--text-muted); white-space: nowrap; font-size: var(--fs-micro); line-height: 16px; }
