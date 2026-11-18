@@ -5,8 +5,8 @@ plugin. It is specified after goofi-data works; this part holds what is decided.
 
 - It selects datasets by their properties: a personal model from the datasets of one person, a
   modality model from a tag.
-- It reads datasets through the storage of goofi-data (part 10.1): the same file, the same
-  adapters, the same memory-mapped access to samples and to embedding vectors.
+- It reads datasets through the dataset file of the goofi layer (part 10.1): the same file, the
+  same memory-mapped access to samples and to embedding vectors.
 - It shares the goofi layer, the shared UI library, the op vocabulary shape, the account and the
   remote data repository.
 - The name `goofi-build` belongs to this program. The builder of the node library is a part of

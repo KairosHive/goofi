@@ -2,7 +2,8 @@
 
 goofi-pipe is the real-time program. One binary serves the app and is its CLI. This part is in
 three files: this file (8.1 the server, 8.2 the shell, 8.3 the workspace), `08-pipe-editor.md`
-(8.4 to 8.7) and `08-pipe-panels.md` (8.8 to 8.14).
+(8.4 to 8.7) and `08-pipe-panels.md` (8.8 to 8.15). Sections 8.1.2 and 8.1.3 hold for the server of every program
+of the ecosystem.
 
 ## 8.1 The server
 
@@ -58,8 +59,8 @@ the catalog of node types; the roster of agents; the history labels.
 
 ### 8.1.4 Demo mode
 
-- Demo mode removes from the op table: directory browsing, agents, self-update, saving, loading,
-  recovering and discarding a session, and saving to the private library. It does not mount the
+- Demo mode removes from the op table: directory browsing, agents, saving and loading a patch, the
+  recovery ops, and saving to the private bundle. It does not mount the
   exec, MCP, terminal, patch-file and plugin routes. No audio engine runs and no plugin loads.
 - In the app: a `demo` label; no save and load controls and no file shortcuts; no recovery
   question; the agent panel says that agents are off; the console prompt is off; an examples
@@ -95,7 +96,7 @@ overlays. There is no menu bar and no status bar.
     tooltip is the full path.
   - Undo and redo carry the label of the step in their tooltip and are disabled without one.
 - The overflow menu is always present. It holds the moved items, then the commands of the
-  active editor (part 8.4.9).
+  active editor (part 08.4.9).
 - An item stays whole or moves whole.
 - The title of the document is the unsaved mark and the file name, or `goofi-pipe`.
 - The `disconnected` badge shows only after an established connection is lost. The paint rate is
@@ -172,8 +173,10 @@ overlays. There is no menu bar and no status bar.
 
 ### 8.3.1 Model
 
-- The workspace is the arrangement of the patch (part 03.7): tabs, and in each tab a tree of
-  splits and panels. It is part of the patch: saved, shared by all clients, undoable.
+- In this part "workspace" means the panel workspace of the app. It is the arrangement of the
+  patch (part 03.7): tabs, and in each tab a tree of splits and panels. It is part of the patch:
+  saved, shared by all clients, undoable. The folder of a patch is the patch workspace (part
+  03.1).
 - There are no floating panels and no separate windows.
 
 ### 8.3.2 Panel types
@@ -234,7 +237,7 @@ overlays. There is no menu bar and no status bar.
 | State | Home |
 | --- | --- |
 | Tabs, splits, shares, panel types, panel state | The patch. Undoable. Dirties the patch. |
-| Viewpoint: the active tab and panel, the scope path and camera of each editor, the size of each side pane | Per client; saved with the patch file; never shared; never dirties the patch. |
+| Viewpoint: the active tab and panel, the scope path and camera of each editor, the size of each side pane, the filters and prompt history of a console | Per client; the patch file keeps the viewpoint of the client that saved it; never shared; never dirties the patch. |
 | Maximize, selection, multi-select mode, the reference pick, which agent a panel shows | The page. |
 | The sort order of the file dialog | The browser. |
 

@@ -14,7 +14,7 @@ goofi-data. Appendix B maps every op of the present program to this vocabulary.
   refused.
 - One registry holds every op. Listings, help, completion, the MCP tool and the generated types
   of the frontend all read the registry.
-- A plugin op is declared with the same types and has the same kinds as a built-in op.
+- A plugin op is declared with the same types. Its kinds are read and effect.
 - A mode does not register what it withholds (headless, demo). Listings and help shrink with it.
 
 ### 7.1.2 Kinds
@@ -79,7 +79,7 @@ goofi-data. Appendix B maps every op of the present program to this vocabulary.
 ### 7.2.2 The console prompt
 
 - The console panel has a prompt that runs the same command lines without the program name,
-  with history and Tab completion (part 8.11).
+  with history and Tab completion (part 08.11).
 
 ### 7.2.3 MCP
 

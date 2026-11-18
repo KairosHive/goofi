@@ -34,7 +34,8 @@ works.
     distinction the caller does not need to know (in process or across processes, terminal or
     pipe). The implementation detects the case.
 11. **Observation does not disturb.** A viewer, a recorder tap or a status read never changes
-    what the engines compute or when. Navigation never dirties the patch.
+    the plan or the schedule of an engine, nor the result of a node that runs. A node can skip
+    work that nobody reads. Navigation never dirties the patch.
 12. **Nothing fails silently.** A node with missing dependencies is listed as unavailable with
     the reason. An exception in a node goes to the error channel of that node. A refused op says
     why and names the help that answers it. A build that fails is a refusal its owner reports.

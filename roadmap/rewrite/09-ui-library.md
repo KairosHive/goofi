@@ -78,11 +78,11 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 
 - **Panel mechanics:** tabs, a tree of splits and panels, headers with overflow, docking by
   drag, corner grips, splitters, maximize, a registry of panel types, and the two patterns of
-  part 8.3.3. The mechanics know no application concept: a panel is an identity, a type and an
+  part 08.3.3. The mechanics know no application concept: a panel is an identity, a type and an
   opaque state. The layout itself is held by the application (in goofi-pipe: by the patch).
 - **Plotting:** one renderer draws lines, images, fields and paths on a shared surface, off the
   main thread, with text drawn by the same surface.
-- **Viewers:** the viewer kinds of part 8.8, their settings menu, their hover readout and the
+- **Viewers:** the viewer kinds of part 08.8, their settings menu, their hover readout and the
   feed that subscribes a viewer to a stream. A frontend adds a viewer kind through a registry.
 - **Dataset views** of goofi-data build on the same viewers: a sample is shown by the viewer of
   its kind.
@@ -92,7 +92,7 @@ inspector belong to goofi-pipe. The dashboard belongs to goofi-data.
 ## 9.6 The client
 
 - **The op client:** calls with replies; previews (the newest per key per frame); batches;
-  events; the history labels; one reconnect policy (part 8.1.2).
+  events; the history labels; one reconnect policy (part 08.1.2).
 - **The replica:** a read-only copy of a document, seeded whole and updated by versioned path
   operations; a stale delta is skipped; a gap forces a new seed. One change wakes only the
   readers of the leaf it moved.

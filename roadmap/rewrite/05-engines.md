@@ -15,8 +15,8 @@ rules. A cable crosses between them through a node that declares the crossing.
 - An engine is planned from settled state only. A plan is compiled when the patch settles, with
   a cost that follows the change.
 - A clock thread (the audio callback, the render tick) never allocates, never takes a lock that
-  another thread can hold, and never waits for another thread. Everything crosses to it as a
-  moved pointer or an atomic cell. Objects are freed on a thread that may take time.
+  another thread can hold, and never waits for another thread. Everything crosses to it without a lock and without
+  allocation. Objects are freed on a thread that may take time.
 - A slow build (a device open, a plugin birth, a shader compile, a node setup) is prepared apart
   and lands whole at a settle (part 02.4).
 - No op waits on a tick of an engine.
@@ -129,7 +129,6 @@ rules. A cable crosses between them through a node that declares the crossing.
 - `MidiIn`: opens a port and deals its notes out as voices: `gate`, `pitch` and `velocity`, one
   channel per voice, with a voice count and a bend range. Voices are allocated round robin. The
   sustain pedal and the pitch wheel apply.
-- `Variable`: puts a variable on a cable.
 - The engine treats a built-in node through the node contract, never through its type name.
 
 ### 5.2.4 Polyphony
@@ -171,7 +170,8 @@ rules. A cable crosses between them through a node that declares the crossing.
 - The clock ticks at `graphics.fps`. An overrun does not catch up. With an external clock the
   driver renders by hand and each tick waits for the GPU.
 - A stage renders only when a reader reaches it backward over the cables: a window, a viewer, an
-  armed output during a take.
+  armed output during a take, a crossing to another plane. This is the one place where a reader
+  decides whether work is done: a stage with state advances only while it is read.
 - Status: adapter, backend, clock, rate, windows, frames, stages, the longest tick, and the cost
   per node.
 

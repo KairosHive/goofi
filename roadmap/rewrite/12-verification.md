@@ -177,3 +177,20 @@ The rewrite is at parity when each list holds.
 - **Tags (16)** of part 04.2.
 - **Multi-client:** one history, presence, previews.
 - **Devices:** touch, tablet, desktop, both orientations.
+
+## 12.9 Audits of this spec
+
+Run on 2026-11-18, after the first full draft. Each audit is a report of a subagent; its findings
+were read and applied, not verified line by line.
+
+| Audit | Method | Result |
+| --- | --- | --- |
+| Frontend coverage | The three frontend surveys against parts 08 and 09. | 32 behaviours that the spec did not state; all are now in parts 07 to 09. The auditor estimates that about 390 of about 450 survey statements were covered before the additions. |
+| Fresh-context review | A reader with the spec alone looked for contradictions, broken references, unclear terms, gaps and structure problems. | 16 contradictions corrected; the references repaired; one word per thing in the glossary; the dataset file placed in the goofi layer; decisions and parts named per stage in part 13.1. |
+| Backend coverage | The four backend surveys against parts 01 to 07, 12 and the appendices. | See 12.10. |
+
+Findings of the fresh-context review that stay open: the spec gives no control protocol, document
+schema, file layout or shared-memory layout (they are implementation, read from the present
+program before the stage that needs them; part 13.1); appendix A lists nodes without their slots
+and params (the node files are the reference); the rename table for the conventions of part 04.9
+does not exist yet.

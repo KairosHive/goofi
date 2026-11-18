@@ -1,13 +1,13 @@
 # 08 (continued). goofi-pipe: the other panels
 
-This file holds sections 8.8 to 8.14.
+This file holds sections 8.8 to 8.15.
 
 ## 8.8 Viewers and the viewer panel
 
 ### 8.8.1 Two hosts, one viewer
 
 - A viewer shows the live frames of one output slot. It has two hosts: the inline viewer on a
-  node card (part 8.4.2) and the viewer panel.
+  node card (part 08.4.2) and the viewer panel.
 - A view is one record: the viewer kind and its settings. The inline viewer stores it on the
   node; the viewer panel stores it in its panel state. Both are validated by one schema.
 - The viewer panel is bound to a node (8.3.3). It has a slot select, the kind select and the
@@ -143,7 +143,7 @@ The panel edits the machines of the patch (part 03.6). It has a canvas and a sco
   and Down walk the history; Tab completes: one match is inserted, several are listed. The
   command and its result are written to the log. The prompt uses the control connection like
   every other part of the app, and its ops land on the one history.
-- Filters and the history of the prompt are part of the panel state as navigation.
+- Filters and the history of the prompt are part of the viewpoint of the client (8.3.4).
 
 ## 8.12 The agent panel
 

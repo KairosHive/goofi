@@ -22,7 +22,7 @@ foundation knows a graph, a node, an engine or an application.
 
 - One module owns every path and every tool lookup (part 01.5).
 - The home is `$GOOFI_HOME/.goofi`, by default `~/.goofi`. It holds: `config.toml`, the list of
-  recent folders, `custom/` (the private node library), `library/` (downloaded bundles),
+  recent folders, `library/` (the installed bundles and the private bundle `_local`),
   `recordings/`, `datasets/`, `recovery/`, `plugins/`, `plugin-data/`, and the account
   credentials.
 - The runtime is `$GOOFI_RUNTIME`, by default under the data directory of the platform. Per
@@ -103,7 +103,8 @@ foundation knows a graph, a node, an engine or an application.
 - The runtime stamps every frame a run emits: `procstart` (the start of the run), `procend`
   (read after the run), `index` (the emit count of the node; a gap is a lost frame), `ufreq`
   (the smoothed update rate, absent until the second emit), `node`, `slot`, and `source`.
-- `source` names, per input slot, the frame held there, by the same five stamps. It holds the
+- `source` names, per input slot, the frame held there, by its `node`, `slot`, `index`,
+  `procstart` and `procend`. It holds the
   immediate inputs only, never the history behind them.
 - Stamps are written at one site and are never inherited.
 - Each frame counts in full, including a window of a buffer. Sample overlap between frames is
@@ -193,8 +194,8 @@ A connection has one of two deliveries:
 
 ### 2.9.2 Interface
 
-- The interface does three things: it sets the root folder, it sets the session (every take goes
-  into the session folder inside the root), and it registers streams.
+- The interface does three things: it sets the root folder, it sets the recording session (a
+  folder inside the root that holds the takes of one sitting), and it registers streams.
 - A registered stream is a named, queued receiver that the recorder holds. A producer only
   pushes.
 - The recorder takes frames from the threads of its program by reference, and from other
@@ -235,7 +236,7 @@ know the recorder type.
     error.
   - Take folder: `<UTC stamp>Z[-name]`. Stream file: `<node>-<slot>__<UTC nanos>Z.<ext>`. A file
     is never overwritten.
-- **Dataset**: the recorder writes a goofi-data dataset file directly (part 10.1): one blob per
+- **Dataset**: the recorder writes a dataset file directly (part 10.1): one blob per
   stream, one sample for the take, paired and synchronized, with tags and annotations.
 
 ### 2.9.5 Status

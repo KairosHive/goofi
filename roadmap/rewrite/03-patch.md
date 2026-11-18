@@ -32,8 +32,10 @@ a client as events or as variable frames.
 - **Identity** is a number that is never reused, written as 12 hex digits. An undo restores the
   identity of a deleted node. A load restores the identities of the file. A paste makes new
   ones.
-- **Type** is `engine:Name` (`signal:Psd`, `audio:Osc`, `graphics:Blur`). A bare name resolves
-  when exactly one engine offers it. The structural types are bare: the sub-patch, and the input
+- **Type** is written `engine:Name` (`signal:Psd`, `audio:Osc`, `graphics:Blur`). A bare name
+  resolves when exactly one engine offers it. The patch stores the resolved reference of the
+  type (name, engine, bundle and source; part 04.8.2), so two bundles can hold a type of the
+  same name. The structural types are bare: the sub-patch, and the input
   and output port of each slot kind.
 - **Names:** one namespace for all three kinds. A name is a letter followed by letters and
   digits, and is not a reserved word. A new node gets `<type stem in lower case><N>`. A rename
@@ -97,7 +99,7 @@ a client as events or as variable frames.
     sine, cosine, triangle, square and saw; `nse(...)` noise; `qtz(v, scale, root, mode)`
     quantization to a scale in Hz or volts per octave; `gte(x, attack, decay, sustain, release)`
     an envelope gate with state per call site;
-  - `nd('name').on(...)`: the events of a node (part 3.6.4).
+  - `nd('name').on(...)`: the events of a node (3.6.4).
 - An expression that is one reference is a direct read: it costs what a cable costs and involves
   no interpreter. A direct read of an audio or texture output is legal for a numeric param of a
   node on the same engine, where it is modulation at the rate of that engine.
@@ -116,7 +118,7 @@ a client as events or as variable frames.
 ## 3.5 Variables
 
 - A variable is `group.element`. Its value is an array or a string.
-- The patch holds the configuration of a variable: its form, its control record (part 8.6), its
+- The patch holds the configuration of a variable: its form, its control record (part 08.6), its
   expression and its locks. Values travel on the data plane as frames. A wide value is saved in
   the workspace; a small value is saved in the document. The limit is one stated value.
 - A group has a configuration lock and a value lock. A group that has an owner (a MIDI device, a
@@ -250,7 +252,7 @@ a client as events or as variable frames.
 - One change wakes only the readers of the record it touched.
 - Runtime state reaches a client as events on the control connection: health and rates of nodes,
   evaluated param values and source errors, log batches, the status of a recording, the roster
-  of agents, the presence of other clients.
+  of agents. The presence of other clients has a connection of its own.
 - Every vocabulary that both sides use (op names and arguments, panel types, viewer kinds, wire
   tags, events) is declared once in the backend and generated for the frontend.
 
@@ -270,8 +272,10 @@ a client as events or as variable frames.
   the file through the browser and leave the remembered file alone.
 - **Recovery:** the program keeps a recovery copy of an unsaved patch in the home. At the next
   start it offers to recover or discard.
-- **Admission** of a loaded or pasted document: an unknown type refuses the document; unknown
-  params and dangling cables are dropped with a warning; an illegal variable name refuses.
+- **Admission** of a loaded or pasted document: a type that no source offers is handled by the
+  rule of part 04.8.4 (install, load without it, or cancel); a type that is known but
+  unavailable stays in the patch (3.2); unknown params and dangling cables are dropped with a
+  warning; an illegal variable name refuses.
 - A clipboard fragment and a patch are one format. A fragment holds nodes and the cables among
   them.
 - The state of a node that the node owns (the state of a VST3 plugin, a painted image) is saved

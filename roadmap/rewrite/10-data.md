@@ -26,8 +26,8 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 - A blob is the bytes of a file: raw, page-aligned in the blob region, immutable once written,
   identified by the hash of its content. It carries a codec tag: `none`, or the codec of a
   compressed blob such as a video. A blob is never a sample.
-- A blob with codec `none` is `.npy`-compatible bytes. With the offset, dtype and shape from the
-  store, `numpy.memmap` reads it with no goofi code.
+- A blob with codec `none` is the raw bytes of the array in C order. With the offset, dtype and
+  shape from the store, `numpy.memmap` reads it with no goofi code.
 - A sample is a view on a blob: `(blob, method, extent)`, with its metadata inline. A whole file
   as a sample is the view with the full extent. An EEG epoch is `(blob, epoch, start to end)`. An
   image crop is `(blob, crop, x y w h)`.
@@ -45,8 +45,8 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 ### 10.1.3 The sample store
 
 - A sample is one row of the sample store. The row holds: id (a hash of blob, method and
-  extent), blob, dtype, shape, strides, extent, method, kind (eeg, image, audio, ...), path, and
-  a `meta` dictionary with the whole metadata of the sample inline.
+  extent), its streams (per stream: blob, dtype, shape, strides and extent), method, kind (eeg,
+  image, audio, ...), path, and a `meta` dictionary with the whole metadata of the sample inline.
 - Each kind has a schema with mandatory `meta` fields (`sfreq` for EEG, the aspect ratio for an
   image, ...). A row is validated against the schema of its kind.
 - One read per sample: no second lookup comes before the bytes. The dtype decides the decoder.
@@ -140,7 +140,7 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 - Each space has one vector table: two parallel arrays, `ids [N]` (the sample hashes) and
   `vectors [N, d]`, contiguous and page-aligned. To add a space touches no sample row. To drop a
   space drops one table. To load a sample does not read its vectors.
-- The vectors are directly accessible as memory-mapped arrays. `dataset space info` gives the
+- The vectors are directly accessible as memory-mapped arrays. `dataset space get` gives the
   offset, dtype and shape of the matrix and of the code plane. The Python package returns the
   memmap.
 - The embedding transform writes the table whole, as one slab, at the end of its run. A later
@@ -195,7 +195,7 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 - Cardinality: one-to-one (bandpass filter); one-to-many (one stretch in, several stretches out:
   windows of a recording); many-to-one (a `zip` over streams whose stretches are paired by
   index: correlation of two samples).
-- The graph is acyclic. A block of the graph can repeat: n times on the same inputs with n seeds
+- The graph is acyclic apart from declared feedback (one frame of delay; part 06.3.2). A block of the graph can repeat: n times on the same inputs with n seeds
   (n random derivative samples, for bootstrapping), or n times with its output fed back as its
   input. A fed-back repetition is unrolled before scheduling and shown collapsed.
 - A stateless transform is replicated when its input queue backs up: k workers read one queue and
@@ -246,7 +246,7 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 - A recorder type (the file type) follows one abstract interface and puts chunks into a file,
   with its own buffering, flushing and compression. A modality does not know the recorder type.
 - A goofi-pipe patch is one modality, in two forms: a running patch that the studio links to, and
-  a recording patch saved with the routine that the studio launches.
+  a recording patch saved with the routine, for which the studio starts goofi-pipe.
 - The studio records through the recorder of goofi-data (part 02.9). The dataset recorder type
   writes the dataset file directly: one blob per stream, one sample for the full recording,
   paired and synchronized, with tags and annotations, no conversion.
@@ -275,20 +275,19 @@ existing dataset libraries on the internet. Accounts are a function of the ecosy
 
 ## 10.7 Op vocabulary
 
-The shape is the shared one (part 07): `<noun> [<sub-noun>] <verb>`. The shared nouns (`session`,
-`log`, `guide`, `agent`, `account`, `library`, `record`, `op`) are in part 07.
+The shape and the standard verbs are the shared ones (part 07.1.4). The shared nouns are in part
+07.5. A transform is a node type: `library list` and `library get` list and describe transforms.
 
 | Noun | Verbs |
 | --- | --- |
-| `dataset` | `create list remove status inspect edit validate compact compress decompress move sync import export publish fetch share` |
-| `dataset space` | `add remove info rebuild import` |
+| `dataset` | `list get add edit remove status validate compact compress decompress move sync import export publish fetch share` |
+| `dataset space` | `list get add remove rebuild import` |
 | `sample` | `list get add remove edit search` |
 | `storage` | `list add remove` |
-| `recipe` | `create list remove get validate plan` |
+| `recipe` | `list get add remove validate plan` |
 | `recipe transform` | `add edit remove` (`edit --repeat n [--feedback]` makes a repetition block) |
 | `recipe queue` | `add edit remove` |
 | `run` | `start list status pause resume cancel edit revert` |
-| `transform` | `list get` |
 | `compute` | `list add remove` |
 | `studio` | `start stop status link` |
 | `studio routine` | `list add edit remove` |
@@ -313,4 +312,6 @@ or `--like <sample id>`.
    *transform* and *queue* as the words of the interface only, or keep their own op nouns. One
    graph model argues for one set of graph ops.
 10. The remote repository service and the suggestion mechanism.
-11. The op vocabulary in 10.7 is the compacted proposal of 2026-11-16; it is not confirmed.
+11. The op vocabulary in 10.7 is the compacted proposal of 2026-11-16 with the standard verbs of
+    part 07.1.4; it is not confirmed.
+12. The dashboard views of 10.6 are a proposal; how the frontend is organized is not decided.

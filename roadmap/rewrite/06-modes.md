@@ -22,7 +22,8 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
     fresh frame.
   - `hold`: the slot never causes an event; the node reads the value it holds.
 - **Timers.** A node with `autotrigger` runs at its frequency without an input event. The common
-  params of a node (part 04.3) set the frequency and a maximum rate.
+  params of a node (part 04.3) set its rate: the frequency of its timer and the cap on its
+  runs.
 - **A pulse** runs a node once on demand.
 - **One run, one settle.** A run reads its inputs, calls the node, publishes the outputs, stamps
   each frame, and then clears the inputs that the node declares as cleared. Input clearing takes
@@ -43,7 +44,7 @@ There are two modes. Both run the same graph and the same nodes, unchanged.
   frame at each run and never a backlog.
 - An `each` or `zip` event with several frames waiting delivers the newest.
 - A node never blocks its producer, and a producer never waits for a consumer.
-- The maximum rate of a node caps how often it runs; events that arrive faster coalesce.
+- The rate of a node caps how often it runs; events that arrive faster coalesce.
 - Node processing never runs under the graph lock. An edit of the patch does not wait for a node.
 - A node hosted in another process (a Python subprocess node, a Rust node built after the start)
   behaves as an in-process node: it schedules itself, and its death is seen and repaired by the

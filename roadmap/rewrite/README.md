@@ -60,7 +60,9 @@ The parts are in five groups:
 - "Open" marks a point that is not decided. Part 13.3 lists every open decision and marks the
   ones needed before the first stage.
 - A behaviour that the spec does not state is read from the present program, and then written
-  into the spec.
+  into the spec. The present program is the rest of this repository: `backend/` (the Rust
+  crates), `frontend/` (the app), `node-bundles/`, `sdk/` (the authoring guides), `plugins/`,
+  `skills/`, `tests/e2e/`, `examples/`, with `README.md` and `AGENTS.md` at the root.
 
 ## Glossary
 
@@ -79,12 +81,14 @@ The parts are in five groups:
 | plane | The data of one engine: signal, audio, graphics. |
 | crossing | A node that takes the data of another plane. |
 | coupling | What an input slot does with a frame: `each`, `zip` or `hold`. |
-| event | Something that happened once, delivered once to each listener. |
+| event | Something that happened once, delivered once to each listener: a kind of frame. Also the cause of a run of a node (part 06.1). A message the server pushes to a client is called a push event. |
 | settle | The one point after a batch where all consequences are decided from the change. |
+| arrangement | The layout of tabs, splits and panels of a patch; the panel workspace of the app. |
+| workspace | The folder of a patch: its node files, node state and skills. |
 | op | One capability of a program, declared once, reached by every interface. |
 | live mode | The runtime mode of goofi-pipe: wall time, latest wins. |
 | Kahn mode | The runtime mode of goofi-data: data time, queues, lossless and deterministic. |
-| variable | A named value of a patch, `group.element`. |
+| variable | A named value of a patch, `group.element`. An element of a group is also called an entry. |
 | playhead | A position in a state machine, published as a variable group. |
 | take | One recording from start to stop. |
 | dataset | One goofi-data file. |
@@ -92,4 +96,7 @@ The parts are in five groups:
 | sample | A view on one or more blobs with its metadata. |
 | transform, queue | A node and a cable of a recipe. |
 | studio routine | A preset for a recurring recording session. |
-| home, runtime, session | What the user keeps; what one version needs; what one running program owns. |
+| home, runtime, session | What the user keeps; what one version needs; what one running program owns. A recording session is a folder of takes. |
+| private bundle | The bundle of the user in the home (`_local`). |
+| stream | A sequence of frames from one source: an output of a node, or one part of a sample. |
+| modality | A kind of input a studio records: audio, writing, drawing, a patch. |

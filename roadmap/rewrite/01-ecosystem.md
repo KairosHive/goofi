@@ -22,13 +22,16 @@ marketplace for autopoietic research and arts.
 
 - **The goofi layer** holds what does not know an application: time, paths and tools, the
   session, the build of components, logging, configuration, payload types and their metadata,
-  the codec, the transport, the recorder, the graph and the document, the node contract and the
-  SDKs, the node library, the three engines, the op framework, the agent harness, the account
+  the codec, the transport, the recorder, the dataset file (its format, its reader and its
+  writer), the graph and the document, the node contract and the SDKs, the node library, the three engines, the op framework, the agent harness, the account
   client, and the shared UI library.
 - **goofi-pipe** holds the live runtime mode, its server and ops, the patch editor and its
   panels.
-- **goofi-data** holds the Kahn runtime mode, the dataset file and its adapters, the scheduler,
-  the studio, its server and ops, and its dashboard.
+- **goofi-data** holds the Kahn runtime mode, the management of datasets (locations, adapters,
+  exchange, search), the scheduler, the studio, its server and ops, and its dashboard.
+- The dataset file is in the goofi layer because three users need it and no program depends on
+  another: the dataset recorder type (part 02.9.4), the loader and writer nodes (part 04.9)
+  and goofi-build (part 11).
 - **The layer rule:** the goofi layer depends on no application; an application depends on the
   goofi layer and on no other application. A test asserts the rule from the dependency graph.
 

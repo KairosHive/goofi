@@ -151,7 +151,8 @@ class Smooth(goofi.Node):
 
 ## 4.6 Discovery and build
 
-- **Roots**, scanned in this order: the shipped bundles; the installed bundles of the library;
+- **Roots**, scanned in this order: the built-in bundles; the extra roots named at the start;
+  the installed bundles of the library;
   the nodes of plugins; the private bundle of the user; the workspace of the open patch.
 - A workspace holds its node files in `nodes/`, in one folder for all engines.
 - Two types with the same name and engine in different bundles coexist (4.8). There is no "last
@@ -246,7 +247,8 @@ class Smooth(goofi.Node):
 - Structural nodes of every plane: a crossing node per pair of planes, named after the source
   plane and living on the receiving plane (`signal:AudioIn`, `signal:GraphicsIn`,
   `audio:SignalIn`, `audio:GraphicsIn`, `graphics:SignalIn`, `graphics:AudioIn`); one `Variable`
-  node per plane; one pass-through anchor per plane and kind for expressions; one `Feedback`
+  node per plane; pass-through anchors for expressions (one per kind on the signal plane, one on the audio
+  plane); one `Feedback`
   node per plane; playback nodes for recorded arrays, strings, tables and audio.
 - **Loader and writer nodes** connect a graph to a dataset (part 10.4): a loader emits the
   frames of a sample between markers; a writer writes blobs and samples.
@@ -269,7 +271,8 @@ class Smooth(goofi.Node):
   | Axis | `axis`, default −1 (time). |
   | Generators | `mode` of value or block, with `sfreq`. |
 
-- The example patches are valid against the shipped library; a check loads each one.
+- The example patches of the repository use only the built-in bundles. Every other bundle ships
+  its own examples. A check loads each example against its bundles.
 
 ## 4.10 Open decisions
 
