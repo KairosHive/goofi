@@ -5,7 +5,9 @@
 // stood on its side in a panel taller than wide. A track's settings stand in groups beside its
 // lane, and those that do not fit are in the menu in its title; its edge held at the end of the
 // track area scrolls the area and goes on. On a phone, a held finger is the door onto the menu, a
-// tap makes the note, and the title's menu holds hide and delete. A track records its input.
+// tap makes the note, a finger held on a note opens the note's menu, and the title's menu holds
+// hide and delete. A picked note's settings are in a menu on it, the Delete key takes out what is
+// picked, and a wheel moves and zooms the view. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -231,47 +233,51 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.up();
 		await page.keyboard.up('Shift');
 		await expect.poll(async () => ((await trackNamed(page, 'track0')).notes[0].at * 4) % 1).not.toBe(0);
+		// A picked note's settings are in a menu on the note, which a right click opens, and not
+		// among the track's own: its pitch, its length and its velocity. The track's menu stays shut.
+		const noteMenu = page.getByTestId('note-menu');
+		await expect(keys.getByTestId('track-section-item')).toHaveCount(0);
+		await note.click({ button: 'right' });
+		await expect(noteMenu).toBeVisible();
+		await expect(page.locator('.context-menu')).toHaveCount(0);
+		expect((await trackNamed(page, 'track0')).notes.length, 'the right press made no note').toBe(1);
 		for (const [field, value] of [['Length', 2], ['Velocity', 0.5]] as const) {
-			await keys.getByLabel(field).fill(String(value));
-			await keys.getByLabel(field).press('Enter');
+			await noteMenu.getByLabel(field).fill(String(value));
+			await noteMenu.getByLabel(field).press('Enter');
 			await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0][field.toLowerCase()]).toBe(value);
 		}
-		// What is picked takes the room the keyboard's section had: that one is in the menu in the
-		// track's title, whole and under its name, and no setting is cut off.
-		await expect(keys.getByTestId('track-section-keyboard')).toBeHidden();
-		await keys.getByTestId('track-more').click();
-		await expect(page.getByTestId('track-more-menu').locator('h4')).toHaveText(['Keyboard']);
-		await shut(page);
-		// A press on another note picks it: the field that showed the first hands it nothing.
+		await noteMenu.locator('select[aria-label="Pitch"]').selectOption('62');
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].pitch).toBe(62);
+		// A press beside the menu closes it and does nothing else: the lane gets no note.
+		await page.mouse.click(ground.x + ground.width * 0.9, ground.y + ground.height * 0.1);
+		await expect(noteMenu).toHaveCount(0);
+		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
+		// A velocity typed and not entered lands on its note when the menu closes: a note is drawn
+		// as strong as its velocity. The note the menu was on is the one picked, in an outline of
+		// the second accent, and the Delete key takes out what is picked.
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
 		await expect(note).toHaveCount(2);
-		// A velocity typed and not entered lands on its note at the next press, and the drag that
-		// press begins keeps it: a note is drawn as strong as its velocity.
-		await keys.getByLabel('Velocity').fill('0.6');
-		const grab = (await note.nth(0).boundingBox())!;
-		await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
-		await page.mouse.down();
+		await note.nth(0).click({ button: 'right' });
+		await noteMenu.getByLabel('Velocity').fill('0.6');
+		await page.mouse.click(ground.x + ground.width * 0.9, ground.y + ground.height * 0.1);
+		await expect(noteMenu).toHaveCount(0);
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await expect(note.nth(0)).toHaveCSS('opacity', '0.76');
-		await page.mouse.move(grab.x + grab.width / 2 + ground.width * 0.05, grab.y + grab.height / 2, { steps: 6 });
-		await page.mouse.up();
-		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].at).toBeGreaterThan(1);
-		expect((await trackNamed(page, 'track0')).notes[0].velocity).toBe(0.6);
-		await keys.getByLabel('Velocity').click();
-		await dragBy(page, note.nth(1), ground.width * 0.05, 0);
-		await expect(keys.getByLabel('Velocity')).toHaveValue('0.9');
-		expect((await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
-		await keys.getByTestId('track-delete-picked').click();
-		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
-		// One click on a note picks it, in an outline of the second accent, and takes nothing out;
-		// one on an empty cell puts a note on the line of the grid before it, and the grid is the
-		// track's to choose.
+		await expect(lane.locator('.note.picked')).toHaveCount(1);
+		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(192, 140, 255)');
+		await page.keyboard.press('Delete');
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.pitch)).toEqual([64]);
+		// One click on a note picks it and takes nothing out, and the menu on it has the way to
+		// take it out too; one click on an empty cell puts a note on the line of the grid before
+		// it, and the grid is the track's to choose.
 		await expect(lane.locator('.note.picked')).toHaveCount(0);
 		await note.first().click();
 		await expect(lane.locator('.note.picked')).toHaveCount(1);
-		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(192, 140, 255)');
 		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
-		await keys.getByTestId('track-delete-picked').click();
+		await note.first().click({ button: 'right' });
+		await page.getByTestId('note-delete').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
+		await expect(noteMenu).toHaveCount(0);
 		await choose(page, keys, 'Grid', '1 s');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
 		expect((await trackNamed(page, 'track2')).grid, 'another note track keeps its own grid').toBe('1/4 beat');
@@ -290,7 +296,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.evaluate(() => (window as any).goofi.commands.undo());
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length, 'the drag is one step back').toBe(1);
 		// A drag with Shift held draws a box that picks every note it touches: they move as one,
-		// a field sets them all, and the ✕ takes them all out.
+		// a field of the menu on one of them sets them all, and the Delete key takes them all out.
 		const ats = async (): Promise<number[]> => (await trackNamed(page, 'track0')).notes.map((n: any) => n.at);
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 2, length: 1, pitch: 60, velocity: 0.8 }, { at: 4, length: 1, pitch: 64, velocity: 0.8 }] });
 		await expect(note).toHaveCount(2);
@@ -304,10 +310,19 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(lane.locator('.note.picked')).toHaveCount(2);
 		await dragBy(page, note.nth(0), ground.width * 0.125, 0);
 		await expect.poll(ats).toEqual([3, 5]);
-		await keys.getByLabel('Velocity').fill('0.4');
-		await keys.getByLabel('Velocity').press('Enter');
+		await note.nth(1).click({ button: 'right' });
+		await expect(lane.locator('.note.picked'), 'a right click on a picked note keeps what is picked').toHaveCount(2);
+		await expect(page.getByTestId('note-delete')).toHaveText(/Delete 2 notes/);
+		await noteMenu.getByLabel('Velocity').fill('0.4');
+		await noteMenu.getByLabel('Velocity').press('Enter');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.4, 0.4]);
-		await keys.getByTestId('track-delete-picked').click();
+		await page.keyboard.press('Escape');
+		await expect(noteMenu).toHaveCount(0);
+		await page.keyboard.press('Delete');
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length, 'the delete is one step back').toBe(2);
+		await page.evaluate(() => (window as any).goofi.commands.redo());
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
@@ -348,6 +363,19 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect(painted.every((k, i) => i === 0 || (k.at > painted[i - 1].at && k.value > painted[i - 1].value)), 'they follow the drag').toBe(true);
 		await page.evaluate(() => (window as any).goofi.commands.undo());
 		await expect.poll(async () => (await keysOf()).length, 'the drag is one step back').toBe(0);
+		// A drag draws over what was there: a keyframe from before it, between the first and the
+		// last it makes, is removed, and the keyframes outside that stretch stay.
+		for (const x of [0.2, 0.5, 0.8]) await attr.click({ position: { x: box.width * x, y: box.height * 0.5 } });
+		await expect.poll(async () => (await keysOf()).length).toBe(3);
+		const [outer, inPath, other] = (await keysOf()).map((k) => k.at);
+		await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.3);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.3, { steps: 10 });
+		await page.mouse.up();
+		await expect.poll(async () => (await keysOf()).some((k) => k.at === inPath), 'the keyframe in the path is drawn over').toBe(false);
+		const overdrawn = (await keysOf()).map((k) => k.at);
+		expect([overdrawn[0], overdrawn[overdrawn.length - 1]], 'the keyframes outside the path stay').toEqual([outer, other]);
+		expect(overdrawn.length).toBeGreaterThan(3);
 		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [first, last] });
 		await expect(attr.locator('.key')).toHaveCount(2);
 		await dragBy(page, attr.locator('.key').nth(1), box.width * 0.1, box.height * 0.2);
@@ -551,6 +579,16 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.keyboard.up('Shift');
 		await expect.poll(async () => Math.round((await thumb.boundingBox())!.x)).toBe(Math.round(half.x));
 		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
+		// A wheel turned with Ctrl held zooms about the pointer, which is at the middle of the lane:
+		// up looks closer, down as far back, and the middle of the view stays where it is.
+		const middle = (b: { x: number; width: number }): number => Math.round(b.x + b.width / 2);
+		await page.keyboard.down('Control');
+		await page.mouse.wheel(0, -200);
+		await expect.poll(async () => (await thumb.boundingBox())!.width).toBeLessThan(half.width - 2);
+		expect(middle((await thumb.boundingBox())!), 'the point under the pointer stays').toBe(middle(half));
+		await page.mouse.wheel(0, 200);
+		await page.keyboard.up('Control');
+		await expect.poll(async () => Math.round((await thumb.boundingBox())!.width)).toBe(Math.round(half.width));
 		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
 		await expect.poll(lastMark).toBe(marked);
 
@@ -597,7 +635,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	}
 });
 
-test('a held finger opens a track\'s menu, and a tap makes a note and then picks it', async ({ page, hasTouch }) => {
+test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note and then picks it', async ({ page, hasTouch }) => {
 	test.skip(!hasTouch, 'the finger walk');
 	await page.goto('/');
 	await waitForApp(page);
@@ -617,8 +655,20 @@ test('a held finger opens a track\'s menu, and a tap makes a note and then picks
 			await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length, `a tap that ${tap} the note`).toBe(1);
 			await expect(track.locator('.note.picked')).toHaveCount(1);
 		}
-		const head = (await track.locator('.info').boundingBox())!;
+		// A finger held on the note opens the note's menu, where a mouse has its right click, and
+		// moves nothing: the menu has the note's settings and the way to take it out.
 		const finger = await touchSession(page);
+		const [on, was] = [(await track.locator('.note').boundingBox())!, (await trackNamed(page, 'keys')).notes];
+		await finger.down({ x: on.x + on.width / 2, y: on.y + on.height / 2 });
+		await expect(page.getByTestId('note-menu')).toBeVisible();
+		await finger.up();
+		await expect(page.locator('.context-menu'), 'the note\'s menu, and not the track\'s').toHaveCount(0);
+		expect((await trackNamed(page, 'keys')).notes).toEqual(was);
+		await expectIntact(page, 'a note\'s menu on a phone');
+		await page.getByTestId('note-delete').tap();
+		await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(0);
+		await expect(page.getByTestId('note-menu')).toHaveCount(0);
+		const head = (await track.locator('.info').boundingBox())!;
 		await finger.down({ x: head.x + head.width * 0.6, y: head.y + head.height / 2 });
 		await expect(page.locator('.context-menu .item', { hasText: 'Hide Other Tracks' })).toBeVisible();
 		await finger.up();

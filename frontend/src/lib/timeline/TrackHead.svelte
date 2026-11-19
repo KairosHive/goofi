@@ -1,7 +1,8 @@
 <!-- What a track says about itself, beside its lane: its name with hide and delete, then its
-     settings in named sections that fold: what is picked, the recording with its button on the
-     section's own line, and the lane's own settings. The sections that do not fit in the room the
-     track has go, whole, behind one menu in the title. -->
+     settings in named sections that fold: the keyframe picked, the recording with its button on
+     the section's own line, and the lane's own settings. The sections that do not fit in the room
+     the track has go, whole, behind one menu in the title. A picked note's settings are not here:
+     they are in a menu on the note. -->
 <script lang="ts" module>
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
 
@@ -17,7 +18,7 @@
 </script>
 
 <script lang="ts">
-	import type { Key, Note, Track } from '$lib/api/generated';
+	import type { Key, Track } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { numberDescriptor } from '$lib/machine/attributes';
@@ -39,8 +40,8 @@
 	}: {
 		id: string;
 		t: Track;
-		/** The note or the keyframe picked in the track, the first of them. */
-		item?: Note | Key;
+		/** The keyframe picked in the track, the first of them. */
+		item?: Key;
 		recording: boolean;
 		/** The MIDI devices there are, for a note track's input. */
 		ports: Port[];
@@ -50,8 +51,8 @@
 		onRecord: (e: MouseEvent) => void;
 		onHide: () => void;
 		onDelete: () => void;
-		/** Change what is picked, or with `null` take it out. */
-		onItem: (to: Partial<Note & Key> | null) => void;
+		/** Change the keyframes picked, or with `null` take them out. */
+		onItem: (to: Partial<Key> | null) => void;
 		/** Ask for this much more room across the axis, in pixels; answers whether the track grows. */
 		onGrow: (by: number) => boolean;
 	} = $props();
@@ -60,8 +61,8 @@
 		if (to !== t.name && isValidIdentifier(to)) onEdit({ to });
 	};
 
-	/** A track's sections of settings, in the order they stand: what is picked first, while
-	 * something is, then the recording, then the lane's own. */
+	/** A track's sections of settings, in the order they stand: the keyframe picked first, while
+	 * one is, then the recording, then the lane's own. */
 	const TITLES = { item: 'Selection', record: 'Record', keyboard: 'Keyboard', range: 'Range' };
 	type Group = keyof typeof TITLES;
 	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), 'record', t.kind === 'note' ? 'keyboard' : 'range']);
@@ -124,23 +125,15 @@
 
 {#snippet group(name: Group)}
 	{#if name === 'item' && item}
-		{#if 'pitch' in item}
-			<Field label="length" row doc="How long the note lasts, in beats" data-menu-row>
-				<NumberInput value={item.length} min={0.01} step={0.25} onChange={(length) => onItem({ length })} />
-				{#snippet adornment()}{@render remove('Delete note')}{/snippet}
-			</Field>
-			<Field label="velocity" row doc="The note's velocity, 0 to 1" data-menu-row>
-				<NumberInput value={item.velocity} min={0} max={1} step={0.05} onChange={(velocity) => onItem({ velocity })} />
-			</Field>
-		{:else}
-			<Field label="value" row doc="The keyframe's value" data-menu-row>
-				<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onItem({ value })} />
-				{#snippet adornment()}{@render remove('Delete keyframe')}{/snippet}
-			</Field>
-			<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
-				<CurvePicker value={item.curve} onChange={(curve) => onItem({ curve })} />
-			</Field>
-		{/if}
+		<Field label="value" row doc="The keyframe's value" data-menu-row>
+			<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onItem({ value })} />
+			{#snippet adornment()}
+				<IconButton variant="ghost" size="sm" label="Delete keyframe" data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
+			{/snippet}
+		</Field>
+		<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
+			<CurvePicker value={item.curve} onChange={(curve) => onItem({ curve })} />
+		</Field>
 	{:else if name === 'keyboard' && t.kind === 'note'}
 		<Field label="keys" row doc="The lowest and the highest pitch the keyboard shows" data-menu-row>
 			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [Number(p), t.range[1]] })} />
@@ -196,10 +189,6 @@
 		data-testid="track-record"
 		onclick={onRecord}><Icon name="circle-dot" /></IconButton
 	></span>
-{/snippet}
-
-{#snippet remove(label: string)}
-	<IconButton variant="ghost" size="sm" {label} data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
 {/snippet}
 
 <div class="title" bind:this={title}>

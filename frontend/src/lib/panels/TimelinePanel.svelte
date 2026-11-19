@@ -7,7 +7,7 @@
      Every change is a `timeline` or a `clock` op or a clock variable, so the manager owns the
      model and this panel the drawing and the gesture. -->
 <script lang="ts">
-	import { MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, type MenuItem, type PanelProps } from 'panelty';
+	import { MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, workspace, type MenuItem, type PanelProps } from 'panelty';
 	import { flushSync, untrack } from 'svelte';
 	import { bindViewer } from '$lib/api/frames';
 	import type { ArrayData } from '$lib/codec/decode';
@@ -20,11 +20,12 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned } from '$lib/timeline/model';
+	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, wheelUnit, zoomed } from '$lib/timeline/model';
+	import NoteMenu from '$lib/timeline/NoteMenu.svelte';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
-	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under, ContextMenu } from '$lib/ui';
+	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under, ContextMenu, isTextEditingTarget } from '$lib/ui';
 
 	interface TimelineState {
 		/** The ids of the tracks this panel hides. */
@@ -33,7 +34,8 @@
 		sizes?: Record<string, number>;
 	}
 
-	let { state: panelState, setState }: PanelProps = $props();
+	let { panelId, state: panelState, setState }: PanelProps = $props();
+	const ws = workspace();
 	const g = graph();
 	const own = $derived(asStateObject(panelState) as TimelineState);
 	const hidden = $derived(own.hidden ?? []);
@@ -128,17 +130,24 @@
 		view = loop && within(at, loop) ? [loop[0], loop[1]] : [0, reach()];
 	};
 
-	/** A wheel turned along the axis, over a lane or the head's axis, moves the view as far as the
-	 * turn is long. A turn across the axis is the track area's own scroll, and one with Ctrl held
-	 * is the browser's zoom. */
+	/** A wheel turned with Ctrl held, anywhere in the panel, zooms the view about the point of the
+	 * axis the pointer is at, which stays there: up looks closer. A pinch on a trackpad is such a
+	 * turn. With no Ctrl, a wheel turned along the axis, over a lane or the head's axis, moves the
+	 * view as far as the turn is long, and a turn across the axis is the track area's own scroll. */
 	let ruler = $state<HTMLElement | null>(null);
 	function onWheel(e: WheelEvent): void {
-		if (e.ctrlKey || !ruler || !(e.target as Element).closest('.lane, .axis')) return;
-		const length = (vertical ? ruler.clientHeight : ruler.clientWidth) || 1;
-		const by = (turned(e, vertical, length) / length) * width;
-		if (by === 0) return;
+		if (!ruler) return;
+		const box = ruler.getBoundingClientRect();
+		const length = (vertical ? box.height : box.width) || 1;
+		if (e.ctrlKey) {
+			const at = clamp((vertical ? e.clientY - box.top : e.clientX - box.left) / length, 0, 1);
+			view = zoomed(view, view[0] + at * width, e.deltaY * wheelUnit(e.deltaMode, length));
+		} else {
+			const by = (e.target as Element).closest('.lane, .axis') ? (turned(e, vertical, length) / length) * width : 0;
+			if (by === 0) return;
+			view = [view[0] + by, view[1] + by];
+		}
 		e.preventDefault();
-		view = [view[0] + by, view[1] + by];
 		// The cell under the pointer is another now.
 		over = null;
 	}
@@ -174,9 +183,20 @@
 		menu = { ...under(e), items };
 	}
 	const addMenu = (e: MouseEvent): void => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }]);
-	// The touch door onto a track's menu.
-	let pressed = '';
-	const press = createLongPress((at) => trackMenu(pressed, at.clientX, at.clientY));
+	// The touch door onto a track's menu, and on a note onto the menu of the notes picked. A held
+	// finger makes no edit: the drag its press began ends there.
+	let pressed: { track: string; note: HTMLElement | null } = { track: '', note: null };
+	const press = createLongPress((at) => {
+		drag?.();
+		if (pressed.note?.isConnected) noteMenu(pressed.track, pressed.note);
+		else trackMenu(pressed.track, at.clientX, at.clientY);
+	});
+	/** A press in a track, which a finger may hold. A note takes its press for its own drag, so it
+	 * says so itself. */
+	function hold(e: PointerEvent, track: string): void {
+		pressed = { track, note: (e.target as HTMLElement).closest<HTMLElement>('.note[data-item]') };
+		if (e.pointerType !== 'mouse') press.start(e);
+	}
 
 	// ---- a recording: a track takes its input in at the clock's position until it is ended. The
 	// stepping thread says whether one runs, in the track's own group.
@@ -338,6 +358,36 @@
 		if (!to) picked = picked.filter((p) => p.track !== id);
 		edit(id, put(t, held(t).flatMap((o, k) => (!indices.includes(k) ? [o] : to ? [{ ...o, ...to }] : []))));
 	}
+	/** One edit of each of several tracks, as one step of the history. */
+	function editAll(patches: [string, Record<string, unknown>][], label: string): void {
+		if (patches.length === 1) edit(...patches[0]);
+		else if (patches.length > 1) void history().transaction(label, async (step) => {
+			for (const [track, patch] of patches) await g.op('timeline track edit', { track, ...patch }, step);
+		}).catch(fail('Edit track'));
+	}
+	/** The keys of the active panel, outside its text fields and dialogs: Delete takes out every
+	 * note and keyframe picked. Nothing reaches a panel that is not the active one. */
+	function onKeydown(e: KeyboardEvent): void {
+		const on = e.target as HTMLElement | null;
+		if ((e.key !== 'Delete' && e.key !== 'Backspace') || picked.length === 0) return;
+		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(on) || on?.closest?.('dialog[open]')) return;
+		e.preventDefault();
+		const tracks = [...new Set(picked.map((p) => p.track))].filter((track) => g.timeline[track]);
+		const patches = tracks.map((track): [string, Record<string, unknown>] => [track, put(g.timeline[track], held(g.timeline[track]).filter((_, k) => !pickedIn(track).includes(k)))]);
+		picked = [];
+		editAll(patches, 'Delete notes and keyframes');
+	}
+	/** The menu of the notes picked in a track, on the note it was opened from: by a right click,
+	 * or by a held finger. It goes when no note of the track is picked. */
+	let noted = $state<{ track: string; anchor: HTMLElement } | null>(null);
+	function noteMenu(track: string, on: HTMLElement): void {
+		const index = Number(on.dataset.item);
+		if (!pickedIn(track).includes(index)) pick([{ track, index }]);
+		noted = { track, anchor: on };
+	}
+	$effect(() => {
+		if (noted && (g.timeline[noted.track]?.kind !== 'note' || !held(g.timeline[noted.track])[pickedIn(noted.track)[0]])) noted = null;
+	});
 	/** The cell of a note lane under a pointer: where it begins, and the note of the scale it is on. */
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
 		const [f, v] = point(p, ground);
@@ -351,9 +401,11 @@
 	/** A press on a lane's own ground makes a note in that cell, or a keyframe there, and a drag
 	 * from it one more in each cell the pointer goes through, or each stretch of the axis: shown
 	 * as they come, and one edit when the pointer is let go. The notes made are the ones picked.
-	 * A keyframe eases as the keyframe before it does, else as the one after, else in and out. */
+	 * A drag in a curve lane draws over what was there: a keyframe from before it, between the
+	 * first and the last it has made, is removed. A keyframe eases as the keyframe before it does,
+	 * else as the one after, else in and out. */
 	function paint(e: PointerEvent, id: string, t: Track): void {
-		if (e.target !== e.currentTarget) return;
+		if (e.button !== 0 || e.target !== e.currentTarget) return;
 		pick([]);
 		const ground = e.currentTarget as HTMLElement;
 		const [base, made, lo, hi] = [held(t), [] as (Note | Key)[], ...t.range];
@@ -366,14 +418,21 @@
 				return void made.push({ ...cell, length: exact(gridOf(t)), velocity: 0.8 });
 			}
 			const [f, v] = point(p, ground);
-			const [at, all] = [exact(Math.max(0, view[0] + f * width)), [...base, ...made] as Key[]];
-			if (Math.abs(f - last) * length < PAINT_EVERY || all.some((k) => k.at === at)) return;
+			const at = exact(Math.max(0, view[0] + f * width));
+			if (Math.abs(f - last) * length < PAINT_EVERY || made.some((k) => k.at === at)) return;
 			last = f;
+			const all = [...kept(at), ...made] as Key[];
 			const near = (side: Key[]): Key | undefined => side.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at))[0];
 			const shape = (near(all.filter((k) => k.at < at)) ?? near(all.filter((k) => k.at > at)))?.curve ?? 'in_out';
 			made.push({ at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: shape });
 		};
-		const lane = (): Record<string, unknown> => put(t, [...base, ...made].sort((a, b) => (t.kind === 'curve' ? a.at - b.at : 0)));
+		/** What was in the lane before the drag and stays: every note, and the keyframes outside
+		 * the stretch from the first keyframe the drag has made to the last, `and` counted in. */
+		const kept = (and?: number): (Note | Key)[] => {
+			const ats = [...made.map((k) => k.at), ...(and === undefined ? [] : [and])];
+			return t.kind === 'note' ? base : base.filter((k) => k.at < Math.min(...ats) || k.at > Math.max(...ats));
+		};
+		const lane = (): Record<string, unknown> => put(t, [...kept(), ...made].sort((a, b) => (t.kind === 'curve' ? a.at - b.at : 0)));
 		add(e);
 		g.previewTrack(id, lane());
 		drag = beginDrag(ground, e.pointerId, {
@@ -452,11 +511,7 @@
 			},
 			commit: () => {
 				dragged = null;
-				const all = patches;
-				if (all?.length === 1) edit(...all[0]);
-				else if (all) void history().transaction('Move notes and keyframes', async (step) => {
-					for (const [track, patch] of all) await g.op('timeline track edit', { track, ...patch }, step);
-				}).catch(fail('Edit track'));
+				if (patches) editAll(patches, 'Move notes and keyframes');
 			},
 			// Put back, where the track is still there.
 			cancel: () => {
@@ -503,7 +558,10 @@
 	});
 </script>
 
-<div class="timeline" class:vertical bind:clientWidth={wide} bind:clientHeight={tall} data-testid="timeline-panel">
+<svelte:document onkeydown={onKeydown} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="timeline" class:vertical bind:clientWidth={wide} bind:clientHeight={tall} data-testid="timeline-panel" onwheel={onWheel}>
 	<!-- One group that wraps: a narrow panel puts the controls on as many lines as they take. -->
 	<Bar>
 		{#snippet start()}
@@ -524,7 +582,7 @@
 	</Bar>
 	<div class="scroll thin-scrollbar">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick} onwheel={onWheel}>
+		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
 			<!-- The head: the clock's own controls in the corner, and beside them the view's bar
 			     over the ruler, each as long as a lane. -->
 			<div class="row head">
@@ -554,7 +612,7 @@
 			{#each shown as id (id)}
 				{@const t = g.timeline[id]}
 				{@const chosen = pickedIn(id)}
-				{@const mine = held(t)[chosen[0]]}
+				{@const mine = t.kind === 'curve' ? t.keys[chosen[0]] : undefined}
 				{@const [lo, hi] = t.range}
 				{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
 				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
@@ -570,10 +628,7 @@
 						e.preventDefault();
 						trackMenu(id, e.clientX, e.clientY);
 					}}
-					onpointerdown={(e) => {
-						pressed = id;
-						if (e.pointerType !== 'mouse') press.start(e);
-					}}
+					onpointerdown={(e) => hold(e, id)}
 					onpointermove={press.move}
 					onpointerup={press.cancel}
 					onpointercancel={press.cancel}
@@ -632,7 +687,15 @@
 										style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
 										style:--s={share(1 / (hi - lo + 1))}
 										style:opacity={0.4 + 0.6 * n.velocity}
-										onpointerdown={(e) => dragItem(e, id, t, i)}
+										onpointerdown={(e) => {
+											hold(e, id);
+											dragItem(e, id, t, i);
+										}}
+										oncontextmenu={(e) => {
+											e.preventDefault();
+											e.stopPropagation();
+											noteMenu(id, e.currentTarget);
+										}}
 									>
 										<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
 									</div>
@@ -681,6 +744,13 @@
 
 {#if menu}
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+{#if noted}
+	{@const [of, t] = [noted.track, g.timeline[noted.track]]}
+	{@const first = t?.kind === 'note' ? t.notes[pickedIn(of)[0]] : undefined}
+	{#if t?.kind === 'note' && first}
+		<NoteMenu {t} note={first} count={pickedIn(of).length} anchor={noted.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (noted = null)} />
+	{/if}
 {/if}
 <ConfirmDialog
 	open={doomed !== undefined}

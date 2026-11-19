@@ -57,9 +57,10 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
 - The `Clock` node keeps a tempo of its own. Whether it reads `clock.bpm` instead.
 - The expression editor still starts a completion behind a dismissed window, and Tab takes it.
-- The panel's view zooms by the range bar alone: a wheel moves the view and does not zoom, and
-  two fingers on a touch screen do neither. The Shift key's turn of a wheel is tried in Chromium
-  alone.
+- Two fingers on a touch screen neither move the panel's view nor zoom it: a wheel does both, and
+  the range bar. The Shift key's turn of a wheel is tried in Chromium alone.
+- A picked note's settings are a menu on the note, and a picked keyframe's a section of the
+  track's settings. Whether a keyframe gets the menu too.
 - The clock's section is drawn again to change it: it has no edges to drag and cannot be
   moved. A position put past its end folds into it.
 - A track dragged onto a param writes the expression that reads it; no test drops one there.

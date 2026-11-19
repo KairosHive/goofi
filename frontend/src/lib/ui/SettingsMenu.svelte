@@ -1,6 +1,7 @@
 <!-- A button opening a Popover of settings rows, one under the other: a viewer's settings, or a
      state's attributes behind a search field. Its role is `group`, not a menu: no row is a menuitem.
-     Up and down move between the search and each `data-menu-row`; left and right stay the row's. -->
+     Up and down move between the search and each `data-menu-row`; left and right stay the row's.
+     With an `anchor` it has no button: it hangs from that element, and its owner opens it. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { Icon, IconButton } from 'panelty';
@@ -20,6 +21,7 @@
 		onEnter,
 		width = 232,
 		open = $bindable(false),
+		anchor,
 		children
 	}: {
 		label: string;
@@ -38,10 +40,13 @@
 		width?: number;
 		/** Whether the menu shows; an owner closes it when a row in it ends the menu's business. */
 		open?: boolean;
+		/** The element the menu hangs from where no button of its own opens it: what was
+		 * right-clicked, say. */
+		anchor?: HTMLElement | null;
 		children: Snippet;
 	} = $props();
 
-	let anchor = $state<HTMLElement | null>(null);
+	let button = $state<HTMLElement | null>(null);
 
 	function toggle(e: MouseEvent): void {
 		// Not also a click on what hosts the button: a node header's collapse, a card's selection.
@@ -51,7 +56,7 @@
 	}
 	function dismiss(): void {
 		// The focus that was in the menu goes back to its button, not to nowhere.
-		if (body?.contains(document.activeElement)) anchor?.querySelector('button')?.focus({ preventScroll: true });
+		if (body?.contains(document.activeElement)) button?.querySelector('button')?.focus({ preventScroll: true });
 		open = false;
 		query = '';
 	}
@@ -92,13 +97,15 @@
 	}
 </script>
 
-<span class="sm-anchor" bind:this={anchor}>
-	<IconButton variant="ghost" size="sm" class={`${klass} ${open ? 'on' : ''}`.trim()} {label} aria-expanded={open} data-testid={testid} onclick={toggle}>
-		<Icon name={icon} />
-	</IconButton>
-</span>
+{#if anchor === undefined}
+	<span class="sm-anchor" bind:this={button}>
+		<IconButton variant="ghost" size="sm" class={`${klass} ${open ? 'on' : ''}`.trim()} {label} aria-expanded={open} data-testid={testid} onclick={toggle}>
+			<Icon name={icon} />
+		</IconButton>
+	</span>
+{/if}
 
-<Popover {anchor} {open} onDismiss={dismiss} role="group" aria-label={label} class="sm-menu" data-testid={menuTestid}>
+<Popover anchor={anchor ?? button} {open} onDismiss={dismiss} role="group" aria-label={label} class="sm-menu" data-testid={menuTestid}>
 	<!-- Popover owns the surface's style, so the width rides a body inside it. -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="sm-body" style={`width: ${width}px`} tabindex="-1" bind:this={body} onkeydown={onArrow} use:land>

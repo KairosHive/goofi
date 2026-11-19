@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned } from './model';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, zoomed } from './model';
 
 const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -73,6 +73,20 @@ describe('the timeline model', () => {
 		expect(turned(turn(0, 40, true), true, 500)).toBe(0);
 		// A turn counted in lines or in pages is that many pixels.
 		expect([turned(turn(3, 0, false, 1), false, 500), turned(turn(1, 0, false, 2), false, 500)]).toEqual([48, 500]);
+	});
+
+	it('zooms a view about a point that stays where it is', () => {
+		// A turn up looks closer and a turn down further, each the other's way back.
+		const near = zoomed([0, 8], 2, -100);
+		expect(near[1] - near[0]).toBeLessThan(8);
+		expect((2 - near[0]) / (near[1] - near[0])).toBeCloseTo(0.25, 9);
+		expect(zoomed(near, 2, 100).map((v) => Number(v.toFixed(9)))).toEqual([0, 8]);
+		// About an end of the view, that end stays.
+		expect(zoomed([4, 8], 4, 200)[0]).toBe(4);
+		// A view gets no narrower than 0.05 of a beat, and no wider than a million.
+		const [closest, furthest] = [zoomed([0, 8], 4, -1e5), zoomed([0, 8], 4, 1e5)];
+		expect(closest[1] - closest[0]).toBeCloseTo(0.05, 9);
+		expect(furthest[1] - furthest[0]).toBeCloseTo(1e6, 3);
 	});
 
 	it('draws a take as a line through its samples, begun again at each pass', () => {

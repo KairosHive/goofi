@@ -6,7 +6,7 @@
      no widest and the fold never leaves the bar. -->
 <script lang="ts">
 	import { beginDrag } from 'panelty';
-	import { barPlace, barPoint } from './model';
+	import { NARROWEST_VIEW as LEAST, barPlace, barPoint } from './model';
 
 	let {
 		view,
@@ -22,8 +22,6 @@
 		/** The axis runs down. */
 		vertical?: boolean;
 	} = $props();
-	/** The narrowest a view gets. */
-	const LEAST = 0.05;
 
 	const clamp = (v: number): number => Math.min(1, Math.max(0, v));
 	const [from, to] = $derived([barPlace(view[0], span), barPlace(view[1], span)]);

@@ -265,7 +265,10 @@ the lane, in the recording's colour, until the take is the track's.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in
-each cell or stretch it goes through; a click on one picks it, and a drag moves one. A note
+each cell or stretch it goes through; a click on one picks it, and a drag moves one. A drag
+along a curve's lane draws over the keyframes in its path. The Delete key takes out what is
+picked. A right click on a note, or a held finger, opens a menu on it with the pitch, the length
+and the velocity of the notes picked. A note
 snaps to its track's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
 are play, stop and the clock's position, a number that a click makes a field. A press on the
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
@@ -274,7 +277,8 @@ view, as long as a lane: a view of the whole timeline fills it, a drag of it mov
 axis, and a drag of either end of it zooms, as far out as you like: past an end of the timeline
 that end of the bar folds and takes a muted accent. A wheel turned along the axis over a lane
 or the ruler moves the view too: sideways, or with Shift held on a wheel that turns one way,
-and down in a panel taller than wide. A double click on the ruler looks at everything
+and down in a panel taller than wide. With Ctrl held a wheel zooms, about the point of the axis
+under the pointer. A double click on the ruler looks at everything
 again. A track's edge resizes it, as far as it is
 dragged: held at the end of the track area, the area scrolls. Beside its lane a track says its
 name and its settings in named sections that fold. The recording's section has the record

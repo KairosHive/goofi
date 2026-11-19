@@ -88,7 +88,21 @@ export function turned(e: { deltaX: number; deltaY: number; deltaMode: number; s
 	const [x, y] = e.shiftKey && e.deltaX === 0 ? [e.deltaY, 0] : [e.deltaX, e.deltaY];
 	const [along, across] = down ? [y, x] : [x, y];
 	if (Math.abs(along) <= Math.abs(across)) return 0;
-	return along * (e.deltaMode === 1 ? LINE : e.deltaMode === 2 ? length : 1);
+	return along * wheelUnit(e.deltaMode, length);
+}
+/** The pixels one count of a wheel's turn is: a pixel, a line, or a page as long as the axis. */
+export const wheelUnit = (deltaMode: number, length: number): number => (deltaMode === 1 ? LINE : deltaMode === 2 ? length : 1);
+
+/** The narrowest a view gets and the widest, in beats. */
+export const [NARROWEST_VIEW, WIDEST_VIEW] = [0.05, 1e6];
+/** How much of a view a pixel of a wheel's turn takes or gives, as a power of e. */
+const ZOOM = 0.003;
+/** A view after a wheel turned `pixels` to zoom about `about`, a point of the axis that stays
+ * where it is in the panel: a turn up or away, which counts below 0, looks closer. */
+export function zoomed([from, to]: [number, number], about: number, pixels: number): [number, number] {
+	const width = Math.min(WIDEST_VIEW, Math.max(NARROWEST_VIEW, (to - from) * Math.exp(pixels * ZOOM)));
+	const before = (about - from) / (to - from);
+	return [about - before * width, about + (1 - before) * width];
 }
 
 /** What a recording has taken so far, flat `at, value` pairs, as a path in the box `lanePath`
