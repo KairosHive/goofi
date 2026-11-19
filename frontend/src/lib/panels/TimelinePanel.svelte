@@ -419,48 +419,47 @@
 	const PAINT_EVERY = 16;
 	/** A press on a lane's own ground makes a note in that cell, or a keyframe there, and a drag
 	 * from it one more in each cell the pointer goes through, or each stretch of the axis: shown
-	 * as they come, and one edit when the pointer is let go.
-	 * A drag in a curve lane draws over what was there: a keyframe from before it, between the
-	 * first and the last it has made, is removed. A keyframe eases as the keyframe before it does,
-	 * else as the one after, else in and out. */
+	 * as they come, and one edit when the pointer is let go. A drag in a curve lane draws over
+	 * what it goes across: a keyframe between the last one the drag made and the next one is
+	 * removed, whether it was there before the drag or the drag made it on its way out. A keyframe
+	 * eases as the keyframe before it does, else as the one after, else in and out. */
 	function paint(e: PointerEvent, id: string, t: Track): void {
 		if (e.button !== 0 || e.target !== e.currentTarget) return;
 		pick([]);
 		const ground = e.currentTarget as HTMLElement;
-		const [base, made, lo, hi] = [held(t), [] as (Note | Key)[], ...t.range];
+		const [base, lo, hi] = [held(t), ...t.range];
 		const length = (vertical ? ground.clientHeight : ground.clientWidth) || 1;
-		let last = -Infinity;
-		const add = (p: { clientX: number; clientY: number }): void => {
+		/** The lane as the drag has it, and in a curve lane the last keyframe the drag made with
+		 * where along the lane it made it. */
+		let now = base;
+		let last: { f: number; key: Key } | null = null;
+		/** Take the pointer's place into the lane; answers whether the lane changed. */
+		const add = (p: { clientX: number; clientY: number }): boolean => {
 			if (t.kind === 'note') {
 				const cell = cellAt(p, ground, t);
-				if ([...base, ...made].some((n) => n.at === cell.at && (n as Note).pitch === cell.pitch)) return;
-				return void made.push({ ...cell, length: exact(gridOf(t)), velocity: 0.8 });
+				if (now.some((n) => n.at === cell.at && (n as Note).pitch === cell.pitch)) return false;
+				now = [...now, { ...cell, length: exact(gridOf(t)), velocity: 0.8 }];
+				return true;
 			}
 			const [f, v] = point(p, ground);
+			if (last && Math.abs(f - last.f) * length < PAINT_EVERY) return false;
 			const at = exact(Math.max(0, view[0] + f * width));
-			if (Math.abs(f - last) * length < PAINT_EVERY || made.some((k) => k.at === at)) return;
-			last = f;
-			const all = [...kept(at), ...made] as Key[];
+			// What stays: the keyframes outside the stretch from the last keyframe made to this
+			// one, and that last keyframe, unless this one is at its very time.
+			const [from, to] = [Math.min(last?.key.at ?? at, at), Math.max(last?.key.at ?? at, at)];
+			const keys = (now as Key[]).filter((k) => (k === last?.key ? k.at !== at : k.at < from || k.at > to));
 			const near = (side: Key[]): Key | undefined => side.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at))[0];
-			const shape = (near(all.filter((k) => k.at < at)) ?? near(all.filter((k) => k.at > at)))?.curve ?? 'in_out';
-			made.push({ at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: shape });
+			const shape = (near(keys.filter((k) => k.at < at)) ?? near(keys.filter((k) => k.at > at)))?.curve ?? 'in_out';
+			const key: Key = { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: shape };
+			now = [...keys, key].sort((a, b) => a.at - b.at);
+			last = { f, key };
+			return true;
 		};
-		/** What was in the lane before the drag and stays: every note, and the keyframes outside
-		 * the stretch from the first keyframe the drag has made to the last, `and` counted in. */
-		const kept = (and?: number): (Note | Key)[] => {
-			const ats = [...made.map((k) => k.at), ...(and === undefined ? [] : [and])];
-			return t.kind === 'note' ? base : base.filter((k) => k.at < Math.min(...ats) || k.at > Math.max(...ats));
-		};
-		const lane = (): Record<string, unknown> => put(t, [...kept(), ...made].sort((a, b) => (t.kind === 'curve' ? a.at - b.at : 0)));
 		add(e);
-		g.previewTrack(id, lane());
+		g.previewTrack(id, put(t, now));
 		drag = beginDrag(ground, e.pointerId, {
-			move: (p) => {
-				const had = made.length;
-				add(p);
-				if (made.length > had) g.previewTrack(id, lane());
-			},
-			commit: () => edit(id, lane()),
+			move: (p) => void (add(p) && g.previewTrack(id, put(t, now))),
+			commit: () => edit(id, put(t, now)),
 			// Put back, where the track is still there.
 			cancel: () => void (g.timeline[id] && g.previewTrack(id, put(t, base)))
 		});
@@ -1090,7 +1089,7 @@
 		width: var(--space-5);
 		height: var(--space-5);
 		border-radius: 50%;
-		background: var(--accent-strong);
+		background: var(--accent);
 		cursor: grab;
 	}
 	.box {
@@ -1100,10 +1099,11 @@
 		background: var(--accent-fill);
 		pointer-events: none;
 	}
-	/* What is picked wears a thin line of the second accent around it. Around a note the line
-	   is on the lines of the note's cells, which the note stays clear of. */
+	/* What is picked is the accent held back, in a thin line of the accent. Around a note the
+	   line is on the lines of the note's cells, which the note stays clear of. */
 	.picked {
-		outline: 1px solid var(--accent-2);
+		background: var(--accent-muted);
+		outline: 1px solid var(--accent);
 		outline-offset: 1px;
 	}
 	.note.picked {

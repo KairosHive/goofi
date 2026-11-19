@@ -54,7 +54,7 @@
 		stroke-linejoin: round;
 	}
 	:global(.svelte-flow__edge:hover .svelte-flow__edge-path.transition) {
-		stroke: var(--ring-accent);
+		stroke: var(--accent-muted);
 	}
 	:global(.svelte-flow__edge.selected .svelte-flow__edge-path.transition) {
 		stroke: var(--accent);

@@ -101,7 +101,7 @@
 		stroke-linejoin: round;
 	}
 	.arc.lit {
-		stroke: var(--ring-accent);
+		stroke: var(--accent-muted);
 	}
 	.arc.picked {
 		stroke: var(--accent);

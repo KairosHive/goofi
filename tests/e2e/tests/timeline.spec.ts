@@ -254,7 +254,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// A velocity typed and not entered lands on its note when the menu closes: a note is drawn
 		// as strong as its velocity. The note the menu was on is the one picked, in an outline of
-		// the second accent, and the Delete key takes out what is picked.
+		// the accent over a fill of the accent held back, and the Delete key takes out what is picked.
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
 		await expect(note).toHaveCount(2);
 		await note.nth(0).click({ button: 'right' });
@@ -266,7 +266,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// a soft note as on a loud one.
 		await expect.poll(() => note.nth(0).evaluate((el) => getComputedStyle(el).getPropertyValue('--v'))).toBe('0.76');
 		await expect(lane.locator('.note.picked')).toHaveCount(1);
-		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(240, 120, 90)');
+		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(80, 208, 160)');
+		expect(await lane.locator('.note.picked').evaluate((el) => getComputedStyle(el).backgroundColor), 'its fill is the accent held back').toMatch(/0\.4\)$/);
 		await expect(lane.locator('.note.picked')).toHaveCSS('opacity', '1');
 		await page.keyboard.press('Delete');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.pitch)).toEqual([64]);
@@ -395,6 +396,22 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		const overdrawn = (await keysOf()).map((k) => k.at);
 		expect([overdrawn[0], overdrawn[overdrawn.length - 1]], 'the keyframes outside the path stay').toEqual([outer, other]);
 		expect(overdrawn.length).toBeGreaterThan(3);
+		// The drag draws over its own keyframes too: it goes out high, comes back low without a
+		// lift, and where it came back the high keyframes of the way out are gone. The keyframe
+		// it turned at stays.
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [] });
+		await expect(attr.locator('.key')).toHaveCount(0);
+		await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.2);
+		await page.mouse.down();
+		await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.2, { steps: 12 });
+		await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.8, { steps: 4 });
+		await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.8, { steps: 12 });
+		await page.mouse.up();
+		await expect.poll(async () => (await keysOf()).filter((k) => k.value < 0.5).length, 'the way back made keyframes').toBeGreaterThan(2);
+		const [high, low] = [(await keysOf()).filter((k) => k.value > 0.5).map((k) => k.at), (await keysOf()).filter((k) => k.value < 0.5).map((k) => k.at)];
+		expect(high.filter((at) => at > Math.min(...low) && at < Math.max(...low)), 'no keyframe of the way out is left where the drag came back').toEqual([]);
+		expect(high.filter((at) => at > Math.max(...low)).length, 'the keyframe the drag turned at stays').toBe(1);
+		expect(high.some((at) => at < Math.min(...low)), 'the way out stays where the drag did not come back').toBe(true);
 		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [first, last] });
 		await expect(attr.locator('.key')).toHaveCount(2);
 		await dragBy(page, attr.locator('.key').nth(1), box.width * 0.1, box.height * 0.2);
