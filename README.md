@@ -286,8 +286,10 @@ that end of the bar folds and takes a muted accent. A wheel turned along the axi
 or the ruler moves the view too: sideways, or with Shift held on a wheel that turns one way,
 and down in a panel taller than wide. With Ctrl held a wheel zooms, about the point of the axis
 under the pointer. A double click on the ruler looks at everything
-again. A track's edge resizes it, as far as it is
-dragged: held at the end of the track area, the area scrolls. Beside its lane a track says its
+again. A line across the tracks marks where the timeline begins, and one where it ends when it
+has a length. A track's edge resizes it, as far as it is
+dragged: held at the end of the track area, the area scrolls; a double click on the edge gives
+the track the room the panel shows, and scrolls to it. Beside its lane a track says its
 name and its settings in named sections that fold. The recording's section has the record
 button on its line and begins folded; a curve's input in it is a param's own row, so it takes
 an expression, a MIDI learn, or a node, a variable or a state dropped on it. A section unfolded

@@ -591,6 +591,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 			await expect.poll(() => clock(page, 'length')).toBe(beats);
 			await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
 			await expect.poll(lastMark).toBe(last);
+			// A line across the tracks marks where the timeline begins, and one where it ends
+			// when it has a length: in a view of all of it, at the two ends of the lanes.
+			const edges = panel.getByTestId('timeline-edge');
+			await expect(edges).toHaveCount(beats > 0 ? 2 : 1);
+			const at = await edges.evaluateAll((all) => all.map((el) => Math.round(el.getBoundingClientRect().left)));
+			expect(at).toEqual([Math.round(axis.x), ...(beats > 0 ? [Math.round(axis.x + axis.width)] : [])]);
 		}
 
 		// The range bar is the view: its end dragged in zooms in, and dragged out past the end of
@@ -668,6 +674,17 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.up();
 		expect(await panel.locator('.scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 		expect(await others()).toBe(beside);
+		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
+		// The edge pressed twice gives the track the room the area shows under the head, and the
+		// area scrolls to show exactly that track: its top under the head, its end at the area's,
+		// each to the pixel a scroll lands on.
+		await curve.getByTestId('track-grip').dblclick();
+		const headRow = (await panel.locator('.row.head').boundingBox())!;
+		const astray = async (): Promise<number[]> => {
+			const fitted = (await curve.boundingBox())!;
+			return [fitted.y - (headRow.y + headRow.height), fitted.y + fitted.height - (area.y + area.height)];
+		};
+		await expect.poll(async () => (await astray()).every((d) => Math.abs(d) <= 1), `the track is off the room by ${await astray()}`).toBe(true);
 		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
 		expect(JSON.stringify((await backendDoc(page)).timeline)).toBe(tracks);
 

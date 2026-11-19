@@ -125,6 +125,8 @@
 		});
 	}
 	const band = $derived(section ?? loop);
+	/** Where the timeline begins, and where it ends when it has a length: the beats a line marks. */
+	const ends = $derived([0, ...(clock('length') > 0 ? [clock('length')] : [])]);
 	const onRulerTwice = (e: MouseEvent): void => {
 		const at = view[0] + point(e, e.currentTarget as Element)[0] * width;
 		view = loop && within(at, loop) ? [loop[0], loop[1]] : [0, reach()];
@@ -322,6 +324,22 @@
 		if (!lane) return false;
 		setState({ sizes: { ...own.sizes, [id]: Math.ceil(lane.getBoundingClientRect().height + by) } }, 'authored', 'Resize Track');
 		return true;
+	}
+	/** A track's edge pressed twice: the track is as large as the room the track area shows under
+	 * the head, and the area is scrolled to show exactly that track. The room after the last
+	 * track stays, past the edge. */
+	function fit(e: MouseEvent, id: string): void {
+		const grip = e.currentTarget as HTMLElement;
+		const [area, track, head] = [grip.closest<HTMLElement>('.scroll')!, grip.parentElement!, stack!.querySelector<HTMLElement>('.head')!];
+		const [client, offset, scroll, length, from, to] = vertical ? (['clientWidth', 'offsetWidth', 'scrollLeft', 'width', 'left', 'right'] as const) : (['clientHeight', 'offsetHeight', 'scrollTop', 'height', 'top', 'bottom'] as const);
+		// The room is the area's without its scroll bar and the head. The size is the lane's: the
+		// line a track has before it is the track's, and stays.
+		const room = area.getBoundingClientRect()[length] - (area[offset] - area[client]) - head.getBoundingClientRect()[length];
+		const size = Math.max(vertical ? NARROWEST : LOWEST, Math.floor(room - (track[offset] - track[client])));
+		sizing = { id, size, sent: true };
+		setState({ sizes: { ...own.sizes, [id]: size } }, 'authored', 'Resize Track');
+		flushSync();
+		area[scroll] += track.getBoundingClientRect()[from] - head.getBoundingClientRect()[to];
 	}
 	// The size dragged stands until the panel's state holds it.
 	$effect(() => {
@@ -638,6 +656,9 @@
 							{#if band && band[1] > view[0] && band[0] < view[1]}
 								<span class="span" style:--a={share(clamp(along(band[0]), 0, 1))} style:--l={share(clamp(along(band[1]), 0, 1) - clamp(along(band[0]), 0, 1))}></span>
 							{/if}
+							{#each ends as end (end)}
+								{#if within(end, view)}<span class="bound" style:--a={share(along(end))}></span>{/if}
+							{/each}
 							{#if within(beat, view)}<span class="now" style:--a={share(along(beat))}></span>{/if}
 						</div>
 					</div>
@@ -755,7 +776,7 @@
 							{/if}
 						</div>
 					</div>
-					<span class="grip" data-testid="track-grip" title="Drag to resize the track" onpointerdown={(e) => resize(e, id)}></span>
+					<span class="grip" data-testid="track-grip" title="Drag to resize the track; double click to give it the room the panel shows" onpointerdown={(e) => resize(e, id)} ondblclick={(e) => fit(e, id)}></span>
 				</section>
 			{/each}
 			<!-- The loop's section and the clock's position, across the ruler and every track. -->
@@ -766,6 +787,10 @@
 			{#if box}
 				<div class="box" data-testid="timeline-box" style:left={`${box.left}px`} style:top={`${box.top}px`} style:width={`${box.width}px`} style:height={`${box.height}px`}></div>
 			{/if}
+			<!-- Where the timeline begins and where it ends, under the clock's own line. -->
+			{#each ends as end (end)}
+				{#if within(end, view)}<div class="edge" data-testid="timeline-edge" style:--a={along(end)}></div>{/if}
+			{/each}
 			{#if within(beat, view)}
 				<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
 			{/if}
@@ -976,10 +1001,16 @@
 		min-width: 0;
 	}
 	.span,
+	.bound,
 	.now {
 		position: absolute;
 		inset: 0 auto 0 var(--a);
 		pointer-events: none;
+	}
+	/* Where the timeline begins and ends: a line as the clock's own, in the ink of the text. */
+	.bound {
+		width: 1px;
+		background: var(--text);
 	}
 	.span {
 		width: var(--l);
@@ -1117,11 +1148,16 @@
 		touch-action: none;
 	}
 	.band,
+	.edge,
 	.playhead {
 		position: absolute;
 		inset: 0 auto 0 calc(var(--side) + (100% - var(--side)) * var(--a));
 		z-index: 1;
 		pointer-events: none;
+	}
+	.edge {
+		width: 1px;
+		background: var(--text);
 	}
 	.band {
 		width: calc((100% - var(--side)) * var(--l));
@@ -1193,8 +1229,13 @@
 		padding: 0;
 	}
 	.vertical .span,
+	.vertical .bound,
 	.vertical .now {
 		inset: var(--a) 0 auto 0;
+	}
+	.vertical .bound {
+		width: auto;
+		height: 1px;
 	}
 	.vertical .span {
 		width: auto;
@@ -1249,8 +1290,13 @@
 		cursor: ew-resize;
 	}
 	.vertical .band,
+	.vertical .edge,
 	.vertical .playhead {
 		inset: calc(var(--side) + (100% - var(--side)) * var(--a)) 0 auto 0;
+	}
+	.vertical .edge {
+		width: auto;
+		height: 1px;
 	}
 	.vertical .band {
 		width: auto;
