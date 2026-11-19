@@ -54,9 +54,10 @@
 	--accent: #50d0a0;
 	--accent-strong: #3fb88a;
 	/* A second accent, for what is picked inside a thing that already wears --accent: the
-	   outline of a picked note on the note's own mint fill. A violet, apart from every semantic
-	   colour. */
-	--accent-2: #c08cff;
+	   outline of a picked note on the note's own mint fill. A coral, across the wheel from the
+	   mint: the mint's own opposite is the rose of --danger, so this stands a step toward
+	   orange from it, and reads as neither a fault nor a warning. */
+	--accent-2: #f0785a;
 	/* A grass-green shifted off the mint --accent (D-M1) so "healthy/OK" reads distinct from
 	   "selected/accent" where they meet (a selected+healthy node's ring vs its health dot).
 	   Kept above the 3:1 floor on --surface-4; --success-fill color-mixes from it. */

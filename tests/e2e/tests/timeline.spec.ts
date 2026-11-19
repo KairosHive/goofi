@@ -266,7 +266,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// a soft note as on a loud one.
 		await expect.poll(() => note.nth(0).evaluate((el) => getComputedStyle(el).getPropertyValue('--v'))).toBe('0.76');
 		await expect(lane.locator('.note.picked')).toHaveCount(1);
-		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(192, 140, 255)');
+		await expect(lane.locator('.note.picked')).toHaveCSS('outline-color', 'rgb(240, 120, 90)');
 		await expect(lane.locator('.note.picked')).toHaveCSS('opacity', '1');
 		await page.keyboard.press('Delete');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.pitch)).toEqual([64]);
