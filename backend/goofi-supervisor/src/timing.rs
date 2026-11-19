@@ -145,10 +145,7 @@ impl Time {
     /// position it never reaches.
     pub fn until(&self, at: f64) -> Option<Duration> {
         let now = self.position();
-        let at = match self.looped() {
-            Some((start, length)) if now >= start => at.min(start + length),
-            _ => at,
-        };
+        let at = self.looped().map_or(at, |(start, length)| at.min(start + length));
         (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - now).max(0.0)))
     }
 

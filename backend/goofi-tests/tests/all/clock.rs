@@ -59,6 +59,18 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     g.until("the position to reach the section", |g| (time(g) >= 1.0).then_some(()));
     assert!(g.stays(|g| (1.0..1.2).contains(&time(g))), "the position stays in the section");
     assert!(g.call("clock set", j!({ "section": [0.0, 0.0] }))["section"].is_null(), "a section of no length is none");
+    // A section stands in the length's place: the position plays past the length up to it, and
+    // never goes back to 0 on the way.
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.4 }));
+    g.call("clock set", j!({ "section": [1.0, 1.2], "time": 0.3 }));
+    let mut lowest = f64::INFINITY;
+    g.until("the position to pass the length for the section", |g| {
+        lowest = lowest.min(time(g));
+        (time(g) >= 1.0).then_some(())
+    });
+    assert!(lowest >= 0.3, "the position went back to {lowest} on its way to the section");
+    assert!(g.call("clock set", j!({ "section": [0.0, 0.0] }))["section"].is_null());
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 20.0 }));
     assert!(g.refuse("clock set", j!({ "section": [-1.0, 2.0] })).contains("at least 0"));
     assert!(g.refuse("clock set", j!({ "section": [1.0, 1.0001] })).contains("a millisecond"));
     // Endless again, it goes on from where it stands, past the length; it does not jump to the

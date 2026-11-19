@@ -35,9 +35,9 @@ export function keyboard(notes: Note[], set: Partial<Keyboard> = {}): Keyboard {
 	const range = Array.isArray(set.range) && key(set.range[0]) && key(set.range[1]) && set.range[0] < set.range[1] ? set.range : null;
 	return {
 		range: range ?? [Math.min(48, ...pitches), Math.max(72, ...pitches)],
-		scale: set.scale !== undefined && set.scale in SCALES ? set.scale : Object.keys(SCALES)[0],
+		scale: set.scale !== undefined && Object.hasOwn(SCALES, set.scale) ? set.scale : Object.keys(SCALES)[0],
 		root: (NOTE_NAMES as readonly string[]).includes(set.root ?? '') ? set.root! : NOTE_NAMES[0],
-		grid: set.grid !== undefined && set.grid in GRIDS ? set.grid : '1/4 beat'
+		grid: set.grid !== undefined && Object.hasOwn(GRIDS, set.grid) ? set.grid : '1/4 beat'
 	};
 }
 

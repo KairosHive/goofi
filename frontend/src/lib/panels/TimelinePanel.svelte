@@ -70,7 +70,6 @@
 			.op<{ section: [number, number] | null }>('clock set', { section: [from * spb, to * spb] })
 			.then((r) => (looped = r.section))
 			.catch(fail('Set loop'));
-	// What the clock loops in now: a `clock set` that sets nothing says it.
 	void g
 		.op<{ section: [number, number] | null }>('clock set', {})
 		.then((r) => (looped = r.section))
@@ -152,7 +151,6 @@
 			view = [view[0] + by, view[1] + by];
 		}
 		e.preventDefault();
-		// The cell under the pointer is another now.
 		over = null;
 	}
 
@@ -280,7 +278,6 @@
 			cancel: () => (sizing = null)
 		});
 	}
-	// The size dragged stands until the panel's state holds it.
 	$effect(() => {
 		void own.sizes;
 		if (untrack(() => sizing?.sent)) sizing = null;
@@ -409,7 +406,6 @@
 		drag = beginDrag(ground, e.pointerId, {
 			move: (p) => void (add(p) && g.previewTrack(id, put(t, now))),
 			commit: () => edit(id, put(t, now)),
-			// Put back, where the track is still there.
 			cancel: () => void (g.timeline[id] && g.previewTrack(id, put(t, base)))
 		});
 	}
@@ -465,8 +461,6 @@
 				if (!patches && Math.hypot(p.clientX - e.clientX, p.clientY - e.clientY) < MOVE_TOLERANCE_PX) return;
 				dragged ??= { track: id, index };
 				const [f, v] = point(p, ground);
-				// Shift lets a note go off the grid in time, Ctrl off the scale in pitch; either lets
-				// a note's end go off the grid.
 				const ctrl = p.ctrlKey || p.metaKey;
 				patches = moved((f - f0) * width, v - v0, { time: p.shiftKey || (stretch && ctrl), pitch: ctrl });
 				for (const [track, patch] of patches) g.previewTrack(track, patch);
@@ -474,7 +468,6 @@
 			commit: () => {
 				dragged = null;
 				if (patches) return editAll(patches, 'Move notes and keyframes');
-				// A click, with no drag. A right click keeps what is picked, for the menu.
 				if (e.button !== 0 || stretch) return;
 				if (more) {
 					if (was) pick(picked.filter((p) => p.track !== id || p.index !== index));
@@ -484,7 +477,6 @@
 					edit(id, { notes: t.notes.filter((_, k) => k !== index) });
 				} else pick([{ track: id, index }]);
 			},
-			// Put back, where the track is still there.
 			cancel: () => {
 				dragged = null;
 				if (patches) for (const { track, was, all } of tracks) if (g.timeline[track]) g.previewTrack(track, put(was, all));
@@ -550,7 +542,7 @@
 		{#snippet start()}
 			<div class="tools">
 			<label class="labeled">bpm <NumberInput title="The tempo, in beats a minute" data-testid="clock-bpm" value={clock('bpm')} min={0} max={999} onChange={(v) => void g.setVariableValue('clock.bpm', v).catch(fail('Set tempo'))} /></label>
-			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
+			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it, unless a section loops it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
 			{#if loop}
 				<Chip tone="accent" title="The clock loops in the section marked on the ruler: press to clear it" data-testid="clock-loop" onclick={() => setLoop(0, 0)}>loop</Chip>
 			{/if}

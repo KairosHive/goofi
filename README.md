@@ -281,7 +281,7 @@ menu on it with the settings of what is picked: a note's pitch, length and veloc
 keyframe's value and curve. A note
 snaps to its keyboard's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
 are play, stop and the clock's position, a number that a click makes a field. A press on the
-ruler places the clock, and a drag along it marks a section the clock loops in: that section is
+ruler places the clock, and a drag along it marks a section the clock loops in, in the length's place: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
 view, as long as a lane: a view of the whole timeline fills it, a drag of it moves along the
 axis, and a drag of either end of it zooms, as far out as you like: past an end of the timeline

@@ -393,7 +393,6 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
     // A cubic from (0, 0) to (1, 1) with its handles a third and two thirds along is a cubic in
     // the progress itself, so the two handle heights nearest the take are a least squares.
     let basis = |x: f64| (3.0 * (1.0 - x) * (1.0 - x) * x, 3.0 * (1.0 - x) * x * x, x * x * x);
-    // The stretches still to fit, the earliest on top, each from one sample to a later one.
     let mut open = vec![(0, run.len() - 1)];
     while let Some((from, to)) = open.pop() {
         // Past the most a curve holds, the rest is not fitted: the caller refuses the take.
@@ -402,7 +401,6 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
         }
         let (first, last) = (run[from], run[to]);
         let (dt, dv) = (last.at - first.at, last.value - first.value);
-        // Each point by the sample it lies nearest, its beat and the take's value there.
         let line = (from..to).flat_map(|i| (0..POINTS).map(move |k| (i, k as f64 / POINTS as f64)));
         let take = || line.clone().map(|(i, f)| (i + usize::from(f >= 0.5), run[i].at + (run[i + 1].at - run[i].at) * f, run[i].value + (run[i + 1].value - run[i].value) * f));
         let level = dv.abs() <= tolerance / 100.0;

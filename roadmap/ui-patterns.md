@@ -2,7 +2,7 @@
 
 An audit of every panel against `$lib/ui` and `panelty`. Shipped: `FieldGrid` (the grid a block
 of `Field row`s stands on, six users), `under` (where a menu drops from its button, five users),
-`fit` (the parts that fit, the others reported for a menu), `Catcher` (the layer under every
+`Catcher` (the layer under every
 popover, pick list and context menu that takes the press which closes it, so that press does
 nothing else; a tooltip, a combobox's list and the settings of a widget that is dragged while
 they are open have none), MIDI learn and the console's run
@@ -39,7 +39,7 @@ found by a subagent and is not checked line by line.
 - **A label beside a control, and a bar that is too narrow.** The timeline's bar labels `bpm`
   and `dur` with a class of its own; `Field` cannot, because its label is wide and its value
   wraps. A bar that does not fit wraps in the timeline, scrolls in a node-linked panel, and is
-  cut in the console; a track's head moves what does not fit into a menu. One inline form of
+  cut in the console, and a track's head scrolls. One inline form of
   `Field`, and one answer for a bar.
 - **A section.** A line between two groups of settings is written five ways and a heading over
   a group four ways (the inspector, a track's head, the state form, the metadata panel, the
