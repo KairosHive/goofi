@@ -27,10 +27,18 @@ export const GRIDS: Record<string, readonly [number, boolean]> = {
 	'1/16 beat': [0.0625, true]
 };
 /** The keyboard for `notes` with what a panel `set` of it: two octaves from C3 and every note the
- * track holds, chromatic from C, on quarter beats, but for what is set. */
+ * track holds, chromatic from C, on quarter beats, but for what is set. What is set and is no
+ * keyboard's, as a file or an agent may put in a panel's state, is as if unset. */
 export function keyboard(notes: Note[], set: Partial<Keyboard> = {}): Keyboard {
 	const pitches = notes.map((n) => n.pitch);
-	return { range: set.range ?? [Math.min(48, ...pitches), Math.max(72, ...pitches)], scale: set.scale ?? Object.keys(SCALES)[0], root: set.root ?? NOTE_NAMES[0], grid: set.grid ?? '1/4 beat' };
+	const key = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 127;
+	const range = Array.isArray(set.range) && key(set.range[0]) && key(set.range[1]) && set.range[0] < set.range[1] ? set.range : null;
+	return {
+		range: range ?? [Math.min(48, ...pitches), Math.max(72, ...pitches)],
+		scale: set.scale !== undefined && set.scale in SCALES ? set.scale : Object.keys(SCALES)[0],
+		root: (NOTE_NAMES as readonly string[]).includes(set.root ?? '') ? set.root! : NOTE_NAMES[0],
+		grid: set.grid !== undefined && set.grid in GRIDS ? set.grid : '1/4 beat'
+	};
 }
 
 /** The seconds a beat of the tempo lasts; a tempo of nothing has the longest beat there is. */

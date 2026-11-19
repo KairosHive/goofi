@@ -41,7 +41,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A name the manager refuses, or one that is no identifier, stays in the name field until the
   name next moves: the shared live value holds a commit as pending. The machine's attribute
   form has the same fault.
-- A panel keeps the id of a removed track in `state.hidden` and `state.sizes`; nothing reads it.
+- A panel keeps the id of a removed track in `state.hidden`, `state.sizes` and
+  `state.keyboards`; nothing reads it.
 - The range bar stands for everything from 0 to the view, so far along the axis a small drag
   of it is a long time.
 - A keyboard's scale is the panel's: what it marks and what a gesture lands on. A note set by an
@@ -57,8 +58,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   moved. A position put past its end folds into it.
 - A track dragged onto a param writes the expression that reads it; no test drops one there.
 - A track dragged over the others shows no line where it will land.
-- A section that lies past the timeline's length is taken as it is: the position leaves the
-  length for it.
+- A section stands in the length's place: the position plays up to it, past the length where
+  the section lies past it, and loops in it until it is cleared.
 - What a box picks moves in time as one; in pitch each note lands on its own scale and keyboard,
   so a pick pushed past the keyboard's edge closes up. A box has no door under a finger.
 - A track is lifted by the free edge of what it says about itself; under a finger the browser

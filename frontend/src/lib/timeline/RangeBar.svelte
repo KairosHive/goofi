@@ -74,7 +74,8 @@
 				}
 				onChange(now);
 			},
-			commit: () => onCommit?.(now),
+			// A press that moved nothing is no edit.
+			commit: () => void (now !== was && onCommit?.(now)),
 			cancel: () => onChange(was)
 		});
 	}

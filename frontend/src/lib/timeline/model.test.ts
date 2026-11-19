@@ -128,5 +128,8 @@ describe('keyboard', () => {
 		expect(keyboard([])).toEqual({ range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat' });
 		expect(keyboard(notes.kind === 'note' ? notes.notes : []).range).toEqual([48, 90]);
 		expect(keyboard([{ at: 0, length: 1, pitch: 30, velocity: 1 }], { range: [60, 72], grid: '1 s' })).toEqual({ range: [60, 72], scale: 'chromatic', root: 'C', grid: '1 s' });
+		// What no keyboard has, from a file or an agent, is as if unset.
+		expect(keyboard([], { range: [72, 60], scale: 'none', root: 'H', grid: '1/7 beat' })).toEqual(keyboard([]));
+		expect(keyboard([], { range: [60.5, 200] as [number, number] }).range).toEqual([48, 72]);
 	});
 });

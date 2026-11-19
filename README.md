@@ -246,7 +246,8 @@ them all together. A `note` track holds notes; it writes the held velocities to
 its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, the
 panel's own: from a lowest to a highest pitch, marking the notes of a scale and a root, the ones a
 `Quantize` node offers, and a grid; a note made or moved on the lane lands on that scale and that
-grid. A `curve` track is one line
+grid. Until its bar is dragged, a keyboard shows two octaves from C3 and every note the track
+holds; then it shows what was set, and a note outside that lies off the lane. A `curve` track is one line
 through keyframes: the value eases from a keyframe to the next by that keyframe's curve, holds
 outside them, and is `vars.<track>.value`. A keyframe's curve is `smooth` unless it is given
 another: the value goes through the keyframe at the slope the keyframes beside it give it, so a
