@@ -2,8 +2,8 @@
      axis in view: a view of the whole axis fills the bar. A drag of the thumb pans, and a drag of
      the handle at either end of it moves that end alone, which zooms. A view that reaches past an
      end of the axis folds there: the thumb stays at the bar's end, and that end of it takes a
-     colour, as far as the view is past the axis at first and then less and less, so a view has
-     no widest and the fold never leaves the bar. -->
+     colour, in proportion to how far the view is past the axis for about the axis's own length,
+     and then less and less, so a view has no widest and the fold never leaves the bar. -->
 <script lang="ts">
 	import { beginDrag } from 'panelty';
 	import { NARROWEST_VIEW as LEAST, barPlace, barPoint } from './model';

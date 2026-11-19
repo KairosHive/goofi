@@ -50,10 +50,15 @@ describe('the timeline model', () => {
 	it('folds a view past an end of the axis into the end of its bar', () => {
 		// Inside the axis a point stands where it is: a view of the whole axis is the whole bar.
 		expect([0, 4, 8].map((at) => barPlace(at, 8))).toEqual([0, 0.5, 1]);
-		// Past an end it is that far past at first, then less and less, and never 0.15 of the bar.
-		expect(barPlace(8.08, 8) - 1).toBeCloseTo(0.01, 2);
-		const far = [9, 16, 80, 8000].map((at) => barPlace(at, 8) - 1);
-		expect(far.every((p, i) => p < 0.15 && (i === 0 || p > far[i - 1]))).toBe(true);
+		// Past an end the place goes on in proportion, a twelfth of the bar for a length of the
+		// axis: twice as far past is twice as far on, to a tenth, for the first length of the axis.
+		const past = (lengths: number): number => barPlace(8 + 8 * lengths, 8) - 1;
+		expect(past(0.1)).toBeCloseTo(0.4 * 0.1 / 5.1, 12);
+		expect(past(1) / past(0.5)).toBeGreaterThan(1.8);
+		// Then less and less: half of the most it folds into at five lengths, and never the most.
+		expect(past(5)).toBeCloseTo(0.2, 12);
+		const far = [1, 10, 100, 1e4, 1e6].map(past);
+		expect(far.every((p, i) => p < 0.4 && (i === 0 || p > far[i - 1]))).toBe(true);
 		expect(barPlace(-16, 8)).toBeCloseTo(1 - barPlace(24, 8), 12);
 		// A place on the bar is one point of the axis, there and back.
 		for (const at of [-40, -1, 0, 3, 8, 9, 100]) expect(barPoint(barPlace(at, 8), 8)).toBeCloseTo(at, 6);
