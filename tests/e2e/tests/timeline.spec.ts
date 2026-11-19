@@ -175,6 +175,20 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(keys.locator('select[aria-label="Lowest"]')).toHaveCount(0);
 		await sectionOpen('keyboard').click();
 		await expect(keys.locator('select[aria-label="Lowest"] option:checked')).toHaveText('C3');
+		// A pointer on a section's name lights the ground under all the name folds, the name's
+		// line and the settings under it, from one edge of what the track says to the keyboard.
+		const lit = (): Promise<{ ground: string; size: number[] }> =>
+			sectionOpen('keyboard').evaluate((el) => {
+				const under = getComputedStyle(el, '::after');
+				return { ground: under.backgroundColor, size: [under.width, under.height].map((v) => Math.round(parseFloat(v))) };
+			});
+		const [whole, said, piano] = [(await keys.getByTestId('track-section-keyboard').boundingBox())!, (await keys.locator('.info').boundingBox())!, (await keys.getByTestId('track-keyboard').boundingBox())!];
+		await page.mouse.move(piano.x + piano.width + 40, piano.y + 4);
+		await expect.poll(async () => (await lit()).ground, 'no ground at rest').toBe('rgba(0, 0, 0, 0)');
+		await sectionOpen('keyboard').hover();
+		await expect.poll(async () => (await lit()).ground).not.toBe('rgba(0, 0, 0, 0)');
+		expect((await lit()).size, 'the lit ground is the whole section').toEqual([Math.round(whole.width), Math.round(whole.height)]);
+		expect([Math.round(whole.x), Math.round(whole.x + whole.width)], 'the section goes from edge to keyboard').toEqual([Math.round(said.x), Math.round(piano.x)]);
 		await choose(page, keys, 'Highest', '60');
 		await expect(board).toHaveCount(13);
 		await choose(page, keys, 'Scale', 'pentatonic_major');

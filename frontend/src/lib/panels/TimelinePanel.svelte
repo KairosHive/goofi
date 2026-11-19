@@ -766,7 +766,9 @@
 		display: flex;
 		flex-direction: column;
 		--number-width: max(calc(var(--space-8) * 1.75), var(--hit));
-		padding: var(--space-2);
+		/* The room at its sides, which a section in it reaches across. */
+		--head-pad: var(--space-2);
+		padding: var(--head-pad);
 		overflow: hidden;
 		font-size: var(--fs-small);
 		color: var(--text-muted);
@@ -774,7 +776,7 @@
 	}
 	/* A note track's keyboard stands between what it says and its lane, a key per row. */
 	.notes .info {
-		padding-right: calc(var(--keys) + var(--space-2));
+		padding-right: calc(var(--keys) + var(--head-pad));
 	}
 	.keys {
 		position: absolute;
@@ -1025,7 +1027,7 @@
 		border-left: 1px solid var(--border);
 	}
 	.vertical .notes .info {
-		padding: var(--space-2) var(--space-2) calc(var(--keys) + var(--space-2));
+		padding: var(--head-pad) var(--head-pad) calc(var(--keys) + var(--head-pad));
 	}
 	.vertical .keys {
 		inset: calc(var(--side) - var(--keys)) var(--pad) auto var(--pad);

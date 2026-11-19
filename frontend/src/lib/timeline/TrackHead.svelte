@@ -230,12 +230,10 @@
 </div>
 <div class="groups" bind:this={room} use:fit={fitted}>
 	{#each groups as name (name)}
-		<div class="group" data-fit={name} data-testid={`track-section-${name}`}>
-			<Disclosure bind:open={() => open[name], (to) => unfold(name, to)} aside={name === 'record' ? recorder : undefined}>
-				{#snippet summary()}{TITLES[name]}{/snippet}
-				<FieldGrid {stacked}>{@render group(name)}</FieldGrid>
-			</Disclosure>
-		</div>
+		<Disclosure class="group" data-fit={name} data-testid={`track-section-${name}`} stretched bind:open={() => open[name], (to) => unfold(name, to)} aside={name === 'record' ? recorder : undefined}>
+			{#snippet summary()}{TITLES[name]}{/snippet}
+			<FieldGrid {stacked}>{@render group(name)}</FieldGrid>
+		</Disclosure>
 	{/each}
 </div>
 
@@ -282,14 +280,18 @@
 		overflow-y: clip;
 	}
 	/* A section under its own name; a label in it is as narrow as its word, and its rows stand
-	   under the name with no margin of their own. */
-	.group {
+	   under the name with no margin of their own. The section is as wide as what the track says
+	   about itself, so the ground its name's hover lights goes from edge to edge, as a param's
+	   own row does. */
+	.groups > :global(.group) {
 		flex: none;
+		margin-inline: calc(0px - var(--head-pad, 0px));
+		padding-inline: var(--head-pad, 0px);
 		--field-label-min: 0px;
 		--disclosure-body-pad: 0 0 var(--space-2);
 	}
 	/* The root is as wide as a note's name, and the scale takes the rest. */
-	.group :global(.root),
+	.groups :global(.root),
 	section :global(.root) {
 		flex: 0 0 auto;
 	}

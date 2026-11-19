@@ -1,6 +1,8 @@
 <!-- Disclosure — a caret plus a `summary` that mounts `children` on toggle, with an `aside` control
      beside the summary that keeps its own gestures. `--disclosure-surface` and `--disclosure-hover`
-     give the summary row a ground of its own; `--disclosure-body-pad` sets the body's padding. -->
+     give the summary row a ground of its own; `--disclosure-body-pad` sets the body's padding.
+     `stretched` puts the hover's ground under all the summary folds, so a pointer on the summary
+     shows how far the fold goes. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -11,6 +13,7 @@
 		aside,
 		children,
 		open = $bindable(false),
+		stretched = false,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
@@ -20,11 +23,13 @@
 		children?: Snippet;
 		/** Whether the body shows; a parent may open a row, and the caret toggles it either way. */
 		open?: boolean;
+		/** The summary's hover lights all it folds: its own line with the aside, and the body. */
+		stretched?: boolean;
 	} = $props();
 	const bodyId = $props.id();
 </script>
 
-<div {...rest} class={`ui-disclosure ${klass}`.trim()}>
+<div {...rest} class={`ui-disclosure ${klass}`.trim()} class:stretched>
 	<div class="ui-disclosure-head">
 		<button
 			type="button"
@@ -59,7 +64,6 @@
 		display: inline-flex;
 		align-items: center;
 		flex: 0 0 auto;
-		width: 40%;
 		min-width: 0;
 	}
 	.ui-disclosure-summary {
@@ -81,8 +85,30 @@
 		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
+	/* The summary has no ground of its own, and stands on any: its hover lifts the one it is on. */
 	.ui-disclosure-summary:hover {
-		background: var(--disclosure-hover, var(--surface-2));
+		background: var(--disclosure-hover, var(--hover-fill));
+	}
+	/* Stretched, the hover's ground is one layer under the whole disclosure, behind what is in it;
+	   the press stays the summary's own. */
+	.ui-disclosure.stretched {
+		position: relative;
+		isolation: isolate;
+	}
+	.stretched .ui-disclosure-summary::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		z-index: -1;
+		border-radius: var(--radius-sm);
+		pointer-events: none;
+		transition: background var(--dur-fast) var(--ease);
+	}
+	.stretched .ui-disclosure-summary:hover {
+		background: var(--disclosure-surface, transparent);
+	}
+	.stretched .ui-disclosure-summary:hover::after {
+		background: var(--disclosure-hover, var(--hover-fill));
 	}
 	.ui-disclosure-summary:focus-visible {
 		outline-offset: -2px;
