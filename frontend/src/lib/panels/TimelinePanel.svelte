@@ -89,9 +89,16 @@
 		const [x, y] = [(p.clientX - box.left) / box.width, (p.clientY - box.top) / box.height];
 		return vertical ? [y, x] : [x, 1 - y];
 	}
-	/** Where what sits `low` up a lane, `size` high, begins across it: a row counts from its top,
-	 * a column from its left. */
-	const across = (low: number, size = 0): string => share(vertical ? low : 1 - low - size);
+	/** Where a thing stands on a lane, as `--x`, `--y`, `--w` and `--h`: `a` along the axis and `l`
+	 * long, `c` up it and `s` tall, each a share of the lane. A row counts across from its top, a
+	 * column lays the axis down. */
+	const stood = (a: number, l: number, c: number, s: number): string =>
+		vertical ? `--x: ${share(c)}; --y: ${share(a)}; --w: ${share(s)}; --h: ${share(l)}` : `--x: ${share(a)}; --y: ${share(1 - c - s)}; --w: ${share(l)}; --h: ${share(s)}`;
+	/** A line across the whole stack at `at`, a share of the lanes' length, and `long` along it. */
+	const lined = (at: number, long: string): string => {
+		const from = `calc(var(--side) + (100% - var(--side)) * ${at})`;
+		return vertical ? `--x: 0; --y: ${from}; --w: 100%; --h: ${long}` : `--x: ${from}; --y: 0; --w: ${long}; --h: 100%`;
+	};
 
 	/** A press on the ruler puts the clock there, and outside the loop's section clears it; a drag
 	 * along it marks the section the clock loops in. A double click looks at the section it is on,
@@ -550,7 +557,8 @@
 				{@const t = g.timeline[id]}
 				{@const chosen = pickedIn(id)}
 				{@const [lo, hi] = t.range}
-				{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
+				{@const rows = hi - lo + 1}
+				{@const board = t.kind === 'note' ? Array.from({ length: rows }, (_, i) => lo + i) : []}
 				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<section
@@ -559,7 +567,7 @@
 					data-testid={`track-${t.name}`}
 					data-track={id}
 					style:--size={size ? `${size}px` : null}
-					style:--rows={t.kind === 'note' ? hi - lo + 1 : null}
+					style:--rows={t.kind === 'note' ? rows : null}
 					oncontextmenu={(e) => {
 						e.preventDefault();
 						trackMenu(id, { x: e.clientX, y: e.clientY });
@@ -610,17 +618,14 @@
 									<path d={gridPath(view[0], view[1], gridOf(t), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#if over?.track === id}
-									<div class="cell" data-testid="track-cell" style:--a={share(along(over.at))} style:--l={share(gridOf(t) / width)} style:--c={across((over.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+									<div class="cell" data-testid="track-cell" style={stood(along(over.at), gridOf(t) / width, (over.pitch - lo) / rows, 1 / rows)}></div>
 								{/if}
 								{#each t.notes as n, i}
 									<div
 										class="note"
 										class:picked={chosen.includes(i)}
 										data-item={i}
-										style:--a={share(along(n.at))}
-										style:--l={share((n.length) / width)}
-										style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
-										style:--s={share(1 / (hi - lo + 1))}
+										style={stood(along(n.at), n.length / width, (n.pitch - lo) / rows, 1 / rows)}
 										style:--v={0.4 + 0.6 * n.velocity}
 										onpointerdown={(e) => {
 											hold(e, id);
@@ -637,7 +642,7 @@
 								{/each}
 								<!-- What a recording has taken so far, until the take is the track's. -->
 								{#each taken(takes[id]) as [at, length, pitch]}
-									<div class="note taking" data-testid="track-taking" style:--a={share(along(at))} style:--l={share(length / width)} style:--c={across((pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))} style:--s={share(1 / (hi - lo + 1))}></div>
+									<div class="note taking" data-testid="track-taking" style={stood(along(at), length / width, (pitch - lo) / rows, 1 / rows)}></div>
 								{/each}
 							{:else}
 								<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
@@ -645,7 +650,7 @@
 									<path class="taking" data-testid="track-taking" d={takePath(takes[id] ?? [], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#each t.keys as k, i}
-									<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => {
+									<span class="key" class:picked={chosen.includes(i)} data-item={i} style={stood(along(k.at), 0, (k.value - lo) / (hi - lo || 1), 0)} onpointerdown={(e) => {
 										hold(e, id);
 										dragItem(e, id, t, i);
 									}}
@@ -665,17 +670,17 @@
 			<!-- The loop's section, the timeline's ends and the clock's position, across the head
 			     and every track. -->
 			{#if band && band[1] > view[0] && band[0] < view[1]}
-				{@const from = clamp(along(band[0]), 0, 1)}
-				<div class="band" data-testid="timeline-loop" style:--a={from} style:--l={clamp(along(band[1]), 0, 1) - from}></div>
+				{@const [from, to] = [clamp(along(band[0]), 0, 1), clamp(along(band[1]), 0, 1)]}
+				<div class="band" data-testid="timeline-loop" style={lined(from, `calc((100% - var(--side)) * ${to - from})`)}></div>
 			{/if}
 			{#if box}
 				<div class="box" data-testid="timeline-box" style:left={`${box.left}px`} style:top={`${box.top}px`} style:width={`${box.width}px`} style:height={`${box.height}px`}></div>
 			{/if}
 			{#each ends as end (end)}
-				{#if within(end, view)}<div class="edge" data-testid="timeline-edge" style:--a={along(end)}></div>{/if}
+				{#if within(end, view)}<div class="edge" data-testid="timeline-edge" style={lined(along(end), '1px')}></div>{/if}
 			{/each}
 			{#if within(beat, view)}
-				<div class="playhead" data-testid="timeline-playhead" style:--a={along(beat)}></div>
+				<div class="playhead" data-testid="timeline-playhead" style={lined(along(beat), 'max(2px, var(--space-1))')}></div>
 			{/if}
 		</div>
 		{#if shown.length === 0}
@@ -719,8 +724,8 @@
 </ConfirmDialog>
 
 <style>
-	/* Along the axis a thing is placed by `--a` and is `--l` long; across it, by `--c` and `--s`.
-	   A row reads them as left, width, top and height; a column the other way round. */
+	/* A thing on a lane or across the stack stands at `--x`, `--y`, `--w` by `--h`, which the
+	   script lays out for the panel's orientation; what else turns with it is a token here. */
 	.timeline {
 		/* What a track says about itself, beside its lane. A pitch's row in a note lane. */
 		--side: calc(var(--space-8) * 10);
@@ -731,6 +736,22 @@
 		/* The room before and after a lane's ground: a keyframe at the end of its range shows whole. */
 		--pad: var(--space-3);
 		--number-width: calc(var(--space-8) * 2.5);
+		/* The keys and the rows pile up from the bottom, each with a line at its top. */
+		--pile: column-reverse;
+		--line: 1px 0 0 0;
+		/* A note's end and a track's edge: where each lies, how large, and the cursor on it. */
+		--end-long: min(var(--space-3), 34%);
+		--end-inset: 0 0 0 auto;
+		--note-w-min: var(--space-2);
+		--note-h-min: 0px;
+		--end-w: var(--end-long);
+		--end-h: auto;
+		--stretch: ew-resize;
+		--grip-thick: var(--space-2);
+		--grip-inset: auto 0 0 0;
+		--grip-w: auto;
+		--grip-h: var(--grip-thick);
+		--resize: ns-resize;
 		display: flex;
 		flex-direction: column;
 		height: 100%;
@@ -804,7 +825,7 @@
 		position: absolute;
 		inset: var(--pad) auto var(--pad) calc(var(--side) - var(--keys));
 		display: flex;
-		flex-direction: column-reverse;
+		flex-direction: var(--pile);
 		width: var(--keys);
 	}
 	.keys span {
@@ -813,7 +834,8 @@
 		align-items: center;
 		min-width: 0;
 		min-height: 0;
-		border-top: 1px solid var(--bg);
+		border: solid var(--bg);
+		border-width: var(--line);
 		background: var(--text-dim);
 		color: var(--bg);
 	}
@@ -898,12 +920,13 @@
 		position: absolute;
 		inset: 0;
 		display: flex;
-		flex-direction: column-reverse;
+		flex-direction: var(--pile);
 		pointer-events: none;
 	}
 	.rows span {
 		flex: 1 1 0;
-		border-top: 1px solid var(--bg);
+		border: solid var(--bg);
+		border-width: var(--line);
 	}
 	.rows .black {
 		background: var(--surface-1);
@@ -917,18 +940,18 @@
 	}
 	.cell {
 		position: absolute;
-		left: var(--a);
-		top: var(--c);
-		width: var(--l);
-		height: var(--s);
+		left: var(--x);
+		top: var(--y);
+		width: var(--w);
+		height: var(--h);
 	}
 	/* A note is inside its cells, clear of the lines at its top and its start. */
 	.note {
 		position: absolute;
-		left: calc(var(--a) + 1px);
-		top: calc(var(--c) + 1px);
-		width: calc(var(--l) - 1px);
-		height: calc(var(--s) - 1px);
+		left: calc(var(--x) + 1px);
+		top: calc(var(--y) + 1px);
+		width: calc(var(--w) - 1px);
+		height: calc(var(--h) - 1px);
 	}
 	.cell {
 		background: var(--hover-fill);
@@ -941,16 +964,18 @@
 	path.taking {
 		stroke: var(--danger);
 	}
+	/* Never more of a short note than its last third: the rest is the note's own. */
 	.end {
 		position: absolute;
-		inset: 0 0 0 auto;
-		/* Never more of a short note than its last third: the rest is the note's own. */
-		width: min(var(--space-3), 34%);
-		cursor: ew-resize;
+		inset: var(--end-inset);
+		width: var(--end-w);
+		height: var(--end-h);
+		cursor: var(--stretch);
 	}
-	/* A note's fill is as strong as its velocity. */
+	/* A note's fill is as strong as its velocity; the shortest still shows. */
 	.note {
-		min-width: var(--space-2);
+		min-width: var(--note-w-min);
+		min-height: var(--note-h-min);
 		border-radius: var(--radius-sm);
 		background: color-mix(in srgb, var(--accent) calc(var(--v, 1) * 100%), transparent);
 		cursor: grab;
@@ -971,8 +996,8 @@
 	/* Placed by its centre with no transform: a transform would keep its hit area above the other dots. */
 	.key {
 		position: absolute;
-		left: calc(var(--a) - var(--space-5) / 2);
-		top: calc(var(--c) - var(--space-5) / 2);
+		left: calc(var(--x) - var(--space-5) / 2);
+		top: calc(var(--y) - var(--space-5) / 2);
 		width: var(--space-5);
 		height: var(--space-5);
 		border-radius: 50%;
@@ -996,9 +1021,10 @@
 	}
 	.grip {
 		position: absolute;
-		inset: auto 0 0 0;
-		height: var(--space-2);
-		cursor: ns-resize;
+		inset: var(--grip-inset);
+		width: var(--grip-w);
+		height: var(--grip-h);
+		cursor: var(--resize);
 		touch-action: none;
 		user-select: none;
 	}
@@ -1007,24 +1033,38 @@
 	.edge,
 	.playhead {
 		position: absolute;
-		inset: 0 auto 0 calc(var(--side) + (100% - var(--side)) * var(--a));
+		left: var(--x);
+		top: var(--y);
+		width: var(--w);
+		height: var(--h);
 		z-index: 3;
 		pointer-events: none;
 	}
 	.edge {
-		width: 1px;
 		background: var(--text);
 	}
 	.band {
-		width: calc((100% - var(--side)) * var(--l));
 		background: var(--accent-fill);
 	}
 	.playhead {
-		width: max(2px, var(--space-1));
 		background: var(--danger);
 	}
 
 	/* ---- a panel taller than wide: the time runs down, the tracks stand as columns. */
+	.vertical {
+		--pile: row;
+		--line: 0 0 0 1px;
+		--end-inset: auto 0 0 0;
+		--note-w-min: 0px;
+		--note-h-min: var(--space-2);
+		--end-w: auto;
+		--end-h: var(--end-long);
+		--stretch: ns-resize;
+		--grip-inset: 0 0 0 auto;
+		--grip-w: var(--grip-thick);
+		--grip-h: auto;
+		--resize: ew-resize;
+	}
 	.vertical .stack {
 		display: flex;
 		width: max-content;
@@ -1053,13 +1093,8 @@
 	}
 	.vertical .keys {
 		inset: calc(var(--side) - var(--keys)) var(--pad) auto var(--pad);
-		flex-direction: row;
 		width: auto;
 		height: var(--keys);
-	}
-	.vertical .keys span {
-		border-top: 0;
-		border-left: 1px solid var(--bg);
 	}
 	.vertical .lane {
 		min-height: 0;
@@ -1094,62 +1129,6 @@
 		border-left: 0;
 		border-top: 1px solid var(--border-strong);
 	}
-	.vertical .rows {
-		flex-direction: row;
-	}
-	.vertical .rows span {
-		border-top: 0;
-		border-left: 1px solid var(--bg);
-	}
-	.vertical .cell {
-		left: var(--c);
-		top: var(--a);
-		width: var(--s);
-		height: var(--l);
-	}
-	.vertical .note {
-		left: calc(var(--c) + 1px);
-		top: calc(var(--a) + 1px);
-		width: calc(var(--s) - 1px);
-		height: calc(var(--l) - 1px);
-	}
-	.vertical .note {
-		min-width: 0;
-		min-height: var(--space-2);
-	}
-	.vertical .end {
-		inset: auto 0 0 0;
-		width: auto;
-		height: min(var(--space-3), 34%);
-		cursor: ns-resize;
-	}
-	.vertical .key {
-		left: calc(var(--c) - var(--space-5) / 2);
-		top: calc(var(--a) - var(--space-5) / 2);
-	}
-	.vertical .grip {
-		inset: 0 0 0 auto;
-		width: var(--space-2);
-		height: auto;
-		cursor: ew-resize;
-	}
-	.vertical .band,
-	.vertical .edge,
-	.vertical .playhead {
-		inset: calc(var(--side) + (100% - var(--side)) * var(--a)) 0 auto 0;
-	}
-	.vertical .edge {
-		width: auto;
-		height: 1px;
-	}
-	.vertical .band {
-		width: auto;
-		height: calc((100% - var(--side)) * var(--l));
-	}
-	.vertical .playhead {
-		width: auto;
-		height: max(2px, var(--space-1));
-	}
 
 	/* Under a finger a row is taller, a track's edge is thicker, and a keyframe takes a press a
 	   hit-size wide, behind every keyframe's own dot. */
@@ -1170,19 +1149,9 @@
 			inset: calc((100% - var(--hit)) / 2);
 			z-index: -1;
 		}
-		.grip {
-			height: var(--space-5);
-		}
-		.end {
-			width: min(var(--space-6), 34%);
-		}
-		.vertical .end {
-			width: auto;
-			height: min(var(--space-6), 34%);
-		}
-		.vertical .grip {
-			width: var(--space-5);
-			height: auto;
+		.timeline {
+			--end-long: min(var(--space-6), 34%);
+			--grip-thick: var(--space-5);
 		}
 	}
 </style>
