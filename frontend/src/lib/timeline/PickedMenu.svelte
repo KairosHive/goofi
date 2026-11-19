@@ -35,7 +35,7 @@
 	const pitches = $derived('pitch' in item ? [...new Set([...Array.from({ length: t.range[1] - t.range[0] + 1 }, (_, i) => t.range[1] - i), item.pitch])].sort((a, b) => b - a) : []);
 </script>
 
-<Popover {anchor} open onDismiss={onClose} role="group" aria-label={count > 1 ? `${count} ${what}s` : what} style="--popover-min-width: 0; --popover-radius: var(--radius-sm)" data-testid="picked-menu">
+<Popover {anchor} open onDismiss={onClose} role="group" aria-label={count > 1 ? `${count} ${what}s` : what} style="--popover-radius: var(--radius-sm)" data-testid="picked-menu">
 	<div class="body"><FieldGrid>
 		{#if 'pitch' in item}
 			<Field label="pitch" row doc="The key the note plays">
@@ -64,8 +64,6 @@
 <style>
 	.body {
 		width: 14rem;
-		max-width: calc(100dvw - 2 * var(--space-6));
-		padding: var(--space-3) var(--space-5);
 	}
 	.acts {
 		grid-column: 1 / -1;

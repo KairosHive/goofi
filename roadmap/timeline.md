@@ -33,7 +33,7 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A curve track's variable is `vars.<track>.value`, because every variable is in a group.
   Whether a track's value takes the track's name alone.
 - What a box picks is moved, set and taken out together; it is not copied, and no key deletes it.
-- The panel has no keyboard path to a note, a keyframe or a track's menu.
+- The panel has no keyboard path to a note or a keyframe.
 - Under a finger a note is one row high: it takes no hit-size press, because the rows beside
   it are notes too.
 - A drag writes its lane whole from the panel's replica, so an edit of that lane whose echo

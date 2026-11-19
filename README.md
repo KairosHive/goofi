@@ -237,8 +237,8 @@ A patch plays on one clock from the moment it loads, and by default it never end
 expression is its position in seconds, and so is `vars.clock.time`. `goofi clock set --no-playing`
 pauses the position and `--time 12` puts it at a second; the engines run on through a pause, and
 a recording never stops. `vars.clock.bpm` is the tempo. `vars.clock.length` is the timeline's
-length in beats: with one, the position restarts from 0 when it reaches it, and
-`vars.clock.progress` is how far along it is, 0 to 1. A length of 0 is endless.
+length in beats: with one, the position restarts from 0 when it reaches it. A length of 0 is
+endless.
 
 The timeline holds tracks on that position, their times in beats, so a change of the tempo moves
 them all together. A `note` track holds notes; it writes the held velocities to
@@ -293,7 +293,8 @@ limits at the bar's ends, each a number a click makes a field. A drag of the bar
 range, a drag of an end changes it, and a double click fits it to what the track holds; a
 double click on the bar above the ruler looks at everything too. Beside its lane a track says its
 name, with the button to its menu, and its settings in named sections that fold; a track too
-short for them scrolls them. The recording's section has the record
+short for them scrolls them. A note track is as tall as its keyboard has keys, until its edge is
+dragged. The recording's section has the record
 button on its line and begins folded; a curve's input in it is a param's own row, so it takes
 an expression, a MIDI learn, or a node, a variable or a state dropped on it. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
 taller than wide the time runs down and the tracks stand as columns.
