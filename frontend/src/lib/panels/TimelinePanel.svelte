@@ -491,6 +491,18 @@
 			}
 		});
 	}
+	/** A note's or a keyframe's own events: its press, which a finger may hold, and its right click. */
+	const itemEvents = (id: string, t: Track, i: number) => ({
+		onpointerdown: (e: PointerEvent): void => {
+			hold(e, id);
+			dragItem(e, id, t, i);
+		},
+		oncontextmenu: (e: MouseEvent): void => {
+			e.preventDefault();
+			e.stopPropagation();
+			pickedMenu(id, e.currentTarget as HTMLElement);
+		}
+	});
 	/** A drag with Shift held draws a box: every note and keyframe it touches is picked. */
 	let box = $state<{ left: number; top: number; width: number; height: number } | null>(null);
 	function boxPick(e: PointerEvent): void {
@@ -649,15 +661,7 @@
 										data-item={i}
 										style={stood(along(n.at), n.length / width, (n.pitch - lo) / rows, 1 / rows)}
 										style:--v={0.4 + 0.6 * n.velocity}
-										onpointerdown={(e) => {
-											hold(e, id);
-											dragItem(e, id, t, i);
-										}}
-										oncontextmenu={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											pickedMenu(id, e.currentTarget);
-										}}
+										{...itemEvents(id, t, i)}
 									>
 										<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
 									</div>
@@ -672,16 +676,7 @@
 									<path class="taking" data-testid="track-taking" d={takePath(takes[id] ?? [], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#each t.keys as k, i}
-									<span class="key" class:picked={chosen.includes(i)} data-item={i} style={stood(along(k.at), 0, (k.value - lo) / (hi - lo || 1), 0)} onpointerdown={(e) => {
-										hold(e, id);
-										dragItem(e, id, t, i);
-									}}
-									oncontextmenu={(e) => {
-										e.preventDefault();
-										e.stopPropagation();
-										pickedMenu(id, e.currentTarget);
-									}}
-								></span>
+									<span class="key" class:picked={chosen.includes(i)} data-item={i} style={stood(along(k.at), 0, (k.value - lo) / (hi - lo || 1), 0)} {...itemEvents(id, t, i)}></span>
 								{/each}
 							{/if}
 						</div>
