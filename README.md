@@ -289,7 +289,11 @@ under the pointer. A double click on the ruler looks at everything
 again. A line across the tracks marks where the timeline begins, and one where it ends when it
 has a length. A track's edge resizes it, as far as it is
 dragged: held at the end of the track area, the area scrolls; a double click on the edge gives
-the track the room the panel shows, and scrolls to it. Beside its lane a track says its
+the track the room the panel shows, and scrolls to it. Between what a track says and its lane
+is a bar of what the lane shows: the keys of a keyboard, or the values of a curve with its two
+limits at the bar's ends, each a number a click makes a field. A drag of the bar moves that
+range, a drag of an end changes it, and a double click fits it to what the track holds; a
+double click on the bar above the ruler looks at everything too. Beside its lane a track says its
 name and its settings in named sections that fold. The recording's section has the record
 button on its line and begins folded; a curve's input in it is a param's own row, so it takes
 an expression, a MIDI learn, or a node, a variable or a state dropped on it. A section unfolded

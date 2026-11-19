@@ -1,6 +1,6 @@
 <!-- What a track says about itself, beside its lane: its name with hide and delete, then its
      settings in named sections that fold: the recording with its button on the section's own
-     line, and the lane's own settings. The sections that do not fit in the room the track has go,
+     line, and a keyboard's scale and grid. The sections that do not fit in the room the track has go,
      whole, behind one menu in the title. What is picked in the lane has its settings in a menu
      of its own, on the lane. -->
 <script lang="ts" module>
@@ -11,10 +11,8 @@
 		port: string;
 		group: string;
 	}
-	const PITCHES = Array.from({ length: 128 }, (_, p) => String(p));
 	/** A pitch as a keyboard names it: C4 is 60. */
 	export const pitchName = (pitch: number): string => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
-	const PITCH_NAMES = Object.fromEntries(PITCHES.map((p) => [p, pitchName(Number(p))]));
 </script>
 
 <script lang="ts">
@@ -55,12 +53,12 @@
 		if (to !== t.name && isValidIdentifier(to)) onEdit({ to });
 	};
 
-	/** A track's sections of settings, in the order they stand: the recording, then the lane's own. */
-	const TITLES = { record: 'Record', keyboard: 'Keyboard', range: 'Range' };
+	/** A track's sections of settings, in the order they stand: the recording, then a keyboard's. */
+	const TITLES = { record: 'Record', keyboard: 'Keyboard' };
 	type Group = keyof typeof TITLES;
-	const groups = $derived<Group[]>(['record', t.kind === 'note' ? 'keyboard' : 'range']);
+	const groups = $derived<Group[]>(['record', ...(t.kind === 'note' ? (['keyboard'] as const) : [])]);
 	/** The sections that are unfolded: the recording's settings are set once, so it begins folded. */
-	const open = $state<Record<Group, boolean>>({ record: false, keyboard: true, range: true });
+	const open = $state<Record<Group, boolean>>({ record: false, keyboard: true });
 	/** A section was unfolded by hand and its room is not yet found: until the page has laid the
 	 * section out, which a measure of the room follows at once. */
 	let unfolded = false;
@@ -118,22 +116,12 @@
 
 {#snippet group(name: Group)}
 	{#if name === 'keyboard' && t.kind === 'note'}
-		<Field label="keys" row doc="The lowest and the highest pitch the keyboard shows" data-menu-row>
-			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [Number(p), t.range[1]] })} />
-			<Select aria-label="Highest" value={String(t.range[1])} options={PITCHES.slice(t.range[0] + 1)} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [t.range[0], Number(p)] })} />
-		</Field>
 		<Field label="scale" row doc="The scale whose notes the keyboard marks and a note lands on, and the note it starts on" data-menu-row>
 			<Select aria-label="Root" class="root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => onEdit({ root })} />
 			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => onEdit({ scale })} />
 		</Field>
 		<Field label="grid" row doc="The lines a note of this track snaps to when it is made or dragged; Shift or Ctrl lets it go free" data-menu-row>
 			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => onEdit({ grid })} />
-		</Field>
-	{:else if name === 'range' && t.kind === 'curve'}
-		<Field label="range" row doc="The lowest and the highest value the lane shows" data-menu-row>
-			{#each [0, 1] as end (end)}
-				<NumberInput aria-label={end ? 'Highest' : 'Lowest'} value={t.range[end]} step={0.1} onChange={(v) => onEdit({ range: t.range.with(end, v) })} />
-			{/each}
 		</Field>
 	{:else if name === 'record' && t.kind === 'note'}
 		<Field label="input" row doc="The MIDI device a recording takes its notes from; auto is the one there is, or the one picked when it begins" data-menu-row>

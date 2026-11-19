@@ -174,32 +174,50 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(keys.getByTestId('track-section-record').getByTestId('track-record')).toBeVisible();
 		await expect(sectionOpen('keyboard')).toHaveAttribute('aria-expanded', 'true');
 		await sectionOpen('keyboard').click();
-		await expect(keys.locator('select[aria-label="Lowest"]')).toHaveCount(0);
+		await expect(keys.locator('select[aria-label="Scale"]')).toHaveCount(0);
 		await sectionOpen('keyboard').click();
-		await expect(keys.locator('select[aria-label="Lowest"] option:checked')).toHaveText('C3');
+		await expect(keys.locator('select[aria-label="Scale"] option:checked')).toHaveText('chromatic');
 		// A pointer on a section's name lights the ground under all the name folds, the name's
-		// line and the settings under it, from one edge of what the track says to the keyboard.
+		// line and the settings under it, from one edge of what the track says to the bar of the
+		// keyboard's range.
 		const lit = (): Promise<{ ground: string; size: number[] }> =>
 			sectionOpen('keyboard').evaluate((el) => {
 				const under = getComputedStyle(el, '::after');
 				return { ground: under.backgroundColor, size: [under.width, under.height].map((v) => Math.round(parseFloat(v))) };
 			});
-		const [whole, said, piano] = [(await keys.getByTestId('track-section-keyboard').boundingBox())!, (await keys.locator('.info').boundingBox())!, (await keys.getByTestId('track-keyboard').boundingBox())!];
+		const [whole, said, piano, ranger] = [(await keys.getByTestId('track-section-keyboard').boundingBox())!, (await keys.locator('.info').boundingBox())!, (await keys.getByTestId('track-keyboard').boundingBox())!, (await keys.getByTestId('track-range-bar').boundingBox())!];
 		await page.mouse.move(piano.x + piano.width + 40, piano.y + 4);
 		await expect.poll(async () => (await lit()).ground, 'no ground at rest').toBe('rgba(0, 0, 0, 0)');
 		await sectionOpen('keyboard').hover();
 		await expect.poll(async () => (await lit()).ground).not.toBe('rgba(0, 0, 0, 0)');
 		expect((await lit()).size, 'the lit ground is the whole section').toEqual([Math.round(whole.width), Math.round(whole.height)]);
-		expect([Math.round(whole.x), Math.round(whole.x + whole.width)], 'the section goes from edge to keyboard').toEqual([Math.round(said.x), Math.round(piano.x)]);
-		await choose(page, keys, 'Highest', '60');
+		expect([Math.round(whole.x), Math.round(whole.x + whole.width)], 'the section goes from the edge to the range bar').toEqual([Math.round(said.x), Math.round(ranger.x)]);
+		// The keys the keyboard shows are a bar between what the track says and the keyboard, as
+		// long as every key there is, the highest at its top: an end dragged changes that end by
+		// whole keys, a drag of the bar moves both, and each drag is one step of the history.
+		expect(Math.round(ranger.x + ranger.width), 'the bar stands against the keyboard').toBe(Math.round(piano.x));
+		const keyRange = async (): Promise<number[]> => (await trackNamed(page, 'track0')).range;
+		const octave = (ranger.height * 12) / 128;
+		await dragBy(page, keys.getByTestId('track-range-from'), 0, octave);
+		await expect.poll(keyRange).toEqual([48, 60]);
 		await expect(board).toHaveCount(13);
+		await dragBy(page, keys.getByTestId('track-range-bar').locator('.thumb'), 0, octave);
+		await expect.poll(keyRange).toEqual([36, 48]);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(keyRange, 'the drag is one step back').toEqual([48, 60]);
+		// A drag past the last key stops there, as long as it was.
+		await dragBy(page, keys.getByTestId('track-range-bar').locator('.thumb'), 0, ranger.height);
+		await expect.poll(keyRange).toEqual([0, 12]);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(keyRange).toEqual([48, 60]);
 		await choose(page, keys, 'Scale', 'pentatonic_major');
 		await expect(keys.locator('.keys .out')).toHaveCount(7);
 		await choose(page, keys, 'Root', 'D');
 		await expect(keys.locator('.keys span:not(.out)').first()).toHaveAttribute('data-pitch', '50');
 		expect(await trackNamed(page, 'track0')).toMatchObject({ range: [48, 60], scale: 'pentatonic_major', root: 'D' });
 		await choose(page, keys, 'Root', 'C');
-		await choose(page, keys, 'Highest', '72');
+		await dragBy(page, keys.getByTestId('track-range-from'), 0, -octave);
+		await expect.poll(keyRange).toEqual([48, 72]);
 		await expect(board).toHaveCount(25);
 		const lane = keys.getByTestId('track-lane');
 		const ground = (await lane.boundingBox())!;
@@ -354,6 +372,27 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// A curve track is one line: a click on its lane makes a keyframe, and a drag moves it in
 		// time and in value.
 		const curve = fade;
+		// What a curve's lane shows is between two limits, at the two ends of the bar beside the
+		// lane: a click on one makes it a field, and a drag of the bar moves both by as much.
+		const limits = async (): Promise<number[]> => (await trackNamed(page, 'track1')).range;
+		await expect(curve.getByTestId('track-range-most')).toHaveText('1');
+		await expect(curve.getByTestId('track-range-least')).toHaveText('0');
+		// The bar is where a keyboard's is, as long as it, and each limit is beside its end of the
+		// bar: the most at its top, the least at its bottom.
+		const [rail, lined] = [(await curve.getByTestId('track-range-bar').boundingBox())!, (await panel.getByTestId('track-lead').getByTestId('track-range-bar').boundingBox())!];
+		expect([Math.round(rail.x), Math.round(rail.width)], 'the bars of the two kinds of track are in one line').toEqual([Math.round(lined.x), Math.round(lined.width)]);
+		const [most, least] = [(await curve.getByTestId('track-range-most').boundingBox())!, (await curve.getByTestId('track-range-least').boundingBox())!];
+		expect(most.x >= rail.x + rail.width - 1 && least.x >= rail.x + rail.width - 1, 'the limits are beside the bar').toBe(true);
+		expect([Math.abs(most.y - rail.y) <= 1, Math.abs(least.y + least.height - (rail.y + rail.height)) <= 1], 'each at its end of the bar').toEqual([true, true]);
+		await curve.getByTestId('track-range-most').click();
+		await curve.getByTestId('track-range-most-input').fill('2');
+		await curve.getByTestId('track-range-most-input').press('Enter');
+		await expect.poll(limits).toEqual([0, 2]);
+		await dragBy(page, curve.getByTestId('track-range-bar').locator('.thumb'), 0, 12);
+		await expect.poll(async () => (await limits())[0]).toBeLessThan(0);
+		expect((await limits())[1] - (await limits())[0], 'the range is as long as it was').toBeCloseTo(2, 2);
+		await rawCall(page, 'timeline track edit', { track: 'track1', range: [0, 1] });
+		await expect.poll(limits).toEqual([0, 1]);
 		const attr = curve.getByTestId('track-lane');
 		const box = (await attr.boundingBox())!;
 		const keysOf = async (): Promise<any[]> => (await trackNamed(page, 'track1')).keys;

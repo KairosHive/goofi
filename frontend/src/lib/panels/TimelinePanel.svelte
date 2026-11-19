@@ -23,6 +23,7 @@
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, wheelUnit, zoomed } from '$lib/timeline/model';
 	import PickedMenu from '$lib/timeline/PickedMenu.svelte';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
+	import TrackRange from '$lib/timeline/TrackRange.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
 	import { Bar, Button, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, Segmented, under, ContextMenu, isTextEditingTarget } from '$lib/ui';
@@ -646,7 +647,7 @@
 					</span>
 				</div>
 				<div class="axis">
-					<RangeBar {view} span={reach()} {vertical} onChange={(next) => (view = next)} />
+					<RangeBar {view} span={reach()} {vertical} onChange={(next) => (view = next)} onReset={() => (view = [0, reach()])} />
 					<div class="ruler" data-testid="timeline-ruler">
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div class="lane" bind:this={ruler} onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
@@ -700,6 +701,12 @@
 							onDelete={() => (asked = id)}
 							onGrow={(by) => grow(id, by)}
 						/>
+					</div>
+					<!-- What the lane shows across its axis, as a bar between what the track says and
+					     its lane, at the one place for every track: a keyboard's keys beside the
+					     keyboard, a curve's values with its two limits beside the bar's ends. -->
+					<div class="range">
+						<TrackRange {t} up={!vertical} onPreview={(range) => g.previewTrack(id, { range })} onCommit={(range) => edit(id, { range })} />
 					</div>
 					{#if t.kind === 'note'}
 						<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
@@ -842,6 +849,8 @@
 		/* What a track says about itself, beside its lane. A pitch's row in a note lane. */
 		--side: calc(var(--space-8) * 10);
 		--keys: calc(var(--space-8) * 1.5);
+		/* How thick a range bar is: `RangeBar`'s own, which this restates to give it its room. */
+		--bar: var(--space-6);
 		--row: var(--space-3);
 		/* The room before and after a lane's ground: a keyframe at the end of its range shows whole. */
 		--pad: var(--space-3);
@@ -909,9 +918,16 @@
 		color: var(--text-muted);
 		cursor: grab;
 	}
-	/* A note track's keyboard stands between what it says and its lane, a key per row. */
-	.notes .info {
-		padding-right: calc(var(--keys) + var(--head-pad));
+	/* Between what a track says and its lane stand the bar of what the lane shows, as long as
+	   the lane's ground, and after it the room a keyboard has: a note track's keyboard, a key
+	   per row, or a curve's two limits. */
+	.info {
+		padding-right: calc(var(--keys) + var(--bar) + var(--head-pad));
+	}
+	.range {
+		position: absolute;
+		inset: var(--pad) auto var(--pad) calc(var(--side) - var(--keys) - var(--bar));
+		width: var(--bar);
 	}
 	.keys {
 		position: absolute;
@@ -1187,8 +1203,13 @@
 		border-top: 0;
 		border-left: 1px solid var(--border);
 	}
-	.vertical .notes .info {
-		padding: var(--head-pad) var(--head-pad) calc(var(--keys) + var(--head-pad));
+	.vertical .info {
+		padding: var(--head-pad) var(--head-pad) calc(var(--keys) + var(--bar) + var(--head-pad));
+	}
+	.vertical .range {
+		inset: calc(var(--side) - var(--keys) - var(--bar)) var(--pad) auto var(--pad);
+		width: auto;
+		height: var(--bar);
 	}
 	.vertical .keys {
 		inset: calc(var(--side) - var(--keys)) var(--pad) auto var(--pad);
@@ -1313,6 +1334,9 @@
 		.timeline {
 			--row: var(--space-5);
 			--pad: var(--space-6);
+			--bar: var(--space-8);
+			/* A curve's limits stand in a column this wide, each a press as large as any. */
+			--keys: max(calc(var(--space-8) * 1.5), var(--hit));
 		}
 		.ground {
 			isolation: isolate;
