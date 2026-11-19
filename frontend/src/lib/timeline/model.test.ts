@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks } from './model';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned } from './model';
 
 const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -59,6 +59,20 @@ describe('the timeline model', () => {
 		for (const at of [-40, -1, 0, 3, 8, 9, 100]) expect(barPoint(barPlace(at, 8), 8)).toBeCloseTo(at, 6);
 		// Past where a fold ends, the place is the furthest point a fold holds.
 		expect(barPoint(2, 8)).toBe(barPoint(1.5, 8));
+	});
+
+	it('takes a turn of the wheel along the axis, and leaves a turn across it', () => {
+		const turn = (deltaX: number, deltaY: number, shiftKey = false, deltaMode = 0) => ({ deltaX, deltaY, deltaMode, shiftKey });
+		// Sideways along an axis that runs to the right, down along one that runs down.
+		expect([turned(turn(40, 0), false, 500), turned(turn(0, 40), false, 500)]).toEqual([40, 0]);
+		expect([turned(turn(40, 0), true, 500), turned(turn(0, -40), true, 500)]).toEqual([0, -40]);
+		// A slanted swipe goes the way it goes most, and one that goes both ways alike is across.
+		expect([turned(turn(40, 10), false, 500), turned(turn(10, 40), false, 500), turned(turn(40, 40), false, 500)]).toEqual([40, 0, 0]);
+		// Shift turns a wheel with one direction sideways, said in the turn or by the key alone.
+		expect([turned(turn(0, 40, true), false, 500), turned(turn(40, 0, true), false, 500)]).toEqual([40, 40]);
+		expect(turned(turn(0, 40, true), true, 500)).toBe(0);
+		// A turn counted in lines or in pages is that many pixels.
+		expect([turned(turn(3, 0, false, 1), false, 500), turned(turn(1, 0, false, 2), false, 500)]).toEqual([48, 500]);
 	});
 
 	it('draws a take as a line through its samples, begun again at each pass', () => {

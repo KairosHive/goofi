@@ -20,7 +20,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks } from '$lib/timeline/model';
+	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned } from '$lib/timeline/model';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
@@ -127,6 +127,21 @@
 		const at = view[0] + point(e, e.currentTarget as Element)[0] * width;
 		view = loop && within(at, loop) ? [loop[0], loop[1]] : [0, reach()];
 	};
+
+	/** A wheel turned along the axis, over a lane or the head's axis, moves the view as far as the
+	 * turn is long. A turn across the axis is the track area's own scroll, and one with Ctrl held
+	 * is the browser's zoom. */
+	let ruler = $state<HTMLElement | null>(null);
+	function onWheel(e: WheelEvent): void {
+		if (e.ctrlKey || !ruler || !(e.target as Element).closest('.lane, .axis')) return;
+		const length = (vertical ? ruler.clientHeight : ruler.clientWidth) || 1;
+		const by = (turned(e, vertical, length) / length) * width;
+		if (by === 0) return;
+		e.preventDefault();
+		view = [view[0] + by, view[1] + by];
+		// The cell under the pointer is another now.
+		over = null;
+	}
 
 	/** The beats between two lines of a note track's grid. */
 	const gridOf = (t: Extract<Track, { kind: 'note' }>): number => Math.max(0.001, GRIDS[t.grid][1] ? GRIDS[t.grid][0] : GRIDS[t.grid][0] / spb);
@@ -509,7 +524,7 @@
 	</Bar>
 	<div class="scroll thin-scrollbar">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
+		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick} onwheel={onWheel}>
 			<!-- The head: the clock's own controls in the corner, and beside them the view's bar
 			     over the ruler, each as long as a lane. -->
 			<div class="row head">
@@ -524,7 +539,7 @@
 					<RangeBar {view} span={reach()} {vertical} onChange={(next) => (view = next)} />
 					<div class="ruler" data-testid="timeline-ruler">
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="lane" onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
+						<div class="lane" bind:this={ruler} onpointerdown={onRuler} ondblclick={onRulerTwice} title="Press to put the clock here; drag to mark the section it loops in; double click to look at that section, or at everything">
 							{#each ticks(view[0], view[1]) as tick}<span class="tick" style:--a={share(along(tick))}>{tick}</span>{/each}
 							<!-- The loop's section and the clock's position on the ruler itself: the head
 							     stands over the lines that cross the tracks. -->

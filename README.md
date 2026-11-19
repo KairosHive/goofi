@@ -272,7 +272,9 @@ ruler places the clock, and a drag along it marks a section the clock loops in: 
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
 view, as long as a lane: a view of the whole timeline fills it, a drag of it moves along the
 axis, and a drag of either end of it zooms, as far out as you like: past an end of the timeline
-that end of the bar folds and takes a muted accent. A double click on the ruler looks at everything
+that end of the bar folds and takes a muted accent. A wheel turned along the axis over a lane
+or the ruler moves the view too: sideways, or with Shift held on a wheel that turns one way,
+and down in a panel taller than wide. A double click on the ruler looks at everything
 again. A track's edge resizes it, as far as it is
 dragged: held at the end of the track area, the area scrolls. Beside its lane a track says its
 name and its settings in named sections that fold. The recording's section has the record

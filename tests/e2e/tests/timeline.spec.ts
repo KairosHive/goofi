@@ -519,6 +519,27 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(lastMark).toBe(marked);
 		await expect(thumb).toHaveAttribute('data-folded', 'false');
 
+		// A wheel turned along the axis over a lane moves the view, as far as the turn is long: the
+		// thumb goes that far along the bar and stays as long. A turn across the axis moves nothing.
+		await dragBy(page, panel.getByTestId('range-to'), -bar.width / 2, 0);
+		await expect.poll(lastMark).toBeLessThan(6);
+		const half = (await thumb.boundingBox())!;
+		const under = (await curve.getByTestId('track-lane').boundingBox())!;
+		await page.mouse.move(under.x + under.width / 2, under.y + under.height / 2);
+		await page.mouse.wheel(0, 40);
+		expect(Math.round((await thumb.boundingBox())!.x), 'a turn across the axis leaves the view').toBe(Math.round(half.x));
+		await page.mouse.wheel(axis.width / 4, 0);
+		await expect.poll(async () => Math.round((await thumb.boundingBox())!.x - half.x)).toBe(Math.round(bar.width / 8));
+		expect(Math.round((await thumb.boundingBox())!.width), 'the view is as long as it was').toBe(Math.round(half.width));
+		// A wheel that turns one way goes along the axis with Shift held: here, back to where it was.
+		await page.keyboard.down('Shift');
+		await page.mouse.wheel(0, -axis.width / 4);
+		await page.keyboard.up('Shift');
+		await expect.poll(async () => Math.round((await thumb.boundingBox())!.x)).toBe(Math.round(half.x));
+		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
+		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
+		await expect.poll(lastMark).toBe(marked);
+
 		// A track's edge dragged resizes the track in this panel, and changes nothing of the track.
 		const tall = async (): Promise<number> => (await curve.locator('.lane').boundingBox())!.height;
 		const [was, tracks] = [await tall(), JSON.stringify((await backendDoc(page)).timeline)];

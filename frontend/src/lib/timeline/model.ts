@@ -77,6 +77,20 @@ export function barPoint(on: number, span: number): number {
 	return span * (on < 0 ? -unfold(-on) : on > 1 ? 1 + unfold(on - 1) : on);
 }
 
+/** The pixels a wheel's line is taken for, where a browser counts a turn in lines. */
+const LINE = 16;
+/** How far a turn of the wheel goes along an axis `length` pixels long, in pixels; 0 where the
+ * turn is not along it. The axis runs to the right, or down where `down` says so. A wheel with
+ * one direction turns along a sideways axis with Shift held: a browser that does not say so in
+ * the turn itself says it with the key. A turn that goes across the axis as far or further is
+ * not along it, so a slanted swipe scrolls one way. */
+export function turned(e: { deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean }, down: boolean, length: number): number {
+	const [x, y] = e.shiftKey && e.deltaX === 0 ? [e.deltaY, 0] : [e.deltaX, e.deltaY];
+	const [along, across] = down ? [y, x] : [x, y];
+	if (Math.abs(along) <= Math.abs(across)) return 0;
+	return along * (e.deltaMode === 1 ? LINE : e.deltaMode === 2 ? length : 1);
+}
+
 /** What a recording has taken so far, flat `at, value` pairs, as a path in the box `lanePath`
  * draws in: a line from each sample to the next, begun again where the time goes back, as
  * another pass of the recording does. */
