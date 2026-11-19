@@ -16,6 +16,11 @@ mod probe;
 pub use probe::OutputProbe;
 pub use serde_json::json as j;
 
+/// The number the variable `name` holds now, NaN where it holds none.
+pub fn number(g: &Goofi, name: &str) -> f64 {
+    g.variable(name).as_f64().unwrap_or(f64::NAN)
+}
+
 /// How long [`Goofi::until`] waits before it calls a condition unmet. Only a FAILING assertion
 /// pays it, so the number clears the slowest machine that runs the suite: a four-core CI runner
 /// compiling a shader on lavapipe beside three other situations.

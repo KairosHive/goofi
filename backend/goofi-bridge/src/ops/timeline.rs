@@ -10,8 +10,8 @@ use crate::{AppState, Caller, Txn};
 use goofi_graph::timeline::{Key, Lanes, Note, Track};
 
 op!(List, "timeline list", 0, NoArgs,
-    "Every track of the timeline, under its id; `order` is its place among them, the lowest first, which a panel draws them by. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and its keyboard as a panel draws it — `range: [low, high]`, the pitches it shows, `scale` and `root`, whose notes it marks and a gesture lands on, the options of a `Quantize` node, and `grid`, the lines a gesture snaps a note to, such as `1/4 beat` or `1 s` — and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds one curve, `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve`, and holds before the first and after the last. A `curve` is `smooth`, which a keyframe with none is: the value goes through the keyframe at the slope the keyframes beside it give it, level at a peak and in a valley, so a run that falls keeps falling and the value between two keyframes stays between theirs; or one of an attribute's curves, `step`, `linear`, `easing` or `{custom: …}` (see `machine attribute add`). `input` is what `timeline track record` takes into the track; `vars.<track>.recording` is 1 while it does, and `vars.<track>.take` holds what it has taken so far, for a panel to draw: each note as `at, length, pitch, velocity`, or each sample as `at, value`, at most 256 of them.",
-    "{tracks: {id: {name, order, input, kind: note, range, scale, root, grid, notes} | {name, order, input, kind: curve, range, rate, keys}}}");
+    "Every track of the timeline, under its id, in the order a panel draws them. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`; the keyboard a panel draws them on is the panel's own. It writes `vars.<track>.notes`, the velocity of each held note in 0..1 as a MIDI device's `notes` has its channel 1. A `curve` track holds `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve`, and holds outside them. A `curve` is `smooth` (the default: through the keyframe at the slope its neighbours give it, level at a peak and in a valley, never past their values), or an attribute's `step`, `linear`, `easing` or `{custom: …}` (see `machine attribute add`). `input` is what `timeline track record` takes in; `vars.<track>.recording` is 1 while it does, and `vars.<track>.take` is what it has taken so far, at most 256 notes (`at, length, pitch, velocity`) or samples (`at, value`).",
+    "{tracks: {id: {name, input, kind: note, notes} | {name, input, kind: curve, range, rate, keys}}}");
 
 op!(TrackAdd, "timeline track add", 1, TrackAddArgs {
     pub kind: String,
@@ -26,29 +26,26 @@ op!(TrackEdit, "timeline track edit", 1, TrackEditArgs {
     #[schemars(with = "Option<Value>")]
     pub notes: Option<Vec<Note>>,
     pub range: Option<[f64; 2]>,
-    pub scale: Option<String>,
-    pub root: Option<String>,
-    pub grid: Option<String>,
     #[schemars(with = "Option<Value>")]
     pub keys: Option<Vec<Key>>,
     pub input: Option<String>,
     pub rate: Option<f64>,
 },
-    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `notes` replaces a note track's notes whole; `range`, `scale`, `root` and `grid` set its keyboard. `range` and `keys` replace a curve track's range and its keyframes whole. `input` is what a recording takes in (see `timeline track record`), and an empty one is none: for a note track the variable group of a MIDI device, a `group` of `midi list`; for a curve track an expression, as a param's but with no `me`, such as `nd('lfo0')`, `vars.pads.cc[7]` or `sm('head').gain`, whose first number is the value. `rate` is the most samples a second a curve track's recording takes, 1..120. Previewable: a drag sends the notes or the keyframes as a preview.",
+    "Change a track. `to` renames it: its variable group moves with what it holds, and every expression that reads it is rewritten. `notes` replaces a note track's notes whole; `range` and `keys` replace a curve track's range and its keyframes whole. `input` is what a recording takes in (see `timeline track record`), an expression as a param's but with no `me`, and an empty one is none: a note track reads the keys it holds, a MIDI device's `vars.<group>.notes` (a `group` of `midi list`) or another note track's; a curve track reads its first number, such as `nd('lfo0')`, `vars.pads.cc[7]` or `sm('head').gain`. `rate` is the most samples a second a curve track's recording takes, 1..120. Previewable: a drag sends the notes or the keyframes as a preview.",
     "{name}");
 
 op!(TrackRecord, "timeline track record", 1, TrackRecordArgs {
     pub track: String,
     pub on: bool,
 },
-    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key of its device, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate, and any other input holds its value between two changes, a `step` — and the end puts keyframes that follow the take to within a hundredth of the track's `range`, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. A take that leaves the curve more than two thousand keyframes is refused whole: the op answers the refusal, and the track stays as it was. A position that goes back or is put elsewhere begins another pass, so a seek leaves what it jumped over as it was. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
+    "Begin (`on` true) or end a recording of the track's `input` into the track, at the clock's position as it plays: the op leaves the clock alone, and a clock that loops records pass after pass. A note track takes each key its input holds, on any channel, from when it goes down to when it comes up; the end adds those notes to the notes it holds, as one undo step, and widens `range` to show them. A curve track takes its input's value at most `rate` times a second — an input that reads a node takes a sample for each frame of the node, so a slower node gives its own rate, and any other input holds its value between two changes, a `step` — and the end puts keyframes that follow the take to within a hundredth of the track's `range`, each eased to the next by a fitted bezier `curve`, in place of the keyframes in the stretch each pass covered. A take that leaves the curve more than two thousand keyframes is refused whole: the op answers the refusal, and the track stays as it was. A position that goes back or is put elsewhere begins another pass, so a seek leaves what it jumped over as it was. `vars.<track>.recording` is 1 while a recording runs. Refused to begin without an `input`.",
     "{name, recording}");
 
 op!(TrackMove, "timeline track move", 1, TrackMoveArgs {
     pub track: String,
     pub before: Option<String>,
 },
-    "Put a track before the track `before`, or last without one: every track's `order` is its place again.",
+    "Put a track before the track `before`, or last without one.",
     "{name}");
 
 op!(TrackRemove, "timeline track remove", 1, TrackRemoveArgs {
@@ -82,8 +79,8 @@ impl WriteOp for TrackAdd {
     fn run(tx: &mut Txn, a: TrackAddArgs) -> Result<Value, String> {
         let lanes: Lanes = serde_json::from_value(json!({ "kind": a.kind })).map_err(|_| format!("`kind` is `note` or `curve`, not `{}`", a.kind))?;
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("track", 0, |n| tx.g.group_taken(n)));
-        let id = tx.g.mint_id("k", |_| false);
-        set(tx, &id, Some(Track { name: name.clone(), order: tx.g.timeline().values().map(|t| t.order + 1).max().unwrap_or(0), lanes, input: String::new() }))?;
+        let id = tx.g.mint_id("k");
+        set(tx, &id, Some(Track { name: name.clone(), lanes, input: String::new() }))?;
         Ok(json!({ "id": id, "name": name }))
     }
 }
@@ -94,26 +91,17 @@ impl WriteOp for TrackEdit {
         let (id, mut track) = track_of(tx, &a.track)?;
         track.name = a.to.unwrap_or(track.name);
         track.input = a.input.unwrap_or(track.input);
-        match (&mut track.lanes, a.notes, a.range, a.keys) {
-            (Lanes::Note { range, scale, root, grid, notes }, next_notes, next_range, None) if a.rate.is_none() => {
-                *scale = a.scale.unwrap_or(std::mem::take(scale));
-                *root = a.root.unwrap_or(std::mem::take(root));
-                *grid = a.grid.unwrap_or(std::mem::take(grid));
-                if let Some(next) = next_range {
-                    let pitch = |p: f64| (p.fract() == 0.0 && (0.0..=127.0).contains(&p)).then_some(p as u8);
-                    *range = pitch(next[0]).zip(pitch(next[1])).map(<[u8; 2]>::from).ok_or_else(|| format!("track `{}`: a note track's `range` is two pitches, 0..127", track.name))?;
-                }
-                *notes = next_notes.unwrap_or(std::mem::take(notes));
-            }
-            (Lanes::Curve { range, rate, keys }, None, next_range, next_keys) if a.scale.is_none() && a.root.is_none() && a.grid.is_none() => {
+        match (&mut track.lanes, a.notes, a.range, a.keys, a.rate) {
+            (Lanes::Note { notes }, next_notes, None, None, None) => *notes = next_notes.unwrap_or(std::mem::take(notes)),
+            (Lanes::Curve { range, rate, keys }, None, next_range, next_keys, next_rate) => {
                 *range = next_range.unwrap_or(*range);
-                *rate = a.rate.unwrap_or(*rate);
+                *rate = next_rate.unwrap_or(*rate);
                 if let Some(mut next) = next_keys {
                     next.sort_by(|a, b| a.at.total_cmp(&b.at));
                     *keys = next;
                 }
             }
-            _ => return Err(format!("track `{}`: a note track takes `notes`, `scale`, `root` and `grid`, a curve track `keys` and `rate`", track.name)),
+            _ => return Err(format!("track `{}`: a note track takes `notes`, a curve track `range`, `keys` and `rate`", track.name)),
         }
         let out = json!({ "name": track.name });
         set(tx, &id, Some(track))?;

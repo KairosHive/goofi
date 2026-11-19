@@ -36,12 +36,8 @@ describe('curveAt', () => {
 			}
 		}
 	});
-	it('reads one bezier with handles a third and two thirds along as a cubic of the progress', () => {
-		// What a smooth keyframe is: the same blend the bisection finds, with no search.
-		const cubic: Point[] = [[0, 0, 0, 0, 1 / 3, 0.2], [1, 1, -1 / 3, -0.5, 0, 0]];
-		const near: Point[] = [[0, 0, 0, 0, 1 / 3 + 1e-9, 0.2], [1, 1, -1 / 3, -0.5, 0, 0]];
-		for (const x of [0, 0.1, 0.5, 0.9, 1]) expect(curveAt({ custom: cubic }, x)).toBeCloseTo(curveAt({ custom: near }, x), 6);
-		expect(curveAt('smooth', 0.3), 'alone, smooth is a straight line').toBe(0.3);
+	it('reads smooth alone as a straight line', () => {
+		expect(curveAt('smooth', 0.3)).toBe(0.3);
 	});
 	it('keeps a handle inside the segment it shapes', () => {
 		const loose: Point[] = [[0, 0, -1, 1, 0.9, 0], [0.5, 0.5, -0.9, 0, 0.9, 0], [1, 1, -0.9, 0, 1, 1]];

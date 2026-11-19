@@ -4,11 +4,7 @@
 use std::sync::Arc;
 
 use goofi_python::inproc::PyExprEvaluator;
-use goofi_tests::{f32s, hex, j, Goofi};
-
-fn number(g: &Goofi, name: &str) -> f64 {
-    g.variable(name).as_f64().unwrap_or(f64::NAN)
-}
+use goofi_tests::{f32s, hex, j, number, Goofi};
 
 fn time(g: &Goofi) -> f64 {
     number(g, "clock.time")
@@ -44,8 +40,8 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     assert_eq!(g.call("clock set", j!({ "playing": false, "time": 0.0 })), j!({ "playing": false, "time": 0.0, "section": null }));
     assert!(g.refuse("clock set", j!({ "time": -1.0 })).contains("at least 0"));
 
-    // With a length, in beats, the position restarts from 0 when it reaches it; progress is its
-    // share. At the tempo of 120 a beat is half a second.
+    // With a length, in beats, the position restarts from 0 when it reaches it. At the tempo of
+    // 120 a beat is half a second.
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.4 }));
     g.call("clock set", j!({ "playing": true }));
     let mut last = time(&g);
@@ -53,18 +49,28 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
         let now = time(g);
         (now < std::mem::replace(&mut last, now)).then_some(())
     });
-    let progress = |g: &Goofi| number(g, "clock.progress");
-    assert!(g.stays(|g| time(g) < 0.2 && (0.0..1.0).contains(&progress(g))), "the position stays under its length");
-    // A section loops the position inside it, and is the clock's own: no variable holds it, and
-    // progress stays the share of the whole length.
+    assert!(g.stays(|g| time(g) < 0.2), "the position stays under its length");
+    // A section loops the position inside it, and is the clock's own: no variable holds it.
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 20.0 }));
     g.call("clock set", j!({ "playing": false, "time": 0.0 }));
     assert_eq!(g.call("clock set", j!({ "section": [1.0, 1.2] }))["section"], j!([1.0, 1.2]));
     assert_eq!(time(&g), 0.0, "before the section the position is its own");
     g.call("clock set", j!({ "playing": true, "time": 0.9 }));
     g.until("the position to reach the section", |g| (time(g) >= 1.0).then_some(()));
-    assert!(g.stays(|g| (1.0..1.2).contains(&time(g)) && (0.1..0.12).contains(&progress(g))), "the position stays in the section");
+    assert!(g.stays(|g| (1.0..1.2).contains(&time(g))), "the position stays in the section");
     assert!(g.call("clock set", j!({ "section": [0.0, 0.0] }))["section"].is_null(), "a section of no length is none");
+    // A section stands in the length's place: the position plays past the length up to it, and
+    // never goes back to 0 on the way.
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.4 }));
+    g.call("clock set", j!({ "section": [1.0, 1.2], "time": 0.3 }));
+    let mut lowest = f64::INFINITY;
+    g.until("the position to pass the length for the section", |g| {
+        lowest = lowest.min(time(g));
+        (time(g) >= 1.0).then_some(())
+    });
+    assert!(lowest >= 0.3, "the position went back to {lowest} on its way to the section");
+    assert!(g.call("clock set", j!({ "section": [0.0, 0.0] }))["section"].is_null());
+    g.call("variable entry edit", j!({ "name": "clock.length", "value": 20.0 }));
     assert!(g.refuse("clock set", j!({ "section": [-1.0, 2.0] })).contains("at least 0"));
     assert!(g.refuse("clock set", j!({ "section": [1.0, 1.0001] })).contains("a millisecond"));
     // Endless again, it goes on from where it stands, past the length; it does not jump to the
@@ -74,7 +80,6 @@ fn the_position_pauses_jumps_and_restarts_and_the_run_time_goes_on() {
     g.until("the position to restart at a thousand seconds", |g| (time(g) < 999.0).then_some(()));
     g.call("variable entry edit", j!({ "name": "clock.length", "value": 0.0 }));
     assert!(time(&g) < 999.0, "the position went on from where it stood");
-    assert_eq!(progress(&g), 0.0, "an endless clock has no share of a length");
 
     // A paused clock plays again from zero on a load: the clock is the patch's.
     g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 90.0 }));

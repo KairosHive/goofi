@@ -7,15 +7,19 @@
 <script lang="ts">
 	import type { Track } from '$lib/api/generated';
 	import RenameField from '$lib/inspector/RenameField.svelte';
+	import { fixed } from '$lib/ui';
 	import RangeBar from './RangeBar.svelte';
 
 	let {
 		t,
+		range,
 		up,
 		onPreview,
 		onCommit
 	}: {
 		t: Track;
+		/** What the lane shows across its axis: the keyboard's pitches, or the curve's range. */
+		range: [number, number];
 		/** The lane's own axis runs up, so the bar stands and its top is the highest; else the bar
 		 * lies and its end is. */
 		up: boolean;
@@ -25,7 +29,6 @@
 		onCommit: (range: [number, number]) => void;
 	} = $props();
 
-	const fixed = (v: number): number => Number(v.toFixed(3));
 	/** Every key there is: a keyboard's range is some of them. */
 	const KEYS = 128;
 	/** The stretch of a curve's values the bar is as long as: from the least value a keyframe has
@@ -33,7 +36,7 @@
 	const extent = $derived.by<[number, number]>(() => {
 		const values = t.kind === 'curve' ? t.keys.map((k) => k.value) : [];
 		const [least, most] = [Math.min(...values), Math.max(...values)];
-		return most > least ? [least, most] : [t.range[0], t.range[1]];
+		return most > least ? [least, most] : [range[0], range[1]];
 	});
 	/** The stretch a drag began on: the bar is as long as that until the drag ends, whatever the
 	 * range has become meanwhile. */
@@ -44,7 +47,7 @@
 	const past = $derived(t.kind === 'note' ? 1 : 0);
 	/** The range on the bar's axis, and a view of the bar as a range. A bar that stands is
 	 * measured from its top, where the highest is. */
-	const view = $derived<[number, number]>(up ? [span - (t.range[1] + past - origin), span - (t.range[0] - origin)] : [t.range[0] - origin, t.range[1] + past - origin]);
+	const view = $derived<[number, number]>(up ? [span - (range[1] + past - origin), span - (range[0] - origin)] : [range[0] - origin, range[1] + past - origin]);
 	const ranged = (v: [number, number]): [number, number] => {
 		const [low, high] = up ? [span - v[1], span - v[0]] : v;
 		return [fixed(low + origin), fixed(high - past + origin)];
@@ -52,19 +55,19 @@
 	/** The range that holds all the track has: its keyframes' values, or its notes' keys and no
 	 * less than an octave of them. None where the track has nothing to fit. */
 	const whole = $derived.by<[number, number] | null>(() => {
-		if (t.kind === 'curve') return extent[0] === t.range[0] && extent[1] === t.range[1] ? null : extent;
+		if (t.kind === 'curve') return extent[0] === range[0] && extent[1] === range[1] ? null : extent;
 		if (t.notes.length === 0) return null;
 		const low = Math.min(...t.notes.map((n) => n.pitch));
 		return [Math.min(low, KEYS - 13), Math.max(...t.notes.map((n) => n.pitch), Math.min(low, KEYS - 13) + 12)];
 	});
 	/** A limit typed at an end of a curve's bar. */
-	const limited = (end: 0 | 1, text: string): void => onCommit(t.range.with(end, Number(text)) as [number, number]);
-	const apart = (end: 0 | 1) => (text: string): boolean => text !== '' && Number.isFinite(Number(text)) && (end === 0 ? Number(text) < t.range[1] : Number(text) > t.range[0]);
+	const limited = (end: 0 | 1, text: string): void => onCommit(range.with(end, Number(text)) as [number, number]);
+	const apart = (end: 0 | 1) => (text: string): boolean => text !== '' && Number.isFinite(Number(text)) && (end === 0 ? Number(text) < range[1] : Number(text) > range[0]);
 </script>
 
 {#snippet limit(which: 0 | 1)}
 	<span class="limit" class:most={which === 1} title={which ? 'The most the lane shows: click to set it' : 'The least the lane shows: click to set it'}>
-		<RenameField value={String(t.range[which])} valid={apart(which)} onRename={(text) => limited(which, text)} label={which ? 'Most' : 'Least'} testid={which ? 'track-range-most' : 'track-range-least'} />
+		<RenameField value={String(range[which])} valid={apart(which)} onRename={(text) => limited(which, text)} label={which ? 'Most' : 'Least'} testid={which ? 'track-range-most' : 'track-range-least'} />
 	</span>
 {/snippet}
 

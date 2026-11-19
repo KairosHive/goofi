@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
 import type { Curve, Key } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, shapeOf, takePath, ticks, turned, zoomed } from './model';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, keyboard, lanePath, shapeOf, takePath, ticks, turned, zoomed } from './model';
 
-const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
-const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
+const notes: Track = { name: 'keys', input: '', kind: 'note', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
+const curve: Track = { name: 'fade', input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
 
 describe('the timeline model', () => {
 	it('reads a beat by the tempo, and finds where the tracks end', () => {
@@ -120,5 +120,17 @@ describe('the timeline model', () => {
 		expect(takePath([], [0, 1], along)).toBe('');
 		expect(takePath([0, 0, 2, 1, 1, 0.5, 3, 0.5], [0, 1], along)).toBe('M0 100 L500 0 M250 50 L750 50');
 		expect(takePath([0, 0, 2, 1], [0, 1], along, true)).toBe('M0 0 L100 500');
+	});
+});
+
+describe('keyboard', () => {
+	it('shows two octaves from C3 and every note the track holds, but for what is set', () => {
+		expect(keyboard([])).toEqual({ range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat' });
+		expect(keyboard(notes.kind === 'note' ? notes.notes : []).range).toEqual([48, 90]);
+		expect(keyboard([{ at: 0, length: 1, pitch: 30, velocity: 1 }], { range: [60, 72], grid: '1 s' })).toEqual({ range: [60, 72], scale: 'chromatic', root: 'C', grid: '1 s' });
+		// What no keyboard has, from a file or an agent, is as if unset.
+		expect(keyboard([], { range: [72, 60], scale: 'none', root: 'H', grid: '1/7 beat' })).toEqual(keyboard([]));
+		expect(keyboard([], { scale: 'constructor', grid: 'toString' }), 'a name every object answers to is no scale').toEqual(keyboard([]));
+		expect(keyboard([], { range: [60.5, 200] as [number, number] }).range).toEqual([48, 72]);
 	});
 });

@@ -829,14 +829,11 @@ impl Graph {
                 out.extend(group_of(key));
             }
         }
-        for track in self.patch.stepped.tracks.values().filter(|t| !t.input.is_empty()) {
-            match track.expression().map(timeline::input_refs) {
-                None => drop(out.insert(track.input.clone())),
-                Some(read) => out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
-                    expr_rewrite::Target::Variable { key } => group_of(&key),
-                    _ => None,
-                })),
-            }
+        for read in self.patch.stepped.tracks.values().filter_map(timeline::Track::expression).map(timeline::input_refs) {
+            out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
+                expr_rewrite::Target::Variable { key } => group_of(&key),
+                _ => None,
+            }));
         }
         for (_, leaf) in self.leaves() {
             let typed = self.typed(leaf);
@@ -966,15 +963,10 @@ impl Graph {
         &self.patch.stepped.tracks
     }
 
-    /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, so none is
-    /// handed out twice, and clear of every machine's and track's id and every id `taken` answers for.
-    pub fn mint_id(&mut self, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
-        loop {
-            let id = format!("{prefix}-{}", self.mint().0);
-            if !taken(&id) && !self.patch.stepped.machines.contains_key(&id) && !self.patch.stepped.tracks.contains_key(&id) {
-                return id;
-            }
-        }
+    /// A fresh id for a named record, `prefix-N`: off the mint a node's uid comes from, which a
+    /// load advances past every id it read, so none is handed out twice.
+    pub fn mint_id(&mut self, prefix: &str) -> String {
+        format!("{prefix}-{}", self.mint().0)
     }
 
     /// Set, replace or remove (`None`) the machine `id` whole. A name that moved is read off the
@@ -986,12 +978,8 @@ impl Graph {
             self.sync_owned();
             return Ok(Vec::new());
         };
-        if !goofi_core::variables::is_valid_identifier(&record.name) || goofi_core::variables::is_valid_identifier(id) {
-            return Err(format!("invalid machine name `{}`, or its id `{id}` is a name: {}", record.name, machine::NAME_RULE));
-        }
-        if self.patch.stepped.machines.iter().any(|(other, m)| other != id && m.name == record.name) {
-            return Err(format!("machine `{}` already exists", record.name));
-        }
+        let id = &id.to_string();
+        machine::names("machine", self.patch.stepped.machines.iter().filter(|(other, _)| *other != id).chain([(id, &record)]))?;
         fn renamed<V: machine::Named>(old: Option<&IndexMap<String, V>>, new: &IndexMap<String, V>) -> Vec<(String, String)> {
             let pairs = new.iter().filter_map(|(id, v)| Some((old?.get(id)?.name().to_string(), v.name().to_string())));
             pairs.filter(|(from, to)| from != to).collect()
@@ -1031,9 +1019,9 @@ impl Graph {
             return Ok(Vec::new());
         };
         record.check()?;
-        let valid = goofi_core::variables::is_valid_identifier;
-        if valid(id) || !valid(&record.name) || (old.is_none_or(|o| o.name != record.name) && self.group_taken(&record.name)) {
-            return Err(format!("invalid track name `{}`, or a variable group already: {}", record.name, machine::NAME_RULE));
+        machine::names("track", self.patch.stepped.tracks.iter().filter(|(other, _)| *other != id).chain([(&id.to_string(), &record)]))?;
+        if old.is_none_or(|o| o.name != record.name) && self.group_taken(&record.name) {
+            return Err(format!("`{}` is a variable group already; a track's name is its group", record.name));
         }
         let moved = old.map_or(Vec::new(), |o| moved(&o.entries(), &record.entries()));
         self.variables().move_owned(&moved);
@@ -1042,21 +1030,15 @@ impl Graph {
         Ok(self.rewrite_variable_reads(&moved))
     }
 
-    /// Put the track `id` before the track `before`, or last, and number every track by its place.
+    /// Put the track `id` before the track `before`, or last: the tracks' order is the map's.
     pub fn move_track(&mut self, id: &str, before: Option<&str>) {
         if before == Some(id) {
             return;
         }
         let tracks = &mut Arc::make_mut(&mut self.patch.stepped).tracks;
-        let mut ids: Vec<String> = tracks.keys().filter(|k| *k != id).cloned().collect();
-        ids.sort_by_key(|k| tracks[k].order);
-        let at = before.and_then(|b| ids.iter().position(|k| k == b)).unwrap_or(ids.len());
-        ids.insert(at, id.to_string());
-        for (place, k) in ids.iter().enumerate() {
-            if let Some(track) = tracks.get_mut(k) {
-                track.order = place as u32;
-            }
-        }
+        let Some((_, track)) = tracks.shift_remove_entry(id) else { return };
+        let at = before.and_then(|b| tracks.get_index_of(b)).unwrap_or(tracks.len());
+        tracks.shift_insert(at, id.to_string(), track);
     }
 
     /// Hold every owned group in step with what steps on the clock: one group per playhead, under
@@ -1081,7 +1063,7 @@ impl Graph {
     }
 
     /// Re-set every expression of what steps on the clock that `edit` rewrites: a machine's, and
-    /// the input of a curve track.
+    /// a track's input.
     fn rewrite_stepped(&mut self, edit: impl Fn(&str) -> Option<String>) {
         let stepped = Arc::make_mut(&mut self.patch.stepped);
         for m in stepped.machines.values_mut() {
@@ -1100,12 +1082,6 @@ impl Graph {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
         self.rewrite_stepped(|e| expr_rewrite::rename_variables(e, rename));
-        // A note track names the group it records from, which is that group's `notes`.
-        for track in Arc::make_mut(&mut self.patch.stepped).tracks.values_mut().filter(|t| t.expression().is_none()) {
-            if let Some((group, _)) = rename(&format!("{}.notes", track.input)).as_deref().and_then(goofi_core::variables::split_variable) {
-                track.input = group.to_string();
-            }
-        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })
@@ -3296,8 +3272,8 @@ impl Graph {
         self.runtime.time.clone()
     }
 
-    /// The clock as the store says it: the length its position restarts at, and the readings a
-    /// patch takes as variables. Both are functionals of `t`, so nothing publishes as it runs.
+    /// The clock as the store says it: the length its position restarts at, and its position as a
+    /// variable, a functional of `t`, so nothing publishes as it runs.
     fn sync_clock(&self) {
         let number = |name: &str| self.variables().get(name).map_or(0.0, goofi_core::control::number_of);
         // A length under a millisecond is no length: nothing could read a position that short.
@@ -3308,13 +3284,9 @@ impl Graph {
         if self.runtime.evaluator.is_none() {
             return;
         }
-        let progress = if length > 0.0 { format!("min(t / {length:?}, 1.0)") } else { "0.0".to_string() };
         // Compiled before the store is locked: a compile takes the interpreter.
-        let frames = [("clock.time", "t"), ("clock.progress", progress.as_str())].map(|(name, source)| (name, machine::functional_code(&self.runtime.evaluator, source)));
-        let mut store = self.variables();
-        for (name, code) in frames {
-            store.publish(name, Data::functional(code, goofi_core::Meta::default()));
-        }
+        let code = machine::functional_code(&self.runtime.evaluator, "t");
+        self.variables().publish("clock.time", Data::functional(code, goofi_core::Meta::default()));
     }
     /// The generation of the node about to be born at `uid`: 0 for a first birth, one more than
     /// the last for every rebirth.
@@ -4099,6 +4071,11 @@ impl Graph {
             if let Err(e) = self.set_track(id, Some(track.clone())) {
                 warnings.push(format!("track `{}` dropped: {e}", track.name));
             }
+        }
+        // A loaded record's id, `prefix-N`, advances the mint past N, so one minted later is its own.
+        let ids = doc.machines.iter().flat_map(|(id, m)| [id].into_iter().chain(m.attributes.keys()).chain(m.states.keys()).chain(m.playheads.keys())).chain(doc.timeline.keys());
+        for n in ids.filter_map(|id| id.rsplit_once('-')?.1.parse::<u64>().ok()) {
+            self.runtime.next_uid = self.runtime.next_uid.max(n + 1);
         }
         // Every uid this load hands out, restored or minted — what keeps two records from landing
         // on one uid when a hand-written file spells the same number two ways.

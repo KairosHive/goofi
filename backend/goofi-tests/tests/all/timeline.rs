@@ -4,12 +4,8 @@
 use std::sync::Arc;
 
 use goofi_python::inproc::PyExprEvaluator;
-use goofi_tests::{hex, j, Goofi};
+use goofi_tests::{hex, j, number, Goofi};
 use serde_json::Value;
-
-fn number(g: &Goofi, name: &str) -> f64 {
-    g.variable(name).as_f64().unwrap_or(f64::NAN)
-}
 
 /// The velocity a note track holds for `pitch` now.
 fn held(g: &Goofi, name: &str, pitch: usize) -> f64 {
@@ -105,27 +101,15 @@ fn a_track_writes_its_group_at_the_clocks_position() {
         at(&g, time);
         g.until(&format!("the note at {time}"), |g| (held(g, "keys.notes", 60) == velocity).then_some(()));
     }
-    // Its keyboard shows two octaves from C3 until it is told another range.
-    let keyboard = |g: &Goofi| g.call("timeline list", j!({}))["tracks"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap()["range"].clone();
-    assert_eq!(keyboard(&g), j!([48, 72]));
-    g.call("timeline track edit", j!({ "track": "keys", "range": [36, 84], "scale": "minor", "root": "D", "grid": "1 s" }));
-    assert_eq!(keyboard(&g), j!([36, 84]));
-    let doc = g.doc();
-    let held_as = doc["timeline"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap();
-    assert_eq!((&held_as["scale"], &held_as["root"], &held_as["grid"], held_as["notes"].as_array().map(Vec::len)), (&j!("minor"), &j!("D"), &j!("1 s"), Some(1)), "the keyboard's scale and grid, and the notes as they were");
     // Played, the thread wakes for the note's start and for its end.
     g.call("clock set", j!({ "playing": true, "time": 0.9 }));
     g.until("the note to start", |g| (held(g, "keys.notes", 60) == 0.5).then_some(()));
     g.until("the note to end", |g| (held(g, "keys.notes", 60) == 0.0).then_some(()));
     at(&g, 1.0);
 
-    // A track is put before another, or last: the order every panel draws them in.
-    let order = |g: &Goofi| {
-        let doc = g.doc();
-        let mut tracks: Vec<_> = doc["timeline"].as_object().unwrap().values().map(|t| (t["order"].as_u64(), t["name"].as_str().unwrap().to_string())).collect();
-        tracks.sort();
-        tracks.into_iter().map(|(_, name)| name).collect::<Vec<_>>()
-    };
+    // A track is put before another, or last: the document holds them in the order every panel
+    // draws them in.
+    let order = |g: &Goofi| g.doc()["timeline"].as_object().unwrap().values().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
     assert_eq!(order(&g), ["sweep", "keys"]);
     g.call("timeline track move", j!({ "track": "keys", "before": "sweep" }));
     assert_eq!(order(&g), ["keys", "sweep"]);
@@ -139,13 +123,10 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     for (payload, why) in [
         (j!({ "track": "keys", "notes": [{ "at": 0.0, "length": 0.0, "pitch": 60, "velocity": 0.5 }] }), "lasts more than 0"),
         (j!({ "track": "keys", "keys": [] }), "a note track takes `notes`"),
-        (j!({ "track": "keys", "range": [60, 60] }), "a lower pitch to a higher one"),
-        (j!({ "track": "keys", "range": [60.5, 72] }), "two pitches"),
-        (j!({ "track": "keys", "scale": "wrong" }), "a scale and a root"),
-        (j!({ "track": "keys", "grid": "1/7 beat" }), "its grid is one"),
-        (j!({ "track": "sweep", "root": "D" }), "a note track takes"),
+        (j!({ "track": "keys", "range": [60, 72] }), "a note track takes `notes`"),
+        (j!({ "track": "sweep", "notes": [] }), "a note track takes"),
         (j!({ "track": "sweep", "keys": [{ "at": 1.0, "value": 0.0 }, { "at": 1.0, "value": 1.0 }] }), "each later"),
-        (j!({ "track": "sweep", "to": "keys" }), "a variable group already"),
+        (j!({ "track": "sweep", "to": "keys" }), "already exists"),
     ] {
         let refusal = g.refuse("timeline track edit", payload);
         assert!(refusal.contains(why), "{refusal}");
@@ -261,7 +242,7 @@ fn a_recording_goes_into_its_track() {
     let heard = track(&g, "heard");
     assert_eq!((&heard["range"], heard["keys"].as_array().and_then(|k| k.last()).map(|k| &k["value"])), (&j!([0.0, 4.0]), Some(&j!(4.0))), "{heard}");
 
-    // A note track records the keys of a MIDI device, by the device's group, on any channel.
+    // A note track records the keys its input holds, a MIDI device's `notes`, on any channel.
     g.graph().variables().grab_midi("pads", "a test port").unwrap();
     let press = |g: &Goofi, key: usize, velocity: f64| {
         let mut keys = vec![0.0; 2048];
@@ -270,7 +251,7 @@ fn a_recording_goes_into_its_track() {
     };
     g.call("timeline track add", j!({ "kind": "note", "name": "played" }));
     let there = j!({ "at": 0.0, "length": 1.0, "pitch": 50, "velocity": 0.5 });
-    g.call("timeline track edit", j!({ "track": "played", "input": "pads", "notes": [there] }));
+    g.call("timeline track edit", j!({ "track": "played", "input": "vars.pads.notes", "notes": [there] }));
     // Pitch 80 on channel 2 is down from beat 1 until the clock is paused, and comes up there.
     at(&g, 1.0);
     press(&g, 128 + 80, 0.75);
@@ -282,13 +263,12 @@ fn a_recording_goes_into_its_track() {
     let note = &played["notes"][1];
     assert_eq!((&played["notes"][0], &note["at"], &note["pitch"], &note["velocity"]), (&there, &j!(1.0), &j!(80), &j!(0.75)), "the note is added to those there");
     assert!(near(note["length"].as_f64().unwrap(), lifted - 1.0), "{note} for a key that came up at {lifted}");
-    assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
-    // A track is a group with `notes` too, so another can name it as its input, and a rename
+    // A track is a group with `notes` too, so another can read it as its input, and a rename
     // of it follows there.
     g.call("timeline track add", j!({ "kind": "note", "name": "copy" }));
-    g.call("timeline track edit", j!({ "track": "copy", "input": "played" }));
+    g.call("timeline track edit", j!({ "track": "copy", "input": "vars.played.notes" }));
     g.call("timeline track edit", j!({ "track": "played", "to": "lead" }));
-    assert_eq!(track(&g, "copy")["input"], j!("lead"));
+    assert_eq!(track(&g, "copy")["input"], j!("vars.lead.notes"));
     g.call("timeline track edit", j!({ "track": "lead", "to": "played" }));
     // A key still down when the recording ends is a note until there.
     at(&g, 4.0);
@@ -313,7 +293,7 @@ fn a_take_becomes_the_keyframes_that_follow_it() {
     use goofi_core::ease::Curve;
     use goofi_graph::timeline::{Lanes, Sample, Take, Track};
     let sample = |at: f64, value: f64| Sample { at, value, held: false };
-    let curve = || Track { name: "wave".into(), order: 0, input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
+    let curve = || Track { name: "wave".into(), input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
     let merged = |passes: Vec<Vec<Sample>>| {
         let mut track = curve();
         track.merge(&Take::Samples(passes)).unwrap();
@@ -388,7 +368,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
         other => Err(format!("{other:?} is not readable here")),
     };
     let recorder = |input: &str, lanes: Lanes| {
-        let track = Track { name: "wave".into(), order: 0, input: input.into(), lanes };
+        let track = Track { name: "wave".into(), input: input.into(), lanes };
         let mut m = Machines::default();
         // At a tempo of 60 a beat is a second.
         m.configure(Default::default(), ([("k1".to_string(), track)].into_iter().collect(), 60.0), None);
@@ -456,7 +436,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
 
     // A note is a key of the device from when it goes down to when it comes up; a seek ends it
     // where the recording last looked, and a key still down begins another where it lands.
-    let mut m = recorder("pads", Lanes::Note { range: [48, 72], scale: "chromatic".into(), root: "C".into(), grid: "1/4 beat".into(), notes: Vec::new() });
+    let mut m = recorder("vars.pads.notes", Lanes::Note { notes: Vec::new() });
     for (now, velocity, seek) in [(1.0, 0.5, false), (1.5, 0.5, false), (3.0, 0.5, true), (3.5, 0.0, false)] {
         if seek {
             m.restart();

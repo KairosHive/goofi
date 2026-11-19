@@ -237,15 +237,17 @@ A patch plays on one clock from the moment it loads, and by default it never end
 expression is its position in seconds, and so is `vars.clock.time`. `goofi clock set --no-playing`
 pauses the position and `--time 12` puts it at a second; the engines run on through a pause, and
 a recording never stops. `vars.clock.bpm` is the tempo. `vars.clock.length` is the timeline's
-length in beats: with one, the position restarts from 0 when it reaches it, and
-`vars.clock.progress` is how far along it is, 0 to 1. A length of 0 is endless.
+length in beats: with one, the position restarts from 0 when it reaches it. A length of 0 is
+endless.
 
 The timeline holds tracks on that position, their times in beats, so a change of the tempo moves
 them all together. A `note` track holds notes; it writes the held velocities to
 `vars.<track>.notes`, and the audio `MidiIn` node lists it as a port (`timeline: <track>`), so
-its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, from a
-lowest to a highest pitch, which marks the notes of a scale and a root, the ones a `Quantize`
-node offers; a note made or moved on the lane lands on that scale. A `curve` track is one line
+its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, the
+panel's own: from a lowest to a highest pitch, marking the notes of a scale and a root, the ones a
+`Quantize` node offers, and a grid; a note made or moved on the lane lands on that scale and that
+grid. Until its bar is dragged, a keyboard shows two octaves from C3 and every note the track
+holds; then it shows what was set, and a note outside that lies off the lane. A `curve` track is one line
 through keyframes: the value eases from a keyframe to the next by that keyframe's curve, holds
 outside them, and is `vars.<track>.value`. A keyframe's curve is `smooth` unless it is given
 another: the value goes through the keyframe at the slope the keyframes beside it give it, so a
@@ -254,11 +256,12 @@ run that falls keeps falling, and it is level at a peak. The others are `step`, 
 `timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
 A track records its `input` into itself while the clock plays: the record button beside its
-name, or `timeline track record`, begins a recording, and ends it. A note track's input is a
-MIDI device: the one there is, or the one picked where there are several. The notes played are
-added to the notes the track holds. A curve track's input is an expression, as a param's, typed
-or dropped on it: a node, a variable, a state. The track takes the input's value at most `rate`
-times a second (30 unless set), and a node slower than that gives a sample for each of its
+name, or `timeline track record`, begins a recording, and ends it. The input is an expression, as
+a param's. A note track reads the keys a MIDI device holds, `vars.<device>.notes`: a track with
+no input is given the device there is, or asked which where there are several. The notes played
+are added to the notes the track holds. A curve track's input is typed or dropped on it: a node,
+a variable, a state. The track takes the input's value at most `rate` times a second (30 unless
+set), and a node slower than that gives a sample for each of its
 frames; an input that reads no node holds its value between two changes, a step. The end of the
 recording puts keyframes with fitted bezier curves that follow what came, in place of the
 keyframes of the stretch it covered. A loop or a seek begins another pass, so what a seek jumps
@@ -270,16 +273,15 @@ The panel puts every track on one time axis, each beside what it says about itse
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in
 each cell or stretch it goes through; a drag along a curve's lane draws over the keyframes in
 its path. A note or a keyframe may stand before 0, as it may past the timeline's length: the
-clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl
-held picks one more, or one less; a click with Shift held picks everything in the box from the
-one picked last to the one clicked; and a drag with Shift held on a lane draws a box that picks
+clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl or Shift
+held picks one more, or one less, and a drag with Shift held on a lane draws a box that picks
 what it touches. A drag of a note or a keyframe moves it, and with it everything picked. The
 Delete key takes out what is picked, and Escape picks none. A right click on a note or a keyframe, or a held finger, opens a
 menu on it with the settings of what is picked: a note's pitch, length and velocity, a
 keyframe's value and curve. A note
-snaps to its track's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
+snaps to its keyboard's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
 are play, stop and the clock's position, a number that a click makes a field. A press on the
-ruler places the clock, and a drag along it marks a section the clock loops in: that section is
+ruler places the clock, and a drag along it marks a section the clock loops in, in the length's place: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the
 view, as long as a lane: a view of the whole timeline fills it, a drag of it moves along the
 axis, and a drag of either end of it zooms, as far out as you like: past an end of the timeline
@@ -288,18 +290,16 @@ or the ruler moves the view too: sideways, or with Shift held on a wheel that tu
 and down in a panel taller than wide. With Ctrl held a wheel zooms, about the point of the axis
 under the pointer. A double click on the ruler looks at everything
 again. A line across the tracks marks where the timeline begins, and one where it ends when it
-has a length. A track's edge resizes it, as far as it is
-dragged: held at the end of the track area, the area scrolls; a double click on the edge gives
-the track the room the panel shows, so that one track alone fills it, and scrolls to it. Between what a track says and its lane
+has a length. A track's edge resizes it, as far as it is dragged, and the track area scrolls. Between what a track says and its lane
 is a bar of what the lane shows: the keys of a keyboard, or the values of a curve with its two
 limits at the bar's ends, each a number a click makes a field. A drag of the bar moves that
 range, a drag of an end changes it, and a double click fits it to what the track holds; a
 double click on the bar above the ruler looks at everything too. Beside its lane a track says its
-name and its settings in named sections that fold. The recording's section has the record
+name, with the button to its menu, and its settings in named sections that fold; a track too
+short for them scrolls them. A note track is as tall as its keyboard has keys, until its edge is
+dragged. The recording's section has the record
 button on its line and begins folded; a curve's input in it is a param's own row, so it takes
-an expression, a MIDI learn, or a node, a variable or a state dropped on it. A section unfolded
-makes its track larger where it needs to, and the sections that do not fit are in the menu in
-the track's title. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
+an expression, a MIDI learn, or a node, a variable or a state dropped on it. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
 taller than wide the time runs down and the tracks stand as columns.
 
 ## Testing

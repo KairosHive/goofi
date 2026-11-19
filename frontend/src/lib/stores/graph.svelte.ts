@@ -153,8 +153,8 @@ export class GraphStore {
 	machineGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'machine'));
 	/** Every state machine, by id, doc-authoritative. */
 	machines: Record<string, Machine> = $derived(machineViews(this.doc));
-	/** Every track of the timeline, by id, in the order of their `order`: the one a panel draws. */
-	timeline = $derived(Object.fromEntries(Object.entries((this.doc.timeline ?? {}) as Record<string, Track>).sort(([, a], [, b]) => a.order - b.order)));
+	/** Every track of the timeline, by id, in the order a panel draws them: the manager's. */
+	timeline = $derived((this.doc.timeline ?? {}) as Record<string, Track>);
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);

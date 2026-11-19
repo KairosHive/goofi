@@ -60,6 +60,9 @@ describe('SyncClient', () => {
 		const put = { op: 'put' as const, path: ['variables'], value: vars(['p.z', 'p.b']) };
 		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops: [put] } });
 		expect(Object.keys(client.doc.variables as object)).toEqual(['p.z', 'p.b']);
+		// A move alone: the same keys, in another order, as a track moved among the tracks.
+		ctl.emit({ event: 'doc_patch', payload: { from: 2, v: 3, ops: [{ op: 'put', path: ['variables'], value: vars(['p.b', 'p.z']) }] } });
+		expect(Object.keys(client.doc.variables as object)).toEqual(['p.b', 'p.z']);
 	});
 
 	it('skips a stale delta in silence — the seed already carried it', () => {

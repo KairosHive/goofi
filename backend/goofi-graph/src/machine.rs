@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::expr_rewrite::{self, Target, VarRef};
-use crate::timeline::{Lanes, Recording, Take, Timeline, Track, NOTES, RECORDING, TAKE};
+use crate::timeline::{Lanes, Recording, Take, Timeline, Track, RECORDING, TAKE};
 
 /// The elements of a playhead's group that are the machine's own, and no attribute's name: where
 /// it is, and how far along its transition. Where it came from and when it arrived are no
@@ -50,10 +50,10 @@ pub fn find<'a, V: Named>(map: &'a IndexMap<String, V>, given: &str) -> Option<&
     map.get_key_value(given).or_else(|| map.iter().find(|(_, v)| v.name() == given)).map(|(id, _)| id.as_str())
 }
 
-/// Whether every record of `map` has an id that is no name, and a legal name of its own.
-pub(crate) fn names<V: Named>(kind: &str, map: &IndexMap<String, V>) -> Result<(), String> {
+/// Whether every record given has an id that is no name, and a legal name of its own.
+pub(crate) fn names<'a, V: Named + 'a>(kind: &str, records: impl IntoIterator<Item = (&'a String, &'a V)>) -> Result<(), String> {
     let mut seen = HashSet::new();
-    for (id, v) in map {
+    for (id, v) in records {
         if is_valid_identifier(id) {
             return Err(format!("`{id}` is a name, not the id of a {kind}"));
         }
@@ -625,23 +625,19 @@ impl Machines {
 
     /// The beat the position `now` is, at the tempo the timeline plays at.
     fn beat(&self, now: f64) -> f64 {
-        now * self.timed.1.max(1e-9) / 60.0
+        now / crate::timeline::seconds_per_beat(self.timed.1)
     }
 
     /// Take what the input of every track with a recording holds at the position `now`. Notes
-    /// are the keys of the input's device as they go down and up; a curve takes its input's
-    /// value at most `rate` times a second.
+    /// are the keys the input holds as they go down and up; a curve takes its input's first
+    /// number at most `rate` times a second.
     fn capture(&mut self, now: f64, read: &dyn Fn(&Target) -> Result<Local, String>) {
         let (beat, every) = (self.beat(now), self.beat(1.0));
         let ctx = Ctx::new(&self.heard, &self.evaluator, read, now);
         for (id, taking) in &mut self.recording {
             let Some(track) = self.timed.0.get(id) else { continue };
             let taken = match &track.lanes {
-                Lanes::Note { .. } => read(&Target::Variable { key: format!("{}.{}", track.input, NOTES.0) }).map(|held| {
-                    if let Local::Frame(held) = held {
-                        taking.keys(beat, control::numbers(&held));
-                    }
-                }),
+                Lanes::Note { .. } => ctx.eval(&track.input, None).map(|held| taking.keys(beat, control::numbers(&held))),
                 Lanes::Curve { rate, .. } => ctx.eval(&track.input, None).map(|value| taking.sample(beat, control::number_of(&value), ctx.stamp(&track.input), every / rate)),
             };
             if let Err(why) = taken {
@@ -683,9 +679,7 @@ impl Machines {
             Target::Variable { key } => Some(key.clone()),
             _ => None,
         });
-        // The keys of a device a note track records from are read as a variable is.
-        let devices = self.timed.0.values().filter(|t| matches!(t.lanes, Lanes::Note { .. }) && !t.input.is_empty()).map(|t| format!("{}.{}", t.input, NOTES.0));
-        self.keys = variables.chain(devices).collect();
+        self.keys = variables.collect();
         self.keys.sort();
         self.keys.dedup();
     }

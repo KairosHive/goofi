@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use goofi_core::ease::Curve;
-use goofi_core::scale;
 use goofi_core::variables::MIDI_ENTRIES;
 use goofi_core::{Data, Face, Meta};
 use goofi_node::ExprEvaluator;
@@ -20,22 +19,12 @@ use crate::machine::{functional_code, AttributeKind, Keyed, Leg, Motion};
 /// The one element of a note track's group, and its width: each held note's velocity, where a
 /// MIDI device's `notes` has its channel 1, so a reader of a device reads a track.
 pub(crate) const NOTES: (&str, usize) = MIDI_ENTRIES[1];
-/// The grids a note track's notes snap to in a panel, by name: how many seconds or beats lie
-/// between two of its lines, and which of the two they are.
-pub const GRIDS: [(&str, f64, bool); 10] = [
-    ("1 s", 1.0, false),
-    ("1/2 s", 0.5, false),
-    ("1/4 s", 0.25, false),
-    ("1/10 s", 0.1, false),
-    ("1 beat", 1.0, true),
-    ("1/2 beat", 0.5, true),
-    ("1/3 beat", 1.0 / 3.0, true),
-    ("1/4 beat", 0.25, true),
-    ("1/8 beat", 0.125, true),
-    ("1/16 beat", 0.0625, true),
-];
 /// The one element of a curve track's group.
 const VALUE: &str = "value";
+/// The seconds a beat lasts at `bpm`. A tempo of nothing is the slowest there is: a beat never comes.
+pub fn seconds_per_beat(bpm: f64) -> f64 {
+    60.0 / bpm.max(1e-9)
+}
 /// The element of every track's group that says whether a recording into it runs: 1 or 0.
 pub(crate) const RECORDING: &str = "recording";
 /// The element of every track's group that holds what a recording has taken so far, for a panel
@@ -47,30 +36,21 @@ pub(crate) const TAKE: &str = "take";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
-    /// Its place among the tracks, the lowest first: the order a panel draws them in.
-    pub order: u32,
-    /// What a recording into the track takes in: for notes the variable group of a MIDI device,
-    /// for a curve an expression, as a param's. Empty is none.
+    /// What a recording into the track takes in: an expression, as a param's. A note track reads
+    /// the keys it holds, a device's `vars.pads.notes`; a curve reads its first number. Empty is
+    /// none.
     pub input: String,
     #[serde(flatten)]
     pub lanes: Lanes,
 }
 
-/// What a track holds: notes, with the keyboard a panel draws them on — its lowest and highest
-/// pitch, the scale and root whose notes it marks, and the grid a gesture snaps to — or one curve through its keyframes, in
-/// time order, over a range. The curve's value holds outside the keyframes.
+/// What a track holds: notes, or one curve through its keyframes, in time order, over a range.
+/// The curve's value holds outside the keyframes. The keyboard a panel draws the notes on is the
+/// panel's own.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Lanes {
     Note {
-        #[serde(default = "keyboard")]
-        range: [u8; 2],
-        #[serde(default = "chromatic")]
-        scale: String,
-        #[serde(default = "c")]
-        root: String,
-        #[serde(default = "quarter")]
-        grid: String,
         #[serde(default)]
         notes: Vec<Note>,
     },
@@ -100,23 +80,6 @@ fn unit() -> [f64; 2] {
 
 fn thirty() -> f64 {
     30.0
-}
-
-/// Two octaves from C3.
-fn keyboard() -> [u8; 2] {
-    [48, 72]
-}
-
-fn chromatic() -> String {
-    scale::PRESET_NAMES[0].into()
-}
-
-fn c() -> String {
-    scale::NOTES[0].into()
-}
-
-fn quarter() -> String {
-    GRIDS[7].0.into()
 }
 
 /// A keyframe: the value at `at`, and the curve from it to the next one. A keyframe with no
@@ -178,11 +141,9 @@ impl Track {
         // where the clock does not come.
         let time = |at: f64| at.is_finite();
         let (ok, why) = match &self.lanes {
-            Lanes::Note { range, scale, root, grid, notes } => {
+            Lanes::Note { notes } => {
                 let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
-                let keyboard = range[0] < range[1] && range[1] <= 127 && scale::PRESET_NAMES.contains(&scale.as_str()) && scale::NOTES.contains(&root.as_str());
-                let gridded = GRIDS.iter().any(|(name, ..)| name == grid);
-                (keyboard && gridded && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; its grid is one a panel offers; a note lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
+                (notes.iter().all(whole), "a note lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
             Lanes::Curve { range, rate, keys } => {
                 let whole = keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && keys.windows(2).all(|k| k[0].at < k[1].at);
@@ -190,14 +151,8 @@ impl Track {
             }
         };
         ok.then_some(()).ok_or_else(|| format!("track `{}`: {why}", self.name))?;
-        // What it records from: a device's group by name, or an expression as a param's, which
-        // has no `me` to read.
-        let heard = match &self.lanes {
-            _ if self.input.is_empty() => true,
-            Lanes::Note { .. } => goofi_core::variables::is_valid_identifier(&self.input),
-            Lanes::Curve { .. } => input_refs(&self.input).is_ok(),
-        };
-        heard.then_some(()).ok_or_else(|| format!("track `{}`: a note track's `input` is the group of a MIDI device, a curve track's an expression as a param's, without `me`", self.name))
+        let heard = self.input.is_empty() || input_refs(&self.input).is_ok();
+        heard.then_some(()).ok_or_else(|| format!("track `{}`: its `input` is an expression as a param's, without `me`", self.name))
     }
 
     /// Take a recording in. Notes are added to those the track holds. Each pass of samples
@@ -207,10 +162,7 @@ impl Track {
     /// it was.
     pub fn merge(&mut self, take: &Take) -> Result<(), String> {
         match (&mut self.lanes, take) {
-            (Lanes::Note { range, notes, .. }, Take::Notes(taken)) => {
-                *range = taken.iter().fold(*range, |r, n| [r[0].min(n.pitch), r[1].max(n.pitch)]);
-                notes.extend(taken.iter().cloned());
-            }
+            (Lanes::Note { notes }, Take::Notes(taken)) => notes.extend(taken.iter().cloned()),
             (Lanes::Curve { range, keys, .. }, Take::Samples(passes)) => {
                 let wide = passes.iter().flatten().fold(*range, |r, s| [r[0].min(s.value), r[1].max(s.value)]);
                 let refused = || format!("track `{}`: the take leaves the curve more than {MOST} keyframes, the most it holds: record a shorter stretch, a slower rate or a smoother input", self.name);
@@ -232,9 +184,9 @@ impl Track {
         Ok(())
     }
 
-    /// The expression a recording into the track evaluates: a curve track's input, where it has one.
+    /// The expression a recording into the track evaluates: its input, where it has one.
     pub fn expression(&self) -> Option<&str> {
-        (matches!(self.lanes, Lanes::Curve { .. }) && !self.input.is_empty()).then_some(self.input.as_str())
+        (!self.input.is_empty()).then_some(self.input.as_str())
     }
 
     /// The variables the track's group holds, each born at rest: what it plays, and whether a
@@ -259,8 +211,8 @@ impl Track {
     }
 }
 
-/// The variables a curve track's input reads: an expression as a param's, but with no node of
-/// its own, so no `me`. A playhead's element is the variable it is published as.
+/// The variables a track's input reads: an expression as a param's, but with no node of its own,
+/// so no `me`. A playhead's element is the variable it is published as.
 pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
     let (rewritten, mut refs) = crate::expr_rewrite::rewrite(text)?;
     for r in &mut refs {
@@ -441,7 +393,6 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
     // A cubic from (0, 0) to (1, 1) with its handles a third and two thirds along is a cubic in
     // the progress itself, so the two handle heights nearest the take are a least squares.
     let basis = |x: f64| (3.0 * (1.0 - x) * (1.0 - x) * x, 3.0 * (1.0 - x) * x * x, x * x * x);
-    // The stretches still to fit, the earliest on top, each from one sample to a later one.
     let mut open = vec![(0, run.len() - 1)];
     while let Some((from, to)) = open.pop() {
         // Past the most a curve holds, the rest is not fitted: the caller refuses the take.
@@ -450,7 +401,6 @@ fn spans(run: &[Sample], tolerance: f64, keys: &mut Vec<Key>) {
         }
         let (first, last) = (run[from], run[to]);
         let (dt, dv) = (last.at - first.at, last.value - first.value);
-        // Each point by the sample it lies nearest, its beat and the take's value there.
         let line = (from..to).flat_map(|i| (0..POINTS).map(move |k| (i, k as f64 / POINTS as f64)));
         let take = || line.clone().map(|(i, f)| (i + usize::from(f >= 0.5), run[i].at + (run[i + 1].at - run[i].at) * f, run[i].value + (run[i + 1].value - run[i].value) * f));
         let level = dv.abs() <= tolerance / 100.0;
@@ -494,10 +444,9 @@ impl Timeline {
     pub(crate) fn new(tracks: &IndexMap<String, Track>, bpm: f64, evaluator: &Option<Arc<dyn ExprEvaluator>>) -> Timeline {
         let mut out = Timeline::default();
         for track in tracks.values() {
-            // A tempo of nothing is the slowest there is: a beat never comes.
-            let seconds = |at: f64| at * 60.0 / bpm.max(1e-9);
+            let seconds = |at: f64| at * seconds_per_beat(bpm);
             match &track.lanes {
-                Lanes::Note { notes, .. } => {
+                Lanes::Note { notes } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();
                     out.notes.push((track.name.clone(), notes));
                 }

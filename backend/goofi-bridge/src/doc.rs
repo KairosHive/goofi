@@ -31,6 +31,8 @@ fn diff_into(ops: &mut Vec<Op>, path: Vec<String>, before: &Value, after: &Value
                 ops.push(Op::Del { path: at(key) });
             }
         }
+        // Two maps whose keys moved are equal to `Map`, which holds no order: a reorder goes whole.
+        (Some(_), Some(_)) => ops.push(Op::Put { path, value: after.clone() }),
         _ if before == after => {}
         _ => ops.push(Op::Put { path, value: after.clone() }),
     }

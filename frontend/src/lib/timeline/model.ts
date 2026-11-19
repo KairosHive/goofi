@@ -1,6 +1,45 @@
 /* The timeline's arithmetic: what the panel draws its tracks by, apart from the drawing. */
-import type { Curve, Key, Track } from '$lib/api/generated';
+import type { Curve, Key, Note, Track } from '$lib/api/generated';
+import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 import { curveAt } from '$lib/ui/curve';
+
+/** How a panel draws a note track's keyboard, its own and no part of the track: the pitches from
+ * its lowest to its highest, the scale and the root it marks and a note lands on, and the grid a
+ * note snaps to. */
+export interface Keyboard {
+	range: [number, number];
+	scale: string;
+	root: string;
+	grid: string;
+}
+/** The grids a note snaps to, by name: how many seconds or beats lie between two lines, and
+ * whether they are beats. */
+export const GRIDS: Record<string, readonly [number, boolean]> = {
+	'1 s': [1, false],
+	'1/2 s': [0.5, false],
+	'1/4 s': [0.25, false],
+	'1/10 s': [0.1, false],
+	'1 beat': [1, true],
+	'1/2 beat': [0.5, true],
+	'1/3 beat': [1 / 3, true],
+	'1/4 beat': [0.25, true],
+	'1/8 beat': [0.125, true],
+	'1/16 beat': [0.0625, true]
+};
+/** The keyboard for `notes` with what a panel `set` of it: two octaves from C3 and every note the
+ * track holds, chromatic from C, on quarter beats, but for what is set. What is set and is no
+ * keyboard's, as a file or an agent may put in a panel's state, is as if unset. */
+export function keyboard(notes: Note[], set: Partial<Keyboard> = {}): Keyboard {
+	const pitches = notes.map((n) => n.pitch);
+	const key = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 127;
+	const range = Array.isArray(set.range) && key(set.range[0]) && key(set.range[1]) && set.range[0] < set.range[1] ? set.range : null;
+	return {
+		range: range ?? [Math.min(48, ...pitches), Math.max(72, ...pitches)],
+		scale: set.scale !== undefined && Object.hasOwn(SCALES, set.scale) ? set.scale : Object.keys(SCALES)[0],
+		root: (NOTE_NAMES as readonly string[]).includes(set.root ?? '') ? set.root! : NOTE_NAMES[0],
+		grid: set.grid !== undefined && Object.hasOwn(GRIDS, set.grid) ? set.grid : '1/4 beat'
+	};
+}
 
 /** The seconds a beat of the tempo lasts; a tempo of nothing has the longest beat there is. */
 export const beatSeconds = (bpm: number): number => 60 / Math.max(bpm, 1e-9);

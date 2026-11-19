@@ -1,7 +1,7 @@
 //! The thread of what steps on the clock's position, the machines and the timeline,
 //! `goofi-machines`: it wakes for a reason alone — a landing, a decision's
-//! due, a stamped request, a replaced model, a write to a variable a machine reads, or a frame of a
-//! node one reads — settles every instant owed and writes each playhead's group through the store,
+//! due, a stamped request, a replaced model, a steer of the clock, a write to a variable a machine
+//! reads, or a frame of a node one reads — settles every instant owed and writes each playhead's group through the store,
 //! as the follower does: no graph lock, no undo entry, no dirty mark. The graph lock is for config
 //! edits, which hand it a replaced model with the node reads resolved.
 
@@ -37,10 +37,10 @@ pub enum Msg {
     Reset { at: f64, machine: Option<String> },
     /// A variable was written; one a machine reads is a reason to look again.
     Changed(String),
-    /// The clock's position was put somewhere: every run starts over there.
-    Jumped,
-    /// The section the clock loops in moved: what the thread waits for is another instant.
-    Section,
+    /// The clock was steered: what the thread waits for is another instant, and the notes that
+    /// sound stop and start again. With `restart`, the position was put somewhere: every run
+    /// starts over there.
+    Clock { restart: bool },
     /// Begin a recording into the track of this id.
     Record(String),
     /// End the recording into the track of this id, and answer what it took.
@@ -245,10 +245,12 @@ fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, e
         Msg::Fire { at, machine, playhead, transition } => machines.fire(at, &machine, &playhead, &transition),
         Msg::Jump { at, machine, playhead, state } => machines.jump(at, &machine, &playhead, &state),
         Msg::Reset { at, machine } => machines.reset(at, machine.as_deref()),
-        // A pause and a resume are a pass too: the notes that sound stop, and start again.
-        Msg::Changed(name) => return name == "clock.playing" || machines.keys().contains(&name),
-        Msg::Jumped => machines.restart(),
-        Msg::Section => return false,
+        Msg::Changed(name) => return machines.keys().contains(&name),
+        Msg::Clock { restart } => {
+            if restart {
+                machines.restart();
+            }
+        }
         Msg::Record(track) => machines.record(&track),
         Msg::Recorded(track, answer) => ended.push((track, answer)),
     }

@@ -50,13 +50,13 @@ pub struct Time {
     origin: AtomicU64,
     wall: Mutex<SystemTime>,
     /// The position, as three `f64`s a reader takes with no lock: it is `run - shift` while it
-    /// plays and `held` while it is paused (NaN while it plays), folded into the section or the
-    /// length where there is one.
+    /// plays and `held` while it is paused (NaN while it plays), folded into the loop it is in.
     shift: AtomicU64,
     held: AtomicU64,
-    /// The seconds at which the position restarts from 0; 0 is never.
+    /// The seconds at which the position restarts from 0, the timeline's length; 0 is never.
     total: AtomicU64,
-    /// The section the position loops in, where it begins and how long it is; a length of 0 is none.
+    /// The section the position loops in, where it begins and how long it is, which stands in
+    /// the length's place while it lasts; a length of 0 is none.
     start: AtomicU64,
     length: AtomicU64,
 }
@@ -78,18 +78,22 @@ impl Time {
         since_base().saturating_sub(self.origin.load(Ordering::Relaxed)) as f64 / 1e9
     }
 
-    /// The position at the run second `run`.
-    pub fn position_at(&self, run: f64) -> f64 {
+    /// The loop the position restarts in, where it begins and how long it is: the section, else
+    /// the length from 0, else none.
+    fn looped(&self) -> Option<(f64, f64)> {
         let read = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
-        let (held, total, start, length) = (read(&self.held), read(&self.total), read(&self.start), read(&self.length));
-        let at = if held.is_nan() { run - read(&self.shift) } else { held };
-        // Before the section the position plays up to it; from its start on it stays inside.
-        if length > 0.0 && at >= start {
-            start + (at - start).rem_euclid(length)
-        } else if total > 0.0 {
-            at.rem_euclid(total)
-        } else {
-            at
+        let (total, start, length) = (read(&self.total), read(&self.start), read(&self.length));
+        if length > 0.0 { Some((start, length)) } else if total > 0.0 { Some((0.0, total)) } else { None }
+    }
+
+    /// The position at the run second `run`: before its loop it plays up to it, and from the
+    /// loop's start on it stays inside.
+    pub fn position_at(&self, run: f64) -> f64 {
+        let held = f64::from_bits(self.held.load(Ordering::Relaxed));
+        let at = if held.is_nan() { run - f64::from_bits(self.shift.load(Ordering::Relaxed)) } else { held };
+        match self.looped() {
+            Some((start, length)) if at >= start => start + (at - start).rem_euclid(length),
+            _ => at,
         }
     }
 
@@ -140,17 +144,8 @@ impl Time {
     /// wait toward a deadline of the position parks for. None while it is paused, and for a
     /// position it never reaches.
     pub fn until(&self, at: f64) -> Option<Duration> {
-        let read = |a: &AtomicU64| f64::from_bits(a.load(Ordering::Relaxed));
-        let (total, start, length) = (read(&self.total), read(&self.start), read(&self.length));
         let now = self.position();
-        // Inside the section the position restarts at its end and never at the length.
-        let at = match (length > 0.0, total > 0.0) {
-            (true, _) if now >= start => at.min(start + length),
-            (true, true) => at.min(start + length).min(total),
-            (true, false) => at.min(start + length),
-            (false, true) => at.min(total),
-            (false, false) => at,
-        };
+        let at = self.looped().map_or(at, |(start, length)| at.min(start + length));
         (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - now).max(0.0)))
     }
 

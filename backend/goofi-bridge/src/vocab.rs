@@ -187,7 +187,6 @@ pub fn typescript() -> String {
     let playhead_fields = quoted(&goofi_graph::machine::OWN);
     let own_groups = quoted(&goofi_core::variables::OWN_GROUPS);
     let note_names = quoted(goofi_core::scale::NOTES);
-    let grids: String = goofi_graph::timeline::GRIDS.iter().map(|(name, count, beats)| format!("\t'{name}': [{count}, {beats}],\n")).collect();
     // Each named scale as the semitones above its root nearest its degrees: what a keyboard marks.
     let scales: String = goofi_core::scale::PRESET_NAMES
         .iter()
@@ -314,8 +313,6 @@ pub fn typescript() -> String {
          export const OWN_GROUPS = [{own_groups}] as const;\n\
          /** The twelve notes by name, from C: what a root is one of. */\n\
          export const NOTE_NAMES = [{note_names}] as const;\n\
-         /** The grids a note track's notes snap to, by name: how many seconds or beats lie between two lines, and whether they are beats. */\n\
-         export const GRIDS: Record<string, readonly [number, boolean]> = {{\n{grids}}};\n\
          /** The named scales, each as the semitones above its root nearest its degrees. */\n\
          export const SCALES: Record<string, readonly number[]> = {{\n{scales}}};\n\
          \n\

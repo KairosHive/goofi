@@ -8,6 +8,7 @@
      axis. -->
 <script lang="ts">
 	import { beginDrag } from 'panelty';
+	import { clamp } from '$lib/ui';
 	import { NARROWEST_VIEW, barPlace, barPoint } from './model';
 
 	let {
@@ -44,7 +45,6 @@
 		testid?: string;
 	} = $props();
 
-	const clamp = (v: number, lo = 0, hi = 1): number => Math.min(hi, Math.max(lo, v));
 	const [from, to] = $derived([barPlace(view[0], span), barPlace(view[1], span)]);
 	/** How much of the thumb each fold takes: its share of the bar, told in the thumb's own length. */
 	const shown = $derived(Math.max(clamp(to) - clamp(from), 1e-6));
@@ -74,7 +74,8 @@
 				}
 				onChange(now);
 			},
-			commit: () => onCommit?.(now),
+			// A press that moved nothing is no edit.
+			commit: () => void (now !== was && onCommit?.(now)),
 			cancel: () => onChange(was)
 		});
 	}
