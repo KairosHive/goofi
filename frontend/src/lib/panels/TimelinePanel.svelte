@@ -21,7 +21,7 @@
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import TrackRange from '$lib/timeline/TrackRange.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
-	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
+	import TrackHead, { notesOf, pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
 	import { Bar, Button, Chip, ConfirmDialog, EmptyState, Icon, IconButton, NumberInput, under, ContextMenu, isTextEditingTarget, clamp, fixed } from '$lib/ui';
 
 	interface TimelineState {
@@ -219,14 +219,15 @@
 	let ports = $state<Port[]>([]);
 	const rescan = async (): Promise<Port[]> => (ports = (await g.op<{ ports: Port[] }>('midi list', {})).ports);
 	void rescan().catch(fail('List MIDI devices'));
-	/** The MIDI device a note track records from: the one it names while that is there, else the
-	 * one there is, else one picked at `at` from those there are, or none where the pick is let go. */
+	/** What a note track records from, as the expression that reads it: the device it names while
+	 * that is there, else the one there is, else one picked at `at` from those there are, or none
+	 * where the pick is let go. */
 	async function device(t: Track, at: { x: number; y: number }): Promise<string | null> {
 		const found = await rescan();
 		if (found.length === 0) throw new Error('no MIDI device is connected');
-		if (found.some((p) => p.group === t.input)) return t.input;
-		if (found.length === 1) return found[0].group;
-		return quickPick().ask(at, found.map((p) => ({ id: p.group, label: p.port })), `Record ${t.name} from`);
+		if (found.some((p) => notesOf(p.group) === t.input)) return t.input;
+		if (found.length === 1) return notesOf(found[0].group);
+		return quickPick().ask(at, found.map((p) => ({ id: notesOf(p.group), label: p.port })), `Record ${t.name} from`);
 	}
 	/** Begin a recording into the track, or end the one that runs. A paused clock plays for it. */
 	async function record(e: MouseEvent, id: string): Promise<void> {
@@ -739,19 +740,20 @@
 		/* The keys and the rows pile up from the bottom, each with a line at its top. */
 		--pile: column-reverse;
 		--line: 1px 0 0 0;
+		/* The least a note is along the axis. */
+		--note-w-min: var(--space-2);
+		--note-h-min: 0px;
 		/* A note's end and a track's edge: where each lies, how large, and the cursor on it. */
 		--end-long: min(var(--space-3), 34%);
 		--end-inset: 0 0 0 auto;
-		--note-w-min: var(--space-2);
-		--note-h-min: 0px;
 		--end-w: var(--end-long);
 		--end-h: auto;
-		--stretch: ew-resize;
+		--end-cursor: ew-resize;
 		--grip-thick: var(--space-2);
 		--grip-inset: auto 0 0 0;
 		--grip-w: auto;
 		--grip-h: var(--grip-thick);
-		--resize: ns-resize;
+		--grip-cursor: ns-resize;
 		display: flex;
 		flex-direction: column;
 		height: 100%;
@@ -970,7 +972,7 @@
 		inset: var(--end-inset);
 		width: var(--end-w);
 		height: var(--end-h);
-		cursor: var(--stretch);
+		cursor: var(--end-cursor);
 	}
 	/* A note's fill is as strong as its velocity; the shortest still shows. */
 	.note {
@@ -1024,7 +1026,7 @@
 		inset: var(--grip-inset);
 		width: var(--grip-w);
 		height: var(--grip-h);
-		cursor: var(--resize);
+		cursor: var(--grip-cursor);
 		touch-action: none;
 		user-select: none;
 	}
@@ -1059,11 +1061,11 @@
 		--note-h-min: var(--space-2);
 		--end-w: auto;
 		--end-h: var(--end-long);
-		--stretch: ns-resize;
+		--end-cursor: ns-resize;
 		--grip-inset: 0 0 0 auto;
 		--grip-w: var(--grip-thick);
 		--grip-h: auto;
-		--resize: ew-resize;
+		--grip-cursor: ew-resize;
 	}
 	.vertical .stack {
 		display: flex;

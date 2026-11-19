@@ -96,8 +96,9 @@ export type Lanes = { "kind": "note", range: [number, number], scale: string, ro
 rate: number, keys: Array<Key>, };
 export type Track = { name: string, 
 /**
- * What a recording into the track takes in: for notes the variable group of a MIDI device,
- * for a curve an expression, as a param's. Empty is none.
+ * What a recording into the track takes in: an expression, as a param's. A note track reads
+ * the keys it holds, a device's `vars.pads.notes`; a curve reads its first number. Empty is
+ * none.
  */
 input: string, } & ({ "kind": "note", range: [number, number], scale: string, root: string, grid: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], 
 /**

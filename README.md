@@ -254,10 +254,11 @@ run that falls keeps falling, and it is level at a peak. The others are `step`, 
 `timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
 A track records its `input` into itself while the clock plays: the record button beside its
-name, or `timeline track record`, begins a recording, and ends it. A note track's input is a
-MIDI device: the one there is, or the one picked where there are several. The notes played are
-added to the notes the track holds. A curve track's input is an expression, as a param's, typed
-or dropped on it: a node, a variable, a state. The track takes the input's value at most `rate`
+name, or `timeline track record`, begins a recording, and ends it. The input is an expression, as a
+param's. A note track reads the keys a MIDI device holds, `vars.<device>.notes`: the panel offers
+the device there is, or asks which where there are several. The notes played are added to the
+notes the track holds. A curve track's input is typed or dropped on it: a node, a variable, a
+state. The track takes the input's value at most `rate`
 times a second (30 unless set), and a node slower than that gives a sample for each of its
 frames; an input that reads no node holds its value between two changes, a step. The end of the
 recording puts keyframes with fitted bezier curves that follow what came, in place of the

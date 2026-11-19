@@ -10,6 +10,8 @@
 	}
 	/** A pitch as a keyboard names it: C4 is 60. */
 	export const pitchName = (pitch: number): string => `${NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
+	/** The expression that reads the keys a device's group holds: a note track's input. */
+	export const notesOf = (group: string): string => `vars.${group}.notes`;
 </script>
 
 <script lang="ts">
@@ -53,9 +55,10 @@
 	const open = $state<Record<Group, boolean>>({ record: false, keyboard: true });
 	/** A curve's input that is no expression: none, or a number alone. */
 	const plain = $derived(t.input.trim() === '' || Number.isFinite(Number(t.input)));
-	/** The devices a note track can record from: those there are, and the one it names. */
-	const devices = $derived(['', ...new Set([...ports.map((p) => p.group), ...(t.input ? [t.input] : [])])]);
-	const deviceNames = $derived(Object.fromEntries(devices.map((d) => [d, d === '' ? 'auto' : (ports.find((p) => p.group === d)?.port ?? `${d} (absent)`)])));
+	/** The devices a note track can record from, each as the expression that reads it: those there
+	 * are, and the one the track names. */
+	const devices = $derived(['', ...new Set([...ports.map((p) => notesOf(p.group)), ...(t.input ? [t.input] : [])])]);
+	const deviceNames = $derived(Object.fromEntries(devices.map((d) => [d, d === '' ? 'auto' : (ports.find((p) => notesOf(p.group) === d)?.port ?? `${d} (absent)`)])));
 </script>
 
 {#snippet group(name: Group)}

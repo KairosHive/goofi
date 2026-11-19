@@ -829,14 +829,11 @@ impl Graph {
                 out.extend(group_of(key));
             }
         }
-        for track in self.patch.stepped.tracks.values().filter(|t| !t.input.is_empty()) {
-            match track.expression().map(timeline::input_refs) {
-                None => drop(out.insert(track.input.clone())),
-                Some(read) => out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
-                    expr_rewrite::Target::Variable { key } => group_of(&key),
-                    _ => None,
-                })),
-            }
+        for read in self.patch.stepped.tracks.values().filter_map(timeline::Track::expression).map(timeline::input_refs) {
+            out.extend(read.into_iter().flat_map(|(_, refs)| refs).filter_map(|r| match r.target {
+                expr_rewrite::Target::Variable { key } => group_of(&key),
+                _ => None,
+            }));
         }
         for (_, leaf) in self.leaves() {
             let typed = self.typed(leaf);
@@ -1085,12 +1082,6 @@ impl Graph {
         let rename = |name: &str| moved.iter().find(|(old, _)| old == name).map(|(_, new)| new.clone());
         self.rewrite_variable_expressions(|e| expr_rewrite::rename_variables(e, rename));
         self.rewrite_stepped(|e| expr_rewrite::rename_variables(e, rename));
-        // A note track names the group it records from, which is that group's `notes`.
-        for track in Arc::make_mut(&mut self.patch.stepped).tracks.values_mut().filter(|t| t.expression().is_none()) {
-            if let Some((group, _)) = rename(&format!("{}.notes", track.input)).as_deref().and_then(goofi_core::variables::split_variable) {
-                track.input = group.to_string();
-            }
-        }
         self.rewrite_sources(|s| {
             Some(SourceState { expression: expr_rewrite::rename_variables(&s.expression, rename)?, ..s.clone() })
         })

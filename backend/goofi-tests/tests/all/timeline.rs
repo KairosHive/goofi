@@ -253,7 +253,7 @@ fn a_recording_goes_into_its_track() {
     let heard = track(&g, "heard");
     assert_eq!((&heard["range"], heard["keys"].as_array().and_then(|k| k.last()).map(|k| &k["value"])), (&j!([0.0, 4.0]), Some(&j!(4.0))), "{heard}");
 
-    // A note track records the keys of a MIDI device, by the device's group, on any channel.
+    // A note track records the keys its input holds, a MIDI device's `notes`, on any channel.
     g.graph().variables().grab_midi("pads", "a test port").unwrap();
     let press = |g: &Goofi, key: usize, velocity: f64| {
         let mut keys = vec![0.0; 2048];
@@ -262,7 +262,7 @@ fn a_recording_goes_into_its_track() {
     };
     g.call("timeline track add", j!({ "kind": "note", "name": "played" }));
     let there = j!({ "at": 0.0, "length": 1.0, "pitch": 50, "velocity": 0.5 });
-    g.call("timeline track edit", j!({ "track": "played", "input": "pads", "notes": [there] }));
+    g.call("timeline track edit", j!({ "track": "played", "input": "vars.pads.notes", "notes": [there] }));
     // Pitch 80 on channel 2 is down from beat 1 until the clock is paused, and comes up there.
     at(&g, 1.0);
     press(&g, 128 + 80, 0.75);
@@ -275,12 +275,12 @@ fn a_recording_goes_into_its_track() {
     assert_eq!((&played["notes"][0], &note["at"], &note["pitch"], &note["velocity"]), (&there, &j!(1.0), &j!(80), &j!(0.75)), "the note is added to those there");
     assert!(near(note["length"].as_f64().unwrap(), lifted - 1.0), "{note} for a key that came up at {lifted}");
     assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
-    // A track is a group with `notes` too, so another can name it as its input, and a rename
+    // A track is a group with `notes` too, so another can read it as its input, and a rename
     // of it follows there.
     g.call("timeline track add", j!({ "kind": "note", "name": "copy" }));
-    g.call("timeline track edit", j!({ "track": "copy", "input": "played" }));
+    g.call("timeline track edit", j!({ "track": "copy", "input": "vars.played.notes" }));
     g.call("timeline track edit", j!({ "track": "played", "to": "lead" }));
-    assert_eq!(track(&g, "copy")["input"], j!("lead"));
+    assert_eq!(track(&g, "copy")["input"], j!("vars.lead.notes"));
     g.call("timeline track edit", j!({ "track": "lead", "to": "played" }));
     // A key still down when the recording ends is a note until there.
     at(&g, 4.0);
@@ -448,7 +448,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
 
     // A note is a key of the device from when it goes down to when it comes up; a seek ends it
     // where the recording last looked, and a key still down begins another where it lands.
-    let mut m = recorder("pads", Lanes::Note { range: [48, 72], scale: "chromatic".into(), root: "C".into(), grid: "1/4 beat".into(), notes: Vec::new() });
+    let mut m = recorder("vars.pads.notes", Lanes::Note { range: [48, 72], scale: "chromatic".into(), root: "C".into(), grid: "1/4 beat".into(), notes: Vec::new() });
     for (now, velocity, seek) in [(1.0, 0.5, false), (1.5, 0.5, false), (3.0, 0.5, true), (3.5, 0.0, false)] {
         if seek {
             m.restart();

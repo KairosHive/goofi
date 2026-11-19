@@ -1,7 +1,7 @@
 //! The thread of what steps on the clock's position, the machines and the timeline,
 //! `goofi-machines`: it wakes for a reason alone — a landing, a decision's
-//! due, a stamped request, a replaced model, a write to a variable a machine reads, or a frame of a
-//! node one reads — settles every instant owed and writes each playhead's group through the store,
+//! due, a stamped request, a replaced model, a steer of the clock, a write to a variable a machine
+//! reads, or a frame of a node one reads — settles every instant owed and writes each playhead's group through the store,
 //! as the follower does: no graph lock, no undo entry, no dirty mark. The graph lock is for config
 //! edits, which hand it a replaced model with the node reads resolved.
 

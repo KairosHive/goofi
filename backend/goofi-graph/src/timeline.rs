@@ -51,8 +51,9 @@ pub(crate) const TAKE: &str = "take";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
-    /// What a recording into the track takes in: for notes the variable group of a MIDI device,
-    /// for a curve an expression, as a param's. Empty is none.
+    /// What a recording into the track takes in: an expression, as a param's. A note track reads
+    /// the keys it holds, a device's `vars.pads.notes`; a curve reads its first number. Empty is
+    /// none.
     pub input: String,
     #[serde(flatten)]
     pub lanes: Lanes,
@@ -192,14 +193,8 @@ impl Track {
             }
         };
         ok.then_some(()).ok_or_else(|| format!("track `{}`: {why}", self.name))?;
-        // What it records from: a device's group by name, or an expression as a param's, which
-        // has no `me` to read.
-        let heard = match &self.lanes {
-            _ if self.input.is_empty() => true,
-            Lanes::Note { .. } => goofi_core::variables::is_valid_identifier(&self.input),
-            Lanes::Curve { .. } => input_refs(&self.input).is_ok(),
-        };
-        heard.then_some(()).ok_or_else(|| format!("track `{}`: a note track's `input` is the group of a MIDI device, a curve track's an expression as a param's, without `me`", self.name))
+        let heard = self.input.is_empty() || input_refs(&self.input).is_ok();
+        heard.then_some(()).ok_or_else(|| format!("track `{}`: its `input` is an expression as a param's, without `me`", self.name))
     }
 
     /// Take a recording in. Notes are added to those the track holds. Each pass of samples
@@ -234,9 +229,9 @@ impl Track {
         Ok(())
     }
 
-    /// The expression a recording into the track evaluates: a curve track's input, where it has one.
+    /// The expression a recording into the track evaluates: its input, where it has one.
     pub fn expression(&self) -> Option<&str> {
-        (matches!(self.lanes, Lanes::Curve { .. }) && !self.input.is_empty()).then_some(self.input.as_str())
+        (!self.input.is_empty()).then_some(self.input.as_str())
     }
 
     /// The variables the track's group holds, each born at rest: what it plays, and whether a
@@ -261,8 +256,8 @@ impl Track {
     }
 }
 
-/// The variables a curve track's input reads: an expression as a param's, but with no node of
-/// its own, so no `me`. A playhead's element is the variable it is published as.
+/// The variables a track's input reads: an expression as a param's, but with no node of its own,
+/// so no `me`. A playhead's element is the variable it is published as.
 pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
     let (rewritten, mut refs) = crate::expr_rewrite::rewrite(text)?;
     for r in &mut refs {
