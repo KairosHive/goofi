@@ -64,6 +64,12 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     for (time, value) in [(0.5, 9.375), (1.9, 5.025), (2.1, 4.975)] {
         level(&g, time, value, "the eased fall");
     }
+    // A keyframe may stand before 0, as one may stand past the timeline's length: the clock does
+    // not come there, and the curve from it is the curve at 0.
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": [{ "at": -2.0, "value": 0.0, "curve": "linear" }, { "at": 2.0, "value": 10.0 }] }));
+    for (time, value) in [(0.0, 5.0), (1.0, 7.5), (3.0, 10.0)] {
+        level(&g, time, value, "the line from before 0");
+    }
     // At a peak a smooth curve is level, and it comes up to the peak and never past it; where
     // the keyframes go on the same way, it goes through at their slope.
     g.call("timeline track edit", j!({ "track": "sweep", "keys": [{ "at": 0.0, "value": 0.0 }, { "at": 2.0, "value": 10.0 }, { "at": 4.0, "value": 0.0 }] }));

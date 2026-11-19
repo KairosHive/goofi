@@ -269,7 +269,8 @@ the lane, in the recording's colour, until the take is the track's.
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in
 each cell or stretch it goes through; a drag along a curve's lane draws over the keyframes in
-its path. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl
+its path. A note or a keyframe may stand before 0, as it may past the timeline's length: the
+clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl
 held picks one more, or one less; a click with Shift held picks everything in the box from the
 one picked last to the one clicked; and a drag with Shift held on a lane draws a box that picks
 what it touches. A drag of a note or a keyframe moves it, and with it everything picked. The
@@ -289,7 +290,7 @@ under the pointer. A double click on the ruler looks at everything
 again. A line across the tracks marks where the timeline begins, and one where it ends when it
 has a length. A track's edge resizes it, as far as it is
 dragged: held at the end of the track area, the area scrolls; a double click on the edge gives
-the track the room the panel shows, and scrolls to it. Between what a track says and its lane
+the track the room the panel shows, so that one track alone fills it, and scrolls to it. Between what a track says and its lane
 is a bar of what the lane shows: the keys of a keyboard, or the values of a curve with its two
 limits at the bar's ends, each a number a click makes a field. A drag of the bar moves that
 range, a drag of an end changes it, and a double click fits it to what the track holds; a

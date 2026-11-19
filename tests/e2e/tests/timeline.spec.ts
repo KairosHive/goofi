@@ -693,8 +693,19 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await page.mouse.wheel(0, 200);
 		await page.keyboard.up('Control');
 		await expect.poll(async () => Math.round((await thumb.boundingBox())!.width)).toBe(Math.round(half.width));
-		await ruler.dblclick({ position: { x: axis.width / 2, y: 4 } });
+		// A view moved before the timeline's beginning shows the lane there, and a click there
+		// makes a keyframe before 0, as one makes a keyframe past the timeline's length.
+		const keysWere = await keysOf();
+		await page.mouse.wheel(-axis.width / 4, 0);
+		const zero = panel.getByTestId('timeline-edge').first();
+		await expect.poll(async () => Math.round((await zero.boundingBox())!.x - axis.x)).toBeGreaterThan(40);
+		await page.mouse.click((await zero.boundingBox())!.x - 20, under.y + under.height / 2);
+		await expect.poll(async () => (await keysOf()).filter((k) => k.at < 0).length).toBe(1);
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: keysWere });
+		// A double click on the bar looks at everything again, as one on the ruler does.
+		await panel.getByTestId('range-bar').dblclick();
 		await expect.poll(lastMark).toBe(marked);
+		await expect.poll(async () => Math.round((await zero.boundingBox())!.x)).toBe(Math.round(axis.x));
 
 		// A track's edge dragged resizes the track in this panel, and changes nothing of the track.
 		const tall = async (): Promise<number> => (await curve.locator('.lane').boundingBox())!.height;
@@ -714,16 +725,22 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect(await panel.locator('.scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 		expect(await others()).toBe(beside);
 		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
-		// The edge pressed twice gives the track the room the area shows under the head, and the
-		// area scrolls to show exactly that track: its top under the head, its end at the area's,
-		// each to the pixel a scroll lands on.
+		// The edge pressed twice gives the track the room the area shows under the head, less the
+		// room the area keeps after its last track, and the area scrolls to put the track's top
+		// under the head: its end stands clear of the area's by that room, each to the pixel a
+		// scroll lands on. The edge is still the track's to drag.
 		await curve.getByTestId('track-grip').dblclick();
 		const headRow = (await panel.locator('.row.head').boundingBox())!;
+		const spare = await panel.locator('.stack').evaluate((el) => parseFloat(getComputedStyle(el).marginBottom));
+		expect(spare).toBeGreaterThan(0);
 		const astray = async (): Promise<number[]> => {
 			const fitted = (await curve.boundingBox())!;
-			return [fitted.y - (headRow.y + headRow.height), fitted.y + fitted.height - (area.y + area.height)];
+			return [fitted.y - (headRow.y + headRow.height), fitted.y + fitted.height - (area.y + area.height - spare)];
 		};
 		await expect.poll(async () => (await astray()).every((d) => Math.abs(d) <= 1), `the track is off the room by ${await astray()}`).toBe(true);
+		const fittedTall = await tall();
+		await dragBy(page, curve.getByTestId('track-grip'), 0, -40);
+		await expect.poll(tall).toBeLessThan(fittedTall - 30);
 		await panel.locator('.scroll').evaluate((el) => (el.scrollTop = 0));
 		expect(JSON.stringify((await backendDoc(page)).timeline)).toBe(tracks);
 

@@ -267,6 +267,9 @@
 	const [LOWEST, NARROWEST, EDGE, FASTEST] = [32, 64, 32, 16];
 	function resize(e: PointerEvent, id: string): void {
 		e.stopPropagation();
+		// The press is this drag's alone. Left to the browser, a press after a double click, which
+		// has selected the text beside the edge, drags that selection and cancels the pointer.
+		e.preventDefault();
 		const grip = e.currentTarget as HTMLElement;
 		const area = grip.closest<HTMLElement>('.scroll')!;
 		const lane = grip.parentElement!.querySelector('.lane')!.getBoundingClientRect();
@@ -327,15 +330,17 @@
 		return true;
 	}
 	/** A track's edge pressed twice: the track is as large as the room the track area shows under
-	 * the head, and the area is scrolled to show exactly that track. The room after the last
-	 * track stays, past the edge. */
+	 * the head, less the room the area keeps after its last track, and the area is scrolled to
+	 * put the track's beginning under the head. So one track alone fills the area and leaves it
+	 * nothing to scroll, with its edge still clear of the area's end. */
 	function fit(e: MouseEvent, id: string): void {
 		const grip = e.currentTarget as HTMLElement;
 		const [area, track, head] = [grip.closest<HTMLElement>('.scroll')!, grip.parentElement!, stack!.querySelector<HTMLElement>('.head')!];
 		const [client, offset, scroll, length, from, to] = vertical ? (['clientWidth', 'offsetWidth', 'scrollLeft', 'width', 'left', 'right'] as const) : (['clientHeight', 'offsetHeight', 'scrollTop', 'height', 'top', 'bottom'] as const);
-		// The room is the area's without its scroll bar and the head. The size is the lane's: the
-		// line a track has before it is the track's, and stays.
-		const room = area.getBoundingClientRect()[length] - (area[offset] - area[client]) - head.getBoundingClientRect()[length];
+		// The room is the area's without its scroll bar, the head, and what the area keeps after
+		// its last track. The size is the lane's: the line a track has before it is the track's.
+		const spare = parseFloat(getComputedStyle(stack!)[vertical ? 'marginRight' : 'marginBottom']);
+		const room = area.getBoundingClientRect()[length] - (area[offset] - area[client]) - head.getBoundingClientRect()[length] - spare;
 		const size = Math.max(vertical ? NARROWEST : LOWEST, Math.floor(room - (track[offset] - track[client])));
 		sizing = { id, size, sent: true };
 		setState({ sizes: { ...own.sizes, [id]: size } }, 'authored', 'Resize Track');
@@ -430,7 +435,7 @@
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
 		const [f, v] = point(p, ground);
 		const [lo, hi] = t.range;
-		return { at: exact(onGrid(Math.max(0, view[0] + f * width), gridOf(t), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
+		return { at: exact(onGrid(view[0] + f * width, gridOf(t), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
 	}
 	/** The cell the pointer is over, to light it. */
 	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
@@ -462,7 +467,7 @@
 			}
 			const [f, v] = point(p, ground);
 			if (last && Math.abs(f - last.f) * length < PAINT_EVERY) return false;
-			const at = exact(Math.max(0, view[0] + f * width));
+			const at = exact(view[0] + f * width);
 			// What stays: the keyframes outside the stretch from the last keyframe made to this
 			// one, and that last keyframe, unless this one is at its very time.
 			const [from, to] = [Math.min(last?.key.at ?? at, at), Math.max(last?.key.at ?? at, at)];
@@ -505,13 +510,13 @@
 		// Every track the drag moves something of, with what its lane held at the press and what
 		// of it moves. The lane is taken now: a preview puts a new one in the track's record.
 		const tracks = [...new Set(picked.map((p) => p.track))].map((track) => ({ track, was: g.timeline[track], all: held(g.timeline[track]), indices: pickedIn(track) }));
-		// What is picked moves as one: none of it goes before 0, and a keyframe goes no further
-		// than the nearest keyframe the drag leaves, so keyframes keep their order.
+		// What is picked moves as one: a keyframe goes no further than the nearest keyframe the
+		// drag leaves, so keyframes keep their order.
 		let [least, most] = [-Infinity, Infinity];
 		for (const { was, all, indices } of tracks) {
 			for (const k of indices) {
 				const [before, after] = was.kind === 'curve' ? [all[k - 1], all[k + 1]] : [];
-				least = Math.max(least, (before && !indices.includes(k - 1) ? before.at + 0.001 : 0) - all[k].at);
+				if (before && !indices.includes(k - 1)) least = Math.max(least, before.at + 0.001 - all[k].at);
 				if (after && !indices.includes(k + 1)) most = Math.min(most, after.at - 0.001 - all[k].at);
 			}
 		}
@@ -1162,6 +1167,7 @@
 		height: var(--space-2);
 		cursor: ns-resize;
 		touch-action: none;
+		user-select: none;
 	}
 	.band,
 	.edge,

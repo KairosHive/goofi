@@ -174,13 +174,15 @@ crate::machine::named!(Track);
 impl Track {
     /// Whether the record holds together.
     pub fn check(&self) -> Result<(), String> {
-        let time = |at: f64| at.is_finite() && at >= 0.0;
+        // A time is any beat: one before 0, as one past the timeline's length, is on the axis
+        // where the clock does not come.
+        let time = |at: f64| at.is_finite();
         let (ok, why) = match &self.lanes {
             Lanes::Note { range, scale, root, grid, notes } => {
                 let whole = |n: &Note| time(n.at) && n.length.is_finite() && n.length > 0.0 && n.pitch <= 127 && (0.0..=1.0).contains(&n.velocity);
                 let keyboard = range[0] < range[1] && range[1] <= 127 && scale::PRESET_NAMES.contains(&scale.as_str()) && scale::NOTES.contains(&root.as_str());
                 let gridded = GRIDS.iter().any(|(name, ..)| name == grid);
-                (keyboard && gridded && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; its grid is one a panel offers; a note starts at 0 or later, lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
+                (keyboard && gridded && notes.iter().all(whole), "its keyboard shows a lower pitch to a higher one, 0..127, in a scale and a root a `Quantize` node offers; its grid is one a panel offers; a note lasts more than 0, has a pitch in 0..127 and a velocity in 0..1")
             }
             Lanes::Curve { range, rate, keys } => {
                 let whole = keys.iter().all(|k| time(k.at) && k.value.is_finite() && k.curve.check().is_ok()) && keys.windows(2).all(|k| k[0].at < k[1].at);
