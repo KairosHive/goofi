@@ -270,9 +270,8 @@ The panel puts every track on one time axis, each beside what it says about itse
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in
 each cell or stretch it goes through; a drag along a curve's lane draws over the keyframes in
 its path. A note or a keyframe may stand before 0, as it may past the timeline's length: the
-clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl
-held picks one more, or one less; a click with Shift held picks everything in the box from the
-one picked last to the one clicked; and a drag with Shift held on a lane draws a box that picks
+clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl or Shift
+held picks one more, or one less, and a drag with Shift held on a lane draws a box that picks
 what it touches. A drag of a note or a keyframe moves it, and with it everything picked. The
 Delete key takes out what is picked, and Escape picks none. A right click on a note or a keyframe, or a held finger, opens a
 menu on it with the settings of what is picked: a note's pitch, length and velocity, a
@@ -288,18 +287,15 @@ or the ruler moves the view too: sideways, or with Shift held on a wheel that tu
 and down in a panel taller than wide. With Ctrl held a wheel zooms, about the point of the axis
 under the pointer. A double click on the ruler looks at everything
 again. A line across the tracks marks where the timeline begins, and one where it ends when it
-has a length. A track's edge resizes it, as far as it is
-dragged: held at the end of the track area, the area scrolls; a double click on the edge gives
-the track the room the panel shows, so that one track alone fills it, and scrolls to it. Between what a track says and its lane
+has a length. A track's edge resizes it, as far as it is dragged, and the track area scrolls. Between what a track says and its lane
 is a bar of what the lane shows: the keys of a keyboard, or the values of a curve with its two
 limits at the bar's ends, each a number a click makes a field. A drag of the bar moves that
 range, a drag of an end changes it, and a double click fits it to what the track holds; a
 double click on the bar above the ruler looks at everything too. Beside its lane a track says its
-name and its settings in named sections that fold. The recording's section has the record
+name, with the button to its menu, and its settings in named sections that fold; a track too
+short for them scrolls them. The recording's section has the record
 button on its line and begins folded; a curve's input in it is a param's own row, so it takes
-an expression, a MIDI learn, or a node, a variable or a state dropped on it. A section unfolded
-makes its track larger where it needs to, and the sections that do not fit are in the menu in
-the track's title. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
+an expression, a MIDI learn, or a node, a variable or a state dropped on it. A panel hides the tracks it is told to, so two panels show one timeline in different ways. In a panel
 taller than wide the time runs down and the tracks stand as columns.
 
 ## Testing

@@ -11,6 +11,7 @@
 	import type { Curve } from '$lib/api/generated';
 	import Segmented from './Segmented.svelte';
 	import { PRESETS, curveName, curvePath, fitted, pointsOf, type Point } from './curve';
+	import { clamp, fixed } from './math';
 
 	let {
 		value,
@@ -61,8 +62,6 @@
 		const box = square!.getBoundingClientRect();
 		return [(e.clientX - box.left) / box.width, 1 - (e.clientY - box.top) / box.height];
 	}
-	const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
-	const fixed = (v: number): number => Number(v.toFixed(3));
 	/** What a drag holds: a point, or one of its handles (2 the one before it, 4 the one after),
 	 * and whether it has changed the curve yet. */
 	let held: { index: number; part: 0 | 2 | 4; changed: boolean } | null = null;

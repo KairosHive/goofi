@@ -46,12 +46,6 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   of it is a long time.
 - A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
   is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
-- A node cannot be dropped on a curve's input while that is in the track's menu, as it is in a
-  standing panel. A press on the expression editor's completion window may close that menu
-  before the completion is taken; not tried.
-- A track's edge held at an end of the track area scrolls the area. A note or a keyframe dragged
-  there does not.
-- The edge-held resize has a fixture in a lying panel alone; a standing one is not tried.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
@@ -83,7 +77,6 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   track's range, and the tolerance is not a setting.
 - The fit of a take is slow where its cuts fall one sample apart. It runs with nothing held,
   but for a track that was edited while it ran: then it is made again in the write.
-- A track that goes while its edge is held leaves the size the drag had until the drag ends.
 - A recording whose input cannot be read, an unset variable or a node with no frame yet, shows
   as recording: the reason is in the log alone, and the end changes nothing.
 - A recording ends when it is told to: a patch that is closed, or a track that is removed,

@@ -7,6 +7,7 @@
 <script lang="ts">
 	import type { Track } from '$lib/api/generated';
 	import RenameField from '$lib/inspector/RenameField.svelte';
+	import { fixed } from '$lib/ui';
 	import RangeBar from './RangeBar.svelte';
 
 	let {
@@ -25,7 +26,6 @@
 		onCommit: (range: [number, number]) => void;
 	} = $props();
 
-	const fixed = (v: number): number => Number(v.toFixed(3));
 	/** Every key there is: a keyboard's range is some of them. */
 	const KEYS = 128;
 	/** The stretch of a curve's values the bar is as long as: from the least value a keyframe has

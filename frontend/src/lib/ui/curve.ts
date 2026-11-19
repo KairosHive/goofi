@@ -2,6 +2,7 @@
  * points from (0, 0) to (1, 1), each joined to the next by a cubic bezier. `goofi_core::ease` is
  * the owner; this mirrors it. */
 import type { Curve } from '$lib/api/generated';
+import { clamp } from './math';
 
 /** An anchor point: where it is, and its two handles as offsets from it — `[x, y, in_dx, in_dy,
  * out_dx, out_dy]`. */
@@ -41,8 +42,7 @@ export function pointsOf(c: Curve): Point[] {
 export function fitted(points: Point[]): Point[] {
 	return points.map((p, i) => {
 		const [before, after] = [points[i - 1], points[i + 1]];
-		const within = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
-		return [p[0], p[1], before ? within(p[2], before[0] - p[0], 0) : 0, before ? p[3] : 0, after ? within(p[4], 0, after[0] - p[0]) : 0, after ? p[5] : 0];
+		return [p[0], p[1], before ? clamp(p[2], before[0] - p[0], 0) : 0, before ? p[3] : 0, after ? clamp(p[4], 0, after[0] - p[0]) : 0, after ? p[5] : 0];
 	});
 }
 
@@ -59,9 +59,6 @@ export function curveAt(c: Curve, x: number): number {
 		const i = c.custom.findIndex((p, k) => k > 0 && x <= p[0]);
 		if (i < 1) return x;
 		const [a, b] = [c.custom[i - 1], c.custom[i]];
-		// One bezier whose handles stand a third and two thirds along is a cubic in `x` itself:
-		// what a smooth keyframe and a recording's fit are.
-		if (c.custom.length === 2 && a[4] === 1 / 3 && b[2] === -1 / 3) return cubic(0, a[5], 1 + b[3], 1, x);
 		// The handles' x inside the segment keep x(t) monotonic, so a bisection finds the one t.
 		let [lo, hi] = [0, 1];
 		for (let n = 0; n < 48; n++) {
