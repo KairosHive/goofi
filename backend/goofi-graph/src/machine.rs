@@ -50,10 +50,10 @@ pub fn find<'a, V: Named>(map: &'a IndexMap<String, V>, given: &str) -> Option<&
     map.get_key_value(given).or_else(|| map.iter().find(|(_, v)| v.name() == given)).map(|(id, _)| id.as_str())
 }
 
-/// Whether every record of `map` has an id that is no name, and a legal name of its own.
-pub(crate) fn names<V: Named>(kind: &str, map: &IndexMap<String, V>) -> Result<(), String> {
+/// Whether every record given has an id that is no name, and a legal name of its own.
+pub(crate) fn names<'a, V: Named + 'a>(kind: &str, records: impl IntoIterator<Item = (&'a String, &'a V)>) -> Result<(), String> {
     let mut seen = HashSet::new();
-    for (id, v) in map {
+    for (id, v) in records {
         if is_valid_identifier(id) {
             return Err(format!("`{id}` is a name, not the id of a {kind}"));
         }
@@ -625,7 +625,7 @@ impl Machines {
 
     /// The beat the position `now` is, at the tempo the timeline plays at.
     fn beat(&self, now: f64) -> f64 {
-        now * self.timed.1.max(1e-9) / 60.0
+        now / crate::timeline::seconds_per_beat(self.timed.1)
     }
 
     /// Take what the input of every track with a recording holds at the position `now`. Notes

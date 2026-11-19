@@ -32,20 +32,6 @@ pub enum Curve {
 const SAMPLES: usize = 129;
 
 impl Curve {
-    /// The presets that stand alone, with no keyframes beside them.
-    pub const PRESETS: [Curve; 3] = [Curve::Step, Curve::Linear, Curve::Easing];
-
-    /// The preset's name; a curve of anchor points is `custom`.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Curve::Smooth => "smooth",
-            Curve::Step => "step",
-            Curve::Linear => "linear",
-            Curve::Easing => "easing",
-            Curve::Custom(_) => "custom",
-        }
-    }
-
     /// Why the curve cannot be travelled: it runs from (0, 0) to (1, 1) through points each
     /// further along than the last, and a handle that leaves its segment would fold the curve
     /// back on itself, so one progress would have two blends.

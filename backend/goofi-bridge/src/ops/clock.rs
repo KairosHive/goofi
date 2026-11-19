@@ -12,7 +12,7 @@ op!(Set, "clock set", 0, SetArgs {
     pub time: Option<f64>,
     pub section: Option<[f64; 2]>,
 },
-    "Steer the patch clock's position: what `t` is in every expression, and what the machines and the timeline step by. `playing` false pauses it and true resumes it; `time` puts it at that second, so a stop is `{playing: false, time: 0}`, and every machine starts over from there. The engines run on through a pause, and a stamp or a recording never stops: those read the run time. `section` is `[from, to]` in seconds: the position loops in it from the moment it is inside, whatever else the clock does, until a section of no length, `[0, 0]`, clears it; it is the clock's own and no variable, and a patch never carries it. The tempo and the timeline's length are the variables `clock.bpm` and `clock.length`: with a length the position restarts from 0 when it reaches that many beats; `clock.time`, `clock.progress` and `clock.playing` say where it stands. Not undoable, and no change to the patch.",
+    "Steer the patch clock's position: what `t` is in every expression, and what the machines and the timeline step by. `playing` false pauses it and true resumes it; `time` puts it at that second, so a stop is `{playing: false, time: 0}`, and every machine starts over from there. The engines run on through a pause, and a stamp or a recording never stops: those read the run time. `section` is `[from, to]` in seconds: the position loops in it from the moment it is inside, whatever else the clock does, until a section of no length, `[0, 0]`, clears it; it is the clock's own and no variable, and a patch never carries it. The tempo and the timeline's length are the variables `clock.bpm` and `clock.length`: with a length the position restarts from 0 when it reaches that many beats; `clock.time` and `clock.playing` say where it stands. Not undoable, and no change to the patch.",
     "{playing, time, section: [from, to] | null}");
 
 impl EffectOp for Set {
@@ -31,15 +31,10 @@ impl EffectOp for Set {
                 return Err("a `section` lasts a millisecond or more, or nothing".into());
             }
             time.set_section(from, length);
-            state.machines.send(Msg::Section);
         }
         time.steer(a.playing.unwrap_or(time.playing()), a.time);
         g.variables().publish("clock.playing", Data::number(f64::from(u8::from(time.playing()))));
-        // A position put somewhere starts every run over there; a pause or a resume rings the
-        // machines' thread through the variable.
-        if a.time.is_some() {
-            state.machines.send(Msg::Jumped);
-        }
+        state.machines.send(Msg::Clock { restart: a.time.is_some() });
         Ok(json!({ "playing": time.playing(), "time": time.position(), "section": time.section() }))
     }
 }

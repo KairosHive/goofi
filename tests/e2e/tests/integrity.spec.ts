@@ -267,10 +267,12 @@ test('a patch under construction holds together at every stage', async ({ page }
 				for (const name of names) {
 					await choosePanelType(page, name);
 					if (name === 'State machine') {
-						await page.evaluate(() => {
+						// A panel holds its machine by id.
+						const sweep = Object.entries((await rawCall(page, 'machine list')).result.machines).find(([, m]: any) => m.name === 'sweep')![0];
+						await page.evaluate((machine) => {
 							const g = (window as any).goofi;
-							g.commands.setPanelState(g.query.panels()[0].panelId, { machine: 'sweep' });
-						});
+							g.commands.setPanelState(g.query.panels()[0].panelId, { machine });
+						}, sweep);
 						await expect(page.getByTestId('state-card-A')).toBeVisible();
 						// The label shows once a box of the transition is selected; picked, it lights its
 						// arc in the score, whose chip opens the transition's settings.

@@ -4,12 +4,8 @@
 use std::sync::Arc;
 
 use goofi_python::inproc::PyExprEvaluator;
-use goofi_tests::{hex, j, Goofi};
+use goofi_tests::{hex, j, number, Goofi};
 use serde_json::Value;
-
-fn number(g: &Goofi, name: &str) -> f64 {
-    g.variable(name).as_f64().unwrap_or(f64::NAN)
-}
 
 /// The velocity a note track holds for `pitch` now.
 fn held(g: &Goofi, name: &str, pitch: usize) -> f64 {
@@ -119,13 +115,9 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     g.until("the note to end", |g| (held(g, "keys.notes", 60) == 0.0).then_some(()));
     at(&g, 1.0);
 
-    // A track is put before another, or last: the order every panel draws them in.
-    let order = |g: &Goofi| {
-        let doc = g.doc();
-        let mut tracks: Vec<_> = doc["timeline"].as_object().unwrap().values().map(|t| (t["order"].as_u64(), t["name"].as_str().unwrap().to_string())).collect();
-        tracks.sort();
-        tracks.into_iter().map(|(_, name)| name).collect::<Vec<_>>()
-    };
+    // A track is put before another, or last: the document holds them in the order every panel
+    // draws them in.
+    let order = |g: &Goofi| g.doc()["timeline"].as_object().unwrap().values().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
     assert_eq!(order(&g), ["sweep", "keys"]);
     g.call("timeline track move", j!({ "track": "keys", "before": "sweep" }));
     assert_eq!(order(&g), ["keys", "sweep"]);
@@ -145,7 +137,7 @@ fn a_track_writes_its_group_at_the_clocks_position() {
         (j!({ "track": "keys", "grid": "1/7 beat" }), "its grid is one"),
         (j!({ "track": "sweep", "root": "D" }), "a note track takes"),
         (j!({ "track": "sweep", "keys": [{ "at": 1.0, "value": 0.0 }, { "at": 1.0, "value": 1.0 }] }), "each later"),
-        (j!({ "track": "sweep", "to": "keys" }), "a variable group already"),
+        (j!({ "track": "sweep", "to": "keys" }), "already exists"),
     ] {
         let refusal = g.refuse("timeline track edit", payload);
         assert!(refusal.contains(why), "{refusal}");
@@ -313,7 +305,7 @@ fn a_take_becomes_the_keyframes_that_follow_it() {
     use goofi_core::ease::Curve;
     use goofi_graph::timeline::{Lanes, Sample, Take, Track};
     let sample = |at: f64, value: f64| Sample { at, value, held: false };
-    let curve = || Track { name: "wave".into(), order: 0, input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
+    let curve = || Track { name: "wave".into(), input: String::new(), lanes: Lanes::Curve { range: [0.0, 1.0], rate: 30.0, keys: Vec::new() } };
     let merged = |passes: Vec<Vec<Sample>>| {
         let mut track = curve();
         track.merge(&Take::Samples(passes)).unwrap();
@@ -388,7 +380,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
         other => Err(format!("{other:?} is not readable here")),
     };
     let recorder = |input: &str, lanes: Lanes| {
-        let track = Track { name: "wave".into(), order: 0, input: input.into(), lanes };
+        let track = Track { name: "wave".into(), input: input.into(), lanes };
         let mut m = Machines::default();
         // At a tempo of 60 a beat is a second.
         m.configure(Default::default(), ([("k1".to_string(), track)].into_iter().collect(), 60.0), None);

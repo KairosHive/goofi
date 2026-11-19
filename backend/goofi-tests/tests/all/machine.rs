@@ -10,16 +10,12 @@ use goofi_graph::expr_rewrite::Target;
 use goofi_graph::machine::Machines;
 use goofi_node::Local;
 use goofi_python::inproc::PyExprEvaluator;
-use goofi_tests::{f32s, hex, j, Goofi, Viewer};
+use goofi_tests::{f32s, hex, j, number, Goofi, Viewer};
 use serde_json::Value;
 
 /// A playhead variable as text.
 fn text(g: &Goofi, name: &str) -> String {
     g.variable(name).as_str().unwrap_or_default().to_string()
-}
-
-fn number(g: &Goofi, name: &str) -> f64 {
-    g.variable(name).as_f64().unwrap_or(f64::NAN)
 }
 
 /// Whether the playhead rests in `state`, off the KIND of its `progress` frame: a functional

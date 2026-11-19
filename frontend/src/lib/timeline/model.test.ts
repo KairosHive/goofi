@@ -4,8 +4,8 @@ import type { Curve, Key } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
 import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, shapeOf, takePath, ticks, turned, zoomed } from './model';
 
-const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
-const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
+const notes: Track = { name: 'keys', input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
+const curve: Track = { name: 'fade', input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
 
 describe('the timeline model', () => {
 	it('reads a beat by the tempo, and finds where the tracks end', () => {

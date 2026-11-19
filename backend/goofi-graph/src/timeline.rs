@@ -36,6 +36,10 @@ pub const GRIDS: [(&str, f64, bool); 10] = [
 ];
 /// The one element of a curve track's group.
 const VALUE: &str = "value";
+/// The seconds a beat lasts at `bpm`. A tempo of nothing is the slowest there is: a beat never comes.
+pub fn seconds_per_beat(bpm: f64) -> f64 {
+    60.0 / bpm.max(1e-9)
+}
 /// The element of every track's group that says whether a recording into it runs: 1 or 0.
 pub(crate) const RECORDING: &str = "recording";
 /// The element of every track's group that holds what a recording has taken so far, for a panel
@@ -47,8 +51,6 @@ pub(crate) const TAKE: &str = "take";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Track {
     pub name: String,
-    /// Its place among the tracks, the lowest first: the order a panel draws them in.
-    pub order: u32,
     /// What a recording into the track takes in: for notes the variable group of a MIDI device,
     /// for a curve an expression, as a param's. Empty is none.
     pub input: String,
@@ -494,8 +496,7 @@ impl Timeline {
     pub(crate) fn new(tracks: &IndexMap<String, Track>, bpm: f64, evaluator: &Option<Arc<dyn ExprEvaluator>>) -> Timeline {
         let mut out = Timeline::default();
         for track in tracks.values() {
-            // A tempo of nothing is the slowest there is: a beat never comes.
-            let seconds = |at: f64| at * 60.0 / bpm.max(1e-9);
+            let seconds = |at: f64| at * seconds_per_beat(bpm);
             match &track.lanes {
                 Lanes::Note { notes, .. } => {
                     let notes = notes.iter().map(|n| [seconds(n.at), seconds(n.at + n.length), f64::from(n.pitch), n.velocity]).collect();

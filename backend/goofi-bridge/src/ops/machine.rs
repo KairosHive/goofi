@@ -282,10 +282,7 @@ fn values_of(m: &Machine, values: Option<Value>) -> Result<Edits<Data>, String> 
 }
 
 fn parse_curve(v: Value) -> Result<Curve, String> {
-    let curve: Curve = serde_json::from_value(v.clone()).map_err(|_| {
-        let presets = Curve::PRESETS.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
-        format!("`curve` is one of {presets} or `{{custom: [[x, y, in_dx, in_dy, out_dx, out_dy], …]}}`, not `{v}`")
-    })?;
+    let curve: Curve = serde_json::from_value(v.clone()).map_err(|_| format!("`curve` is one of step/linear/easing or `{{custom: [[x, y, in_dx, in_dy, out_dx, out_dy], …]}}`, not `{v}`"))?;
     if curve == Curve::Smooth {
         return Err("`smooth` is a keyframe's curve, bent by the keyframes beside it: an attribute travels by step, linear, easing or a custom curve".to_string());
     }
@@ -296,7 +293,7 @@ fn parse_curve(v: Value) -> Result<Curve, String> {
 impl WriteOp for Add {
     fn run(tx: &mut Txn, a: AddArgs) -> Result<Value, String> {
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("machine", 0, |n| tx.g.machines().values().any(|m| m.name == n)));
-        let id = tx.g.mint_id("m", |_| false);
+        let id = tx.g.mint_id("m");
         set(tx, &id, Machine { name: name.clone(), ..Machine::default() })?;
         Ok(json!({ "id": id, "name": name }))
     }
@@ -347,7 +344,7 @@ impl WriteOp for AttributeAdd {
         let kind = a.kind.unwrap_or_else(|| AttributeKind::of(&value));
         fits(&kind, &value)?;
         let curve = a.curve.map(parse_curve).transpose()?.unwrap_or_default();
-        let attr = tx.g.mint_id("a", |id| m.attributes.contains_key(id));
+        let attr = tx.g.mint_id("a");
         m.attributes.insert(attr.clone(), Attribute { name: a.name.clone(), default: value.clone(), kind, curve });
         set(tx, &id, m)?;
         Ok(json!({ "id": attr, "name": a.name, "value": value }))
@@ -424,7 +421,7 @@ impl WriteOp for StateAdd {
         let values = values_of(&m, a.values)?.into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
         let envelopes = envelopes_of(&m, a.envelopes)?.into_iter().filter_map(|(k, e)| Some((k, e?))).collect();
         let pos = a.pos.unwrap_or_else(|| goofi_graph::canvas::place_state(&m));
-        let state = tx.g.mint_id("s", |id| m.states.contains_key(id));
+        let state = tx.g.mint_id("s");
         m.states.insert(state.clone(), State { name: name.clone(), pos, values, envelopes, ..State::default() });
         set(tx, &id, m)?;
         Ok(json!({ "id": state, "name": name }))
@@ -599,7 +596,7 @@ impl WriteOp for PlayheadAdd {
         let (id, mut m) = machine_of(&tx.g, &a.machine)?;
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("playhead", 0, |n| tx.g.group_taken(n)));
         let start = id_of("state", &m.states, &a.start)?;
-        let playhead = tx.g.mint_id("p", |id| m.playheads.contains_key(id));
+        let playhead = tx.g.mint_id("p");
         m.playheads.insert(playhead.clone(), Playhead { name: name.clone(), color: a.color.unwrap_or_default(), start });
         set(tx, &id, m)?;
         Ok(json!({ "id": playhead, "name": name }))

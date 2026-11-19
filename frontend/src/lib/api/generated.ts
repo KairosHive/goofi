@@ -96,10 +96,6 @@ export type Lanes = { "kind": "note", range: [number, number], scale: string, ro
 rate: number, keys: Array<Key>, };
 export type Track = { name: string, 
 /**
- * Its place among the tracks, the lowest first: the order a panel draws them in.
- */
-order: number, 
-/**
  * What a recording into the track takes in: for notes the variable group of a MIDI device,
  * for a curve an expression, as a param's. Empty is none.
  */

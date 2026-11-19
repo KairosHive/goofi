@@ -188,9 +188,9 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
     assert_eq!(machine_of(&g), j!("seq"), "a patch with a machine shows it, and mints none");
     assert_eq!(g.doc()["machines"].as_object().unwrap().len(), 1);
-    g.call("machine add", j!({ "name": "aux" }));
-    g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "machine": "aux" } }));
-    assert_eq!(machine_of(&g), j!("aux"), "a panel names a machine as an op does, and holds its id");
+    let aux = g.call("machine add", j!({ "name": "aux" }))["id"].clone();
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "machine": aux } }));
+    assert_eq!(machine_of(&g), j!("aux"), "a panel holds a machine's id");
     g.call("undo", j!({}));
     g.call("machine remove", j!({ "machine": "seq" }));
     assert_eq!(machine_of(&g), j!("aux"), "the panel moved to the machine left");

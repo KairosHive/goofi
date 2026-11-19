@@ -10,8 +10,8 @@ use crate::{AppState, Caller, Txn};
 use goofi_graph::timeline::{Key, Lanes, Note, Track};
 
 op!(List, "timeline list", 0, NoArgs,
-    "Every track of the timeline, under its id; `order` is its place among them, the lowest first, which a panel draws them by. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and its keyboard as a panel draws it — `range: [low, high]`, the pitches it shows, `scale` and `root`, whose notes it marks and a gesture lands on, the options of a `Quantize` node, and `grid`, the lines a gesture snaps a note to, such as `1/4 beat` or `1 s` — and writes `vars.<track>.notes`: the velocity of each held note in 0..1 where a MIDI device's `notes` has its channel 1, so what reads a device reads a track. A `curve` track holds one curve, `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve`, and holds before the first and after the last. A `curve` is `smooth`, which a keyframe with none is: the value goes through the keyframe at the slope the keyframes beside it give it, level at a peak and in a valley, so a run that falls keeps falling and the value between two keyframes stays between theirs; or one of an attribute's curves, `step`, `linear`, `easing` or `{custom: …}` (see `machine attribute add`). `input` is what `timeline track record` takes into the track; `vars.<track>.recording` is 1 while it does, and `vars.<track>.take` holds what it has taken so far, for a panel to draw: each note as `at, length, pitch, velocity`, or each sample as `at, value`, at most 256 of them.",
-    "{tracks: {id: {name, order, input, kind: note, range, scale, root, grid, notes} | {name, order, input, kind: curve, range, rate, keys}}}");
+    "Every track of the timeline, under its id, in the order a panel draws them. A track plays on the patch clock's position (`clock set`): its times are beats of `clock.bpm`. A `note` track holds `notes`, each `{at, length, pitch, velocity}`, and its keyboard as a panel draws it: `range: [low, high]`, `scale` and `root` (the options of a `Quantize` node) and `grid`, the lines a gesture snaps a note to, such as `1/4 beat` or `1 s`. It writes `vars.<track>.notes`, the velocity of each held note in 0..1 as a MIDI device's `notes` has its channel 1. A `curve` track holds `range: [min, max]` and `keys: [{at, value, curve}]`, and writes `vars.<track>.value`: the value eases from each keyframe to the next by that keyframe's `curve`, and holds outside them. A `curve` is `smooth` (the default: through the keyframe at the slope its neighbours give it, level at a peak and in a valley, never past their values), or an attribute's `step`, `linear`, `easing` or `{custom: …}` (see `machine attribute add`). `input` is what `timeline track record` takes in; `vars.<track>.recording` is 1 while it does, and `vars.<track>.take` is what it has taken so far, at most 256 notes (`at, length, pitch, velocity`) or samples (`at, value`).",
+    "{tracks: {id: {name, input, kind: note, range, scale, root, grid, notes} | {name, input, kind: curve, range, rate, keys}}}");
 
 op!(TrackAdd, "timeline track add", 1, TrackAddArgs {
     pub kind: String,
@@ -48,7 +48,7 @@ op!(TrackMove, "timeline track move", 1, TrackMoveArgs {
     pub track: String,
     pub before: Option<String>,
 },
-    "Put a track before the track `before`, or last without one: every track's `order` is its place again.",
+    "Put a track before the track `before`, or last without one.",
     "{name}");
 
 op!(TrackRemove, "timeline track remove", 1, TrackRemoveArgs {
@@ -82,8 +82,8 @@ impl WriteOp for TrackAdd {
     fn run(tx: &mut Txn, a: TrackAddArgs) -> Result<Value, String> {
         let lanes: Lanes = serde_json::from_value(json!({ "kind": a.kind })).map_err(|_| format!("`kind` is `note` or `curve`, not `{}`", a.kind))?;
         let name = a.name.unwrap_or_else(|| goofi_core::fresh_name("track", 0, |n| tx.g.group_taken(n)));
-        let id = tx.g.mint_id("k", |_| false);
-        set(tx, &id, Some(Track { name: name.clone(), order: tx.g.timeline().values().map(|t| t.order + 1).max().unwrap_or(0), lanes, input: String::new() }))?;
+        let id = tx.g.mint_id("k");
+        set(tx, &id, Some(Track { name: name.clone(), lanes, input: String::new() }))?;
         Ok(json!({ "id": id, "name": name }))
     }
 }

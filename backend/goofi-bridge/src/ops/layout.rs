@@ -150,17 +150,7 @@ impl WriteOp for PanelAdd {
 impl WriteOp for PanelEdit {
     fn run(tx: &mut Txn, a: PanelEditArgs) -> Result<Value, String> {
         let ty = a.ty.map(|t| t.0);
-        let mut panel_state = a.state.filter(|v| !v.is_null());
-        // A machine panel's machine is named at the door, as every op names one, and held by its id.
-        let machine_panel = match (&ty, tx.g.arrangement().node(&a.panel)) {
-            (Some(t), _) => t == "machine",
-            (None, Some(goofi_graph::layout::Node::Panel { panel_type, .. })) => panel_type == "machine",
-            _ => false,
-        };
-        if let Some(given) = panel_state.as_ref().filter(|_| machine_panel).and_then(|s| s.get("machine")).and_then(Value::as_str) {
-            let id = goofi_graph::machine::find(tx.g.machines(), given).ok_or_else(|| format!("no machine `{given}` in this patch"))?.to_string();
-            panel_state.as_mut().expect("held")["machine"] = json!(id);
-        }
+        let panel_state = a.state.filter(|v| !v.is_null());
         if ty.is_none() && panel_state.is_none() {
             return Err("give a type, a state, or both".into());
         }
@@ -199,7 +189,7 @@ impl WriteOp for PanelEdit {
             Some("machine") if !named("machine") => Some(("machine", match tx.g.machines().keys().next() {
                 Some(first) => first.clone(),
                 None => {
-                    let fresh = tx.g.mint_id("m", |_| false);
+                    let fresh = tx.g.mint_id("m");
                     born = Some(Born::Machine(fresh.clone()));
                     fresh
                 }

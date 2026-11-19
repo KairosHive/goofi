@@ -30,19 +30,14 @@ export function applyOps(target: Obj, ops: Op[]): void {
 	}
 }
 
-/** Make `target[key]` equal `value`, writing only the leaves that differ. */
+/** Make `target[key]` equal `value`, writing only the leaves that differ. A map whose keys moved
+ * lands whole: a state proxy keeps the order its keys were born in, whatever is deleted and put
+ * back, so the manager's order, which a list shows, takes a new object. */
 function assign(target: Obj, key: string, value: unknown): void {
 	const held = target[key];
-	if (isObj(held) && isObj(value)) {
+	if (isObj(held) && isObj(value) && keepsOrder(held, value)) {
 		for (const k of Object.keys(held)) if (!(k in value)) delete held[k];
 		for (const [k, v] of Object.entries(value)) assign(held, k, v);
-		// The manager's key order is the order a list shows: a reorder re-inserts every key.
-		const order = Object.keys(value);
-		if (Object.keys(held).join('\0') !== order.join('\0')) {
-			const kept = { ...held };
-			for (const k of order) delete held[k];
-			for (const k of order) held[k] = kept[k];
-		}
 		return;
 	}
 	// An array or a scalar lands whole, and only when it moved: an equal one left alone keeps
