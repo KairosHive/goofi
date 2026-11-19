@@ -551,6 +551,20 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		await name('b').click({ button: 'right' });
 		await page.locator('.context-menu .item', { hasText: 'Ring by position' }).click();
 		await expect.poll(wires).toEqual(['a>b', 'b>c', 'c>a']);
+		// A box drawn with Shift picks every state it touches. A click on one of them then picks
+		// that one alone: no rectangle stands over the picked states and takes the press.
+		await name('b').click();
+		await expect(score).toHaveAttribute('data-count', '1');
+		const [left, right] = [(await card('a').boundingBox())!, (await card('c').boundingBox())!];
+		await page.keyboard.down('Shift');
+		await page.mouse.move(right.x + right.width + 16, right.y + right.height + 16);
+		await page.mouse.down();
+		await page.mouse.move(left.x - 16, left.y - 16, { steps: 6 });
+		await page.mouse.up();
+		await page.keyboard.up('Shift');
+		await expect(score).toHaveAttribute('data-count', '3');
+		await name('b').click();
+		await expect(score).toHaveAttribute('data-count', '1');
 		// A column is as wide as its interval: two seconds take twice the column one second does.
 		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'a', interval: 2 });
 		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'b', interval: 1 });

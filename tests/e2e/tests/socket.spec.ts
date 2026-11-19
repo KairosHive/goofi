@@ -764,6 +764,12 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(() => selectedCount(page), { message: 'the release commits what the box drew' })
 					.toBe(2);
+				// No rectangle stands over the cards the box picked: a click on one of them is that
+				// card's, and picks it alone.
+				await page.locator('.svelte-flow__node .header').first().click();
+				await expect
+					.poll(() => selectedCount(page), { message: 'a click on one picked card picks it alone' })
+					.toBe(1);
 			});
 
 			await test.step('an undo here takes back the last write, whoever made it, and the peer sees it', async () => {

@@ -365,13 +365,32 @@
 			for (const [track, patch] of patches) await g.op('timeline track edit', { track, ...patch }, step);
 		}).catch(fail('Edit track'));
 	}
+	/** The places in a lane of what is in the box from one of its notes or keyframes to another:
+	 * the two, and every one that sounds in their stretch of the axis on a key between theirs, or
+	 * stands there at a value between theirs. The one the box is drawn to comes last. */
+	function between(t: Track, from: number, to: number): number[] {
+		const all = held(t);
+		const ends = [all[from], all[to]].filter((o) => o !== undefined);
+		const span = (o: Note | Key): [number, number] => [o.at, o.at + ('length' in o ? o.length : 0)];
+		const level = (o: Note | Key): number => ('pitch' in o ? o.pitch : o.value);
+		const [lo, hi] = [Math.min(...ends.map((o) => span(o)[0])), Math.max(...ends.map((o) => span(o)[1]))];
+		const [low, high] = [Math.min(...ends.map(level)), Math.max(...ends.map(level))];
+		// A note that only begins where the box ends is not in it; a keyframe there is.
+		const inside = (o: Note | Key): boolean => {
+			const [begins, ends] = span(o);
+			return level(o) >= low && level(o) <= high && (t.kind === 'note' ? begins < hi && ends > lo : begins >= lo && begins <= hi);
+		};
+		return [...all.flatMap((o, k) => (k !== to && inside(o) ? [k] : [])), to];
+	}
 	/** The keys of the active panel, outside its text fields and dialogs: Delete takes out every
-	 * note and keyframe picked. Nothing reaches a panel that is not the active one. */
+	 * note and keyframe picked, and Escape picks none. Nothing reaches a panel that is not the
+	 * active one. */
 	function onKeydown(e: KeyboardEvent): void {
 		const on = e.target as HTMLElement | null;
-		if ((e.key !== 'Delete' && e.key !== 'Backspace') || picked.length === 0) return;
+		if ((e.key !== 'Delete' && e.key !== 'Backspace' && e.key !== 'Escape') || picked.length === 0) return;
 		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(on) || on?.closest?.('dialog[open]')) return;
 		e.preventDefault();
+		if (e.key === 'Escape') return void (picked = []);
 		const tracks = [...new Set(picked.map((p) => p.track))].filter((track) => g.timeline[track]);
 		const patches = tracks.map((track): [string, Record<string, unknown>] => [track, put(g.timeline[track], held(g.timeline[track]).filter((_, k) => !pickedIn(track).includes(k)))]);
 		picked = [];
@@ -400,7 +419,7 @@
 	const PAINT_EVERY = 16;
 	/** A press on a lane's own ground makes a note in that cell, or a keyframe there, and a drag
 	 * from it one more in each cell the pointer goes through, or each stretch of the axis: shown
-	 * as they come, and one edit when the pointer is let go. The notes made are the ones picked.
+	 * as they come, and one edit when the pointer is let go.
 	 * A drag in a curve lane draws over what was there: a keyframe from before it, between the
 	 * first and the last it has made, is removed. A keyframe eases as the keyframe before it does,
 	 * else as the one after, else in and out. */
@@ -441,10 +460,7 @@
 				add(p);
 				if (made.length > had) g.previewTrack(id, lane());
 			},
-			commit: () => {
-				if (t.kind === 'note') picked = made.map((_, i) => ({ track: id, index: base.length + i }));
-				edit(id, lane());
-			},
+			commit: () => edit(id, lane()),
 			// Put back, where the track is still there.
 			cancel: () => void (g.timeline[id] && g.previewTrack(id, put(t, base)))
 		});
@@ -452,12 +468,19 @@
 	/** A drag of a note or a keyframe, and with it of everything picked, by as much as the pointer
 	 * moves, a note onto the grid: each move previews every lane it touches as it stands with those
 	 * moved, and the release sends the last of them as the edit. `stretch` drags one note's end and
-	 * not the note. A press that does not move picks what it is on. Shift lets a note go off its
+	 * not the note. A click, a press that does not move, takes a note out, and picks a keyframe
+	 * alone; with Ctrl it picks one more, or one less; with Shift it picks, with what is picked,
+	 * everything in the box from the one picked last in the lane to this one, and where none is
+	 * picked there it is a click with Ctrl. Shift lets a note go off its
 	 * grid, and Ctrl off its scale. */
 	let drag: (() => void) | undefined;
 	function dragItem(e: PointerEvent, id: string, t: Track, index: number, stretch = false): void {
 		e.stopPropagation();
-		if (stretch || !pickedIn(id).includes(index)) pick([{ track: id, index }]);
+		// With Ctrl or Shift the press picks one more, and a click one less where it was picked
+		// already. A click with Shift picks through from the one picked last in this lane.
+		const [more, was, before] = [e.ctrlKey || e.metaKey || e.shiftKey, pickedIn(id).includes(index), picked];
+		const last = e.shiftKey ? before.findLast((p) => p.track === id && p.index !== index) : undefined;
+		if (stretch || !was) pick([...(more && !stretch ? picked : []), { track: id, index }]);
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [f0, v0] = point(e, ground);
 		const rows = t.range[1] - t.range[0] + 1;
@@ -511,7 +534,19 @@
 			},
 			commit: () => {
 				dragged = null;
-				if (patches) editAll(patches, 'Move notes and keyframes');
+				if (patches) return editAll(patches, 'Move notes and keyframes');
+				// A click, with no drag. A right click keeps what is picked, for the menu.
+				if (e.button !== 0 || stretch) return;
+				if (last) {
+					const through = between(t, last.index, index);
+					pick([...before.filter((p) => p.track !== id || !through.includes(p.index)), ...through.map((k) => ({ track: id, index: k }))]);
+				} else if (more) {
+					if (was) pick(picked.filter((p) => p.track !== id || p.index !== index));
+				} else if (t.kind === 'note') {
+					// A note is taken out. The notes after it are one place earlier.
+					picked = picked.flatMap((p) => (p.track !== id ? [p] : p.index === index ? [] : [{ track: id, index: p.index - Number(p.index > index) }]));
+					edit(id, { notes: t.notes.filter((_, k) => k !== index) });
+				} else pick([{ track: id, index }]);
 			},
 			// Put back, where the track is still there.
 			cancel: () => {
@@ -683,7 +718,7 @@
 										style:--l={share((n.length) / width)}
 										style:--c={across((n.pitch - lo) / (hi - lo + 1), 1 / (hi - lo + 1))}
 										style:--s={share(1 / (hi - lo + 1))}
-										style:opacity={0.4 + 0.6 * n.velocity}
+										style:--v={0.4 + 0.6 * n.velocity}
 										onpointerdown={(e) => {
 											hold(e, id);
 											dragItem(e, id, t, i);
@@ -991,13 +1026,21 @@
 		stroke: var(--bg);
 		stroke-width: 1;
 	}
-	.note,
 	.cell {
 		position: absolute;
 		left: var(--a);
 		top: var(--c);
 		width: var(--l);
 		height: var(--s);
+	}
+	/* A note is inside its cells: the line at the top of its row and the line its first cell
+	   begins on stay clear, so a note shows apart from the one above it and the one before it. */
+	.note {
+		position: absolute;
+		left: calc(var(--a) + 1px);
+		top: calc(var(--c) + 1px);
+		width: calc(var(--l) - 1px);
+		height: calc(var(--s) - 1px);
 	}
 	.cell {
 		background: var(--hover-fill);
@@ -1018,10 +1061,12 @@
 		width: min(var(--space-3), 34%);
 		cursor: ew-resize;
 	}
+	/* A note is as strong as its velocity: its fill alone, so the line around a picked one is
+	   as strong on a soft note as on a loud one. */
 	.note {
 		min-width: var(--space-2);
 		border-radius: var(--radius-sm);
-		background: var(--accent);
+		background: color-mix(in srgb, var(--accent) calc(var(--v, 1) * 100%), transparent);
 		cursor: grab;
 	}
 	svg {
@@ -1055,10 +1100,14 @@
 		background: var(--accent-fill);
 		pointer-events: none;
 	}
-	/* What is picked wears a thin line of the second accent around it, clear of its own fill. */
+	/* What is picked wears a thin line of the second accent around it. Around a note the line
+	   is on the lines of the note's cells, which the note stays clear of. */
 	.picked {
 		outline: 1px solid var(--accent-2);
 		outline-offset: 1px;
+	}
+	.note.picked {
+		outline-offset: 0;
 	}
 	.grip {
 		position: absolute;
@@ -1167,12 +1216,17 @@
 		border-top: 0;
 		border-left: 1px solid var(--bg);
 	}
-	.vertical .note,
 	.vertical .cell {
 		left: var(--c);
 		top: var(--a);
 		width: var(--s);
 		height: var(--l);
+	}
+	.vertical .note {
+		left: calc(var(--c) + 1px);
+		top: calc(var(--a) + 1px);
+		width: calc(var(--s) - 1px);
+		height: calc(var(--l) - 1px);
 	}
 	.vertical .note {
 		min-width: 0;

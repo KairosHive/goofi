@@ -1,7 +1,8 @@
 <!-- The settings of the notes or the keyframes picked in a track, in a menu that hangs from one
-     of them: a note's pitch, length and velocity, a keyframe's value and curve, and the way to
-     take them out. A right click on a note or a keyframe opens it, or a held finger. It shows the
-     first one picked, and a change is every picked one's. -->
+     of them: a note's pitch, length and velocity, a keyframe's value and curve. A right click on
+     a note or a keyframe opens it, or a held finger. It shows the first one picked, and a change
+     is every picked one's. A keyframe has the way to take it out here too: a click takes a note
+     out, and picks a keyframe. -->
 <script lang="ts">
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { Button, CurvePicker, Field, FieldGrid, Icon, NumberInput, Select, SettingsMenu } from '$lib/ui';
@@ -53,10 +54,10 @@
 			<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
 				<CurvePicker value={item.curve} onChange={(curve) => onChange({ curve })} />
 			</Field>
+			<div class="acts" data-menu-row>
+				<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} keyframes` : 'Delete'}</Button>
+			</div>
 		{/if}
-		<div class="acts" data-menu-row>
-			<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} ${what}s` : 'Delete'}</Button>
-		</div>
 	</FieldGrid>
 </SettingsMenu>
 

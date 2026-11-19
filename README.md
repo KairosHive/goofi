@@ -265,10 +265,14 @@ the lane, in the recording's colour, until the take is the track's.
 
 The panel puts every track on one time axis, each beside what it says about itself, with a line
 across them where the clock is. A click on a lane makes a note or a keyframe, and a drag along it one in
-each cell or stretch it goes through; a click on one picks it, and a drag moves one. A drag
-along a curve's lane draws over the keyframes in its path. The Delete key takes out what is
-picked. A right click on a note or a keyframe, or a held finger, opens a menu on it with the
-settings of what is picked: a note's pitch, length and velocity, a keyframe's value and curve. A note
+each cell or stretch it goes through; a drag along a curve's lane draws over the keyframes in
+its path. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl
+held picks one more, or one less; a click with Shift held picks everything in the box from the
+one picked last to the one clicked; and a drag with Shift held on a lane draws a box that picks
+what it touches. A drag of a note or a keyframe moves it, and with it everything picked. The
+Delete key takes out what is picked, and Escape picks none. A right click on a note or a keyframe, or a held finger, opens a
+menu on it with the settings of what is picked: a note's pitch, length and velocity, a
+keyframe's value and curve. A note
 snaps to its track's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
 are play, stop and the clock's position, a number that a click makes a field. A press on the
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
