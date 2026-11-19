@@ -5,9 +5,9 @@
 // stood on its side in a panel taller than wide. A track's settings stand in groups beside its
 // lane, and those that do not fit are in the menu in its title; its edge held at the end of the
 // track area scrolls the area and goes on. On a phone, a held finger is the door onto the menu, a
-// tap makes the note, a finger held on a note opens the note's menu, and the title's menu holds
-// hide and delete. A picked note's settings are in a menu on it, the Delete key takes out what is
-// picked, and a wheel moves and zooms the view. A track records its input.
+// tap makes the note, a finger held on a note or a keyframe opens its menu, and the title's menu
+// holds hide and delete. What is picked has its settings in a menu on it, the Delete key takes
+// it out, and a wheel moves and zooms the view. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -235,22 +235,22 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(async () => ((await trackNamed(page, 'track0')).notes[0].at * 4) % 1).not.toBe(0);
 		// A picked note's settings are in a menu on the note, which a right click opens, and not
 		// among the track's own: its pitch, its length and its velocity. The track's menu stays shut.
-		const noteMenu = page.getByTestId('note-menu');
+		const pickedMenu = page.getByTestId('picked-menu');
 		await expect(keys.getByTestId('track-section-item')).toHaveCount(0);
 		await note.click({ button: 'right' });
-		await expect(noteMenu).toBeVisible();
+		await expect(pickedMenu).toBeVisible();
 		await expect(page.locator('.context-menu')).toHaveCount(0);
 		expect((await trackNamed(page, 'track0')).notes.length, 'the right press made no note').toBe(1);
 		for (const [field, value] of [['Length', 2], ['Velocity', 0.5]] as const) {
-			await noteMenu.getByLabel(field).fill(String(value));
-			await noteMenu.getByLabel(field).press('Enter');
+			await pickedMenu.getByLabel(field).fill(String(value));
+			await pickedMenu.getByLabel(field).press('Enter');
 			await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0][field.toLowerCase()]).toBe(value);
 		}
-		await noteMenu.locator('select[aria-label="Pitch"]').selectOption('62');
+		await pickedMenu.locator('select[aria-label="Pitch"]').selectOption('62');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes[0].pitch).toBe(62);
 		// A press beside the menu closes it and does nothing else: the lane gets no note.
 		await page.mouse.click(ground.x + ground.width * 0.9, ground.y + ground.height * 0.1);
-		await expect(noteMenu).toHaveCount(0);
+		await expect(pickedMenu).toHaveCount(0);
 		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
 		// A velocity typed and not entered lands on its note when the menu closes: a note is drawn
 		// as strong as its velocity. The note the menu was on is the one picked, in an outline of
@@ -258,9 +258,9 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await rawCall(page, 'timeline track edit', { track: 'track0', notes: [{ at: 1, length: 1, pitch: 60, velocity: 0.3 }, { at: 3, length: 1, pitch: 64, velocity: 0.9 }] });
 		await expect(note).toHaveCount(2);
 		await note.nth(0).click({ button: 'right' });
-		await noteMenu.getByLabel('Velocity').fill('0.6');
+		await pickedMenu.getByLabel('Velocity').fill('0.6');
 		await page.mouse.click(ground.x + ground.width * 0.9, ground.y + ground.height * 0.1);
-		await expect(noteMenu).toHaveCount(0);
+		await expect(pickedMenu).toHaveCount(0);
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.6, 0.9]);
 		await expect(note.nth(0)).toHaveCSS('opacity', '0.76');
 		await expect(lane.locator('.note.picked')).toHaveCount(1);
@@ -275,9 +275,9 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(lane.locator('.note.picked')).toHaveCount(1);
 		expect((await trackNamed(page, 'track0')).notes.length).toBe(1);
 		await note.first().click({ button: 'right' });
-		await page.getByTestId('note-delete').click();
+		await page.getByTestId('picked-delete').click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
-		await expect(noteMenu).toHaveCount(0);
+		await expect(pickedMenu).toHaveCount(0);
 		await choose(page, keys, 'Grid', '1 s');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
 		expect((await trackNamed(page, 'track2')).grid, 'another note track keeps its own grid').toBe('1/4 beat');
@@ -312,12 +312,12 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(ats).toEqual([3, 5]);
 		await note.nth(1).click({ button: 'right' });
 		await expect(lane.locator('.note.picked'), 'a right click on a picked note keeps what is picked').toHaveCount(2);
-		await expect(page.getByTestId('note-delete')).toHaveText(/Delete 2 notes/);
-		await noteMenu.getByLabel('Velocity').fill('0.4');
-		await noteMenu.getByLabel('Velocity').press('Enter');
+		await expect(page.getByTestId('picked-delete')).toHaveText(/Delete 2 notes/);
+		await pickedMenu.getByLabel('Velocity').fill('0.4');
+		await pickedMenu.getByLabel('Velocity').press('Enter');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.map((n: any) => n.velocity)).toEqual([0.4, 0.4]);
 		await page.keyboard.press('Escape');
-		await expect(noteMenu).toHaveCount(0);
+		await expect(pickedMenu).toHaveCount(0);
 		await page.keyboard.press('Delete');
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
 		await page.evaluate(() => (window as any).goofi.commands.undo());
@@ -381,21 +381,28 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await dragBy(page, attr.locator('.key').nth(1), box.width * 0.1, box.height * 0.2);
 		await expect.poll(async () => (await keysOf())[1].value).toBeLessThan(last.value);
 		expect((await keysOf())[1].at).toBeGreaterThan(last.at);
-		// A press that hardly moves picks the keyframe and edits nothing: its value shows in the bar.
+		// A press that hardly moves picks the keyframe and edits nothing. A right click on it opens
+		// the menu of what is picked, with its value and its curve; the track's own menu stays shut.
 		const held = (await keysOf())[1];
 		const dot = (await attr.locator('.key').nth(1).boundingBox())!;
 		await page.mouse.move(dot.x + dot.width / 2 + 3, dot.y + dot.height / 2 + 3);
 		await page.mouse.down();
 		await page.mouse.move(dot.x + dot.width / 2 + 4, dot.y + dot.height / 2 + 3);
 		await page.mouse.up();
-		await expect(curve.getByLabel('Value')).toHaveValue(String(held.value));
+		await expect(attr.locator('.key.picked')).toHaveCount(1);
 		expect((await keysOf())[1]).toEqual(held);
-		// Its curve opens in a popover. A press beside the popover closes it and does nothing else:
-		// the lane under the press gets no keyframe.
-		await curve.locator('.ui-curve-button').click();
+		await expect(curve.getByLabel('Value'), 'the track\'s settings hold nothing of what is picked').toHaveCount(0);
+		await attr.locator('.key').nth(1).click({ button: 'right' });
+		await expect(pickedMenu.getByLabel('Value')).toHaveValue(String(held.value));
+		await expect(page.locator('.context-menu')).toHaveCount(0);
+		expect((await keysOf())[1], 'the right press moved nothing').toEqual(held);
+		// Its curve opens in a popover of its own. A press beside them closes both and does nothing
+		// else: the lane under the press gets no keyframe.
+		await pickedMenu.locator('.ui-curve-button').click();
 		await expect(page.getByTestId('curve-preset')).toBeVisible();
 		await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
 		await expect(page.getByTestId('curve-preset')).toHaveCount(0);
+		await expect(pickedMenu).toHaveCount(0);
 		expect((await keysOf()).length, 'the press that closed the popover made nothing').toBe(2);
 		// A keyframe held near the end of the lane stays under the pointer.
 		await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2);
@@ -660,14 +667,14 @@ test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note a
 		const finger = await touchSession(page);
 		const [on, was] = [(await track.locator('.note').boundingBox())!, (await trackNamed(page, 'keys')).notes];
 		await finger.down({ x: on.x + on.width / 2, y: on.y + on.height / 2 });
-		await expect(page.getByTestId('note-menu')).toBeVisible();
+		await expect(page.getByTestId('picked-menu')).toBeVisible();
 		await finger.up();
 		await expect(page.locator('.context-menu'), 'the note\'s menu, and not the track\'s').toHaveCount(0);
 		expect((await trackNamed(page, 'keys')).notes).toEqual(was);
 		await expectIntact(page, 'a note\'s menu on a phone');
-		await page.getByTestId('note-delete').tap();
+		await page.getByTestId('picked-delete').tap();
 		await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(0);
-		await expect(page.getByTestId('note-menu')).toHaveCount(0);
+		await expect(page.getByTestId('picked-menu')).toHaveCount(0);
 		const head = (await track.locator('.info').boundingBox())!;
 		await finger.down({ x: head.x + head.width * 0.6, y: head.y + head.height / 2 });
 		await expect(page.locator('.context-menu .item', { hasText: 'Hide Other Tracks' })).toBeVisible();
@@ -688,9 +695,17 @@ test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note a
 		const [a, b] = [(await dots.nth(0).boundingBox())!, (await dots.nth(1).boundingBox())!];
 		expect(Math.hypot(b.x - a.x, b.y - a.y), 'the dots are closer than half a hit area').toBeLessThan(22);
 		await page.touchscreen.tap(a.x + a.width / 2, a.y + a.height / 2);
-		await expect(await settings(page, fade, '[data-testid="track-delete-picked"]')).toBeVisible();
-		await shut(page);
-		expect(await dots.nth(0).getAttribute('class'), 'the dot under the finger is the one picked').toContain('picked');
+		await expect(dots.nth(0), 'the dot under the finger is the one picked').toHaveClass(/picked/);
+		await expect(dots.nth(1)).not.toHaveClass(/picked/);
+		// A finger held on a keyframe opens the menu of what is picked, as on a note.
+		await finger.down({ x: a.x + a.width / 2, y: a.y + a.height / 2 });
+		await expect(page.getByTestId('picked-menu').getByLabel('Value')).toBeVisible();
+		await finger.up();
+		await expect(async () => {
+			await page.keyboard.press('Escape');
+			expect(await page.getByTestId('picked-menu').count()).toBe(0);
+		}).toPass();
+		expect((await trackNamed(page, 'fade')).keys, 'the held finger moved nothing').toEqual(near);
 		await expectIntact(page, 'the timeline panel on a phone');
 		// A title too narrow for every action keeps hide and delete in its menu, which closes when
 		// one of them is taken.

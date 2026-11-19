@@ -21,7 +21,7 @@
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, wheelUnit, zoomed } from '$lib/timeline/model';
-	import NoteMenu from '$lib/timeline/NoteMenu.svelte';
+	import PickedMenu from '$lib/timeline/PickedMenu.svelte';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import RenameField from '$lib/inspector/RenameField.svelte';
 	import TrackHead, { pitchName, type Port } from '$lib/timeline/TrackHead.svelte';
@@ -183,18 +183,18 @@
 		menu = { ...under(e), items };
 	}
 	const addMenu = (e: MouseEvent): void => drop(e, [{ label: 'Note Track', action: () => add('note') }, { label: 'Curve Track', action: () => add('curve') }]);
-	// The touch door onto a track's menu, and on a note onto the menu of the notes picked. A held
-	// finger makes no edit: the drag its press began ends there.
-	let pressed: { track: string; note: HTMLElement | null } = { track: '', note: null };
+	// The touch door onto a track's menu, and on a note or a keyframe onto the menu of what is
+	// picked. A held finger makes no edit: the drag its press began ends there.
+	let pressed: { track: string; item: HTMLElement | null } = { track: '', item: null };
 	const press = createLongPress((at) => {
 		drag?.();
-		if (pressed.note?.isConnected) noteMenu(pressed.track, pressed.note);
+		if (pressed.item?.isConnected) pickedMenu(pressed.track, pressed.item);
 		else trackMenu(pressed.track, at.clientX, at.clientY);
 	});
-	/** A press in a track, which a finger may hold. A note takes its press for its own drag, so it
-	 * says so itself. */
+	/** A press in a track, which a finger may hold. A note or a keyframe takes its press for its
+	 * own drag, so it says so itself. */
 	function hold(e: PointerEvent, track: string): void {
-		pressed = { track, note: (e.target as HTMLElement).closest<HTMLElement>('.note[data-item]') };
+		pressed = { track, item: (e.target as HTMLElement).closest<HTMLElement>('[data-item]') };
 		if (e.pointerType !== 'mouse') press.start(e);
 	}
 
@@ -377,16 +377,16 @@
 		picked = [];
 		editAll(patches, 'Delete notes and keyframes');
 	}
-	/** The menu of the notes picked in a track, on the note it was opened from: by a right click,
-	 * or by a held finger. It goes when no note of the track is picked. */
-	let noted = $state<{ track: string; anchor: HTMLElement } | null>(null);
-	function noteMenu(track: string, on: HTMLElement): void {
+	/** The menu of what is picked in a track, on the note or the keyframe it was opened from: by a
+	 * right click, or by a held finger. It goes when nothing of the track is picked. */
+	let opened = $state<{ track: string; anchor: HTMLElement } | null>(null);
+	function pickedMenu(track: string, on: HTMLElement): void {
 		const index = Number(on.dataset.item);
 		if (!pickedIn(track).includes(index)) pick([{ track, index }]);
-		noted = { track, anchor: on };
+		opened = { track, anchor: on };
 	}
 	$effect(() => {
-		if (noted && (g.timeline[noted.track]?.kind !== 'note' || !held(g.timeline[noted.track])[pickedIn(noted.track)[0]])) noted = null;
+		if (opened && !held(g.timeline[opened.track])[pickedIn(opened.track)[0]]) opened = null;
 	});
 	/** The cell of a note lane under a pointer: where it begins, and the note of the scale it is on. */
 	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
@@ -612,7 +612,6 @@
 			{#each shown as id (id)}
 				{@const t = g.timeline[id]}
 				{@const chosen = pickedIn(id)}
-				{@const mine = t.kind === 'curve' ? t.keys[chosen[0]] : undefined}
 				{@const [lo, hi] = t.range}
 				{@const board = t.kind === 'note' ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []}
 				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
@@ -637,7 +636,6 @@
 						<TrackHead
 							{id}
 							{t}
-							item={mine}
 							recording={recording(t)}
 							{ports}
 							onRescan={() => void rescan().catch(fail('List MIDI devices'))}
@@ -645,7 +643,6 @@
 							onRecord={(e) => void record(e, id).catch(fail('Record'))}
 							onHide={() => hide([...hidden, id], 'Hide Track')}
 							onDelete={() => (asked = id)}
-							onItem={(to) => change(id, t, to)}
 							onGrow={(by) => grow(id, by)}
 						/>
 					</div>
@@ -694,7 +691,7 @@
 										oncontextmenu={(e) => {
 											e.preventDefault();
 											e.stopPropagation();
-											noteMenu(id, e.currentTarget);
+											pickedMenu(id, e.currentTarget);
 										}}
 									>
 										<span class="end" onpointerdown={(e) => dragItem(e, id, t, i, true)}></span>
@@ -710,7 +707,16 @@
 									<path class="taking" data-testid="track-taking" d={takePath(takes[id] ?? [], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#each t.keys as k, i}
-									<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => dragItem(e, id, t, i)}></span>
+									<span class="key" class:picked={chosen.includes(i)} data-item={i} style:--a={share(along(k.at))} style:--c={across((k.value - lo) / (hi - lo || 1))} onpointerdown={(e) => {
+										hold(e, id);
+										dragItem(e, id, t, i);
+									}}
+									oncontextmenu={(e) => {
+										e.preventDefault();
+										e.stopPropagation();
+										pickedMenu(id, e.currentTarget);
+									}}
+								></span>
 								{/each}
 							{/if}
 						</div>
@@ -745,11 +751,11 @@
 {#if menu}
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
-{#if noted}
-	{@const [of, t] = [noted.track, g.timeline[noted.track]]}
-	{@const first = t?.kind === 'note' ? t.notes[pickedIn(of)[0]] : undefined}
-	{#if t?.kind === 'note' && first}
-		<NoteMenu {t} note={first} count={pickedIn(of).length} anchor={noted.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (noted = null)} />
+{#if opened}
+	{@const [of, t] = [opened.track, g.timeline[opened.track]]}
+	{@const first = held(t)[pickedIn(of)[0]]}
+	{#if t && first}
+		<PickedMenu {t} item={first} count={pickedIn(of).length} anchor={opened.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (opened = null)} />
 	{/if}
 {/if}
 <ConfirmDialog

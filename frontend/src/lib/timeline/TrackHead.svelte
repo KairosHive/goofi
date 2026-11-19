@@ -1,8 +1,8 @@
 <!-- What a track says about itself, beside its lane: its name with hide and delete, then its
-     settings in named sections that fold: the keyframe picked, the recording with its button on
-     the section's own line, and the lane's own settings. The sections that do not fit in the room
-     the track has go, whole, behind one menu in the title. A picked note's settings are not here:
-     they are in a menu on the note. -->
+     settings in named sections that fold: the recording with its button on the section's own
+     line, and the lane's own settings. The sections that do not fit in the room the track has go,
+     whole, behind one menu in the title. What is picked in the lane has its settings in a menu
+     of its own, on the lane. -->
 <script lang="ts" module>
 	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
 
@@ -18,16 +18,15 @@
 </script>
 
 <script lang="ts">
-	import type { Key, Track } from '$lib/api/generated';
+	import type { Track } from '$lib/api/generated';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { numberDescriptor } from '$lib/machine/attributes';
-	import { Button, CurvePicker, Disclosure, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
+	import { Button, Disclosure, Field, FieldGrid, Icon, IconButton, NumberInput, Select, SettingsMenu, TextInput, fit } from '$lib/ui';
 
 	let {
 		id,
 		t,
-		item,
 		recording,
 		ports,
 		onRescan,
@@ -35,13 +34,10 @@
 		onRecord,
 		onHide,
 		onDelete,
-		onItem,
 		onGrow
 	}: {
 		id: string;
 		t: Track;
-		/** The keyframe picked in the track, the first of them. */
-		item?: Key;
 		recording: boolean;
 		/** The MIDI devices there are, for a note track's input. */
 		ports: Port[];
@@ -51,8 +47,6 @@
 		onRecord: (e: MouseEvent) => void;
 		onHide: () => void;
 		onDelete: () => void;
-		/** Change the keyframes picked, or with `null` take them out. */
-		onItem: (to: Partial<Key> | null) => void;
 		/** Ask for this much more room across the axis, in pixels; answers whether the track grows. */
 		onGrow: (by: number) => boolean;
 	} = $props();
@@ -61,13 +55,12 @@
 		if (to !== t.name && isValidIdentifier(to)) onEdit({ to });
 	};
 
-	/** A track's sections of settings, in the order they stand: the keyframe picked first, while
-	 * one is, then the recording, then the lane's own. */
-	const TITLES = { item: 'Selection', record: 'Record', keyboard: 'Keyboard', range: 'Range' };
+	/** A track's sections of settings, in the order they stand: the recording, then the lane's own. */
+	const TITLES = { record: 'Record', keyboard: 'Keyboard', range: 'Range' };
 	type Group = keyof typeof TITLES;
-	const groups = $derived<Group[]>([...(item ? (['item'] as const) : []), 'record', t.kind === 'note' ? 'keyboard' : 'range']);
+	const groups = $derived<Group[]>(['record', t.kind === 'note' ? 'keyboard' : 'range']);
 	/** The sections that are unfolded: the recording's settings are set once, so it begins folded. */
-	const open = $state<Record<Group, boolean>>({ item: true, record: false, keyboard: true, range: true });
+	const open = $state<Record<Group, boolean>>({ record: false, keyboard: true, range: true });
 	/** A section was unfolded by hand and its room is not yet found: until the page has laid the
 	 * section out, which a measure of the room follows at once. */
 	let unfolded = false;
@@ -124,17 +117,7 @@
 </script>
 
 {#snippet group(name: Group)}
-	{#if name === 'item' && item}
-		<Field label="value" row doc="The keyframe's value" data-menu-row>
-			<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onItem({ value })} />
-			{#snippet adornment()}
-				<IconButton variant="ghost" size="sm" label="Delete keyframe" data-testid="track-delete-picked" onclick={() => onItem(null)}><Icon name="x" /></IconButton>
-			{/snippet}
-		</Field>
-		<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
-			<CurvePicker value={item.curve} onChange={(curve) => onItem({ curve })} />
-		</Field>
-	{:else if name === 'keyboard' && t.kind === 'note'}
+	{#if name === 'keyboard' && t.kind === 'note'}
 		<Field label="keys" row doc="The lowest and the highest pitch the keyboard shows" data-menu-row>
 			<Select aria-label="Lowest" value={String(t.range[0])} options={PITCHES.slice(0, t.range[1])} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [Number(p), t.range[1]] })} />
 			<Select aria-label="Highest" value={String(t.range[1])} options={PITCHES.slice(t.range[0] + 1)} labels={PITCH_NAMES} onChange={(p) => onEdit({ range: [t.range[0], Number(p)] })} />

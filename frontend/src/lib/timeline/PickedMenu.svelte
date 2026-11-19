@@ -1,0 +1,68 @@
+<!-- The settings of the notes or the keyframes picked in a track, in a menu that hangs from one
+     of them: a note's pitch, length and velocity, a keyframe's value and curve, and the way to
+     take them out. A right click on a note or a keyframe opens it, or a held finger. It shows the
+     first one picked, and a change is every picked one's. -->
+<script lang="ts">
+	import type { Key, Note, Track } from '$lib/api/generated';
+	import { Button, CurvePicker, Field, FieldGrid, Icon, NumberInput, Select, SettingsMenu } from '$lib/ui';
+	import { pitchName } from './TrackHead.svelte';
+
+	let {
+		t,
+		item,
+		count,
+		anchor,
+		onChange,
+		onDelete,
+		onClose
+	}: {
+		t: Track;
+		/** The first note or keyframe picked. */
+		item: Note | Key;
+		/** How many are picked. */
+		count: number;
+		/** The note or the keyframe as the lane draws it. */
+		anchor: HTMLElement;
+		onChange: (to: Partial<Note & Key>) => void;
+		onDelete: () => void;
+		onClose: () => void;
+	} = $props();
+
+	const what = $derived(t.kind === 'note' ? 'note' : 'keyframe');
+	/** Every key of a note track's keyboard, the highest first as the lane has them, and the
+	 * note's own pitch where an op put it off the keyboard. */
+	const pitches = $derived('pitch' in item ? [...new Set([...Array.from({ length: t.range[1] - t.range[0] + 1 }, (_, i) => t.range[1] - i), item.pitch])].sort((a, b) => b - a) : []);
+</script>
+
+<SettingsMenu label={count > 1 ? `${count} ${what}s` : what} testid="picked" {anchor} bind:open={() => true, (to) => void (to || onClose())}>
+	<FieldGrid>
+		{#if 'pitch' in item}
+			<Field label="pitch" row doc="The key the note plays" data-menu-row>
+				<Select aria-label="Pitch" value={String(item.pitch)} options={pitches.map(String)} labels={Object.fromEntries(pitches.map((p) => [String(p), pitchName(p)]))} onChange={(p) => onChange({ pitch: Number(p) })} />
+			</Field>
+			<Field label="length" row doc="How long the note lasts, in beats" data-menu-row>
+				<NumberInput value={item.length} min={0.01} step={0.25} onChange={(length) => onChange({ length })} />
+			</Field>
+			<Field label="velocity" row doc="The note's velocity, 0 to 1" data-menu-row>
+				<NumberInput value={item.velocity} min={0} max={1} step={0.05} onChange={(velocity) => onChange({ velocity })} />
+			</Field>
+		{:else}
+			<Field label="value" row doc="The keyframe's value" data-menu-row>
+				<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onChange({ value })} />
+			</Field>
+			<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
+				<CurvePicker value={item.curve} onChange={(curve) => onChange({ curve })} />
+			</Field>
+		{/if}
+		<div class="acts" data-menu-row>
+			<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} ${what}s` : 'Delete'}</Button>
+		</div>
+	</FieldGrid>
+</SettingsMenu>
+
+<style>
+	.acts {
+		grid-column: 1 / -1;
+		display: flex;
+	}
+</style>
