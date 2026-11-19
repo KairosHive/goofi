@@ -6,6 +6,7 @@
 <script lang="ts">
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { Button, CurvePicker, Field, FieldGrid, Icon, NumberInput, Select, SettingsMenu } from '$lib/ui';
+	import { shapeOf } from './model';
 	import { pitchName } from './TrackHead.svelte';
 
 	let {
@@ -52,7 +53,7 @@
 				<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onChange({ value })} />
 			</Field>
 			<Field label="curve" row doc="How the value eases from this keyframe to the next" data-menu-row>
-				<CurvePicker value={item.curve} onChange={(curve) => onChange({ curve })} />
+				<CurvePicker value={item.curve} smooth={t.kind === 'curve' ? shapeOf(t.keys, Math.max(0, t.keys.indexOf(item))) : undefined} onChange={(curve) => onChange({ curve })} />
 			</Field>
 			<div class="acts" data-menu-row>
 				<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} keyframes` : 'Delete'}</Button>

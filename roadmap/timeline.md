@@ -69,7 +69,9 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
   so a pick pushed past the keyboard's edge closes up. A box has no door under a finger.
 - A track is lifted by the free edge of what it says about itself; under a finger the browser
   may take the press for a scroll. Not tried on a device.
-- `in_out` made custom is one bezier near the preset's shape, not the shape itself.
+- `easing` made custom is one bezier near the preset's shape, not the shape itself.
+- A smooth keyframe's slope is from the values of the keyframes beside it, whatever their curves:
+  beside a `step` or an `easing` it still leans as their line does.
 - A recording reads a device's `notes` as any reader does, the newest value alone: a key that
   goes down and up between two looks of the machines' thread is no note, and two strikes of one
   pitch with no look between are one. Whether a recording takes the device's events instead.

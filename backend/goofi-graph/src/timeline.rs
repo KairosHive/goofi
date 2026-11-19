@@ -119,13 +119,54 @@ fn quarter() -> String {
     GRIDS[7].0.into()
 }
 
-/// A keyframe: the value at `at`, and the curve from it to the next one.
+/// A keyframe: the value at `at`, and the curve from it to the next one. A keyframe with no
+/// curve given is `smooth`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 pub struct Key {
     pub at: f64,
     pub value: f64,
-    #[serde(default)]
+    #[serde(default = "smooth")]
     pub curve: Curve,
+}
+
+fn smooth() -> Curve {
+    Curve::Smooth
+}
+
+/// The curve the value travels by from the keyframe `i` to the next one: the keyframe's own, and
+/// for `smooth` the one cubic that leaves the keyframe at its slope and comes to the next at
+/// that one's, as a bezier whose handles stand a third and two thirds along.
+pub fn shape(keys: &[Key], i: usize) -> Curve {
+    let (from, to) = (&keys[i], &keys[i + 1]);
+    let (run, rise) = (to.at - from.at, to.value - from.value);
+    match from.curve {
+        Curve::Smooth if rise == 0.0 => Curve::Linear,
+        Curve::Smooth => {
+            // A slope as a share of the leg's own: 1 is the straight line from one to the other.
+            let share = |k: usize| slope(keys, k) * run / rise;
+            Curve::Custom(vec![[0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, share(i) / 3.0], [1.0, 1.0, -1.0 / 3.0, -share(i + 1) / 3.0, 0.0, 0.0]])
+        }
+        _ => from.curve.clone(),
+    }
+}
+
+/// The slope a smooth curve has at the keyframe `i`, in value a beat, from the keyframes beside
+/// it and whatever their curves: at an end of the lane, the slope of the line to its one
+/// neighbour; at a peak or in a valley, none; between a rise and a rise, or a fall and a fall, the
+/// mean of the two lines' slopes by their lengths, and no more than twice the lesser of them. So
+/// the value between two keyframes stays between their values (Steffen's monotonic cubic).
+fn slope(keys: &[Key], i: usize) -> f64 {
+    let line = |k: usize| (keys[k + 1].value - keys[k].value) / (keys[k + 1].at - keys[k].at);
+    if i == 0 || i + 1 == keys.len() {
+        return line(i.saturating_sub(1).min(keys.len() - 2));
+    }
+    let (before, after) = (line(i - 1), line(i));
+    if before * after <= 0.0 {
+        return 0.0;
+    }
+    let (left, right) = (keys[i].at - keys[i - 1].at, keys[i + 1].at - keys[i].at);
+    let mean = (before * right + after * left) / (left + right);
+    before.signum() * mean.abs().min(2.0 * before.abs()).min(2.0 * after.abs())
 }
 
 crate::machine::named!(Track);
@@ -459,8 +500,8 @@ impl Timeline {
                     out.notes.push((track.name.clone(), notes));
                 }
                 Lanes::Curve { range, keys, .. } => {
-                    let leg = |k: &[Key]| Leg { start: seconds(k[0].at), end: seconds(k[1].at), from: Data::number(k[0].value), to: Data::number(k[1].value), curve: k[0].curve.clone() };
-                    let motion = Motion { legs: keys.windows(2).map(leg).collect(), rest: Data::number(keys.last().map_or(range[0], |k| k.value)) };
+                    let leg = |i: usize| Leg { start: seconds(keys[i].at), end: seconds(keys[i + 1].at), from: Data::number(keys[i].value), to: Data::number(keys[i + 1].value), curve: shape(keys, i) };
+                    let motion = Motion { legs: (1..keys.len()).map(|next| leg(next - 1)).collect(), rest: Data::number(keys.last().map_or(range[0], |k| k.value)) };
                     let value = motion.source().map_or(motion.rest.clone(), |source| Data::functional(functional_code(evaluator, &source), Meta::default()));
                     out.curves.push((format!("{}.{VALUE}", track.name), value));
                 }

@@ -288,8 +288,9 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 		// A press on the square adds a point to the preset's shape, and the ✕ takes it out again.
 		await press(popover.getByTestId('attribute-curve').locator('button'));
 		const curveOf = async (): Promise<any> => (await machineState()).attributes.gain.curve;
-		await press(page.getByTestId('curve-preset').getByText('eio'));
-		await expect.poll(curveOf).toBe('in_out');
+		await expect(page.getByTestId('curve-preset'), 'smooth is a keyframe\'s curve, and no attribute\'s').not.toContainText('smooth');
+		await press(page.getByTestId('curve-preset').getByText('easing'));
+		await expect.poll(curveOf).toBe('easing');
 		const square = page.getByTestId('curve-square');
 		const squared = (await square.boundingBox())!;
 		const spot = { x: squared.width * 0.5, y: squared.height * 0.2 };

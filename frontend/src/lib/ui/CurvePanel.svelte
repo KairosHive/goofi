@@ -3,18 +3,20 @@
      point there; a press on a point picks it, and a drag moves it; a picked point shows its two
      handles, and a drag moves one; Delete, or the ✕ in the corner, takes the picked point out. An
      edit of a preset makes it a custom curve of the preset's shape. A drag previews through
-     `onInput`; its release commits through `onChange`. -->
+     `onInput`; its release commits through `onChange`. With `smooth`, the curve is a keyframe's:
+     `smooth` is the first of its presets, drawn as the shape given. -->
 <script lang="ts">
 	import { Icon, IconButton } from 'panelty';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Curve } from '$lib/api/generated';
 	import Segmented from './Segmented.svelte';
-	import { PRESETS, SHORT, curveName, curvePath, fitted, pointsOf, type Point } from './curve';
+	import { PRESETS, curveName, curvePath, fitted, pointsOf, type Point } from './curve';
 
 	let {
 		value,
 		onChange,
 		onInput,
+		smooth,
 		disabled = false,
 		class: klass = '',
 		...rest
@@ -23,13 +25,17 @@
 		onChange: (curve: Curve) => unknown;
 		/** Each step of a drag, before the release commits it. */
 		onInput?: (curve: Curve) => unknown;
+		/** The shape `smooth` has where this curve is: given, `smooth` is offered. */
+		smooth?: Curve;
 		disabled?: boolean;
 	} = $props();
 
 	/** The points under a drag in flight, so the curve follows the hand before the commit. */
 	let draft = $state<Point[] | null>(null);
-	const curve = $derived<Curve>(draft ? { custom: draft } : value);
-	const points = $derived(draft ?? pointsOf(value));
+	/** The curve as it is drawn and edited: a smooth one as the shape it has here. */
+	const shape = $derived<Curve>(value === 'smooth' && smooth ? smooth : value);
+	const curve = $derived<Curve>(draft ? { custom: draft } : shape);
+	const points = $derived(draft ?? pointsOf(shape));
 	/** The anchor point picked: its handles show, and Delete takes it out. */
 	let picked = $state<number | null>(null);
 	const removable = $derived(picked !== null && picked > 0 && picked < points.length - 1);
@@ -37,10 +43,17 @@
 	const W = 100;
 	const px = (x: number): number => x * W;
 	const py = (y: number): number => W - y * W;
-	const SEGMENTS = [...PRESETS, 'custom'].map((id) => ({ id, label: SHORT[id], title: id === 'custom' ? 'A curve of your own points' : `The ${id} preset` }));
+	const TITLES: Record<string, string> = {
+		smooth: 'Through the keyframe at the slope the keyframes beside it give it',
+		step: 'Holds, and switches at the end',
+		linear: 'A straight line',
+		easing: 'Slow at both ends',
+		custom: 'A curve of your own points'
+	};
+	const segments = $derived([...(smooth ? ['smooth'] : []), ...PRESETS, 'custom'].map((id) => ({ id, label: id, title: TITLES[id] })));
 	function choose(id: string): void {
 		picked = null;
-		onChange(id === 'custom' ? { custom: pointsOf(value) } : (id as Curve));
+		onChange(id === 'custom' ? { custom: pointsOf(shape) } : (id as Curve));
 	}
 
 	let square = $state<SVGSVGElement | null>(null);
@@ -109,7 +122,7 @@
 		void value;
 		if (!held) draft = null;
 		// A point picked is one the curve still has.
-		if (picked !== null && picked >= pointsOf(value).length) picked = null;
+		if (picked !== null && picked >= pointsOf(shape).length) picked = null;
 	});
 	/** Take the picked point out; the ends stay. */
 	function remove(): void {
@@ -121,7 +134,7 @@
 </script>
 
 <div {...rest} class={`ui-curve-panel ${klass}`.trim()} class:disabled>
-	<Segmented value={curveName(curve)} segments={SEGMENTS} onChange={choose} {disabled} aria-label="curve" data-testid="curve-preset" fill />
+	<Segmented value={draft ? 'custom' : curveName(value)} {segments} onChange={choose} {disabled} aria-label="curve" data-testid="curve-preset" fill />
 	<div class="ui-curve-frame">
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 		<svg

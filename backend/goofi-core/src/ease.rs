@@ -1,5 +1,6 @@
-//! The easing curves an attribute travels by on a transition: one owner, so every ramp in the
-//! tree agrees — the Rust blend a condition reads mid-flight and the Python a functional runs.
+//! The easing curves an attribute travels by on a transition, and a track's value from a keyframe
+//! to the next: one owner, so every ramp in the tree agrees — the Rust blend a condition reads
+//! mid-flight and the Python a functional runs.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -9,13 +10,17 @@ use ts_rs::TS;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Curve {
+    /// A keyframe's curve alone: the value goes through the keyframe at the slope the keyframes
+    /// beside it give it, so a run that falls keeps falling. What knows those keyframes makes
+    /// it a curve of anchor points (`goofi_graph::timeline::shape`); with none beside it, as on
+    /// a transition, it is `linear`.
+    Smooth,
     /// Everything switches on arrival.
     Step,
     #[default]
     Linear,
-    In,
-    Out,
-    InOut,
+    /// Slow away from the start and slow into the target: level at both ends.
+    Easing,
     /// The anchor points from (0, 0) to (1, 1), each `[x, y, in_dx, in_dy, out_dx, out_dy]`: where
     /// it is, and its two handles as offsets from it. A handle's x stays inside the segment it
     /// shapes; its y is free to overshoot.
@@ -27,16 +32,16 @@ pub enum Curve {
 const SAMPLES: usize = 129;
 
 impl Curve {
-    pub const PRESETS: [Curve; 5] = [Curve::Step, Curve::Linear, Curve::In, Curve::Out, Curve::InOut];
+    /// The presets that stand alone, with no keyframes beside them.
+    pub const PRESETS: [Curve; 3] = [Curve::Step, Curve::Linear, Curve::Easing];
 
     /// The preset's name; a curve of anchor points is `custom`.
     pub fn as_str(&self) -> &'static str {
         match self {
+            Curve::Smooth => "smooth",
             Curve::Step => "step",
             Curve::Linear => "linear",
-            Curve::In => "in",
-            Curve::Out => "out",
-            Curve::InOut => "in_out",
+            Curve::Easing => "easing",
             Curve::Custom(_) => "custom",
         }
     }
@@ -62,10 +67,8 @@ impl Curve {
         let x = x.clamp(0.0, 1.0);
         match self {
             Curve::Step => if x >= 1.0 { 1.0 } else { 0.0 },
-            Curve::Linear => x,
-            Curve::In => x * x,
-            Curve::Out => 1.0 - (1.0 - x) * (1.0 - x),
-            Curve::InOut => if x < 0.5 { 2.0 * x * x } else { 1.0 - 2.0 * (1.0 - x) * (1.0 - x) },
+            Curve::Smooth | Curve::Linear => x,
+            Curve::Easing => if x < 0.5 { 2.0 * x * x } else { 1.0 - 2.0 * (1.0 - x) * (1.0 - x) },
             Curve::Custom(points) => {
                 let Some(i) = points.windows(2).position(|w| x <= w[1][0]) else { return x };
                 let (a, b) = (points[i], points[i + 1]);
@@ -90,10 +93,8 @@ impl Curve {
                 format!("(3.0 * (1.0 - x) * (1.0 - x) * x * {:?} + 3.0 * (1.0 - x) * x * x * {:?} + x * x * x)", points[0][5], 1.0 + points[1][3])
             }
             Curve::Step => "(1.0 if x >= 1.0 else 0.0)".into(),
-            Curve::Linear => "x".into(),
-            Curve::In => "x * x".into(),
-            Curve::Out => "1.0 - (1.0 - x) * (1.0 - x)".into(),
-            Curve::InOut => "(2.0 * x * x if x < 0.5 else 1.0 - 2.0 * (1.0 - x) * (1.0 - x))".into(),
+            Curve::Smooth | Curve::Linear => "x".into(),
+            Curve::Easing => "(2.0 * x * x if x < 0.5 else 1.0 - 2.0 * (1.0 - x) * (1.0 - x))".into(),
             Curve::Custom(_) => {
                 let xs: Vec<String> = (0..SAMPLES).map(|i| format!("{:?}", i as f64 / (SAMPLES - 1) as f64)).collect();
                 let ys: Vec<String> = (0..SAMPLES).map(|i| format!("{:?}", self.at(i as f64 / (SAMPLES - 1) as f64))).collect();

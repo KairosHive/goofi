@@ -1,5 +1,5 @@
 /* The timeline's arithmetic: what the panel draws its tracks by, apart from the drawing. */
-import type { Key, Track } from '$lib/api/generated';
+import type { Curve, Key, Track } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
 
 /** The seconds a beat of the tempo lasts; a tempo of nothing has the longest beat there is. */
@@ -21,6 +21,30 @@ export function ticks(from: number, to: number, want = 8): number[] {
 	return Array.from({ length: Math.max(0, Math.floor(to / step + 1e-9) - first + 1) }, (_, i) => Number(((first + i) * step).toFixed(decimals)));
 }
 
+/** The slope a smooth curve has at the keyframe `i`, in value a beat, from the keyframes beside
+ * it: at an end of the lane the slope of the line to its one neighbour, at a peak or in a valley
+ * none, and else the mean of the two lines' slopes by their lengths, no more than twice the
+ * lesser of them. `goofi_graph::timeline` is the owner; this mirrors it. */
+function slope(keys: Key[], i: number): number {
+	const line = (k: number): number => (keys[k + 1].value - keys[k].value) / (keys[k + 1].at - keys[k].at);
+	if (i === 0 || i + 1 === keys.length) return line(Math.min(Math.max(i - 1, 0), keys.length - 2));
+	const [before, after] = [line(i - 1), line(i)];
+	if (before * after <= 0) return 0;
+	const [left, right] = [keys[i].at - keys[i - 1].at, keys[i + 1].at - keys[i].at];
+	const mean = (before * right + after * left) / (left + right);
+	return Math.sign(before) * Math.min(Math.abs(mean), 2 * Math.abs(before), 2 * Math.abs(after));
+}
+/** The curve the value travels by from the keyframe `i` to the next one: the keyframe's own, and
+ * for `smooth` the one cubic that leaves the keyframe at its slope and comes to the next at that
+ * one's. The last keyframe has no next, and its curve is drawn as a straight line. */
+export function shapeOf(keys: Key[], i: number): Curve {
+	const [from, to] = [keys[i], keys[i + 1]];
+	if (from.curve !== 'smooth') return from.curve;
+	if (!to || to.value === from.value) return 'linear';
+	const share = (k: number): number => (slope(keys, k) * (to.at - from.at)) / (to.value - from.value);
+	return { custom: [[0, 0, 0, 0, 1 / 3, share(i) / 3], [1, 1, -1 / 3, -share(i + 1) / 3, 0, 0]] };
+}
+
 /** A curve as an SVG path in a box 1000 along the time axis and 100 across it: each keyframe eases
  * to the next by its curve, and the value holds outside them. `along` is where a time falls on
  * the axis, 0 to 1 over what is in view; `flip` runs the time axis down, the value to the right. */
@@ -32,10 +56,10 @@ export function lanePath(keys: Key[], [lo, hi]: [number, number], along: (at: nu
 	};
 	const points = [`M${at(Math.min(0, along(keys[0].at)), keys[0].value)}`];
 	keys.forEach((k, i) => {
-		const next = keys[i + 1];
+		const [next, shape] = [keys[i + 1], shapeOf(keys, i)];
 		for (let s = 0; s < (next ? steps : 1); s++) {
 			const f = s / steps;
-			points.push(`L${at(along(k.at + ((next?.at ?? k.at) - k.at) * f), k.value + ((next?.value ?? k.value) - k.value) * curveAt(k.curve, f))}`);
+			points.push(`L${at(along(k.at + ((next?.at ?? k.at) - k.at) * f), k.value + ((next?.value ?? k.value) - k.value) * curveAt(shape, f))}`);
 		}
 	});
 	const last = keys[keys.length - 1];

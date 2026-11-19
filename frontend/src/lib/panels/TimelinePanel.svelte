@@ -422,7 +422,7 @@
 	 * as they come, and one edit when the pointer is let go. A drag in a curve lane draws over
 	 * what it goes across: a keyframe between the last one the drag made and the next one is
 	 * removed, whether it was there before the drag or the drag made it on its way out. A keyframe
-	 * eases as the keyframe before it does, else as the one after, else in and out. */
+	 * eases as the keyframe before it does, else as the one after, else it is smooth. */
 	function paint(e: PointerEvent, id: string, t: Track): void {
 		if (e.button !== 0 || e.target !== e.currentTarget) return;
 		pick([]);
@@ -449,7 +449,7 @@
 			const [from, to] = [Math.min(last?.key.at ?? at, at), Math.max(last?.key.at ?? at, at)];
 			const keys = (now as Key[]).filter((k) => (k === last?.key ? k.at !== at : k.at < from || k.at > to));
 			const near = (side: Key[]): Key | undefined => side.sort((a, b) => Math.abs(a.at - at) - Math.abs(b.at - at))[0];
-			const shape = (near(keys.filter((k) => k.at < at)) ?? near(keys.filter((k) => k.at > at)))?.curve ?? 'in_out';
+			const shape = (near(keys.filter((k) => k.at < at)) ?? near(keys.filter((k) => k.at > at)))?.curve ?? 'smooth';
 			const key: Key = { at, value: fixed(clamp(lo + v * (hi - lo), lo, hi)), curve: shape };
 			now = [...keys, key].sort((a, b) => a.at - b.at);
 			last = { f, key };

@@ -223,12 +223,15 @@ fn a_machine_moves_its_playheads_through_its_states_and_writes_their_variables()
     // An eased transition is sampled: monotonic, ending at the target, `progress` rising to 1.
     // The curve is the attribute's: a preset, or anchor points whose handles stay in their segments.
     let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "wavy" }));
-    assert!(why.contains("custom") && why.contains("in_out"), "{why}");
+    assert!(why.contains("custom") && why.contains("easing"), "{why}");
+    // `smooth` bends by the keyframes beside it, and a transition has none.
+    let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "smooth" }));
+    assert!(why.contains("a keyframe's curve"), "{why}");
     let folded = j!({ "custom": [[0.0, 0.0, 0.0, 0.0, 1.5, 0.0], [1.0, 1.0, -0.5, 0.0, 0.0, 0.0]] });
     let why = g.refuse("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": folded }));
     assert!(why.contains("inside its segment"), "{why}");
-    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "in_out" }));
-    assert_eq!(named(&g)["seq"]["attributes"]["gain"]["curve"], j!("in_out"));
+    write("machine attribute edit", j!({ "machine": "seq", "name": "gain", "curve": "easing" }));
+    assert_eq!(named(&g)["seq"]["attributes"]["gain"]["curve"], j!("easing"));
     // Seen in flight on a move long enough that no reader's pace can miss it, and never waited
     // out: a flight a test must catch inside its own length is a race with the scheduler.
     let t2 = write("machine transition add", j!({ "machine": "seq", "from": "B", "to": "C", "duration": 30.0 }))["id"].clone();

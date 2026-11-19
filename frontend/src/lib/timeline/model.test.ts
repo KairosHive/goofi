@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, zoomed } from './model';
+import type { Curve, Key } from '$lib/api/generated';
+import { curveAt } from '$lib/ui/curve';
+import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, lanePath, shapeOf, takePath, ticks, turned, zoomed } from './model';
 
 const notes: Track = { name: 'keys', order: 0, input: '', kind: 'note', range: [48, 72], scale: 'chromatic', root: 'C', grid: '1/4 beat', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', order: 1, input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -30,6 +32,25 @@ describe('the timeline model', () => {
 		// A view that begins after the first keyframe starts the line at that keyframe, out of view.
 		expect(lanePath(curve.keys, curve.range, (at) => (at - 2) / 2, false, 1)).toBe('M-500 100 L-500 100 L500 0 L1000 0');
 		expect(lanePath([], [0, 1], along)).toBe('');
+	});
+
+	it('gives a smooth keyframe the slope of the keyframes beside it', () => {
+		const keys = (values: number[], curve: Curve = 'smooth', ats = values.map((_, i) => 2 * i)): Key[] => values.map((value, i) => ({ at: ats[i], value, curve }));
+		const blend = (all: Key[], i: number, x: number): number => curveAt(shapeOf(all, i), x);
+		// Down a straight fall the value stays on the line, where an easing is level at each keyframe.
+		const fall = keys([10, 5, 0]);
+		for (const x of [0.05, 0.25, 0.5, 0.95]) expect([blend(fall, 0, x), blend(fall, 1, x)].map((v) => Number(v.toFixed(9)))).toEqual([x, x]);
+		expect(blend(keys([10, 5, 0], 'easing'), 0, 0.95)).toBeCloseTo(0.995, 9);
+		// At a peak it is level: it comes up to the peak and never past it.
+		const peak = keys([0, 10, 0]);
+		expect(blend(peak, 0, 0.5)).toBeCloseTo(0.625, 9);
+		expect(blend(peak, 0, 0.95)).toBeCloseTo(0.995125, 9);
+		expect(blend(peak, 1, 0.05)).toBeCloseTo(1 - 0.995125, 9);
+		// A short step after a long fall does not swing the value past its keyframes.
+		const kinked = keys([10, 1, 0], 'smooth', [0, 1, 4]);
+		for (let x = 0; x <= 1; x += 0.05) for (const i of [0, 1]) expect(blend(kinked, i, x)).toBeGreaterThanOrEqual(0), expect(blend(kinked, i, x)).toBeLessThanOrEqual(1);
+		// A keyframe that is not smooth keeps its own curve; a level leg and the last keyframe are a line.
+		expect([shapeOf(keys([0, 1, 2], 'step'), 0), shapeOf(keys([3, 3, 5]), 0), shapeOf(fall, 2)]).toEqual(['step', 'linear', 'linear']);
 	});
 
 	it('draws a line between the cells in view, and fewer when they are too many', () => {

@@ -64,7 +64,7 @@ weights: { [key in string]: number },
  * transition out to take; a negative one waits.
  */
 expression: string, };
-export type Curve = "step" | "linear" | "in" | "out" | "in_out" | { "custom": Array<[number, number, number, number, number, number]> };
+export type Curve = "smooth" | "step" | "linear" | "easing" | { "custom": Array<[number, number, number, number, number, number]> };
 export type Transition = { 
 /**
  * A state's id, or `*` for any state.

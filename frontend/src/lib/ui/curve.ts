@@ -8,9 +8,9 @@ import type { Curve } from '$lib/api/generated';
 export type Point = [number, number, number, number, number, number];
 export type Preset = Exclude<Curve, { custom: Point[] }>;
 
-export const PRESETS: Preset[] = ['step', 'linear', 'in', 'out', 'in_out'];
-/** What a curve is called where there is no room: three letters. */
-export const SHORT: Record<string, string> = { step: 'stp', linear: 'lin', in: 'ein', out: 'eou', in_out: 'eio', custom: 'cst' };
+/** The presets that stand alone. `smooth` is a keyframe's: it bends by the keyframes beside it,
+ * so what knows them gives its shape (`timeline/model`), and alone it is `linear`. */
+export const PRESETS: Preset[] = ['step', 'linear', 'easing'];
 
 export const isCustom = (c: Curve): c is { custom: Point[] } => typeof c === 'object' && c !== null;
 
@@ -20,11 +20,9 @@ export const curveName = (c: Curve): string => (isCustom(c) ? 'custom' : c);
 /** A preset as the two handles of one bezier from (0, 0) to (1, 1), as CSS writes one. */
 const HANDLES: Record<Preset, [number, number, number, number]> = {
 	step: [1, 0, 1, 0],
+	smooth: [0.33, 0.33, 0.67, 0.67],
 	linear: [0.33, 0.33, 0.67, 0.67],
-	// A square of the progress is one bezier exactly.
-	in: [1 / 3, 0, 2 / 3, 1 / 3],
-	out: [1 / 3, 2 / 3, 2 / 3, 1],
-	in_out: [0.42, 0, 0.58, 1]
+	easing: [0.42, 0, 0.58, 1]
 };
 
 /** The anchor points a curve is edited by: its own, or a preset's shape as two of them, so an
@@ -61,6 +59,9 @@ export function curveAt(c: Curve, x: number): number {
 		const i = c.custom.findIndex((p, k) => k > 0 && x <= p[0]);
 		if (i < 1) return x;
 		const [a, b] = [c.custom[i - 1], c.custom[i]];
+		// One bezier whose handles stand a third and two thirds along is a cubic in `x` itself:
+		// what a smooth keyframe and a recording's fit are.
+		if (c.custom.length === 2 && a[4] === 1 / 3 && b[2] === -1 / 3) return cubic(0, a[5], 1 + b[3], 1, x);
 		// The handles' x inside the segment keep x(t) monotonic, so a bisection finds the one t.
 		let [lo, hi] = [0, 1];
 		for (let n = 0; n < 48; n++) {
@@ -73,11 +74,7 @@ export function curveAt(c: Curve, x: number): number {
 	switch (c) {
 		case 'step':
 			return x >= 1 ? 1 : 0;
-		case 'in':
-			return x * x;
-		case 'out':
-			return 1 - (1 - x) * (1 - x);
-		case 'in_out':
+		case 'easing':
 			return x < 0.5 ? 2 * x * x : 1 - 2 * (1 - x) * (1 - x);
 		default:
 			return x;

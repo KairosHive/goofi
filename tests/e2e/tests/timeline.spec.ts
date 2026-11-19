@@ -363,13 +363,13 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect.poll(async () => (await keysOf()).length).toBe(2);
 		const [first, last] = await keysOf();
 		expect(first.at < last.at && first.value < last.value, 'the keyframes are where they were made').toBe(true);
-		// A keyframe eases as the one before it does, else as the one after; with neither, in and out.
-		expect([first.curve, last.curve]).toEqual(['in_out', 'in_out']);
-		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [{ ...first, curve: 'step' }, { ...last, curve: 'out' }] });
+		// A keyframe eases as the one before it does, else as the one after; with neither, it is smooth.
+		expect([first.curve, last.curve]).toEqual(['smooth', 'smooth']);
+		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [{ ...first, curve: 'step' }, { ...last, curve: 'easing' }] });
 		await attr.click({ position: { x: box.width * 0.4, y: box.height * 0.5 } });
-		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'out']);
+		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'easing']);
 		await attr.click({ position: { x: box.width * 0.05, y: box.height * 0.5 } });
-		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'step', 'out']);
+		await expect.poll(async () => (await keysOf()).map((k) => k.curve)).toEqual(['step', 'step', 'step', 'easing']);
 		// A drag along the lane's ground makes a keyframe in each stretch it goes through, as one edit.
 		await rawCall(page, 'timeline track edit', { track: 'track1', keys: [] });
 		await expect(attr.locator('.key')).toHaveCount(0);
@@ -434,8 +434,16 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		expect((await keysOf())[1], 'the right press moved nothing').toEqual(held);
 		// Its curve opens in a popover of its own. A press beside them closes both and does nothing
 		// else: the lane under the press gets no keyframe.
+		// A keyframe's curve is named in full, and `smooth` is one of them: a pick of another and
+		// back is the keyframe's own curve each time.
+		await expect(pickedMenu.locator('.ui-curve-name')).toHaveText('smooth');
 		await pickedMenu.locator('.ui-curve-button').click();
 		await expect(page.getByTestId('curve-preset')).toBeVisible();
+		await expect(page.getByTestId('curve-preset').locator('button')).toHaveText(['smooth', 'step', 'linear', 'easing', 'custom']);
+		for (const name of ['linear', 'smooth']) {
+			await page.getByTestId('curve-preset').getByText(name, { exact: true }).click();
+			await expect.poll(async () => (await keysOf())[1].curve).toBe(name);
+		}
 		await page.mouse.click(box.x + box.width * 0.45, box.y + box.height * 0.5);
 		await expect(page.getByTestId('curve-preset')).toHaveCount(0);
 		await expect(pickedMenu).toHaveCount(0);

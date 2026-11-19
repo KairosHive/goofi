@@ -1,18 +1,20 @@
 <!-- CurvePicker — a button that shows an easing curve, as a glyph and by name, and opens its
      panel (CurvePanel) in a popover. A handle drag previews through `onInput`; its release commits
-     through `onChange`. -->
+     through `onChange`. With `smooth`, the curve is a keyframe's: `smooth` is one of its presets,
+     drawn as the shape given. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import type { Curve } from '$lib/api/generated';
 	import Popover from './Popover.svelte';
 	import CurvePanel from './CurvePanel.svelte';
-	import { SHORT, curveName, curvePath } from './curve';
+	import { curveName, curvePath } from './curve';
 	import { claimFieldControlId } from './field';
 
 	let {
 		value,
 		onChange,
 		onInput,
+		smooth,
 		disabled = false,
 		class: klass = '',
 		...rest
@@ -20,6 +22,8 @@
 		value: Curve;
 		onChange: (curve: Curve) => unknown;
 		onInput?: (curve: Curve) => unknown;
+		/** The shape `smooth` has where this curve is: given, `smooth` is offered. */
+		smooth?: Curve;
 		disabled?: boolean;
 	} = $props();
 
@@ -35,14 +39,14 @@
 	<button id={fieldId} type="button" class="ui-curve-button" bind:this={button} {disabled} aria-haspopup="dialog" aria-expanded={open}
 		title="How the attribute eases over a transition" onclick={() => (open = !open)}>
 		<svg class="ui-curve-glyph" viewBox={`-1 -1 ${W + 2} ${H + 2}`} aria-hidden="true">
-			<path d={curvePath(value, W, H, 24)} vector-effect="non-scaling-stroke" />
+			<path d={curvePath(value === 'smooth' && smooth ? smooth : value, W, H, 24)} vector-effect="non-scaling-stroke" />
 		</svg>
-		<span class="ui-curve-name">{SHORT[curveName(value)]}</span>
+		<span class="ui-curve-name">{curveName(value)}</span>
 	</button>
 </div>
 
 <Popover anchor={button} {open} onDismiss={() => (open = false)} class="ui-curve-pop" role="dialog" aria-label="curve" style="--popover-min-width: 14rem; --popover-max-width: 16rem">
-	<CurvePanel {value} {onChange} {onInput} {disabled} />
+	<CurvePanel {value} {onChange} {onInput} {smooth} {disabled} />
 </Popover>
 
 <style>

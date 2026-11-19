@@ -247,7 +247,10 @@ its notes play an instrument as a keyboard does. Its lane has a piano keyboard b
 lowest to a highest pitch, which marks the notes of a scale and a root, the ones a `Quantize`
 node offers; a note made or moved on the lane lands on that scale. A `curve` track is one line
 through keyframes: the value eases from a keyframe to the next by that keyframe's curve, holds
-outside them, and is `vars.<track>.value`. `goofi timeline track add note` and
+outside them, and is `vars.<track>.value`. A keyframe's curve is `smooth` unless it is given
+another: the value goes through the keyframe at the slope the keyframes beside it give it, so a
+run that falls keeps falling, and it is level at a peak. The others are `step`, `linear`,
+`easing`, which is slow at both ends, and a custom curve of anchor points. `goofi timeline track add note` and
 `timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
 A track records its `input` into itself while the clock plays: the record button beside its

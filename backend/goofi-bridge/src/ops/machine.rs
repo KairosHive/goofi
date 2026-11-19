@@ -48,7 +48,7 @@ op!(AttributeAdd, "machine attribute add", 2, AttributeAddArgs {
     pub kind: Option<AttributeKind>,
     pub curve: Option<Value>,
 },
-    "Add an attribute: a value every state may set and every playhead carries as `vars.<playhead>.<name>`, or `sm('<playhead>').<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. `curve` is how the attribute eases over a transition's duration: `step`, `linear` (the default), `in`, `out`, `in_out`, or `{custom: [[x, y, in_dx, in_dy, out_dx, out_dy], …]}`: anchor points from (0, 0) to (1, 1), each further along than the last and joined to the next by a cubic bezier, with its two handles as offsets from it, a handle's x inside the segment it shapes. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
+    "Add an attribute: a value every state may set and every playhead carries as `vars.<playhead>.<name>`, or `sm('<playhead>').<name>`. `value` is its default. `kind` is what the attribute is, as a node's param is: `{type: num, vmin, vmax, int?, face?}` holding a number or a list of them (`face` is `plain`, or `color` and `envelope` for four RGBA or ADSR numbers), `{type: bool}` holding 0 or 1, or `{type: string, options?}` holding a text; left out, a number is a `num` in 0..1 and a text a `string`. `curve` is how the attribute eases over a transition's duration: `step`, `linear` (the default), `easing` (slow at both ends), or `{custom: [[x, y, in_dx, in_dy, out_dx, out_dy], …]}`: anchor points from (0, 0) to (1, 1), each further along than the last and joined to the next by a cubic bezier, with its two handles as offsets from it, a handle's x inside the segment it shapes. The inspector draws each with that param's widget, and a playhead's variable wears the control-panel widget nearest it. `state` and `progress` are the machine's own and refused.",
     "{id, name, value} — the attribute and its default as stored");
 
 op!(AttributeEdit, "machine attribute edit", 2, AttributeEditArgs {
@@ -286,6 +286,9 @@ fn parse_curve(v: Value) -> Result<Curve, String> {
         let presets = Curve::PRESETS.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("/");
         format!("`curve` is one of {presets} or `{{custom: [[x, y, in_dx, in_dy, out_dx, out_dy], …]}}`, not `{v}`")
     })?;
+    if curve == Curve::Smooth {
+        return Err("`smooth` is a keyframe's curve, bent by the keyframes beside it: an attribute travels by step, linear, easing or a custom curve".to_string());
+    }
     curve.check()?;
     Ok(curve)
 }

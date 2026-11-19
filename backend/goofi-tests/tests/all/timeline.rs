@@ -47,6 +47,37 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     g.call("timeline track edit", j!({ "track": "sweep", "keys": stepped }));
     at(&g, 2.0);
     g.until("the stepped level before its next keyframe", |g| (number(g, "sweep.value") == 0.0).then_some(()));
+    // A keyframe with no curve is smooth: the value goes through it at the slope the keyframes
+    // beside it give it. Down a straight fall it stays on the line all the way, where an easing
+    // levels out at every keyframe.
+    let level = |g: &Goofi, time: f64, value: f64, what: &str| {
+        at(g, time);
+        g.until(&format!("{what} at {time}"), |g| ((number(g, "sweep.value") - value).abs() < 1e-3).then_some(()));
+    };
+    let fall = |curve: &str| j!([{ "at": 0.0, "value": 10.0, "curve": curve }, { "at": 2.0, "value": 5.0, "curve": curve }, { "at": 4.0, "value": 0.0 }]);
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": [{ "at": 0.0, "value": 10.0 }, { "at": 2.0, "value": 5.0 }, { "at": 4.0, "value": 0.0 }] }));
+    assert_eq!(g.doc()["timeline"][sweep["id"].as_str().unwrap()]["keys"][1]["curve"], j!("smooth"));
+    for (time, value) in [(0.5, 8.75), (1.9, 5.25), (2.1, 4.75), (3.5, 1.25)] {
+        level(&g, time, value, "the smooth fall");
+    }
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": fall("easing") }));
+    for (time, value) in [(0.5, 9.375), (1.9, 5.025), (2.1, 4.975)] {
+        level(&g, time, value, "the eased fall");
+    }
+    // At a peak a smooth curve is level, and it comes up to the peak and never past it; where
+    // the keyframes go on the same way, it goes through at their slope.
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": [{ "at": 0.0, "value": 0.0 }, { "at": 2.0, "value": 10.0 }, { "at": 4.0, "value": 0.0 }] }));
+    for (time, value) in [(1.0, 6.25), (1.9, 9.95125), (2.0, 10.0), (2.1, 9.95125), (3.0, 6.25)] {
+        level(&g, time, value, "the smooth peak");
+    }
+    // A slope is no more than twice the lesser of the two lines it stands between, so a short
+    // step after a long fall does not swing the value past its keyframes.
+    g.call("timeline track edit", j!({ "track": "sweep", "keys": [{ "at": 0.0, "value": 10.0 }, { "at": 1.0, "value": 1.0 }, { "at": 4.0, "value": 0.0 }] }));
+    for time in [0.25, 0.5, 0.75, 0.95, 1.5, 2.5, 3.5] {
+        at(&g, time);
+        let floor = if time < 1.0 { 1.0 } else { 0.0 };
+        g.until(&format!("the level at {time} between its keyframes"), |g| (number(g, "sweep.value") > floor && number(g, "sweep.value") < if time < 1.0 { 10.0 } else { 1.0 }).then_some(()));
+    }
     // A time follows the tempo: beat 2 is one second at 120 and two at 60.
     g.call("timeline track edit", j!({ "track": "sweep", "keys": ramp }));
     at(&g, 1.0);
@@ -268,7 +299,7 @@ fn a_recording_goes_into_its_track() {
 fn level(keys: &[goofi_graph::timeline::Key], t: f64) -> f64 {
     let next = keys.iter().position(|k| k.at > t).unwrap_or(keys.len() - 1).max(1);
     let (from, to) = (&keys[next - 1], &keys[next]);
-    from.value + (to.value - from.value) * from.curve.at((t - from.at) / (to.at - from.at))
+    from.value + (to.value - from.value) * goofi_graph::timeline::shape(keys, next - 1).at((t - from.at) / (to.at - from.at))
 }
 
 #[test]
