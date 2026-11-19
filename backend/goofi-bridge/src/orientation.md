@@ -74,7 +74,8 @@ The patch plays on one clock: `t` is its position, `clock set` pauses and places
 `clock.*` variables hold its tempo and the timeline's length in beats. `timeline track add`
 and `timeline track edit` put notes and keyframed curves on that position; each track is a group
 of variables, and a note track is a MIDI port of `audio:MidiIn`. `timeline track record` takes a
-track's `input`, a MIDI device or an expression, into the track while the clock plays.
+track's `input`, an expression (a MIDI device's `vars.<group>.notes`, a node, a variable), into
+the track while the clock plays.
 
 ## Custom nodes
 

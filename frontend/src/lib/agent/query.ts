@@ -56,6 +56,8 @@ export interface PanelView {
 	node: string | null;
 	slot: string | null;
 	kind: string | null;
+	/** The panel's own state, whole. */
+	state: Record<string, unknown>;
 }
 
 export const query = {
@@ -103,7 +105,8 @@ export const query = {
 				type: p.panelType,
 				node: linkedNodeName(p.state),
 				slot: typeof s.slot === 'string' ? s.slot : null,
-				kind: typeof s.kind === 'string' ? s.kind : null
+				kind: typeof s.kind === 'string' ? s.kind : null,
+				state: s
 			};
 		}),
 

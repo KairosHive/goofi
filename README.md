@@ -243,9 +243,10 @@ endless.
 The timeline holds tracks on that position, their times in beats, so a change of the tempo moves
 them all together. A `note` track holds notes; it writes the held velocities to
 `vars.<track>.notes`, and the audio `MidiIn` node lists it as a port (`timeline: <track>`), so
-its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, from a
-lowest to a highest pitch, which marks the notes of a scale and a root, the ones a `Quantize`
-node offers; a note made or moved on the lane lands on that scale. A `curve` track is one line
+its notes play an instrument as a keyboard does. Its lane has a piano keyboard beside it, the
+panel's own: from a lowest to a highest pitch, marking the notes of a scale and a root, the ones a
+`Quantize` node offers, and a grid; a note made or moved on the lane lands on that scale and that
+grid. A `curve` track is one line
 through keyframes: the value eases from a keyframe to the next by that keyframe's curve, holds
 outside them, and is `vars.<track>.value`. A keyframe's curve is `smooth` unless it is given
 another: the value goes through the keyframe at the slope the keyframes beside it give it, so a
@@ -254,12 +255,12 @@ run that falls keeps falling, and it is level at a peak. The others are `step`, 
 `timeline track edit` build one from the CLI or an agent; the same ops drive the timeline panel.
 
 A track records its `input` into itself while the clock plays: the record button beside its
-name, or `timeline track record`, begins a recording, and ends it. The input is an expression, as a
-param's. A note track reads the keys a MIDI device holds, `vars.<device>.notes`: the panel offers
-the device there is, or asks which where there are several. The notes played are added to the
-notes the track holds. A curve track's input is typed or dropped on it: a node, a variable, a
-state. The track takes the input's value at most `rate`
-times a second (30 unless set), and a node slower than that gives a sample for each of its
+name, or `timeline track record`, begins a recording, and ends it. The input is an expression, as
+a param's. A note track reads the keys a MIDI device holds, `vars.<device>.notes`: a track with
+no input is given the device there is, or asked which where there are several. The notes played
+are added to the notes the track holds. A curve track's input is typed or dropped on it: a node,
+a variable, a state. The track takes the input's value at most `rate` times a second (30 unless
+set), and a node slower than that gives a sample for each of its
 frames; an input that reads no node holds its value between two changes, a step. The end of the
 recording puts keyframes with fitted bezier curves that follow what came, in place of the
 keyframes of the stretch it covered. A loop or a seek begins another pass, so what a seek jumps
@@ -277,7 +278,7 @@ what it touches. A drag of a note or a keyframe moves it, and with it everything
 Delete key takes out what is picked, and Escape picks none. A right click on a note or a keyframe, or a held finger, opens a
 menu on it with the settings of what is picked: a note's pitch, length and velocity, a
 keyframe's value and curve. A note
-snaps to its track's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
+snaps to its keyboard's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler
 are play, stop and the clock's position, a number that a click makes a field. A press on the
 ruler places the clock, and a drag along it marks a section the clock loops in: that section is
 the clock's own, no variable holds it and no patch carries it. The bar above the ruler is the

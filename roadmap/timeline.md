@@ -44,8 +44,8 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A panel keeps the id of a removed track in `state.hidden` and `state.sizes`; nothing reads it.
 - The range bar stands for everything from 0 to the view, so far along the axis a small drag
   of it is a long time.
-- A track's scale is what its keyboard marks and what a gesture lands on. A note set by an op
-  is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
+- A keyboard's scale is the panel's: what it marks and what a gesture lands on. A note set by an
+  op is kept off the scale, and a scale that is not of twelve tones is marked to the nearest key.
 - `MidiIn`'s `port` param holds a track by its name (`timeline: <name>`), so a rename of the
   track leaves the node on a port nothing plays. Whether it holds the id.
 - Whether a variable gets an id too. Today its name is its key and a rename rewrites its readers.
@@ -69,7 +69,7 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - A recording reads a device's `notes` as any reader does, the newest value alone: a key that
   goes down and up between two looks of the machines' thread is no note, and two strikes of one
   pitch with no look between are one. Whether a recording takes the device's events instead.
-- A recorded note is where it was played: it is not put on the track's grid or scale.
+- A recorded note is where it was played: it is not put on a keyboard's grid or scale.
 - A curve recording replaces the keyframes of the stretch it covered; it has no way to add to
   them, and no way to keep one pass of a loop and drop another.
 - An input that reads no node holds its value between two changes, so a recording of it steps;

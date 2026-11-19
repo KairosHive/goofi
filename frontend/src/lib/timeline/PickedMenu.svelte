@@ -10,6 +10,7 @@
 
 	let {
 		t,
+		range,
 		item,
 		count,
 		anchor,
@@ -18,6 +19,8 @@
 		onClose
 	}: {
 		t: Track;
+		/** What the lane shows across its axis: the keyboard's pitches, or the curve's range. */
+		range: [number, number];
 		/** The first note or keyframe picked. */
 		item: Note | Key;
 		/** How many are picked. */
@@ -32,7 +35,7 @@
 	const what = $derived(t.kind === 'note' ? 'note' : 'keyframe');
 	/** Every key of a note track's keyboard, the highest first as the lane has them, and the
 	 * note's own pitch where an op put it off the keyboard. */
-	const pitches = $derived('pitch' in item ? [...new Set([...Array.from({ length: t.range[1] - t.range[0] + 1 }, (_, i) => t.range[1] - i), item.pitch])].sort((a, b) => b - a) : []);
+	const pitches = $derived('pitch' in item ? [...new Set([...Array.from({ length: range[1] - range[0] + 1 }, (_, i) => range[1] - i), item.pitch])].sort((a, b) => b - a) : []);
 </script>
 
 <Popover {anchor} open onDismiss={onClose} role="group" aria-label={count > 1 ? `${count} ${what}s` : what} style="--popover-radius: var(--radius-sm)" data-testid="picked-menu">
@@ -49,7 +52,7 @@
 			</Field>
 		{:else}
 			<Field label="value" row doc="The keyframe's value">
-				<NumberInput value={item.value} min={t.range[0]} max={t.range[1]} step={0.01} onChange={(value) => onChange({ value })} />
+				<NumberInput value={item.value} min={range[0]} max={range[1]} step={0.01} onChange={(value) => onChange({ value })} />
 			</Field>
 			<Field label="curve" row doc="How the value eases from this keyframe to the next">
 				<CurvePicker value={item.curve} smooth={t.kind === 'curve' ? shapeOf(t.keys, Math.max(0, t.keys.indexOf(item))) : undefined} onChange={(curve) => onChange({ curve })} />

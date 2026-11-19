@@ -183,7 +183,10 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// long as every key there is, the highest at its top: an end dragged changes that end by
 		// whole keys, a drag of the bar moves both, and each drag is one step of the history.
 		expect(Math.round(ranger.x + ranger.width), 'the bar stands against the keyboard').toBe(Math.round(piano.x));
-		const keyRange = async (): Promise<number[]> => (await trackNamed(page, 'track0')).range;
+		// The keyboard is the panel's own: what a drag or a dropdown sets of it is in the panel's state.
+		const boards = async (): Promise<any> => (await page.evaluate(() => (window as any).goofi.query.panels()[0].state)).keyboards ?? {};
+		const track0 = (await trackNamed(page, 'track0')).id;
+		const keyRange = async (): Promise<number[] | undefined> => (await boards())[track0]?.range;
 		// The bar is as long as the lane, which the range it shows sizes.
 		const barTall = async (): Promise<number> => (await keys.getByTestId('track-range-bar').boundingBox())!.height;
 		await dragBy(page, keys.getByTestId('track-range-from'), 0, ((await barTall()) * 12) / 128);
@@ -202,7 +205,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(keys.locator('.keys .out')).toHaveCount(7);
 		await choose(keys, 'Root', 'D');
 		await expect(keys.locator('.keys span:not(.out)').first()).toHaveAttribute('data-pitch', '50');
-		expect(await trackNamed(page, 'track0')).toMatchObject({ range: [48, 60], scale: 'pentatonic_major', root: 'D' });
+		expect((await boards())[track0]).toMatchObject({ range: [48, 60], scale: 'pentatonic_major', root: 'D' });
+		expect(await trackNamed(page, 'track0'), 'the track holds nothing of the keyboard').not.toHaveProperty('range');
 		await choose(keys, 'Root', 'C');
 		await dragBy(page, keys.getByTestId('track-range-from'), 0, -((await barTall()) * 12) / 128);
 		await expect.poll(keyRange).toEqual([48, 72]);
@@ -288,8 +292,8 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await note.first().click();
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(0);
 		await choose(keys, 'Grid', '1 s');
-		await expect.poll(async () => (await trackNamed(page, 'track0')).grid).toBe('1 s');
-		expect((await trackNamed(page, 'track2')).grid, 'another note track keeps its own grid').toBe('1/4 beat');
+		await expect.poll(async () => (await boards())[track0]?.grid).toBe('1 s');
+		expect((await boards())[(await trackNamed(page, 'track2')).id]?.grid, 'another note track keeps its own grid').toBeUndefined();
 		await lane.click({ position: { x: ground.width * 0.3, y: ground.height * 0.5 } });
 		await expect.poll(async () => (await trackNamed(page, 'track0')).notes.length).toBe(1);
 		expect((await trackNamed(page, 'track0')).notes[0]).toMatchObject({ at: 2, length: 1 });

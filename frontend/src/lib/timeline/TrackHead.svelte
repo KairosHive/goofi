@@ -1,7 +1,7 @@
 <!-- What a track says about itself, beside its lane: its name and the button to its menu, then its
      settings in named sections that fold. -->
 <script lang="ts" module>
-	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
+	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 
 	/** A MIDI input port the host lists, and the variable group it is read as. */
 	export interface Port {
@@ -20,25 +20,32 @@
 	import ParamField from '$lib/inspector/ParamField.svelte';
 	import { numberDescriptor } from '$lib/machine/attributes';
 	import { Disclosure, Field, FieldGrid, Icon, IconButton, NumberInput, Select, TextInput } from '$lib/ui';
+	import { GRIDS, type Keyboard } from './model';
 
 	let {
 		id,
 		t,
+		board,
 		recording,
 		ports,
 		onRescan,
 		onEdit,
+		onBoard,
 		onRecord,
 		onMenu
 	}: {
 		id: string;
 		t: Track;
+		/** The keyboard the panel draws a note track on. */
+		board: Keyboard;
 		recording: boolean;
 		/** The MIDI devices there are, for a note track's input. */
 		ports: Port[];
 		onRescan: () => void;
 		/** Change the track's own settings: one `timeline track edit`. */
 		onEdit: (patch: Record<string, unknown>) => void;
+		/** Change the panel's keyboard for the track. */
+		onBoard: (patch: Partial<Keyboard>) => void;
 		onRecord: (e: MouseEvent) => void;
 		/** Open the track's menu from its button. */
 		onMenu: (e: MouseEvent) => void;
@@ -64,13 +71,13 @@
 {#snippet group(name: Group)}
 	{#if name === 'keyboard' && t.kind === 'note'}
 		<Field label="root" row doc="The note the keyboard's scale starts on">
-			<Select aria-label="Root" value={t.root} options={[...NOTE_NAMES]} onChange={(root) => onEdit({ root })} />
+			<Select aria-label="Root" value={board.root} options={[...NOTE_NAMES]} onChange={(root) => onBoard({ root })} />
 		</Field>
 		<Field label="scale" row doc="The scale whose notes the keyboard marks and a note lands on">
-			<Select aria-label="Scale" value={t.scale} options={Object.keys(SCALES)} onChange={(scale) => onEdit({ scale })} />
+			<Select aria-label="Scale" value={board.scale} options={Object.keys(SCALES)} onChange={(scale) => onBoard({ scale })} />
 		</Field>
-		<Field label="grid" row doc="The lines a note of this track snaps to when it is made or dragged; Shift or Ctrl lets it go free">
-			<Select aria-label="Grid" value={t.grid} options={Object.keys(GRIDS)} onChange={(grid) => onEdit({ grid })} />
+		<Field label="grid" row doc="The lines a note snaps to when it is made or dragged; Shift or Ctrl lets it go free">
+			<Select aria-label="Grid" value={board.grid} options={Object.keys(GRIDS)} onChange={(grid) => onBoard({ grid })} />
 		</Field>
 	{:else if name === 'record' && t.kind === 'note'}
 		<Field label="input" row doc="The MIDI device a recording takes its notes from; auto is the one there is, or the one picked when it begins">

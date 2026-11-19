@@ -1063,7 +1063,7 @@ impl Graph {
     }
 
     /// Re-set every expression of what steps on the clock that `edit` rewrites: a machine's, and
-    /// the input of a curve track.
+    /// a track's input.
     fn rewrite_stepped(&mut self, edit: impl Fn(&str) -> Option<String>) {
         let stepped = Arc::make_mut(&mut self.patch.stepped);
         for m in stepped.machines.values_mut() {

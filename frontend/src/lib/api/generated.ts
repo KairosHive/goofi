@@ -89,7 +89,7 @@ export type Machine = { name: string, attributes: { [key in string]: Attribute }
 seed?: number, };
 export type Note = { at: number, length: number, pitch: number, velocity: number, };
 export type Key = { at: number, value: number, curve: Curve, };
-export type Lanes = { "kind": "note", range: [number, number], scale: string, root: string, grid: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], 
+export type Lanes = { "kind": "note", notes: Array<Note>, } | { "kind": "curve", range: [number, number], 
 /**
  * The most samples a second a recording takes of the input.
  */
@@ -100,7 +100,7 @@ export type Track = { name: string,
  * the keys it holds, a device's `vars.pads.notes`; a curve reads its first number. Empty is
  * none.
  */
-input: string, } & ({ "kind": "note", range: [number, number], scale: string, root: string, grid: string, notes: Array<Note>, } | { "kind": "curve", range: [number, number], 
+input: string, } & ({ "kind": "note", notes: Array<Note>, } | { "kind": "curve", range: [number, number], 
 /**
  * The most samples a second a recording takes of the input.
  */

@@ -101,14 +101,6 @@ fn a_track_writes_its_group_at_the_clocks_position() {
         at(&g, time);
         g.until(&format!("the note at {time}"), |g| (held(g, "keys.notes", 60) == velocity).then_some(()));
     }
-    // Its keyboard shows two octaves from C3 until it is told another range.
-    let keyboard = |g: &Goofi| g.call("timeline list", j!({}))["tracks"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap()["range"].clone();
-    assert_eq!(keyboard(&g), j!([48, 72]));
-    g.call("timeline track edit", j!({ "track": "keys", "range": [36, 84], "scale": "minor", "root": "D", "grid": "1 s" }));
-    assert_eq!(keyboard(&g), j!([36, 84]));
-    let doc = g.doc();
-    let held_as = doc["timeline"].as_object().unwrap().values().find(|t| t["name"] == "keys").unwrap();
-    assert_eq!((&held_as["scale"], &held_as["root"], &held_as["grid"], held_as["notes"].as_array().map(Vec::len)), (&j!("minor"), &j!("D"), &j!("1 s"), Some(1)), "the keyboard's scale and grid, and the notes as they were");
     // Played, the thread wakes for the note's start and for its end.
     g.call("clock set", j!({ "playing": true, "time": 0.9 }));
     g.until("the note to start", |g| (held(g, "keys.notes", 60) == 0.5).then_some(()));
@@ -131,11 +123,8 @@ fn a_track_writes_its_group_at_the_clocks_position() {
     for (payload, why) in [
         (j!({ "track": "keys", "notes": [{ "at": 0.0, "length": 0.0, "pitch": 60, "velocity": 0.5 }] }), "lasts more than 0"),
         (j!({ "track": "keys", "keys": [] }), "a note track takes `notes`"),
-        (j!({ "track": "keys", "range": [60, 60] }), "a lower pitch to a higher one"),
-        (j!({ "track": "keys", "range": [60.5, 72] }), "two pitches"),
-        (j!({ "track": "keys", "scale": "wrong" }), "a scale and a root"),
-        (j!({ "track": "keys", "grid": "1/7 beat" }), "its grid is one"),
-        (j!({ "track": "sweep", "root": "D" }), "a note track takes"),
+        (j!({ "track": "keys", "range": [60, 72] }), "a note track takes `notes`"),
+        (j!({ "track": "sweep", "notes": [] }), "a note track takes"),
         (j!({ "track": "sweep", "keys": [{ "at": 1.0, "value": 0.0 }, { "at": 1.0, "value": 1.0 }] }), "each later"),
         (j!({ "track": "sweep", "to": "keys" }), "already exists"),
     ] {
@@ -274,7 +263,6 @@ fn a_recording_goes_into_its_track() {
     let note = &played["notes"][1];
     assert_eq!((&played["notes"][0], &note["at"], &note["pitch"], &note["velocity"]), (&there, &j!(1.0), &j!(80), &j!(0.75)), "the note is added to those there");
     assert!(near(note["length"].as_f64().unwrap(), lifted - 1.0), "{note} for a key that came up at {lifted}");
-    assert_eq!(played["range"], j!([48, 80]), "the keyboard shows the note");
     // A track is a group with `notes` too, so another can read it as its input, and a rename
     // of it follows there.
     g.call("timeline track add", j!({ "kind": "note", "name": "copy" }));
@@ -448,7 +436,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
 
     // A note is a key of the device from when it goes down to when it comes up; a seek ends it
     // where the recording last looked, and a key still down begins another where it lands.
-    let mut m = recorder("vars.pads.notes", Lanes::Note { range: [48, 72], scale: "chromatic".into(), root: "C".into(), grid: "1/4 beat".into(), notes: Vec::new() });
+    let mut m = recorder("vars.pads.notes", Lanes::Note { notes: Vec::new() });
     for (now, velocity, seek) in [(1.0, 0.5, false), (1.5, 0.5, false), (3.0, 0.5, true), (3.5, 0.0, false)] {
         if seek {
             m.restart();

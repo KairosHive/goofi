@@ -128,19 +128,6 @@ export const PLAYHEAD_FIELDS = ['state', 'progress'] as const;
 export const OWN_GROUPS = ['system', 'signal', 'graphics', 'audio', 'clock'] as const;
 /** The twelve notes by name, from C: what a root is one of. */
 export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
-/** The grids a note track's notes snap to, by name: how many seconds or beats lie between two lines, and whether they are beats. */
-export const GRIDS: Record<string, readonly [number, boolean]> = {
-	'1 s': [1, false],
-	'1/2 s': [0.5, false],
-	'1/4 s': [0.25, false],
-	'1/10 s': [0.1, false],
-	'1 beat': [1, true],
-	'1/2 beat': [0.5, true],
-	'1/3 beat': [0.3333333333333333, true],
-	'1/4 beat': [0.25, true],
-	'1/8 beat': [0.125, true],
-	'1/16 beat': [0.0625, true],
-};
 /** The named scales, each as the semitones above its root nearest its degrees. */
 export const SCALES: Record<string, readonly number[]> = {
 	chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],

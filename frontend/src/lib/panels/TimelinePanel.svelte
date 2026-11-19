@@ -9,14 +9,14 @@
 	import type { ArrayData } from '$lib/codec/decode';
 	import type { ViewSpec } from '$lib/viewers/module';
 	import type { Key, Note, Track } from '$lib/api/generated';
-	import { GRIDS, NOTE_NAMES, SCALES } from '$lib/api/vocab';
+	import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 	import { draggable, type DragSource, type Outcome } from '$lib/drag';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { beatSeconds, contentEnd, gridPath, hiding, lanePath, takePath, ticks, turned, wheelUnit, zoomed } from '$lib/timeline/model';
+	import { GRIDS, beatSeconds, contentEnd, gridPath, hiding, keyboard, lanePath, takePath, ticks, turned, wheelUnit, zoomed, type Keyboard } from '$lib/timeline/model';
 	import PickedMenu from '$lib/timeline/PickedMenu.svelte';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import TrackRange from '$lib/timeline/TrackRange.svelte';
@@ -29,6 +29,8 @@
 		hidden?: string[];
 		/** How large this panel draws a track across the axis, in pixels, by the track's id. */
 		sizes?: Record<string, number>;
+		/** What this panel set of a note track's keyboard, by the track's id. */
+		keyboards?: Record<string, Partial<Keyboard>>;
 	}
 
 	let { panelId, state: panelState, setState }: PanelProps = $props();
@@ -154,8 +156,8 @@
 		over = null;
 	}
 
-	/** The beats between two lines of a note track's grid. */
-	const gridOf = (t: Extract<Track, { kind: 'note' }>): number => Math.max(0.001, GRIDS[t.grid][1] ? GRIDS[t.grid][0] : GRIDS[t.grid][0] / spb);
+	/** The beats between two lines of a keyboard's grid. */
+	const gridOf = (k: Keyboard): number => Math.max(0.001, GRIDS[k.grid][1] ? GRIDS[k.grid][0] : GRIDS[k.grid][0] / spb);
 	/** A time in beats on the nearest line of a grid, as `round` rounds. */
 	const onGrid = (beats: number, grid: number, round = Math.round): number => round(beats / grid + 1e-9) * grid;
 
@@ -219,13 +221,13 @@
 	let ports = $state<Port[]>([]);
 	const rescan = async (): Promise<Port[]> => (ports = (await g.op<{ ports: Port[] }>('midi list', {})).ports);
 	void rescan().catch(fail('List MIDI devices'));
-	/** What a note track records from, as the expression that reads it: the device it names while
-	 * that is there, else the one there is, else one picked at `at` from those there are, or none
-	 * where the pick is let go. */
+	/** What a note track records from, as the expression that reads it: its input, or with none
+	 * the device there is, else one picked at `at` from those there are, or none where the pick
+	 * is let go. */
 	async function device(t: Track, at: { x: number; y: number }): Promise<string | null> {
+		if (t.input) return t.input;
 		const found = await rescan();
 		if (found.length === 0) throw new Error('no MIDI device is connected');
-		if (found.some((p) => notesOf(p.group) === t.input)) return t.input;
 		if (found.length === 1) return notesOf(found[0].group);
 		return quickPick().ask(at, found.map((p) => ({ id: notesOf(p.group), label: p.port })), `Record ${t.name} from`);
 	}
@@ -296,13 +298,27 @@
 	}
 	const held = (t: Track | undefined): (Note | Key)[] => (t?.kind === 'note' ? t.notes : (t?.keys ?? []));
 	const put = (t: Track, items: unknown[]): Record<string, unknown> => (t.kind === 'note' ? { notes: items } : { keys: items });
-	type NoteTrack = Extract<Track, { kind: 'note' }>;
-	/** Whether a pitch is a note of the scale a note track's keyboard marks. */
-	const inScale = (t: NoteTrack, pitch: number): boolean => (SCALES[t.scale] ?? []).includes((((pitch - NOTE_NAMES.indexOf(t.root as never)) % 12) + 12) % 12);
+	// ---- the keyboards: the panel's own, one per note track.
+	/** The range a drag of a keyboard's bar has until it is let go; none where it is at the
+	 * keyboard's own again, as a drag that is cancelled leaves it. */
+	let ranging = $state<{ id: string; range: [number, number] } | null>(null);
+	const boardOf = (id: string, t: Track): Keyboard => keyboard(t.kind === 'note' ? t.notes : [], { ...own.keyboards?.[id], ...(ranging?.id === id ? { range: ranging.range } : {}) });
+	function previewRange(id: string, t: Track, range: [number, number]): void {
+		const rest = keyboard(t.kind === 'note' ? t.notes : [], own.keyboards?.[id]).range;
+		ranging = range[0] === rest[0] && range[1] === rest[1] ? null : { id, range };
+	}
+	/** What the lane of `id` shows across its axis: its keyboard's pitches, or its curve's range. */
+	const spanOf = (id: string, t: Track): [number, number] => (t.kind === 'note' ? boardOf(id, t).range : t.range);
+	function setBoard(id: string, patch: Partial<Keyboard>): void {
+		ranging = null;
+		setState({ keyboards: { ...own.keyboards, [id]: { ...own.keyboards?.[id], ...patch } } }, 'authored', 'Set keyboard');
+	}
+	/** Whether a pitch is a note of the scale a keyboard marks. */
+	const inScale = (k: Keyboard, pitch: number): boolean => (SCALES[k.scale] ?? []).includes((((pitch - NOTE_NAMES.indexOf(k.root as never)) % 12) + 12) % 12);
 	/** The note of the scale nearest `pitch`, on the keyboard. */
-	function snap(t: NoteTrack, pitch: number): number {
-		const [lo, hi] = t.range;
-		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(t, p));
+	function snap(k: Keyboard, pitch: number): number {
+		const [lo, hi] = k.range;
+		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(k, p));
 		return notes.reduce((best, p) => (Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best), notes[0] ?? clamp(pitch, lo, hi));
 	}
 	/** The note or keyframe a drag holds: the drag ends when that one leaves its lane. */
@@ -346,10 +362,10 @@
 		if (opened && !held(g.timeline[opened.track])[pickedIn(opened.track)[0]]) opened = null;
 	});
 	/** The cell of a note lane under a pointer: where it begins, and the note of the scale it is on. */
-	function cellAt(p: { clientX: number; clientY: number }, ground: Element, t: NoteTrack): { at: number; pitch: number } {
+	function cellAt(p: { clientX: number; clientY: number }, ground: Element, k: Keyboard): { at: number; pitch: number } {
 		const [f, v] = point(p, ground);
-		const [lo, hi] = t.range;
-		return { at: exact(onGrid(view[0] + f * width, gridOf(t), Math.floor)), pitch: snap(t, lo + Math.floor(v * (hi - lo + 1))) };
+		const [lo, hi] = k.range;
+		return { at: exact(onGrid(view[0] + f * width, gridOf(k), Math.floor)), pitch: snap(k, lo + Math.floor(v * (hi - lo + 1))) };
 	}
 	/** The cell the pointer is over, to light it. */
 	let over = $state<{ track: string; at: number; pitch: number } | null>(null);
@@ -364,16 +380,16 @@
 		if (e.button !== 0 || e.target !== e.currentTarget) return;
 		pick([]);
 		const ground = e.currentTarget as HTMLElement;
-		const [base, lo, hi] = [held(t), ...t.range];
+		const [base, [lo, hi], k] = [held(t), spanOf(id, t), boardOf(id, t)];
 		const length = (vertical ? ground.clientHeight : ground.clientWidth) || 1;
 		let now = base;
 		let last: { f: number; key: Key } | null = null;
 		/** Take the pointer's place into the lane; answers whether the lane changed. */
 		const add = (p: { clientX: number; clientY: number }): boolean => {
 			if (t.kind === 'note') {
-				const cell = cellAt(p, ground, t);
+				const cell = cellAt(p, ground, k);
 				if (now.some((n) => n.at === cell.at && (n as Note).pitch === cell.pitch)) return false;
-				now = [...now, { ...cell, length: exact(gridOf(t)), velocity: 0.8 }];
+				now = [...now, { ...cell, length: exact(gridOf(k)), velocity: 0.8 }];
 				return true;
 			}
 			const [f, v] = point(p, ground);
@@ -409,9 +425,11 @@
 		if (stretch || !was) pick([...(more && !stretch ? picked : []), { track: id, index }]);
 		const ground = (e.currentTarget as HTMLElement).closest('.ground')!;
 		const [f0, v0] = point(e, ground);
-		const rows = t.range[1] - t.range[0] + 1;
-		// What each lane held at the press: a preview puts a new one in the track's record.
-		const tracks = [...new Set(picked.map((p) => p.track))].map((track) => ({ track, was: g.timeline[track], all: held(g.timeline[track]), indices: pickedIn(track) }));
+		const [plo, phi] = spanOf(id, t);
+		const rows = phi - plo + 1;
+		// What each lane held at the press, and the keyboard it was on: a preview puts a new lane
+		// in the track's record.
+		const tracks = [...new Set(picked.map((p) => p.track))].map((track) => ({ track, was: g.timeline[track], all: held(g.timeline[track]), indices: pickedIn(track), board: boardOf(track, g.timeline[track]) }));
 		// A keyframe goes no further than the nearest keyframe the drag leaves: they keep their order.
 		let [least, most] = [-Infinity, Infinity];
 		for (const { was, all, indices } of tracks) {
@@ -426,19 +444,19 @@
 		 * its grid and its scale unless `free` lets it go where the pointer is, and keeps the time
 		 * or the pitch it has where the drag does not move it. */
 		const moved = (by: number, dv: number, free: { time: boolean; pitch: boolean }): [string, Record<string, unknown>][] =>
-			tracks.map(({ track, was, all, indices }) => [
+			tracks.map(({ track, was, all, indices, board }) => [
 				track,
 				put(was, held(g.timeline[track]).map((it, k) => {
 					const o = all[k];
 					if (!indices.includes(k) || !o) return it;
 					const shift = clamp(by, least, most);
 					if (was.kind === 'curve') return { ...it, at: exact(o.at + shift), value: t.kind === 'curve' ? fixed(clamp((o as Key).value + dv * (was.range[1] - was.range[0]), ...was.range)) : (o as Key).value };
-					const [n, grid] = [o as Note, gridOf(was)];
+					const [n, grid] = [o as Note, gridOf(board)];
 					const on = (from: number, d: number): number => (free.time ? from + d : onGrid(d, grid) === 0 ? from : onGrid(from + d, grid));
 					const end = on(n.at + n.length, by);
 					if (stretch) return { ...it, length: exact(end === n.at + n.length ? n.length : Math.max(free.time ? 0.01 : grid, end - n.at)) };
 					const semitones = t.kind === 'note' ? Math.round(dv * rows) : 0;
-					return { ...it, at: exact(on(n.at, shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...was.range) : snap(was, n.pitch + semitones) };
+					return { ...it, at: exact(on(n.at, shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...board.range) : snap(board, n.pitch + semitones) };
 				}))
 			]);
 		let patches: [string, Record<string, unknown>][] | null = null;
@@ -557,7 +575,8 @@
 			{#each shown as id (id)}
 				{@const t = g.timeline[id]}
 				{@const chosen = pickedIn(id)}
-				{@const [lo, hi] = t.range}
+				{@const k = boardOf(id, t)}
+				{@const [lo, hi] = spanOf(id, t)}
 				{@const rows = hi - lo + 1}
 				{@const board = t.kind === 'note' ? Array.from({ length: rows }, (_, i) => lo + i) : []}
 				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
@@ -585,19 +604,21 @@
 							recording={recording(t)}
 							{ports}
 							onRescan={() => void rescan().catch(fail('List MIDI devices'))}
+							board={k}
 							onEdit={(patch) => edit(id, patch)}
+							onBoard={(patch) => setBoard(id, patch)}
 							onRecord={(e) => void record(e, id).catch(fail('Record'))}
 							onMenu={(e) => trackMenu(id, under(e))}
 						/>
 					</div>
 					<div class="range">
-						<TrackRange {t} up={!vertical} onPreview={(range) => g.previewTrack(id, { range })} onCommit={(range) => edit(id, { range })} />
+						<TrackRange {t} range={[lo, hi]} up={!vertical} onPreview={(range) => (t.kind === 'note' ? previewRange(id, t, range) : g.previewTrack(id, { range }))} onCommit={(range) => (t.kind === 'note' ? setBoard(id, { range }) : edit(id, { range }))} />
 					</div>
 					{#if t.kind === 'note'}
 						<!-- The keyboard: a key per pitch, the notes of the scale lit, each root named. -->
 						<div class="keys" data-testid="track-keyboard" aria-hidden="true">
 							{#each board as p (p)}
-								<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === t.root}<b>{pitchName(p)}</b>{/if}</span>
+								<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(k, p)} data-pitch={p}>{#if NOTE_NAMES[p % 12] === k.root}<b>{pitchName(p)}</b>{/if}</span>
 							{/each}
 						</div>
 					{/if}
@@ -607,19 +628,19 @@
 							class="ground"
 							data-testid="track-lane"
 							onpointerdown={(e) => paint(e, id, t)}
-							onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, t) } : null)}
+							onpointermove={(e) => (over = t.kind === 'note' && e.target === e.currentTarget && e.pointerType === 'mouse' ? { track: id, ...cellAt(e, e.currentTarget, k) } : null)}
 							onpointerleave={() => (over = null)}
 						>
 							{#if t.kind === 'note'}
 								<!-- The cells: a row a pitch, darker off the scale and on a black key; a line a cell. -->
 								<div class="rows" aria-hidden="true">
-									{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(t, p)}></span>{/each}
+									{#each board as p (p)}<span class:black={[1, 3, 6, 8, 10].includes(p % 12)} class:out={!inScale(k, p)}></span>{/each}
 								</div>
 								<svg class="grid" viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
-									<path d={gridPath(view[0], view[1], gridOf(t), vertical)} vector-effect="non-scaling-stroke" />
+									<path d={gridPath(view[0], view[1], gridOf(k), vertical)} vector-effect="non-scaling-stroke" />
 								</svg>
 								{#if over?.track === id}
-									<div class="cell" data-testid="track-cell" style={stood(along(over.at), gridOf(t) / width, (over.pitch - lo) / rows, 1 / rows)}></div>
+									<div class="cell" data-testid="track-cell" style={stood(along(over.at), gridOf(k) / width, (over.pitch - lo) / rows, 1 / rows)}></div>
 								{/if}
 								{#each t.notes as n, i}
 									<div
@@ -703,7 +724,7 @@
 	{@const [of, t] = [opened.track, g.timeline[opened.track]]}
 	{@const first = held(t)[pickedIn(of)[0]]}
 	{#if t && first}
-		<PickedMenu {t} item={first} count={pickedIn(of).length} anchor={opened.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (opened = null)} />
+		<PickedMenu {t} range={spanOf(of, t)} item={first} count={pickedIn(of).length} anchor={opened.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (opened = null)} />
 	{/if}
 {/if}
 <ConfirmDialog
