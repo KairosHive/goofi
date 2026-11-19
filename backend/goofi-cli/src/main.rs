@@ -132,9 +132,14 @@ async fn serve_main(rest: Vec<String>, ui: Option<goofi_window::Ui>) {
     config.demo_base = named_env("GOOFI_DEMO_BASE");
     let window = ui.clone();
     let code = run(cli, python, config, async { let _ = shutdown.await; }, ui, Some(screen)).await;
-    // The window loop ends once every plugin editor and window was unmade by the shutdown above.
-    if let Some(window) = window {
-        window.stop();
+    // The shutdown above unmade every plugin, editor and window. Each module then exits on the
+    // thread it entered on — the window thread, where there is one — and the window loop ends.
+    match window {
+        Some(window) => {
+            window.run(|_| goofi_audio::vst3::exit_all());
+            window.stop();
+        }
+        None => goofi_audio::vst3::exit_all(),
     }
     // Last, after every engine is gone: the record, then the ephemeral directory and shared memory.
     release_session();

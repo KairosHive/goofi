@@ -16,23 +16,30 @@ use vst3::{uid, Class, ComPtr, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg:
 #[cfg(target_os = "linux")]
 use vst3::Steinberg::Linux::IRunLoopTrait;
 
-/// A `deaf` build is a DIFFERENT plugin, not the same one quieter: its classes carry their own
-/// names and ids, so both can be in one palette and one process at once.
-#[cfg(not(feature = "deaf"))]
+/// A `deaf` or `strict` build is a DIFFERENT plugin, not the same one changed: its classes carry
+/// their own names and ids, so all can be in one palette and one process at once.
+#[cfg(not(any(feature = "deaf", feature = "strict")))]
 const VARIANT: u32 = 0;
 #[cfg(feature = "deaf")]
 const VARIANT: u32 = 0x0D0E_0A0F;
+#[cfg(feature = "strict")]
+const VARIANT: u32 = 0x5791_C700;
 
-#[cfg(not(feature = "deaf"))]
+#[cfg(not(any(feature = "deaf", feature = "strict")))]
 const NAME: &str = "GoofiFixture";
 #[cfg(feature = "deaf")]
 const NAME: &str = "GoofiDeaf";
+/// No legal name alone: it begins with a digit.
+#[cfg(feature = "strict")]
+const NAME: &str = "1 Strict";
 /// A second audio class behind the same processor, differing only in the subcategories that
 /// name it an instrument — which is what the palette reads to tag a plugin.
-#[cfg(not(feature = "deaf"))]
+#[cfg(not(any(feature = "deaf", feature = "strict")))]
 const SYNTH_NAME: &str = "GoofiSynth";
 #[cfg(feature = "deaf")]
 const SYNTH_NAME: &str = "GoofiDeafSynth";
+#[cfg(feature = "strict")]
+const SYNTH_NAME: &str = "1 Strict Synth";
 const SYNTH_CID: TUID = uid(0x2B3C4D5E, 0x6F708192, 0xA3B4C5D6, 0xE7F80919 ^ VARIANT);
 const VOICES: usize = 16;
 /// The parameter a channel's pitch wheel is, outside the visible ids exactly as a real plugin's
@@ -825,22 +832,67 @@ impl IPluginFactory2Trait for Factory {
     }
 }
 
+/// Whether the host called the module's exit hook since it entered it.
+static EXITED: AtomicBool = AtomicBool::new(false);
+
+/// A `strict` module tears its globals down in its exit hook and aborts at process exit without
+/// it, as Cardinal's do.
+fn entered() -> bool {
+    #[cfg(feature = "strict")]
+    {
+        extern "C" {
+            fn atexit(handler: extern "C" fn()) -> i32;
+        }
+        extern "C" fn unexited() {
+            if !EXITED.load(Ordering::SeqCst) {
+                std::process::abort();
+            }
+        }
+        unsafe { atexit(unexited) };
+    }
+    EXITED.store(false, Ordering::SeqCst);
+    true
+}
+
+fn exited() -> bool {
+    EXITED.store(true, Ordering::SeqCst);
+    true
+}
+
 #[cfg(target_os = "windows")]
 #[no_mangle]
 extern "system" fn InitDll() -> bool {
-    true
+    entered()
+}
+
+#[cfg(target_os = "windows")]
+#[no_mangle]
+extern "system" fn ExitDll() -> bool {
+    exited()
 }
 
 #[cfg(target_os = "macos")]
 #[no_mangle]
 extern "system" fn bundleEntry(_bundle_ref: *mut c_void) -> bool {
-    true
+    entered()
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+extern "system" fn bundleExit() -> bool {
+    exited()
 }
 
 #[cfg(target_os = "linux")]
 #[no_mangle]
 extern "system" fn ModuleEntry(_library_handle: *mut c_void) -> bool {
-    true
+    entered()
+}
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+extern "system" fn ModuleExit() -> bool {
+    exited()
 }
 
 #[no_mangle]

@@ -8,6 +8,8 @@ mod host;
 mod module;
 mod node;
 
+pub use module::exit_all;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -115,7 +117,9 @@ pub fn scan_main(args: &[String]) -> i32 {
         eprintln!("usage: goofi vst3-scan <bundle> <answer>");
         return 2;
     };
-    match describe(Path::new(bundle)).and_then(|found| {
+    let described = describe(Path::new(bundle));
+    module::exit_all();
+    match described.and_then(|found| {
         serde_json::to_vec(&found).map_err(|e| e.to_string()).and_then(|b| std::fs::write(answer, b).map_err(|e| e.to_string()))
     }) {
         Ok(()) => 0,
@@ -341,9 +345,10 @@ fn answered(child: &mut goofi_supervisor::child::Child, errors: &Path) -> Result
 
 impl AudioEngine {
     /// One class as one type: named by the plugin, or by vendor and plugin where the name is
-    /// taken. A registration from the same binary at the same stamp is kept.
+    /// taken or is no legal name (`3 Band EQ`). A registration from the same binary at the same
+    /// stamp is kept.
     fn register_plugin(&mut self, vendor: &str, binary: &Path, stamp: Stamp, class: ClassInfo) -> ScannedType {
-        let Some(bare) = camel(&class.name) else {
+        let Some(bare) = camel(&class.name).or_else(|| camel(&format!("{vendor} {}", class.name))) else {
             let reason = format!("`{}` is not a legal name: {}", class.name, goofi_core::variables::NAME_RULE);
             return ScannedType { type_name: class.name, stamp: None, outcome: Scanned::Unavailable(reason) };
         };

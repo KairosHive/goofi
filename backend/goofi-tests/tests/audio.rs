@@ -1443,6 +1443,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("library refresh", j!({}));
     assert_eq!(scanned(), 4, "a binary whose bytes moved is scanned again");
 
+    // A module that aborts at process exit unless the host exited it, as Cardinal's does: the
+    // scanner exits it. Its names begin with a digit, so its vendor leads them.
+    bundled("Strict", built("strict"));
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Goofi1Strict", "audio:Goofi1StrictSynth"]));
+    assert_eq!(listed("audio:Goofi1Strict")["available"], true, "{}", listed("audio:Goofi1Strict"));
+
     // The plugin's state is its own blob, the one place its values are stored: the fixture latches
     // the first time `shape` reaches its last step and halves its tone for ever after, which no
     // param can say. Latched, then set to `mid`, saved and reopened: the patch stores no plugin
