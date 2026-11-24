@@ -505,9 +505,12 @@ impl Executor for AudioHalf {
     }
 
     /// A computed result, `[t]` or `[c, t]`, to the audio thread as one chunk; a moved channel
-    /// count asks for the re-plan that re-sizes its region.
+    /// count asks for the re-plan that re-sizes its region. A result that holds no number is not sent.
     fn frame(&mut self, param: usize, frame: &Data) -> bool {
         let goofi_core::Value::Array(a) = frame.value() else { return false };
+        if a.values().any(|v| !v.is_finite()) {
+            return false;
+        }
         let (chans, len) = match a.shape() {
             [t] => (1, *t),
             [c, t] => (*c, *t),
