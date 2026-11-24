@@ -2,7 +2,14 @@
 # host's copy of it is either enormous or wrong for the container.
 target/
 node_modules/
-.gfivenv
-.gfivenv-ft
 .cargo/
 .git/
+
+# The bundles a public demo does not carry: their packages (torch, transformers, diffusers,
+# mediapipe, onnxruntime) are gigabytes of image for models a container with no GPU cannot run.
+node-bundles/ai/
+node-bundles/computer-vision/
+node-bundles/image/
+node-bundles/image-generation/
+node-bundles/ml/
+node-bundles/texture/
