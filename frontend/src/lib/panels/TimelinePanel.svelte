@@ -2,10 +2,17 @@
      curve track as one line through its keyframes, under the clock they play on. A panel taller
      than wide runs the time down. The tracks are the patch's, every change one op; what a panel
      hides and how large it draws a track are its own state; the view is no state at all. -->
+<script lang="ts" module>
+	import type { Clip } from '$lib/timeline/model';
+	/** The last copy, in hand for every timeline panel: a clipboard may refuse its text. */
+	let inHand: Clip | null = null;
+</script>
+
 <script lang="ts">
 	import { MOVE_TOLERANCE_PX, asStateObject, beginDrag, createLongPress, workspace, type MenuItem, type PanelProps } from 'panelty';
 	import { untrack } from 'svelte';
 	import { bindViewer } from '$lib/api/frames';
+	import { copyText } from '$lib/clipboard';
 	import type { ArrayData } from '$lib/codec/decode';
 	import type { ViewSpec } from '$lib/viewers/module';
 	import type { Key, Note, Track } from '$lib/api/generated';
@@ -16,7 +23,7 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { GRIDS, beatSeconds, contentEnd, gridPath, hiding, keyboard, lanePath, takePath, ticks, turned, wheelUnit, zoomed, type Keyboard } from '$lib/timeline/model';
+	import { GRIDS, beatSeconds, clipOf, contentEnd, gridPath, hiding, keyboard, lanePath, parseClip, partItems, pasted, takePath, ticks, turned, wheelUnit, zoomed, type Keyboard } from '$lib/timeline/model';
 	import PickedMenu from '$lib/timeline/PickedMenu.svelte';
 	import RangeBar from '$lib/timeline/RangeBar.svelte';
 	import TrackRange from '$lib/timeline/TrackRange.svelte';
@@ -177,7 +184,8 @@
 			return { label, disabled: more.length === 0, action: () => hide([...hidden, ...more], label) };
 		};
 		const items = [entry('this', 'Hide Track'), entry('above', 'Hide Tracks Above'), entry('below', 'Hide Tracks Below'), entry('others', 'Hide Other Tracks')];
-		menu = { ...at, items: [...items, { separator: true }, { label: 'Delete Track…', icon: 'x', action: () => (asked = id) }] };
+		const copied: MenuItem = { label: 'Paste', disabled: !inHand, action: () => inHand && paste(inHand) };
+		menu = { ...at, items: [copied, { separator: true }, ...items, { separator: true }, { label: 'Delete Track…', icon: 'x', action: () => (asked = id) }] };
 	}
 	/** A menu that drops from the button that opened it. */
 	function drop(e: MouseEvent, items: MenuItem[]): void {
@@ -318,6 +326,8 @@
 		const notes = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i).filter((p) => inScale(k, p));
 		return notes.reduce((best, p) => (Math.abs(p - pitch) < Math.abs(best - pitch) ? p : best), notes[0] ?? clamp(pitch, lo, hi));
 	}
+	/** A pitch `by` semitones on, on a keyboard: on its scale unless `free`, and as it was for none. */
+	const raised = (k: Keyboard, pitch: number, by: number, free = false): number => (by === 0 ? pitch : free ? clamp(pitch + by, ...k.range) : snap(k, pitch + by));
 	/** The note or keyframe a drag holds: the drag ends when that one leaves its lane. */
 	let dragged = $state<{ track: string; index: number } | null>(null);
 	/** Change every note or keyframe picked in a track, or with null remove them. */
@@ -333,19 +343,26 @@
 			for (const [track, patch] of patches) await g.op('timeline track edit', { track, ...patch }, step);
 		}).catch(fail('Edit track'));
 	}
-	/** The keys of the active panel, outside its text fields and dialogs: Delete takes out every
-	 * note and keyframe picked, and Escape picks none. Nothing reaches a panel that is not the
-	 * active one. */
-	function onKeydown(e: KeyboardEvent): void {
+	/** Whether the active panel is this one, and an event outside its text fields and dialogs. */
+	const mine = (e: Event): boolean => {
 		const on = e.target as HTMLElement | null;
-		if ((e.key !== 'Delete' && e.key !== 'Backspace' && e.key !== 'Escape') || picked.length === 0) return;
-		if (e.defaultPrevented || ws.activePanelId !== panelId || isTextEditingTarget(on) || on?.closest?.('dialog[open]')) return;
+		return !e.defaultPrevented && ws.activePanelId === panelId && !isTextEditingTarget(on) && !on?.closest?.('dialog[open]');
+	};
+	/** The panel's keys: Escape lets a copy in hand go, or picks none; Ctrl+C copies what is
+	 * picked, where no text is selected; Delete takes it out. */
+	function onKeydown(e: KeyboardEvent): void {
+		if (!mine(e)) return;
+		if (e.key === 'Escape' && placing) placing = null;
+		else if (picked.length === 0) return;
+		else if (e.key === 'Escape') picked = [];
+		else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !window.getSelection()?.toString()) copy();
+		else if (e.key === 'Delete' || e.key === 'Backspace') {
+			const tracks = [...new Set(picked.map((p) => p.track))].filter((track) => g.timeline[track]);
+			const patches = tracks.map((track): [string, Record<string, unknown>] => [track, put(g.timeline[track], held(g.timeline[track]).filter((_, k) => !pickedIn(track).includes(k)))]);
+			picked = [];
+			editAll(patches, 'Delete notes and keyframes');
+		} else return;
 		e.preventDefault();
-		if (e.key === 'Escape') return void (picked = []);
-		const tracks = [...new Set(picked.map((p) => p.track))].filter((track) => g.timeline[track]);
-		const patches = tracks.map((track): [string, Record<string, unknown>] => [track, put(g.timeline[track], held(g.timeline[track]).filter((_, k) => !pickedIn(track).includes(k)))]);
-		picked = [];
-		editAll(patches, 'Delete notes and keyframes');
 	}
 	/** The menu of what is picked in a track, on the note or the keyframe it was opened from: by a
 	 * right click, or by a held finger. It goes when nothing of the track is picked. */
@@ -452,7 +469,7 @@
 					const end = on(n.at + n.length, by);
 					if (stretch) return { ...it, length: exact(end === n.at + n.length ? n.length : Math.max(free.time ? 0.01 : grid, end - n.at)) };
 					const semitones = t.kind === 'note' ? Math.round(dv * rows) : 0;
-					return { ...it, at: exact(on(n.at, shift)), pitch: semitones === 0 ? n.pitch : free.pitch ? clamp(n.pitch + semitones, ...board.range) : snap(board, n.pitch + semitones) };
+					return { ...it, at: exact(on(n.at, shift)), pitch: raised(board, n.pitch, semitones, free.pitch) };
 				}))
 			]);
 		let patches: [string, Record<string, unknown>][] | null = null;
@@ -523,6 +540,69 @@
 			cancel: () => (box = null)
 		});
 	}
+	// ---- copy and paste. A copy is text on the clipboard, and in hand. A paste holds it over the
+	// lanes, drawn where it would land, and a press on a lane places it where the press is let go.
+	type Landing = { track: string; items: (Note | Key)[]; added: number[] };
+	let placing = $state<{ clip: Clip; lands: Landing[] } | null>(null);
+	/** Where the pointer is, while it is over the tracks. */
+	let pointer: { clientX: number; clientY: number } | null = null;
+	function copy(): void {
+		const clip = clipOf(shown.map((id, row) => ({ row, t: g.timeline[id], picked: pickedIn(id) })));
+		if (!clip) return;
+		inHand = clip;
+		void copyText(JSON.stringify(clip));
+	}
+	function paste(clip: Clip): void {
+		pick([]);
+		placing = { clip, lands: pointer ? landings(clip, pointer) : [] };
+	}
+	function onPaste(e: ClipboardEvent): void {
+		const clip = mine(e) ? (parseClip(e.clipboardData?.getData('text/plain') ?? '') ?? inHand) : null;
+		if (!clip) return;
+		e.preventDefault();
+		paste(clip);
+	}
+	/** What each lane holds with the copy placed at a pointer: the lane under it takes the first
+	 * part of its kind, begun there, and the other parts the tracks as far from it as theirs were. */
+	function landings(clip: Clip, p: { clientX: number; clientY: number }): Landing[] {
+		const ground = document.elementFromPoint(p.clientX, p.clientY)?.closest<HTMLElement>('.track .ground');
+		const id = (ground && stack?.contains(ground) && ground.closest<HTMLElement>('[data-track]')?.dataset.track) || '';
+		const t = g.timeline[id];
+		const lead = t && clip.parts.find((part) => 'notes' in part === (t.kind === 'note'));
+		if (!ground || !lead) return [];
+		const cell = cellAt(p, ground, boardOf(id, t));
+		const [at, semitones] = 'notes' in lead ? [cell.at, cell.pitch - Math.min(...lead.notes.map((n) => n.pitch))] : [exact(view[0] + point(p, ground)[0] * width), 0];
+		const by = at - Math.min(...partItems(lead).map((o) => o.at));
+		return clip.parts.flatMap((part) => {
+			const track = shown[shown.indexOf(id) + part.row - lead.row] ?? '';
+			const onto = g.timeline[track];
+			const lane = onto && pasted(onto, part, by, (pitch) => raised(boardOf(track, onto), pitch, semitones));
+			return lane ? [{ track, ...lane }] : [];
+		});
+	}
+	/** Take the pointer's place, or that it left the tracks, and draw a copy in hand there. */
+	function aim(p: { clientX: number; clientY: number } | null): void {
+		pointer = p && { clientX: p.clientX, clientY: p.clientY };
+		if (placing) placing.lands = pointer ? landings(placing.clip, pointer) : [];
+	}
+	/** A press on a lane with a copy in hand: where it is let go the copy lands, as one edit, and
+	 * is picked. Let go off every lane, the copy stays in hand. */
+	function land(e: PointerEvent): void {
+		if (!stack || e.button !== 0 || !(e.target as Element).closest('.track .ground')) return;
+		e.stopPropagation();
+		aim(e);
+		drag = beginDrag(stack, e.pointerId, {
+			move: aim,
+			commit: () => {
+				const lands = placing && pointer ? landings(placing.clip, pointer) : [];
+				if (lands.length === 0) return;
+				placing = null;
+				picked = lands.flatMap(({ track, added }) => added.map((index) => ({ track, index })));
+				editAll(lands.map(({ track, items }) => [track, put(g.timeline[track], items)]), 'Paste notes and keyframes');
+			},
+			cancel: () => aim(null)
+		});
+	}
 	// A drag ends with the panel, and with the note or keyframe it holds.
 	$effect(() => {
 		if (dragged && !held(g.timeline[dragged.track])[dragged.index]) drag?.();
@@ -533,10 +613,10 @@
 	});
 </script>
 
-<svelte:document onkeydown={onKeydown} />
+<svelte:document onkeydown={onKeydown} onpaste={onPaste} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="timeline" class:vertical bind:clientWidth={wide} bind:clientHeight={tall} data-testid="timeline-panel" onwheel={onWheel}>
+<div class="timeline" class:vertical class:holding={placing !== null} bind:clientWidth={wide} bind:clientHeight={tall} data-testid="timeline-panel" onwheel={onWheel}>
 	<!-- One group that wraps: a narrow panel puts the controls on as many lines as they take. -->
 	<Bar>
 		{#snippet start()}
@@ -545,6 +625,9 @@
 			<label class="labeled">dur <NumberInput title="The timeline's length in beats: the clock restarts when it reaches it, unless a section loops it; 0 is endless" data-testid="clock-length" value={clock('length')} min={0} onChange={(v) => void g.setVariableValue('clock.length', v).catch(fail('Set length'))} /></label>
 			{#if loop}
 				<Chip tone="accent" title="The clock loops in the section marked on the ruler: press to clear it" data-testid="clock-loop" onclick={() => setLoop(0, 0)}>loop</Chip>
+			{/if}
+			{#if placing}
+				<Chip tone="accent" title="A copy is in hand: press a lane to place it there; press here, or Escape, to let it go" data-testid="timeline-placing" onclick={() => (placing = null)}>paste</Chip>
 			{/if}
 			{#if stowed.length > 0}
 				<Button size="sm" data-testid="timeline-hidden" title="Hidden tracks: pick one to show it" onclick={(e) => drop(e, stowed.map((id) => ({ label: g.timeline[id].name, action: () => hide(hidden.filter((h) => h !== id), 'Show Track') })))}>
@@ -557,7 +640,7 @@
 	</Bar>
 	<div class="scroll thin-scrollbar">
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="stack" bind:this={stack} onpointerdowncapture={boxPick}>
+		<div class="stack" bind:this={stack} onpointerdowncapture={(e) => (placing ? land(e) : boxPick(e))} onpointermove={aim} onpointerleave={() => aim(null)}>
 			<div class="row head">
 				<div class="corner">
 					<IconButton variant="ghost" size="sm" label={playing ? 'Pause' : 'Play'} data-testid="clock-play" onclick={() => steer({ playing: !playing })}><Icon name={playing ? 'pause' : 'play'} /></IconButton>
@@ -584,6 +667,8 @@
 				{@const rows = hi - lo + 1}
 				{@const board = t.kind === 'note' ? Array.from({ length: rows }, (_, i) => lo + i) : []}
 				{@const size = sizing?.id === id ? sizing.size : own.sizes?.[id]}
+				{@const ghost = placing?.lands.find((l) => l.track === id)}
+				{@const fresh = ghost?.added.map((i) => ghost.items[i]) ?? []}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<section
 					class="row track"
@@ -662,13 +747,21 @@
 								{#each taken(takes[id]) as [at, length, pitch]}
 									<div class="note taking" data-testid="track-taking" style={stood(along(at), length / width, (pitch - lo) / rows, 1 / rows)}></div>
 								{/each}
+								<!-- A copy in hand, where it would land. -->
+								{#each (fresh as Note[]) as n}
+									<div class="note placing" data-testid="track-placing" style={stood(along(n.at), n.length / width, (n.pitch - lo) / rows, 1 / rows)}></div>
+								{/each}
 							{:else}
 								<svg viewBox={vertical ? '0 0 100 1000' : '0 0 1000 100'} preserveAspectRatio="none" aria-hidden="true">
 									<path d={lanePath(t.keys, t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
 									<path class="taking" data-testid="track-taking" d={takePath(takes[id] ?? [], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />
+									{#if ghost}<path class="placing" d={lanePath(ghost.items as Key[], t.range, (at) => along(at), vertical)} vector-effect="non-scaling-stroke" />{/if}
 								</svg>
 								{#each t.keys as k, i}
 									<span class="key" class:picked={chosen.includes(i)} data-item={i} style={stood(along(k.at), 0, (k.value - lo) / (hi - lo || 1), 0)} {...itemEvents(id, t, i)}></span>
+								{/each}
+								{#each (fresh as Key[]) as k}
+									<span class="key placing" data-testid="track-placing" style={stood(along(k.at), 0, (k.value - lo) / (hi - lo || 1), 0)}></span>
 								{/each}
 							{/if}
 						</div>
@@ -711,7 +804,7 @@
 	{@const [of, t] = [opened.track, g.timeline[opened.track]]}
 	{@const first = held(t)[pickedIn(of)[0]]}
 	{#if t && first}
-		<PickedMenu {t} range={spanOf(of, t)} item={first} count={pickedIn(of).length} anchor={opened.anchor} onChange={(to) => change(of, t, to)} onDelete={() => change(of, t, null)} onClose={() => (opened = null)} />
+		<PickedMenu {t} range={spanOf(of, t)} item={first} count={pickedIn(of).length} anchor={opened.anchor} onChange={(to) => change(of, t, to)} onCopy={() => (copy(), (opened = null))} onDelete={() => change(of, t, null)} onClose={() => (opened = null)} />
 	{/if}
 {/if}
 <ConfirmDialog
@@ -1020,6 +1113,21 @@
 		border: 1px solid var(--accent);
 		background: var(--accent-fill);
 		pointer-events: none;
+	}
+	/* A copy in hand, where it would land: an outline with no fill of its own, a curve's line dashed. */
+	.note.placing,
+	.key.placing {
+		background: var(--accent-fill);
+		outline: 1px dashed var(--accent);
+		outline-offset: -1px;
+		pointer-events: none;
+	}
+	path.placing {
+		stroke-dasharray: 4 3;
+	}
+	.holding .ground,
+	.holding .ground * {
+		cursor: copy;
 	}
 	.picked {
 		background: var(--accent-muted);

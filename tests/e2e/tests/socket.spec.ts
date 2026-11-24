@@ -507,6 +507,10 @@ test.describe('the control socket', () => {
 				await page.keyboard.press('Control+v');
 				expect(await backendDoc(page)).toEqual(beforePaste);
 				await selectNode(page, scope, aside);
+				// The paste lands where the mouse is on the canvas, off its centre: the copy's corner is there.
+				const canvas = (await page.locator('.editor-panel.canvas-wrap').boundingBox())!;
+				const aim = { x: canvas.x + canvas.width / 4, y: canvas.y + canvas.height / 4 };
+				await page.mouse.move(aim.x, aim.y);
 				await page.keyboard.press('Control+v');
 				await expect
 					.poll(
@@ -520,6 +524,15 @@ test.describe('the control socket', () => {
 				const copy = Object.entries((await backendDoc(page)).nodes).find(
 					([uid, n]: [string, any]) => n.type === 'SubPatch' && uid !== scope
 				)![0];
+				await expect
+					.poll(
+						async () => {
+							const box = await page.locator(`.svelte-flow__node[data-id="${copy}"]`).boundingBox();
+							return box && Math.max(Math.abs(box.x - aim.x), Math.abs(box.y - aim.y));
+						},
+						{ message: 'the copy stands where the mouse was' }
+					)
+					.toBeLessThanOrEqual(2);
 				expect(await inside(copy), 'holding everything the original held').toBe(held);
 
 				// CUT a plain selection, then paste it INSIDE a sub-patch. Cut is a copy and a

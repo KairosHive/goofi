@@ -836,12 +836,12 @@
 	async function pasteText(text: string): Promise<void> {
 		const clip = parseClipboard(text);
 		if (!clip) return;
-		// Anchor the paste at the visible viewport centre, in FLOW space. The fragment carries the
-		// positions it was copied at, so what goes to the manager is the SHIFT between the two.
+		// Anchor the paste at the mouse over the canvas, else at the viewport centre, in FLOW space.
+		// The fragment carries the positions it was copied at, so the manager gets the SHIFT.
 		const rect = rootEl?.getBoundingClientRect();
 		let at: [number, number] = [window.innerWidth / 4, window.innerHeight / 4];
 		if (rect && screenToFlow) {
-			const c = screenToFlow({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+			const c = screenToFlow(rootEl?.matches(':hover') ? { x: mouseX, y: mouseY } : { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
 			at = [c.x, c.y];
 		}
 		const from = fragmentCentre(clip.doc);

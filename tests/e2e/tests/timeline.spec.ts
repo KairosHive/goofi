@@ -1,12 +1,13 @@
 // The timeline panel: tracks stacked on one time axis, hidden per panel and shown again from the
-// bar's list, a track's menu with its five entries, a delete that asks first, a note and a keyframe
+// bar's list, a track's menu with its entries, a delete that asks first, a note and a keyframe
 // made by a click and moved by a drag, the clock steered from the bar and looped in a
 // section dragged on the ruler, the view zoomed by its range bar, a track resized, and the whole
 // stood on its side in a panel taller than wide. A track's settings stand in sections beside its
 // lane, and its menu opens from the button in its title. On a phone, a held finger is the door
 // onto the menu, a tap makes the note, and a finger held on a note or a keyframe opens its menu.
 // What is picked has its settings in a menu on it, the Delete key takes it out, and a wheel moves
-// and zooms the view. A track records its input.
+// and zooms the view. What is picked is copied, and a paste holds the copy over the lanes, drawn
+// where it would land, until a press places it. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
@@ -104,9 +105,9 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		await expect(keys).toBeVisible();
 		await expect(panel.getByTestId('timeline-hidden')).toHaveCount(0);
 
-		// A right click on a track opens its menu: the four ways to hide, and the delete.
+		// A right click on a track opens its menu: the paste, the four ways to hide, and the delete.
 		await fade.locator('.info').click({ button: 'right', position: { x: 4, y: 4 } });
-		for (const label of ['Hide Track', 'Hide Tracks Above', 'Hide Tracks Below', 'Hide Other Tracks', 'Delete Track…']) await expect(menuItem(label)).toBeVisible();
+		for (const label of ['Paste', 'Hide Track', 'Hide Tracks Above', 'Hide Tracks Below', 'Hide Other Tracks', 'Delete Track…']) await expect(menuItem(label)).toBeVisible();
 		await menuItem('Hide Other Tracks').click();
 		await expect(fade).toBeVisible();
 		await expect(keys).toHaveCount(0);
@@ -735,6 +736,113 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 	}
 });
 
+test('what is picked is copied, and a paste holds the copy over the lanes until a press places it', async ({ page, hasTouch }) => {
+	test.skip(hasTouch, 'the keys and the pointer that hovers are a desk\'s; the menu doors are walked here by a mouse');
+	await page.goto('/');
+	await waitForApp(page);
+	const menuItem = (label: string): Locator => page.locator('.context-menu .item', { hasText: label }).first();
+	try {
+		await rawCall(page, 'clock set', { playing: false, time: 0 });
+		await rawCall(page, 'variable entry edit', { name: 'clock.bpm', value: 60 });
+		await rawCall(page, 'timeline track add', { kind: 'note', name: 'keys' });
+		await rawCall(page, 'timeline track edit', { track: 'keys', notes: [{ at: 0, length: 1, pitch: 60, velocity: 0.8 }, { at: 1, length: 0.5, pitch: 64, velocity: 0.5 }] });
+		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'fade' });
+		await rawCall(page, 'timeline track edit', { track: 'fade', keys: [{ at: 0.5, value: 0.2, curve: 'linear' }, { at: 1.5, value: 0.8, curve: 'step' }, { at: 4.5, value: 0.5, curve: 'linear' }] });
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
+		});
+		const panel = page.getByTestId('timeline-panel').first();
+		const [keys, fade] = ['keys', 'fade'].map((n) => panel.getByTestId(`track-${n}`).getByTestId('track-lane'));
+		await expect(keys.locator('.note')).toHaveCount(2);
+		const held = panel.getByTestId('timeline-placing');
+		const ghosts = panel.getByTestId('track-placing');
+		const notes = async (): Promise<number[][]> => (await trackNamed(page, 'keys')).notes.map((n: any) => [n.at, n.length, n.pitch, n.velocity]);
+		// The view is 8 beats, and the keyboard the 25 keys from C3: a point of a note lane.
+		const cell = async (beat: number, pitch: number): Promise<{ x: number; y: number }> => {
+			const box = (await keys.boundingBox())!;
+			return { x: box.x + (box.width * beat) / 8, y: box.y + box.height * (1 - (pitch - 48 + 0.5) / 25) };
+		};
+
+		// Ctrl+C copies the notes picked, and Ctrl+V takes the copy in hand: it is drawn where it
+		// would land, its first cell under the pointer, and the track holds nothing of it yet.
+		await keys.locator('.note').nth(0).click({ modifiers: ['ControlOrMeta'] });
+		await keys.locator('.note').nth(1).click({ modifiers: ['ControlOrMeta'] });
+		await expect(keys.locator('.note.picked')).toHaveCount(2);
+		await page.keyboard.press('Control+c');
+		let at = await cell(4.1, 62);
+		await page.mouse.move(at.x, at.y);
+		await page.keyboard.press('Control+v');
+		await expect(held).toBeVisible();
+		await expect(ghosts).toHaveCount(2);
+		await expect(keys.locator('.note.picked'), 'a copy in hand picks none').toHaveCount(0);
+		const first = (await ghosts.first().boundingBox())!;
+		expect(Math.abs(first.x - (await cell(4, 62)).x), 'the copy begins on the line of the cell').toBeLessThan(3);
+		// It follows the pointer, and Escape lets it go: nothing was placed.
+		at = await cell(6.1, 50);
+		await page.mouse.move(at.x, at.y);
+		await expect.poll(async () => Math.abs((await ghosts.first().boundingBox())!.x - (await cell(6, 50)).x)).toBeLessThan(3);
+		expect((await notes()).length).toBe(2);
+		await page.keyboard.press('Escape');
+		await expect(held).toHaveCount(0);
+		await expect(ghosts).toHaveCount(0);
+		// A press on the lane places it, as one edit: each note as far from the first as it was,
+		// the lowest on the pointer's key, and the copies are what is picked.
+		await page.keyboard.press('Control+v');
+		at = await cell(4.1, 62);
+		await page.mouse.move(at.x, at.y);
+		await expect(ghosts).toHaveCount(2);
+		await page.mouse.down();
+		await page.mouse.up();
+		await expect.poll(notes).toEqual([[0, 1, 60, 0.8], [1, 0.5, 64, 0.5], [4, 1, 62, 0.8], [5, 0.5, 66, 0.5]]);
+		await expect(held).toHaveCount(0);
+		await expect(ghosts).toHaveCount(0);
+		await expect.poll(() => keys.locator('.note').evaluateAll((all) => all.flatMap((el, k) => (el.classList.contains('picked') ? [k] : [])))).toEqual([2, 3]);
+		await page.evaluate(() => (window as any).goofi.commands.undo());
+		await expect.poll(async () => (await notes()).length, 'the paste is one step back').toBe(2);
+		// A copy over a lane that is not of its kind lands nowhere, and a press there keeps it in hand.
+		await page.keyboard.press('Control+v');
+		await fade.hover();
+		await expect(held).toBeVisible();
+		await expect(ghosts).toHaveCount(0);
+		await page.mouse.down();
+		await page.mouse.up();
+		await expect(held).toBeVisible();
+		// The chip in the bar lets it go too.
+		await held.click();
+		await expect(held).toHaveCount(0);
+
+		// The menu on what is picked copies it, and a track's menu takes the copy in hand. Keyframes
+		// keep their values and take the place of those in the stretch they cover.
+		const dot = fade.locator('.key');
+		await dot.nth(0).click();
+		await dot.nth(1).click({ modifiers: ['ControlOrMeta'] });
+		await dot.nth(1).click({ button: 'right' });
+		await page.getByTestId('picked-copy').click();
+		await expect(page.getByTestId('picked-menu')).toHaveCount(0);
+		await panel.getByTestId('track-fade').locator('.info').click({ button: 'right', position: { x: 4, y: 4 } });
+		await menuItem('Paste').click();
+		await expect(held).toBeVisible();
+		const lane = (await fade.boundingBox())!;
+		await page.mouse.move(lane.x + lane.width * 0.5, lane.y + lane.height * 0.2);
+		await expect(ghosts).toHaveCount(2);
+		expect((await trackNamed(page, 'fade')).keys.length).toBe(3);
+		await page.mouse.down();
+		await page.mouse.up();
+		await expect.poll(async () => (await trackNamed(page, 'fade')).keys.map((k: any) => [k.value, k.curve])).toEqual([[0.2, 'linear'], [0.8, 'step'], [0.2, 'linear'], [0.8, 'step']]);
+		const placed = (await trackNamed(page, 'fade')).keys;
+		expect(placed[2].at, 'the first keyframe is at the pointer\'s beat').toBeCloseTo(4, 1);
+		expect(placed[3].at - placed[2].at).toBeCloseTo(1, 5);
+		await expect(fade.locator('.key.picked')).toHaveCount(2);
+		await expectIntact(page, 'the timeline panel after a paste');
+	} finally {
+		for (const [name, value] of [['length', 0], ['bpm', 120]] as const) await rawCall(page, 'variable entry edit', { name: `clock.${name}`, value });
+		await rawCall(page, 'clock set', { playing: true });
+		for (const id of Object.keys((await backendDoc(page)).timeline ?? {})) await rawCall(page, 'timeline track remove', { track: id });
+		await restorePanelType(page);
+	}
+});
+
 test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note and then takes it out', async ({ page, hasTouch }) => {
 	test.skip(!hasTouch, 'the finger walk');
 	await page.goto('/');
@@ -766,6 +874,8 @@ test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note a
 		expect((await trackNamed(page, 'keys')).notes).toEqual(was);
 		await expect(track.locator('.note.picked')).toHaveCount(1);
 		await expectIntact(page, 'a note\'s menu on a phone');
+		// The menu copies the note it is on, and closes.
+		await page.getByTestId('picked-copy').tap();
 		await expect(async () => {
 			await page.keyboard.press('Escape');
 			expect(await page.getByTestId('picked-menu').count()).toBe(0);
@@ -780,6 +890,17 @@ test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note a
 			await page.keyboard.press('Escape');
 			expect(await page.locator('.context-menu').count()).toBe(0);
 		}).toPass();
+		// Paste in the track's menu takes the copy in hand, and a tap on the lane places it there:
+		// the phone runs its time down, so a tap below the note is later, and one right of it higher.
+		await track.getByTestId('track-more').tap();
+		await page.getByRole('menuitem', { name: 'Paste', exact: true }).tap();
+		await expect(page.getByTestId('timeline-placing')).toBeVisible();
+		await page.touchscreen.tap(lane.x + lane.width * 0.7, lane.y + lane.height * 0.705);
+		await expect.poll(async () => (await trackNamed(page, 'keys')).notes.length).toBe(2);
+		const [kept, copy] = (await trackNamed(page, 'keys')).notes;
+		expect(kept).toEqual(was[0]);
+		expect([copy.at > kept.at, copy.pitch > kept.pitch, copy.length], 'the copy is where the finger was').toEqual([true, true, kept.length]);
+		await expect(page.getByTestId('timeline-placing')).toHaveCount(0);
 		// Two keyframes closer than a finger is wide: a tap on the first one's dot picks that one,
 		// not the one whose hit area reaches over it.
 		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'fade' });

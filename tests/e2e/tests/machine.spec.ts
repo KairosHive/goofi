@@ -601,16 +601,26 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		await expect.poll(wires).toEqual(['a>b', 'b>c']);
 		await page.getByTestId('chain-tool').click();
 
-		// A copy of two boxes and the wire between them, pasted a cell off: the copies are selected.
+		// A copy of two boxes and the wire between them, pasted under the pointer on the canvas:
+		// the copies stand as the originals do, their middle where the pointer is, and are selected.
 		await name('a').click();
 		await name('b').click({ modifiers: ['Shift'] });
 		await page.keyboard.press('Control+c');
+		const pane = (await panel.locator('.svelte-flow__pane').boundingBox())!;
+		const aim = { x: pane.x + pane.width / 2, y: pane.y + pane.height * 0.8 };
+		await page.mouse.move(aim.x, aim.y);
 		await page.keyboard.press('Control+v');
 		await expect.poll(async () => Object.keys((await machineState()).states).length).toBe(5);
 		await expect.poll(wires).toEqual(['a>b', 'b>c', 'state0>state1']);
 		await expect(score).toHaveAttribute('data-count', '2');
 		const copied = await machineState();
-		expect(copied.states.state0.pos).toEqual([48, 48]);
+		expect([copied.states.state1.pos[0] - copied.states.state0.pos[0], copied.states.state1.pos[1] - copied.states.state0.pos[1]], 'the copies stand as the originals do').toEqual([360, 0]);
+		const [one, two] = [(await card('state0').boundingBox())!, (await card('state1').boundingBox())!];
+		// A canvas unit in pixels: a copy lands on the grid, so within a cell of the pointer.
+		const unit = (two.x - one.x) / 360;
+		expect(Math.abs((one.x + two.x + two.width) / 2 - aim.x), 'their middle is under the pointer').toBeLessThanOrEqual(24 * unit + 1);
+		expect(aim.y, 'and the pointer is on them').toBeGreaterThanOrEqual(one.y);
+		expect(aim.y).toBeLessThanOrEqual(one.y + one.height);
 		// Hovering a box lights its column, and a column its box.
 		await card('c').hover();
 		await expect(score.getByTestId('column-c')).toHaveClass(/lit/);

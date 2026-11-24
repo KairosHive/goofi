@@ -1,7 +1,7 @@
 <!-- The settings of the notes or the keyframes picked in a track, in a popover on one of them: a
      note's pitch, length and velocity, a keyframe's value and curve. It shows the first one picked,
-     and a change is every picked one's. A keyframe has the way to take it out here too: a click
-     takes a note out, and picks a keyframe. -->
+     and a change is every picked one's. Here too are the way to copy what is picked, and the way
+     to take a keyframe out: a click takes a note out, and picks a keyframe. -->
 <script lang="ts">
 	import type { Key, Note, Track } from '$lib/api/generated';
 	import { Button, CurvePicker, Field, FieldGrid, Icon, NumberInput, Popover, Select } from '$lib/ui';
@@ -15,6 +15,7 @@
 		count,
 		anchor,
 		onChange,
+		onCopy,
 		onDelete,
 		onClose
 	}: {
@@ -28,6 +29,7 @@
 		/** The note or the keyframe as the lane draws it. */
 		anchor: HTMLElement;
 		onChange: (to: Partial<Note & Key>) => void;
+		onCopy: () => void;
 		onDelete: () => void;
 		onClose: () => void;
 	} = $props();
@@ -57,10 +59,13 @@
 			<Field label="curve" row doc="How the value eases from this keyframe to the next">
 				<CurvePicker value={item.curve} smooth={t.kind === 'curve' ? shapeOf(t.keys, Math.max(0, t.keys.indexOf(item))) : undefined} onChange={(curve) => onChange({ curve })} />
 			</Field>
-			<div class="acts">
-				<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} keyframes` : 'Delete'}</Button>
-			</div>
 		{/if}
+		<div class="acts">
+			<Button size="sm" data-testid="picked-copy" onclick={onCopy}><Icon name="copy" /> Copy</Button>
+			{#if !('pitch' in item)}
+				<Button size="sm" data-testid="picked-delete" onclick={onDelete}><Icon name="x" /> {count > 1 ? `Delete ${count} keyframes` : 'Delete'}</Button>
+			{/if}
+		</div>
 	</FieldGrid></div>
 </Popover>
 
@@ -71,5 +76,6 @@
 	.acts {
 		grid-column: 1 / -1;
 		display: flex;
+		gap: var(--space-2);
 	}
 </style>

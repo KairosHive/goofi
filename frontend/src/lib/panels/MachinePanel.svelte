@@ -39,6 +39,7 @@
 	import { CARD_W, TITLE_Y, cardBox } from '$lib/machine/layout';
 	import { addStates, allToAll, chained, connect, fragmentOf, parseFragment, pasteFragment, summary, type Subject } from '$lib/machine/model';
 	import { copyText } from '$lib/clipboard';
+	import { centroid } from '$lib/editor/clipboard';
 	import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
@@ -314,8 +315,8 @@
 		for (const n of nodes) void call('machine state remove', { name: n.id });
 	}
 
-	// ---- copy and paste: the selected states and the transitions among them, as text on the
-	// clipboard and in hand; a paste lands them a cell off their origin, the copies selected.
+	// ---- copy and paste: the selected states and their transitions, as text on the clipboard and
+	// in hand; a paste lands them under the pointer on the canvas, else a cell off, and selected.
 	let held: string | null = null;
 	async function copySelection(): Promise<string | null> {
 		const picked = selectedStates();
@@ -327,7 +328,9 @@
 	async function pasteText(text: string | null): Promise<void> {
 		const f = text ? parseFragment(text) : null;
 		if (!f || !machine) return;
-		const names = await pasteFragment(name, f, [GRID * 2, GRID * 2]);
+		const [p, from] = [rootEl?.matches(':hover') ? screenToFlow?.(pointer) : undefined, centroid(Object.values(f.states).map((s) => s.pos))];
+		const offset = p ? [p.x - CARD_W / 2 - from[0], p.y - TITLE_Y - from[1]].map((v) => Math.round(v / GRID) * GRID) : [GRID * 2, GRID * 2];
+		const names = await pasteFragment(name, f, offset as [number, number]);
 		if (names.length) sel.setSelection(panelId, names, []);
 	}
 	function onPaste(e: ClipboardEvent): void {

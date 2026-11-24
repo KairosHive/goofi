@@ -32,7 +32,12 @@ group, written by the machines' thread), a note track as a port of the audio `Mi
 - Whether a note track also publishes the newest note as `pitch`, `gate` and `velocity`.
 - A curve track's variable is `vars.<track>.value`, because every variable is in a group.
   Whether a track's value takes the track's name alone.
-- What a box picks is moved, set and taken out together; it is not copied.
+- A copy is placed by a pointer alone: no key puts it at the clock's position. It has no cut
+  and no duplicate. A copy in hand is not drawn until the pointer is over a lane, so under a
+  finger it shows with the press that places it.
+- A pasted note that would lie on a note of its start and pitch is left out, so a copy placed
+  on itself adds nothing. A pasted keyframe is held in the track's range, so a curve copied
+  into a narrower range loses its shape.
 - The panel has no keyboard path to a note or a keyframe.
 - Under a finger a note is one row high: it takes no hit-size press, because the rows beside
   it are notes too.

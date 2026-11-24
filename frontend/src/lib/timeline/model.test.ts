@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Track } from '$lib/api/generated';
 import type { Curve, Key } from '$lib/api/generated';
 import { curveAt } from '$lib/ui/curve';
-import { barPlace, barPoint, beatSeconds, contentEnd, gridPath, hiding, keyboard, lanePath, shapeOf, takePath, ticks, turned, zoomed } from './model';
+import { barPlace, barPoint, beatSeconds, clipOf, contentEnd, gridPath, hiding, keyboard, lanePath, parseClip, pasted, shapeOf, takePath, ticks, turned, zoomed, type Part } from './model';
 
 const notes: Track = { name: 'keys', input: '', kind: 'note', notes: [{ at: 2, length: 2, pitch: 90, velocity: 1 }] };
 const curve: Track = { name: 'fade', input: '', kind: 'curve', range: [0, 2], rate: 30, keys: [{ at: 1, value: 0, curve: 'linear' }, { at: 3, value: 2, curve: 'step' }] };
@@ -120,6 +120,22 @@ describe('the timeline model', () => {
 		expect(takePath([], [0, 1], along)).toBe('');
 		expect(takePath([0, 0, 2, 1, 1, 0.5, 3, 0.5], [0, 1], along)).toBe('M0 100 L500 0 M250 50 L750 50');
 		expect(takePath([0, 0, 2, 1], [0, 1], along, true)).toBe('M0 0 L100 500');
+	});
+
+	it('copies what is picked from the earliest of it, and puts a copy into a lane of its kind', () => {
+		const clip = clipOf([{ row: 3, t: curve, picked: [1] }, { row: 1, t: notes, picked: [0] }])!;
+		expect(clip.parts).toEqual([{ row: 0, notes: [{ at: 0, length: 2, pitch: 90, velocity: 1 }] }, { row: 2, keys: [{ at: 1, value: 2, curve: 'step' }] }]);
+		expect(clipOf([{ row: 0, t: notes, picked: [] }])).toBeNull();
+		expect(parseClip(JSON.stringify(clip))).toEqual(clip);
+		for (const text of ['no copy', '{"kind":"goofi-machine"}', JSON.stringify({ ...clip, parts: [{ row: 0, notes: [{ at: 0 }] }] })]) expect(parseClip(text), text).toBeNull();
+		const same = (p: number): number => p;
+		// A note that would lie on one of its start and pitch stays out; one elsewhere is added last.
+		expect(pasted(notes, clip.parts[0], 2, same)).toEqual({ items: [{ at: 2, length: 2, pitch: 90, velocity: 1 }], added: [] });
+		expect(pasted(notes, clip.parts[0], 5, (p) => p - 12)).toEqual({ items: [{ at: 2, length: 2, pitch: 90, velocity: 1 }, { at: 5, length: 2, pitch: 78, velocity: 1 }], added: [1] });
+		// Keyframes take the place of those in the stretch they cover, each within the track's range.
+		const shape: Part = { row: 0, keys: [{ at: 0, value: 5, curve: 'linear' }, { at: 3, value: 1, curve: 'smooth' }] };
+		expect(pasted(curve, shape, 2, same)).toEqual({ items: [{ at: 1, value: 0, curve: 'linear' }, { at: 2, value: 2, curve: 'linear' }, { at: 5, value: 1, curve: 'smooth' }], added: [1, 2] });
+		expect(pasted(curve, clip.parts[0], 0, same), 'notes are no keyframes').toBeNull();
 	});
 });
 

@@ -276,7 +276,13 @@ its path. A note or a keyframe may stand before 0, as it may past the timeline's
 clock does not come there, and a curve from before 0 is the curve at 0. A click on a note takes it out, and a click on a keyframe picks it. A click with Ctrl or Shift
 held picks one more, or one less, and a drag with Shift held on a lane draws a box that picks
 what it touches. A drag of a note or a keyframe moves it, and with it everything picked. The
-Delete key takes out what is picked, and Escape picks none. A right click on a note or a keyframe, or a held finger, opens a
+Delete key takes out what is picked, and Escape picks none. Ctrl+C copies what is picked, as the
+Copy button of its menu does, and Ctrl+V, or Paste in a track's menu, takes the copy in hand: it
+is drawn over the lanes where it would land, and a press on a lane places it where the press is
+let go, as one edit. Notes begin in the cell under the pointer, the lowest on the pointer's key;
+keyframes begin at the pointer's beat, keep their values, and take the place of the keyframes in
+the stretch they cover. A copy from several tracks lands in tracks as far apart as those were,
+each part in a track of its kind. Escape, or the chip in the bar, lets the copy go. A right click on a note or a keyframe, or a held finger, opens a
 menu on it with the settings of what is picked: a note's pitch, length and velocity, a
 keyframe's value and curve. A note
 snaps to its keyboard's grid, and a new keyframe eases as the keyframe before it does. In the corner beside the ruler

@@ -2,6 +2,7 @@
 import type { Curve, Key, Note, Track } from '$lib/api/generated';
 import { NOTE_NAMES, SCALES } from '$lib/api/vocab';
 import { curveAt } from '$lib/ui/curve';
+import { clamp, fixed } from '$lib/ui/math';
 
 /** How a panel draws a note track's keyboard, its own and no part of the track: the pitches from
  * its lowest to its highest, the scale and the root it marks and a note lands on, and the grid a
@@ -180,4 +181,65 @@ export function takePath(flat: number[], [lo, hi]: [number, number], along: (at:
 		points.push(`${i === 0 || flat[i] < flat[i - 2] ? 'M' : 'L'}${flip ? `${c} ${a}` : `${a} ${100 - c}`}`);
 	}
 	return points.join(' ');
+}
+
+/** What a copy holds of one track: its notes or its keyframes, and `row`, the track's place among
+ * those the panel showed, counted from the first part's. */
+export type Part = { row: number } & ({ notes: Note[] } | { keys: Key[] });
+/** A copy of notes and keyframes, a part a track, their times counted from the earliest of all. */
+export interface Clip {
+	kind: 'goofi-timeline';
+	parts: Part[];
+}
+/** What a part holds, whichever it is. */
+export const partItems = (part: Part): (Note | Key)[] => ('notes' in part ? part.notes : part.keys);
+
+/** The copy of what is `picked` in each track, by its place; none where nothing is picked. */
+export function clipOf(lanes: { row: number; t: Track; picked: number[] }[]): Clip | null {
+	const taken = lanes
+		.map(({ row, t, picked }) => ({ row, t, items: (t.kind === 'note' ? t.notes : t.keys).filter((_, i) => picked.includes(i)) }))
+		.filter((lane) => lane.items.length > 0)
+		.sort((a, b) => a.row - b.row);
+	if (taken.length === 0) return null;
+	const from = Math.min(...taken.flatMap((lane) => lane.items.map((o) => o.at)));
+	const parts = taken.map(({ row, t, items }) => {
+		const moved = items.map((o) => ({ ...o, at: fixed(o.at - from, 6) }));
+		return { row: row - taken[0].row, ...(t.kind === 'note' ? { notes: moved as Note[] } : { keys: moved as Key[] }) };
+	});
+	return { kind: 'goofi-timeline', parts };
+}
+
+/** The copy a text holds, as the clipboard gives it; null where the text is no copy of this kind. */
+export function parseClip(text: string): Clip | null {
+	const numbers = (o: Record<string, unknown>, names: string[]): boolean => names.every((n) => Number.isFinite(o?.[n]));
+	const whole = (part: Record<string, unknown>): boolean => {
+		const [items, names] = Array.isArray(part?.notes) ? [part.notes, ['at', 'length', 'pitch', 'velocity']] : [part?.keys, ['at', 'value']];
+		return Number.isInteger(part?.row) && Array.isArray(items) && items.length > 0 && items.every((o) => numbers(o, names) && (items === part.notes || 'curve' in o));
+	};
+	try {
+		const clip = JSON.parse(text);
+		return clip?.kind === 'goofi-timeline' && Array.isArray(clip.parts) && clip.parts.length > 0 && clip.parts.every(whole) ? (clip as Clip) : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The lane of `t` with a part of a copy in it `by` beats on, and the places of what came in. A
+ * note on one of its start and pitch stays out; keyframes replace those in the stretch they cover. */
+export function pasted(t: Track, part: Part, by: number, pitch: (p: number) => number): { items: (Note | Key)[]; added: number[] } | null {
+	if (t.kind === 'note' && 'notes' in part) {
+		const lane = [...t.notes];
+		for (const n of part.notes) {
+			const note = { ...n, at: fixed(n.at + by, 6), pitch: pitch(n.pitch) };
+			if (!lane.some((o) => o.at === note.at && o.pitch === note.pitch)) lane.push(note);
+		}
+		return { items: lane, added: lane.slice(t.notes.length).map((_, i) => t.notes.length + i) };
+	}
+	if (t.kind === 'curve' && 'keys' in part) {
+		const fresh = part.keys.map((k) => ({ ...k, at: fixed(k.at + by, 6), value: clamp(k.value, ...t.range) }));
+		const [from, to] = [fresh[0].at, fresh[fresh.length - 1].at];
+		const keys = [...t.keys.filter((k) => k.at < from || k.at > to), ...fresh].sort((a, b) => a.at - b.at);
+		return { items: keys, added: fresh.map((k) => keys.indexOf(k)) };
+	}
+	return null;
 }
