@@ -1,412 +1,517 @@
-//! The iceoryx2 transport, against real shared memory (spec §3).
-//!
-//! Every test picks its own [`Uid`] and [`instance`] scopes the target by pid: a service name is
-//! variable to the MACHINE, and `open_or_create` means a colliding loser reads the winner's config.
+//! The transport under the per-node runtime: slots, doors and the wires a desired state declares
+//! (spec §3). Every test picks its own [`Uid`] and [`instance`] scopes the names by pid.
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use goofi_core::{Param, SlotType};
-use goofi_tests::{f32s, frame, WAIT};
+use goofi_core::{Data, Param, SlotType};
 use goofi_graph::Uid;
-use goofi_signal::runtime::{
-    Control, ControlSink, Envelope, IoxTransport, NodeChannel, NodeEnv, NodeFault, NodeRuntime,
-    ParamValue, Status, Transport, WireStatus,
-};
-use goofi_transport::{door_service, iox_node, output_service, service_base, Doorbell, IoxNode};
-use goofi_node::{NodeManifest, OutputDecl, ParamKey, Params, SlotDecl};
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
+use goofi_node::{DrainWaker, NodeManifest, OutputDecl, ParamDecl, ParamKey, ParamSpec, SlotDecl, Status};
+use goofi_runtime::{Cx, Desired, Executor, Handle, Out, Shared, Spawn, Sub, Ticked};
+use goofi_supervisor::sync::Mutex;
+use goofi_tests::{f32s, frame, WAIT};
+use goofi_transport::{door_service, output_service, service_base, Doorbell, Payload};
 
-/// A node with one input and one output. Nothing runs it; the manifest is what the transport reads.
-struct Passthrough;
-impl Node for Passthrough {
-    fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
-        Ok(())
-    }
-}
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",
     kind: SlotType::Array,
     trigger_process: true,
-    multi: false,
+    multi: true,
     required: false,
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
+static PARAMS: &[ParamDecl] = &[ParamDecl {
+    group: "control",
+    name: "gain",
+    spec: ParamSpec::Str { default: "a", options: &["a", "b"], refresh: true },
+    expression: None,
+    doc: None,
+    section: 0,
+    show: &[],
+    role: None,
+}];
 static MANIFEST: NodeManifest = NodeManifest {
     type_name: "_TransportTest",
     tags: &[],
     doc: "transport fixture",
     inputs: INPUTS,
     outputs: OUTPUTS,
-    params: &[],
+    params: PARAMS,
     producer: false,
 };
 
-fn manifest() -> &'static NodeManifest {
-    &MANIFEST
-}
-
-/// This run's service-name scope.
+/// This run's name scope.
 fn instance() -> String {
     // The process is walled off from the real home before its session is decided.
     goofi_tests::walled_home();
     format!("t{:x}", std::process::id())
 }
 
-/// Status is asynchronous by design, so a test waits for it with a deadline rather than reading once.
-fn status_within(channel: &NodeChannel, timeout: Duration) -> Vec<WireStatus> {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let got = channel.drain_status();
-        if !got.is_empty() || std::time::Instant::now() >= deadline {
-            return got;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-/// The service names of a node born at `uid` — what the graph puts in the other end's slot message.
+/// The names of a node born at `uid` — what the other end's desired state names.
 fn base_of(uid: Uid) -> String {
     service_base(&instance(), uid, 0)
 }
 
-#[test]
-fn the_services_are_created_with_limits_the_defaults_do_not_give_us() {
-    // iceoryx2 fixes these at CREATION, so they are hard patch limits, and every default is wrong
-    // for this design.
-    let t = IoxTransport::create(&instance(), Uid(1), 0, manifest()).expect("services");
-    let cfg = t.event_config();
-    assert_eq!(cfg.event_id_max_value(), 255);
-    assert_eq!(cfg.max_notifiers(), 256);
-    assert_eq!(cfg.max_listeners(), 2);
-    let d = t.data_config("out").expect("the declared output slot has a service");
-    assert_eq!(d.history_size(), 0, "a link NEVER replays a previous output");
-    assert_eq!(d.max_subscribers(), 256);
-    assert_eq!(d.max_publishers(), 1);
-    assert_eq!(d.subscriber_max_buffer_size(), 1, "latest-wins, per wire");
-    assert!(d.has_safe_overflow(), "drop-oldest, matching the no-queue delivery model");
+/// What reached one executor, read by the test from outside its thread.
+#[derive(Default)]
+struct Log {
+    arrived: Vec<(usize, usize, Data)>,
+    wired: Vec<(usize, Vec<(String, String)>)>,
+    values: Vec<Vec<Param>>,
+    pulses: Vec<usize>,
 }
 
-#[test]
-fn an_undrained_control_mailbox_keeps_the_whole_burst() {
-    // Control and status are message STREAMS, not the latest-wins CELL a data wire is. The count is
-    // past any plausible drain interval: a node deep inside `process` is the burst this has to survive.
-    const BURST: u64 = 200;
-    let transport = IoxTransport::create(&instance(), Uid(30), 0, manifest()).unwrap();
-    let graph_node = goofi_transport::iox_node().unwrap();
-    let channel = NodeChannel::open(&graph_node, &base_of(Uid(30))).unwrap();
-    for seq in 1..=BURST {
-        channel.send(Envelope {
-            seq,
-            control: Control::InSlot { slot: "input".to_string(), wires: Vec::new() },
-        });
+/// An executor that logs what reaches it and emits, at its next run, the frame it is handed.
+struct Probe {
+    log: Arc<Mutex<Log>>,
+    emit: Arc<Mutex<Option<Data>>>,
+}
+
+impl Executor for Probe {
+    fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
+        self.log.lock().arrived.push((inbox, wire, frame.clone()));
+        false
+    }
+    fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        self.log.lock().wired.push((inbox, wires.to_vec()));
+    }
+    fn params_changed(&mut self, values: &[Param]) -> Ticked {
+        self.log.lock().values.push(values.to_vec());
+        Ticked::default()
+    }
+    fn pulse(&mut self, param: usize) -> Ticked {
+        self.log.lock().pulses.push(param);
+        Ticked::default()
+    }
+    fn refresh(&mut self, _: usize) -> Option<Vec<String>> {
+        Some(vec!["a".into(), "b".into()])
+    }
+    fn run(&mut self, _: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
+        if let Some(frame) = self.emit.lock().take() {
+            publish(0, Out::Frame(&frame));
+        }
+        Ticked::default()
+    }
+}
+
+/// One runtime with a probe on it: its handle, what the probe saw, and what it emits next.
+struct Node {
+    handle: Handle,
+    log: Arc<Mutex<Log>>,
+    emit: Arc<Mutex<Option<Data>>>,
+}
+
+/// Every runtime of one test shares a drain, as one engine's do.
+struct Fleet {
+    shared: Arc<Shared>,
+}
+
+impl Fleet {
+    fn new() -> Fleet {
+        Fleet { shared: Arc::new(Shared::new(Arc::new(DrainWaker::default()))) }
     }
 
-    let got = transport.drain_control();
-    assert_eq!(
-        got.iter().map(|e| e.seq).collect::<Vec<_>>(),
-        (1..=BURST).collect::<Vec<_>>(),
-        "every message, in the order it was sent",
-    );
-}
-
-/// The doorbell of a node born at `uid`, opened on the ringer's own iceoryx2 node.
-fn bell_for(uid: Uid, ringer: &IoxNode) -> Doorbell {
-    Doorbell::open(ringer, &door_service(&base_of(uid))).expect("doorbell")
-}
-
-#[test]
-fn a_notify_landing_mid_drain_is_not_lost() {
-    // The notification is only a HINT; the truth is in the subscriber queues and the control mailbox.
-    let t = IoxTransport::create(&instance(), Uid(2), 0, manifest()).unwrap();
-    let ringer = iox_node().unwrap();
-    let bell = bell_for(Uid(2), &ringer);
-    bell.ring(1).unwrap();
-    assert_eq!(t.wait(Some(WAIT)), vec![1]);
-    bell.ring(2).unwrap(); // lands while "draining"
-    assert_eq!(t.wait(Some(WAIT)), vec![2], "retained across the re-park");
-}
-
-#[test]
-fn a_control_and_a_data_notification_both_survive() {
-    let t = IoxTransport::create(&instance(), Uid(3), 0, manifest()).unwrap();
-    let ringer = iox_node().unwrap();
-    let bell = bell_for(Uid(3), &ringer);
-    bell.ring(0).unwrap();
-    bell.ring(3).unwrap();
-    let mut got = Vec::new();
-    while !(got.contains(&0) && got.contains(&3)) {
-        let woke = t.wait(Some(WAIT));
-        assert!(!woke.is_empty(), "both ids were rung, and only {got:?} woke the node");
-        got.extend(woke);
+    fn spawn(&self, uid: Uid) -> Node {
+        let (log, emit) = (Arc::new(Mutex::new(Log::default())), Arc::new(Mutex::new(None)));
+        let spawn = Spawn {
+            engine: "signal",
+            uid,
+            instance: instance(),
+            base: base_of(uid),
+            manifest: &MANIFEST,
+            decls: MANIFEST.params.to_vec(),
+            params: Arc::new([AtomicU64::new(0)]),
+            time: Arc::new(goofi_supervisor::timing::Time::new()),
+        };
+        let (probe_log, probe_emit) = (log.clone(), emit.clone());
+        let handle = goofi_runtime::spawn(&goofi_tests::hub(), spawn, self.shared.clone(), move || Probe {
+            log: probe_log,
+            emit: probe_emit,
+        })
+        .expect("a runtime");
+        Node { handle, log, emit }
     }
-    got.sort();
-    assert_eq!(got, vec![0, 3], "each id wakes once");
+
+    /// Every status the runtimes reported so far, by uid.
+    fn reports(&self) -> Vec<(Uid, Status)> {
+        let mut out = Vec::new();
+        self.shared.drain(&mut Vec::new(), &|_, _| true, &mut |uid, status| out.push((uid, status)));
+        out
+    }
+}
+
+/// The desired state of a node that drinks from `producers` on its one inbox, in that order.
+fn drinking(producers: &[Uid]) -> Desired {
+    let subs = producers
+        .iter()
+        .enumerate()
+        .map(|(wire, p)| Sub::Slot { inbox: 0, wire, service: output_service(&base_of(*p), "out"), source: format!("p{}.out", p.0) })
+        .collect();
+    Desired { consts: vec![PARAMS[0].spec.to_param()], subs, targets: vec![Vec::new()], record: Vec::new() }
+}
+
+/// The desired state of a node whose output rings the doors of `consumers`.
+fn ringing(consumers: &[Uid]) -> Desired {
+    let targets = consumers.iter().map(|c| (door_service(&base_of(*c)), 1)).collect();
+    Desired { consts: vec![PARAMS[0].spec.to_param()], subs: Vec::new(), targets: vec![targets], record: Vec::new() }
+}
+
+/// Status and arrivals are asynchronous by design, so a test waits for them with a deadline
+/// rather than reading once.
+fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "waited {WAIT:?} for {what}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn arrived(node: &Node) -> Vec<(usize, usize, Vec<f32>)> {
+    node.log.lock().arrived.iter().map(|(i, w, d)| (*i, *w, f32s(d))).collect()
 }
 
 #[test]
-fn a_control_message_crosses_shared_memory_and_comes_back_acked() {
-    // The ack is the only thing that orders a wire change, so a message without one stalls the sequence.
-    let transport = Arc::new(IoxTransport::create(&instance(), Uid(4), 0, manifest()).unwrap());
-    let mut node = NodeRuntime::new(
-        manifest(),
-        Box::new(Passthrough),
-        manifest().default_params(),
-        transport.clone(),
-        NodeEnv::detached(),
-    );
-    let graph_node = goofi_transport::iox_node().unwrap();
-    let channel = NodeChannel::open(&graph_node, &base_of(Uid(4))).unwrap();
+fn a_slot_is_latest_wins_and_a_link_never_replays() {
+    // One cell per slot: a reader takes the newest payload once, a reader that comes late to a
+    // node's slot takes nothing it did not see published, and a held slot hands its newest frame
+    // to whoever comes.
+    let hub = goofi_tests::hub();
+    let name = output_service(&base_of(Uid(1)), "out");
+    let publisher = hub.publisher(&name, false);
+    let mut early = hub.subscribe(&name);
+    assert!(early.receive().is_none(), "nothing published yet");
+    publisher.publish(Payload::Data(frame(&[1.0])));
+    publisher.publish(Payload::Data(frame(&[2.0])));
+    let got = early.receive().expect("the newest frame");
+    assert!(matches!(got, Payload::Data(ref d) if f32s(d) == [2.0]), "latest wins, one deep");
+    assert!(early.receive().is_none(), "and once");
+    let mut late = hub.subscribe(&name);
+    assert!(late.receive().is_none(), "a link never replays a previous output");
+    assert_eq!(hub.readers(&name), 2, "both readers count as the slot's demand");
+    drop(late);
+    assert_eq!(hub.readers(&name), 1);
 
-    assert_eq!(node.next_wake(), None, "parked: nothing has asked this node to run");
-    channel.send(Envelope {
-        seq: 41,
-        control: Control::SetParam {
-            key: ParamKey::new("common", "autotrigger"),
-            value: ParamValue::Literal(Param::boolean(true)),
-        },
+    let held = hub.publisher(&output_service(&base_of(Uid(1)), "held"), true);
+    held.publish(Payload::Data(frame(&[3.0])));
+    let mut late = hub.subscribe(&output_service(&base_of(Uid(1)), "held"));
+    assert!(matches!(late.receive(), Some(Payload::Data(d)) if f32s(&d) == [3.0]), "a held slot replays its newest frame");
+}
+
+#[test]
+fn a_ring_landing_mid_drain_is_not_lost_and_each_id_wakes_once() {
+    // The ring is only a HINT; the truth is in the slots. Several ids can ring between two
+    // parks, and each wakes once.
+    let hub = goofi_tests::hub();
+    let door = hub.door(&door_service(&base_of(Uid(2))));
+    let bell = Doorbell::on(hub.door(&door_service(&base_of(Uid(2)))));
+    let wait = |d: &goofi_transport::Door| d.wait_until(Instant::now() + WAIT).ids().collect::<Vec<_>>();
+    bell.ring(1);
+    assert_eq!(wait(&door), vec![1]);
+    bell.ring(2); // lands while "draining"
+    assert_eq!(wait(&door), vec![2], "retained across the re-park");
+    // A wait already past looks once and returns: nothing rang, nothing is taken.
+    assert!(door.wait_until(Instant::now()).is_empty());
+    bell.ring(2);
+    assert_eq!(wait(&door), vec![2], "the door is still parked on after the short wait");
+    bell.ring(0);
+    bell.ring(3);
+    bell.ring(3);
+    assert_eq!(wait(&door), vec![0, 3], "each id wakes once, however often it rang");
+
+    // A deadline is kept: a wait of 2 ms does not return before it. How soon after is the
+    // machine's, never asserted.
+    let t = Instant::now();
+    assert!(door.wait_until(t + Duration::from_millis(2)).is_empty());
+    assert!(t.elapsed() >= Duration::from_millis(2), "a 2 ms wait returned early: {:?}", t.elapsed());
+}
+
+#[test]
+fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
+    // The whole state crosses at once, a re-send that moved nothing says nothing, and a request
+    // — a refresh, a pulse — is answered on the node's own thread.
+    let fleet = Fleet::new();
+    let node = fleet.spawn(Uid(4));
+    let key = ParamKey::new("control", "gain");
+    let desired = Desired {
+        consts: vec![Param::Str { value: "b".into(), options: Some(vec!["a".into(), "b".into()]), refresh: true }],
+        subs: Vec::new(),
+        targets: vec![Vec::new()],
+        record: Vec::new(),
+    };
+    assert!(node.handle.send_if_changed(desired.clone()));
+    until("the values to reach the executor", || {
+        node.log.lock().values.last().filter(|v| v[0].as_str() == Some("b")).map(|_| ())
     });
-    assert_eq!(transport.wait(Some(WAIT)), vec![0], "the graph rang the control id");
-
-    node.run_once();
-    assert!(node.next_wake().is_some(), "the node applied what it was sent and re-paced");
-    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Ack { seq: 41, ok: Ok(()) }]);
-
-    // The ack carries the VERDICT, not a receipt: the graph abandons a refused sequence.
-    channel.send(Envelope {
-        seq: 42,
-        control: Control::OutSlot { slot: "nope".to_string(), targets: Vec::new() },
+    assert!(!node.handle.send_if_changed(desired), "what was last sent is not sent again");
+    until("the node to report itself ready", || {
+        fleet.reports().iter().any(|(u, s)| *u == Uid(4) && *s == Status::Stage { stage: goofi_node::NodeStage::Ready }).then_some(())
     });
-    node.run_once();
-    assert_eq!(
-        status_within(&channel, WAIT),
-        vec![WireStatus::Ack { seq: 42, ok: Err("no output slot `nope`".to_string()) }]
-    );
 
-    let fault = NodeFault::Process { msg: "boom".to_string(), since: 12.5 };
-    transport.report(WireStatus::Health(Status::Fault { fault: Some(fault.clone()) }));
-    assert_eq!(status_within(&channel, WAIT), vec![WireStatus::Health(Status::Fault { fault: Some(fault) })]);
+    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Refresh, key: key.clone() });
+    let options = until("the refresh to answer", || {
+        fleet.reports().into_iter().find_map(|(_, s)| match s {
+            Status::RefreshOptions { options, .. } => Some(options),
+            _ => None,
+        })
+    });
+    assert_eq!(options, Some(vec!["a".to_string(), "b".to_string()]));
+    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Pulse, key });
+    until("the pulse to fire", || (node.log.lock().pulses == [0]).then_some(()));
 }
 
 #[test]
-fn a_frame_reaches_a_wired_consumer_and_rings_its_slot() {
-    // A wire is two declarations and nothing else: neither end knows the other's uid.
-    let producer = IoxTransport::create(&instance(), Uid(5), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(6), 0, manifest()).unwrap();
-    consumer.wire_in("input", &[output_service(&base_of(Uid(5)), "out")]).unwrap();
-    producer.wire_out("out", &[(door_service(&base_of(Uid(6))), 1)]).unwrap();
+fn a_frame_reaches_a_wired_consumer_and_a_new_bell_rings_once() {
+    // A wire is two declarations and nothing else: neither end knows the other's uid. The
+    // consumer subscribes at ITS settle and the producer rings at its own, so a frame published
+    // between the two lies on the wire unannounced — until the bell just hung rings once.
+    let fleet = Fleet::new();
+    let (producer, consumer) = (fleet.spawn(Uid(5)), fleet.spawn(Uid(6)));
+    consumer.handle.send_if_changed(drinking(&[Uid(5)]));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    producer.handle.send_if_changed(ringing(&[]));
+    *producer.emit.lock() = Some(frame(&[1.0, 2.0, 3.0]));
+    until("the producer to emit", || producer.emit.lock().is_none().then_some(()));
+    producer.handle.send_if_changed(ringing(&[Uid(6)]));
+    until("the frame to reach the consumer", || (!arrived(&consumer).is_empty()).then_some(()));
+    assert_eq!(arrived(&consumer), vec![(0, 0, vec![1.0, 2.0, 3.0])], "inbox, wire, and the frame");
 
-    producer.publish("out", &frame(&[1.0, 2.0, 3.0]));
-    assert_eq!(consumer.wait(Some(WAIT)), vec![1], "woken by the slot's own event id");
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1);
-    assert_eq!((got[0].0.as_str(), got[0].1), ("input", 0), "slot, and its position in the wire order");
-    assert_eq!(f32s(&got[0].2), vec![1.0, 2.0, 3.0]);
-    assert!(consumer.drain_inputs().is_empty(), "a drained wire is empty");
-}
+    // A frame of any size crosses as the `Arc` it is.
+    let big: Vec<f32> = (0..80_000).map(|i| i as f32).collect();
+    *producer.emit.lock() = Some(frame(&big));
+    until("the large frame to land", || (arrived(&consumer).len() == 2).then_some(()));
+    assert_eq!(arrived(&consumer)[1].2, big);
 
-#[test]
-fn a_frame_larger_than_the_initial_slice_still_lands() {
-    // `AllocationStrategy::Static`, the iceoryx2 default, refuses this: a GOOF frame is variable-size.
-    let producer = IoxTransport::create(&instance(), Uid(7), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(8), 0, manifest()).unwrap();
-    consumer.wire_in("input", &[output_service(&base_of(Uid(7)), "out")]).unwrap();
-
-    let big: Vec<f32> = (0..80_000).map(|i| i as f32).collect(); // 320 KB, past the 64 KiB start
-    producer.publish("out", &frame(&big));
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1, "the oversized frame was published and received");
-    assert_eq!(f32s(&got[0].2), big);
+    // A wire whose producer puts bytes that are not a frame on it is that wire's error, worn by
+    // the consumer as its fault rather than never heard of.
+    let hub = goofi_tests::hub();
+    let raw = hub.publisher(&output_service(&base_of(Uid(50)), "out"), false);
+    let bell = Doorbell::on(hub.door(&door_service(&base_of(Uid(6)))));
+    consumer.handle.send_if_changed(drinking(&[Uid(50)]));
+    until("the consumer to re-subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w[0].0.contains(&format!("_{}_", Uid(50).to_hex()))).map(|_| ()));
+    raw.publish(Payload::Wire(bytes::Bytes::from_static(b"NOPE")));
+    bell.ring(1);
+    let why = until("the bad wire to be worn as a fault", || {
+        fleet.reports().into_iter().find_map(|(u, s)| match s {
+            Status::Fault { fault: Some(goofi_node::NodeFault::Process { msg, .. }) } if u == Uid(6) => Some(msg),
+            _ => None,
+        })
+    });
+    assert!(why.contains("input 0 does not decode") && why.contains("too small"), "the fault says what was wrong: {why}");
 }
 
 #[test]
 fn a_re_sent_wire_set_keeps_what_it_names_and_drops_what_it_omits() {
-    // The slot set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
-    // must be kept rather than rebuilt, and what the set no longer names is dropped.
-    let producer = IoxTransport::create(&instance(), Uid(9), 0, manifest()).unwrap();
-    let consumer = IoxTransport::create(&instance(), Uid(10), 0, manifest()).unwrap();
-    let held = output_service(&base_of(Uid(9)), "out");
-    let added = output_service(&base_of(Uid(11)), "out");
-    consumer.wire_in("input", std::slice::from_ref(&held)).unwrap();
-    producer.publish("out", &frame(&[1.0])); // in flight, unread
+    // The wire set is DECLARATIVE, and the FULL set is re-sent on every change: a surviving wire
+    // is kept rather than rebuilt, and what the set no longer names delivers nothing.
+    let fleet = Fleet::new();
+    let (held, added, consumer) = (fleet.spawn(Uid(9)), fleet.spawn(Uid(11)), fleet.spawn(Uid(10)));
+    held.handle.send_if_changed(ringing(&[Uid(10)]));
+    added.handle.send_if_changed(ringing(&[Uid(10)]));
+    consumer.handle.send_if_changed(drinking(&[Uid(9)]));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    *held.emit.lock() = Some(frame(&[1.0]));
+    until("the first frame", || (arrived(&consumer).len() == 1).then_some(()));
 
-    consumer.wire_in("input", &[held, added]).unwrap();
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), 1, "the second wire has nothing yet");
-    assert_eq!(f32s(&got[0].2), vec![1.0], "and the first still holds what it was sent");
+    consumer.handle.send_if_changed(drinking(&[Uid(9), Uid(11)]));
+    until("the set to grow", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 2).map(|_| ()));
+    *added.emit.lock() = Some(frame(&[2.0]));
+    until("the added wire's frame", || (arrived(&consumer).len() == 2).then_some(()));
+    assert_eq!(arrived(&consumer), vec![(0, 0, vec![1.0]), (0, 1, vec![2.0])], "the first wire kept its index");
 
-    consumer.wire_in("input", &[]).unwrap();
-    producer.publish("out", &frame(&[2.0]));
-    assert!(consumer.drain_inputs().is_empty(), "the dropped wire delivers nothing");
+    consumer.handle.send_if_changed(drinking(&[Uid(11)]));
+    until("the set to shrink", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == 1).map(|_| ()));
+    *held.emit.lock() = Some(frame(&[3.0]));
+    until("the dropped producer to emit", || held.emit.lock().is_none().then_some(()));
+    *added.emit.lock() = Some(frame(&[4.0]));
+    until("the kept wire's frame", || (arrived(&consumer).len() == 3).then_some(()));
+    assert_eq!(arrived(&consumer)[2], (0, 0, vec![4.0]), "the dropped wire delivered nothing, and the kept one moved to index 0");
 }
 
 #[test]
-fn a_slot_feeds_more_consumers_than_the_iceoryx2_defaults_allow() {
-    // `max_subscribers` is inert on its own: a service is opened from one iceoryx2 node per graph
-    // node, and `max_nodes` counts exactly those.
+fn a_slot_feeds_any_number_of_consumers() {
     const CONSUMERS: u64 = 24;
-    let producer = IoxTransport::create(&instance(), Uid(20), 0, manifest()).unwrap();
-    let service = output_service(&base_of(Uid(20)), "out");
-    let consumers: Vec<IoxTransport> = (0..CONSUMERS)
-        .map(|i| {
-            let c = IoxTransport::create(&instance(), Uid(100 + i), 0, manifest()).unwrap();
-            c.wire_in("input", std::slice::from_ref(&service)).expect("subscribe");
-            c
-        })
-        .collect();
-
-    producer.publish("out", &frame(&[7.0]));
+    let fleet = Fleet::new();
+    let producer = fleet.spawn(Uid(20));
+    let consumers: Vec<Node> = (0..CONSUMERS).map(|i| fleet.spawn(Uid(100 + i))).collect();
+    for c in &consumers {
+        c.handle.send_if_changed(drinking(&[Uid(20)]));
+    }
+    until("every consumer to subscribe", || consumers.iter().all(|c| !c.log.lock().wired.is_empty()).then_some(()));
+    producer.handle.send_if_changed(ringing(&(0..CONSUMERS).map(|i| Uid(100 + i)).collect::<Vec<_>>()));
+    *producer.emit.lock() = Some(frame(&[7.0]));
     for (i, consumer) in consumers.iter().enumerate() {
-        assert_eq!(consumer.drain_inputs().len(), 1, "consumer {i} of {CONSUMERS} got the frame");
+        until(&format!("consumer {i} of {CONSUMERS} to get the frame"), || (arrived(consumer) == vec![(0, 0, vec![7.0])]).then_some(()));
     }
 }
 
 #[test]
 fn a_multi_input_keeps_one_cell_per_wire_in_the_order_it_was_given() {
     // A multi slot's cells are keyed by service name and ordered by the SET, never by the producers.
-    // The wire count is past the event service's `max_nodes`, which counts one node per producer.
     const WIRES: u64 = 40;
-    let producers: Vec<IoxTransport> = (0..WIRES)
-        .map(|i| IoxTransport::create(&instance(), Uid(200 + i), 0, manifest()).unwrap())
-        .collect();
-    let consumer = IoxTransport::create(&instance(), Uid(21), 0, manifest()).unwrap();
+    let fleet = Fleet::new();
+    let producers: Vec<Node> = (0..WIRES).map(|i| fleet.spawn(Uid(200 + i))).collect();
+    let consumer = fleet.spawn(Uid(21));
     // Reversed, so a wire index that follows the producers rather than the set is visible.
-    let services: Vec<String> =
-        (0..WIRES).rev().map(|i| output_service(&base_of(Uid(200 + i)), "out")).collect();
-    consumer.wire_in("input", &services).expect("subscribe");
-
-    let door = door_service(&base_of(Uid(21)));
+    let set: Vec<Uid> = (0..WIRES).rev().map(|i| Uid(200 + i)).collect();
+    consumer.handle.send_if_changed(drinking(&set));
+    until("the consumer to subscribe", || consumer.log.lock().wired.last().filter(|(_, w)| w.len() == WIRES as usize).map(|_| ()));
     for (i, producer) in producers.iter().enumerate() {
-        producer.wire_out("out", &[(door.clone(), 1)]).expect("ring this consumer");
-        producer.publish("out", &frame(&[i as f32]));
+        producer.handle.send_if_changed(ringing(&[Uid(21)]));
+        *producer.emit.lock() = Some(frame(&[i as f32]));
     }
-    // Twice on one wire before the drain: latest-wins keeps the second, per wire.
-    producers[0].publish("out", &frame(&[100.0]));
-
-    let got = consumer.drain_inputs();
-    assert_eq!(got.len(), WIRES as usize, "one cell per wire, none merged");
+    until("every wire's frame", || (arrived(&consumer).len() == WIRES as usize).then_some(()));
+    let mut got = arrived(&consumer);
+    got.sort_by_key(|(_, wire, _)| *wire);
+    assert_eq!(got.iter().map(|(_, w, _)| *w).collect::<Vec<_>>(), (0..WIRES as usize).collect::<Vec<_>>(), "one cell per wire, none merged");
     assert_eq!(
-        got.iter().map(|(_, index, _)| *index).collect::<Vec<_>>(),
-        (0..WIRES as usize).collect::<Vec<_>>(),
-        "the cells are indexed by position in the set"
-    );
-    assert_eq!(
-        got.iter().map(|(_, _, frame)| f32s(frame)[0]).collect::<Vec<_>>(),
-        (0..WIRES).rev().map(|i| if i == 0 { 100.0 } else { i as f32 }).collect::<Vec<f32>>(),
-        "each cell holds its own producer's newest frame"
+        got.iter().map(|(_, _, v)| v[0]).collect::<Vec<f32>>(),
+        (0..WIRES).rev().map(|i| i as f32).collect::<Vec<f32>>(),
+        "each cell holds its own producer's frame, at the set's position"
     );
 }
 
 /// The env var that turns this binary into the child below. Its value is irrelevant.
 const CRASH_HELPER: &str = "GOOFI_TRANSPORT_CRASH_HELPER";
 
-/// The child: hold a session of its own, open a node with a port in it, NAME the session, then
-/// wait to be killed, or for its stdin to close.
+/// The child: hold a session of its own, open an exchange in it, NAME the session, then wait to
+/// be killed, or for its stdin to close.
 #[test]
 fn crash_helper() {
     if std::env::var(CRASH_HELPER).is_err() {
         return; // the ordinary run: this test is only the child's entry point
     }
-    let node = iox_node().expect("a node");
-    let _out = goofi_transport::data_service(&node, "goofi_crash_helper_out").expect("a service");
-    println!("READY {}", goofi_transport::session());
-    if std::env::var(CRASH_HELPER).as_deref() == Ok("exit") {
-        // A process that leaves through `exit`, with its ports still open and no release called:
-        // the way a test binary or a second Ctrl-C ends.
-        std::process::exit(0);
-    }
+    let session = goofi_supervisor::session::Session::hold().expect("a session");
+    let hub = goofi_transport::Hub::new(session.id());
+    let _exchange = goofi_transport::Exchange::open(&hub).expect("an exchange, with its shared memory");
+    println!("READY {}", session.id());
     let _ = std::io::stdin().read_line(&mut String::new());
+}
+
+/// The env var that turns this binary into the echo child below. Its value is irrelevant.
+const ECHO_HELPER: &str = "GOOFI_TRANSPORT_ECHO_HELPER";
+
+/// The child: serve the exchange the environment names, answering each request with its own
+/// bytes, until an empty request.
+#[test]
+fn echo_helper() {
+    if std::env::var(ECHO_HELPER).is_err() {
+        return; // the ordinary run: this test is only the child's entry point
+    }
+    let mut served = goofi_transport::Served::open_from_env().expect("the exchange the parent opened");
+    loop {
+        let Some((seq, request)) = served.wait(std::time::Duration::from_secs(30)).expect("a request") else {
+            panic!("no request within the wait");
+        };
+        served.answer(seq, &request).expect("an answer");
+        if request.is_empty() {
+            return;
+        }
+    }
+}
+
+/// A message larger than the mailbox's segment moves the mailbox to a larger one, in either
+/// direction, and the other end follows without losing the message or any that comes after.
+#[test]
+fn a_message_past_the_segment_moves_the_mailbox_and_the_reader_follows() {
+    let hub = goofi_tests::hub();
+    let mut exchange = goofi_transport::Exchange::open(&hub).expect("an exchange");
+    let mut cmd = std::process::Command::new(std::env::current_exe().expect("the test binary"));
+    cmd.args([&format!("{}::echo_helper", crate::situation(module_path!())), "--exact", "--nocapture"])
+        .env(ECHO_HELPER, "1")
+        .env(goofi_transport::ENV, exchange.env());
+    let mut child = goofi_supervisor::child::run("echo helper", &mut cmd).spawn().expect("spawn the child");
+
+    // Small, then past the first segment twice over, then small again: each generation's first
+    // message, and the one after it, come through in both directions.
+    let large: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let larger: Vec<u8> = (0..600_000u32).map(|i| (i % 241) as u8).collect();
+    for request in [&b"hello"[..], &large, &b"again"[..], &larger, &b"last"[..]] {
+        let answer = exchange.ask(&mut child, &[request]).expect("an answer");
+        assert_eq!(answer.len(), request.len(), "the echo's length");
+        assert!(answer == request, "the echo's bytes");
+    }
+    let bye = exchange.ask(&mut child, &[&[][..]]).expect("the parting answer");
+    assert!(bye.is_empty());
+    assert!(child.wait_within(goofi_tests::WAIT).is_some(), "the child left on the empty request");
 }
 
 /// A session owns one ephemeral directory, a workspace and its cache parts; the lock alone
 /// decides what a boot sweep removes, and a content key is never mistaken for a session.
 #[test]
 fn a_session_owns_its_directory_workspace_and_cache_parts() {
-    use goofi_core::session::{alive, hold, sessions, sweep_system, system_dir, workspace_dir, Session};
+    use goofi_supervisor::session::{alive, sessions, sweep_runtime, system_dir, workspace_dir, Session};
     use std::fs;
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
-    let held = hold("abcabcabcabcabc1").unwrap();
+    let held = Session::hold().unwrap();
+    let id = held.id().to_string();
     held.record_url("http://127.0.0.1:9999");
-    assert!(alive("abcabcabcabcabc1"), "held from within the same process still reads alive");
-    assert!(sessions().contains(&Session { id: "abcabcabcabcabc1".into(), url: "http://127.0.0.1:9999".into() }));
-    assert!(system_dir("abcabcabcabcabc1").is_dir());
+    assert!(alive(&id), "held from within the same process still reads alive");
+    assert!(sessions().iter().any(|r| r.id == id && r.url == "http://127.0.0.1:9999"), "{:?}", sessions());
+    assert!(system_dir(&id).is_dir());
 
-    // A dead session: its lock file exists in its directory and nobody holds it. An orphan
-    // directory with no lock at all. A part a crashed hold left behind.
+    // A dead session: its lock file exists beside its directory and nobody holds it. An orphan
+    // directory with no lock at all. A lock a crashed hold left behind with no directory yet.
+    let base = goofi_supervisor::session::system_base();
     fs::create_dir_all(system_dir("gone")).unwrap();
-    fs::File::create(system_dir("gone").join("alive.lock")).unwrap();
-    fs::create_dir_all(system_dir("orphan").join("iox")).unwrap();
-    fs::create_dir_all(system_dir("stale.part")).unwrap();
-    fs::File::create(system_dir("stale.part").join("alive.lock")).unwrap();
+    fs::File::create(base.join("gone.alive")).unwrap();
+    fs::create_dir_all(system_dir("orphan").join("scratch")).unwrap();
+    fs::File::create(base.join("stale.alive")).unwrap();
     assert!(!alive("gone"));
     assert!(sessions().iter().all(|s| s.id != "gone"), "the dead one is not listed");
     assert!(system_dir("gone").exists(), "…and a list removes nothing");
-    goofi_transport::sweep_dead();
-    assert!(!system_dir("gone").exists() && !system_dir("orphan").exists(), "the sweep removes it");
-    assert!(!system_dir("stale.part").exists(), "a crashed hold's part is swept");
-    assert!(system_dir("abcabcabcabcabc1").join("alive.lock").exists(), "the live one is untouched");
+    goofi_supervisor::session::sweep_dead();
+    assert!(!system_dir("gone").exists() && !base.join("gone.alive").exists(), "the sweep removes it and its lock");
+    assert!(!system_dir("orphan").exists(), "the orphan goes");
+    assert!(!base.join("stale.alive").exists(), "a crashed hold's lock is swept");
+    assert!(system_dir(&id).is_dir() && alive(&id), "the live one is untouched");
 
     // The workspace parent: the session's to remove once its last mount is gone, at its release.
-    fs::create_dir_all(workspace_dir("abcabcabcabcabc1")).unwrap();
+    fs::create_dir_all(workspace_dir(&id)).unwrap();
 
-    // The caches: a dead session's part and work dir go, another version's tree goes; a live
-    // session's part, this version's tree and a 16-hex CONTENT key stay.
-    let live = hold("0123456789abcdef").unwrap();
-    let system = goofi_core::home::system();
-    let out = system.join("build").join("out").join("k");
+    // The runtime: a dead session's part and work dir go, another version's tree goes; a live
+    // session's part, this version's tree, the shared dirs and a 16-hex CONTENT key stay.
+    let live = Session::hold().unwrap();
+    let runtime = goofi_supervisor::layout::runtime();
+    let out = runtime.build().join("out").join("k");
     fs::create_dir_all(&out).unwrap();
-    fs::write(out.join(".node.so.s0123456789abcdef"), b"").unwrap();
+    fs::write(out.join(format!(".node.so.s{}", live.id())), b"").unwrap();
     fs::write(out.join(".node.so.sfedcba9876543210"), b"").unwrap();
     fs::write(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json"), b"").unwrap();
-    let work = system.join("build").join("plugins").join("x").join("work-sfedcba9876543210-0");
+    let work = runtime.build().join("plugins").join("x").join("work-sfedcba9876543210-0");
     fs::create_dir_all(&work).unwrap();
-    // The RUNNING version, since every other situation in this process reads that shipped tree.
-    let version = env!("CARGO_PKG_VERSION");
-    fs::create_dir_all(system.join("shipped").join(version).join("fedcba9876543210")).unwrap();
-    fs::create_dir_all(system.join("build").join("sdk").join("0.0.1")).unwrap();
-    fs::create_dir_all(system.join("build").join("sdk").join(version)).unwrap();
-    sweep_system(version);
-    assert!(out.join(".node.so.s0123456789abcdef").exists(), "a live session's part stays");
+    fs::create_dir_all(runtime.shipped().join("fedcba9876543210")).unwrap();
+    fs::create_dir_all(runtime.root().join("0.0.1")).unwrap();
+    fs::create_dir_all(runtime.cache()).unwrap();
+    sweep_runtime();
+    assert!(out.join(format!(".node.so.s{}", live.id())).exists(), "a live session's part stays");
     assert!(!out.join(".node.so.sfedcba9876543210").exists() && !work.exists(), "a dead session's go");
-    assert!(system.join("shipped").join(version).join("fedcba9876543210").exists(), "a content key stays");
+    assert!(runtime.shipped().join("fedcba9876543210").exists(), "a content key stays");
     assert!(out.join("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef.json").exists());
-    assert!(!system.join("build").join("sdk").join("0.0.1").exists(), "another version's tree goes");
-    assert!(system.join("build").join("sdk").join(version).exists());
-    let _ = fs::remove_dir_all(system.join("shipped").join(version).join("fedcba9876543210"));
+    assert!(!runtime.root().join("0.0.1").exists(), "another version's tree goes");
+    assert!(runtime.versioned().is_dir() && runtime.cache().is_dir(), "this version's and the shared cache stay");
+    let _ = fs::remove_dir_all(runtime.shipped().join("fedcba9876543210"));
     drop(live);
 
     drop(held);
-    assert!(!alive("abcabcabcabcabc1"));
-    assert!(!workspace_dir("abcabcabcabcabc1").exists(), "the empty workspace parent went with it");
-    let _ = fs::remove_dir_all(system_dir("abcabcabcabcabc1"));
-}
-
-#[test]
-fn a_process_that_exits_without_releasing_leaves_no_record() {
-    goofi_tests::walled_home();
-    let _sole = goofi_tests::sole_session();
-    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args([&format!("{}::crash_helper", crate::situation(module_path!())), "--exact", "--nocapture"])
-        .env(CRASH_HELPER, "exit")
-        .env_remove(goofi_core::session::ENV)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .expect("run the child");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let id = stdout.lines().find_map(|l| l.strip_prefix("READY ")).map(str::trim).unwrap_or_default().to_string();
-    assert!(!id.is_empty(), "the child named its session: {stdout:?}");
-    assert!(!goofi_core::session::system_dir(&id).exists(), "the directory went at exit, with no release called");
+    assert!(!alive(&id));
+    assert!(!system_dir(&id).exists(), "its directory went with its release");
+    assert!(!workspace_dir(&id).exists(), "the empty workspace parent went with it");
 }
 
 #[test]
 fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     goofi_tests::walled_home();
     let _sole = goofi_tests::sole_session();
-    // A killed process drops NOTHING: its record, its ephemeral directory and its shared memory
-    // stay. Its lock does not — the OS releases it — and that is the one thing the sweep reads.
-    // Under ANOTHER home: the sweep reads the lock on the machine-wide base, so a boot under a
-    // foreign `GOOFI_HOME` — a test run, a warm build — never takes a live session for dead.
+    // A killed process drops NOTHING: its record, its ephemeral directory and the shared memory
+    // of its exchanges stay. Its lock does not — the OS releases it — and that is the one thing
+    // the sweep reads. Under ANOTHER home: the sweep reads the lock on the machine-wide base, so
+    // a boot under a foreign `GOOFI_HOME` — a test run, a warm build — never takes a live session
+    // for dead.
     let foreign = std::env::temp_dir().join(format!("goofi-foreign-home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&foreign);
     let mut child = std::process::Command::new(std::env::current_exe().expect("the test binary"))
@@ -414,7 +519,7 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
         .env(CRASH_HELPER, "1")
         .env("GOOFI_HOME", &foreign)
         // Its OWN session, not this process's.
-        .env_remove(goofi_core::session::ENV)
+        .env_remove(goofi_supervisor::session::ENV)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         // SIGKILLed mid-test, so its parting "broken pipe" would otherwise read as this test's failure.
@@ -432,20 +537,20 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
     }
     let id = line.split_whitespace().nth(1).map(str::to_string).unwrap_or_default();
     assert!(!id.is_empty(), "the child named its session: {line:?}");
-    let system = goofi_core::session::system_dir(&id);
-    assert!(goofi_core::session::alive(&id), "the child holds its session while it lives");
-    assert!(system.join("iox").is_dir(), "its ephemeral directory is where iceoryx2 wrote");
-    assert!(goofi_transport::sessions().iter().any(|s| s.id == id), "listed from any home");
-    let workspace = goofi_core::session::workspace_dir(&id).join("nonce");
+    let system = goofi_supervisor::session::system_dir(&id);
+    assert!(goofi_supervisor::session::alive(&id), "the child holds its session while it lives");
+    assert!(system.is_dir(), "its ephemeral directory stands");
+    assert!(goofi_supervisor::session::sessions().iter().any(|s| s.id == id), "listed from any home");
+    let workspace = goofi_supervisor::session::workspace_dir(&id).join("nonce");
     std::fs::create_dir_all(&workspace).unwrap();
-    goofi_transport::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
-    assert!(system.join("iox").is_dir() && workspace.is_dir(), "a sweep from this home left the live session alone");
+    assert!(system.is_dir() && workspace.is_dir(), "a sweep from this home left the live session alone");
 
     // Killed, because the point is a process that drops nothing: a graceful exit would clean up.
     let _ = child.kill();
     let _ = child.wait();
-    assert!(!goofi_core::session::alive(&id), "the lock went with the process");
+    assert!(!goofi_supervisor::session::alive(&id), "the lock went with the process");
     assert!(system.exists(), "…and everything else stayed");
 
     let segments = || -> usize {
@@ -454,14 +559,69 @@ fn what_a_crash_left_behind_is_gone_by_the_next_start() {
             .unwrap_or(0)
     };
     if cfg!(target_os = "linux") {
-        assert!(segments() > 0, "the child's shared memory stayed too");
+        assert!(segments() > 0, "the child's exchange segments stayed too");
     }
 
-    goofi_transport::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     goofi_bridge::autosave::sweep_dead();
     assert!(!system.exists(), "the ephemeral directory was swept");
     assert!(!workspace.exists(), "the workspace was swept");
     assert_eq!(segments(), 0, "the shared memory its prefix names was swept");
-    assert!(goofi_transport::sessions().iter().all(|s| s.id != id));
+    assert!(goofi_supervisor::session::sessions().iter().all(|s| s.id != id));
     let _ = std::fs::remove_dir_all(&foreign);
+}
+
+#[test]
+fn a_queue_drops_its_oldest_and_never_blocks_its_sender() {
+    // A recorder's queue is bounded: the sender is never held, a frame past the depth costs the
+    // OLDEST one, and what the reader takes is in order with the newest kept.
+    let numbered = |i: u64| {
+        let mut meta = goofi_core::Meta::new();
+        meta.set_index(Some(i));
+        goofi_core::record::Frame::Data(Data::array_f32(vec![1], 0f32.to_le_bytes().to_vec(), meta).expect("one sample"))
+    };
+    let hub = goofi_tests::hub();
+    let name = format!("{}-queue", base_of(Uid(7)));
+    let sender = hub.sender(&name, 4);
+    let mut receiver = hub.receiver(&name, 4);
+    assert!(receiver.receive().is_none());
+    for i in 1..=6 {
+        assert!(sender.send(numbered(i)));
+    }
+    assert_eq!(receiver.fill(), 1.0, "full at its depth");
+    let taken: Vec<u64> = std::iter::from_fn(|| receiver.receive()).map(|f| f.meta().index().expect("numbered")).collect();
+    assert_eq!(taken, vec![3, 4, 5, 6], "the two oldest went, the rest in order");
+    assert_eq!(receiver.fill(), 0.0);
+
+    // Step: a sender on another thread outruns a reader that never waits, so the two meet on a
+    // full ring millions of times: neither end is ever held, nothing is reordered or doubled,
+    // and the newest frame is the one that is kept. Both ends run on threads of their own, so an
+    // end that spins for ever is a failure this test reports, not a hang.
+    const FRAMES: u64 = 2_000_000;
+    let producer = std::thread::spawn(move || {
+        for i in 1..=FRAMES {
+            sender.send(numbered(i));
+        }
+    });
+    let consumer = std::thread::spawn(move || {
+        let mut seen: Vec<u64> = Vec::new();
+        loop {
+            match receiver.receive() {
+                Some(f) => seen.push(f.meta().index().expect("numbered")),
+                None if seen.last() == Some(&FRAMES) => return seen,
+                None => std::hint::spin_loop(),
+            }
+        }
+    });
+    let deadline = Instant::now() + WAIT;
+    while !(producer.is_finished() && consumer.is_finished()) {
+        assert!(Instant::now() < deadline, "an end was held: sender done {}, reader done {}", producer.is_finished(), consumer.is_finished());
+        std::thread::yield_now();
+    }
+    producer.join().expect("the sender ends");
+    let seen = consumer.join().expect("the reader ends");
+    if let Some(w) = seen.windows(2).find(|w| w[0] >= w[1]) {
+        panic!("out of order or doubled: {} then {}", w[0], w[1]);
+    }
+    assert_eq!(seen.last(), Some(&FRAMES), "the newest is never the one dropped");
 }

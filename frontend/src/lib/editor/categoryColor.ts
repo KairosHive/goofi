@@ -1,19 +1,9 @@
+import { DEFAULT_KIND } from '$lib/api/vocab';
+
 /** Map a goofi DataType (ARRAY/STRING/TABLE/…) to a CSS color variable. */
 export function dtypeColor(dtype: string | undefined | null): string {
-	switch ((dtype ?? '').toUpperCase()) {
-		case 'ARRAY':
-			return 'var(--dtype-array)';
-		case 'STRING':
-			return 'var(--dtype-string)';
-		case 'TABLE':
-			return 'var(--dtype-table)';
-		case 'AUDIO':
-			return 'var(--dtype-audio)';
-		case 'TEXTURE':
-			return 'var(--dtype-texture)';
-		default:
-			return 'var(--text-muted)';
-	}
+	const d = (dtype ?? '').toUpperCase();
+	return Object.hasOwn(DEFAULT_KIND, d) ? `var(--dtype-${d.toLowerCase()})` : 'var(--text-muted)';
 }
 
 export function formatName(s: string): string {

@@ -4,35 +4,42 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { useLiveValue } from './liveValue.svelte';
 	import { claimFieldControlId } from './field';
+	import { stepOf } from './knob';
 
 	let {
 		value,
 		onChange,
+		onInput,
 		min = 0,
 		max = 1,
 		step,
 		disabled = false,
+		bounds = true,
 		class: klass = '',
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
 		onChange: (v: number) => unknown;
+		/** Each step of a drag, before the release commits it. */
+		onInput?: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
 		/** Show the value and take no input — what a driven param's own control wears. */
 		disabled?: boolean;
+		/** The min and max printed beside the track; off where a readout beside it says more. */
+		bounds?: boolean;
 	} = $props();
 
 	const ownId = $props.id();
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<number>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 
-	// A default step gives the range ~200 stops across the span.
-	const stp = $derived(step ?? Math.max((max - min) / 200, 1e-6));
+	const stp = $derived(stepOf(min, max, step));
 
 	function fmtBound(v: number): string {
 		if (!Number.isFinite(v)) return '';
@@ -46,7 +53,7 @@
 </script>
 
 <div {...rest} class={`ui-slider ${klass}`.trim()}>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(min)}</span>
+	{#if bounds}<span class="ui-slider-bound" aria-hidden="true">{fmtBound(min)}</span>{/if}
 	<input
 		id={fieldId}
 		class="ui-slider-range"
@@ -58,10 +65,15 @@
 		value={live.value}
 		onpointerdown={() => live.begin()}
 		onpointerup={() => live.end()}
-		onpointercancel={() => live.end()}
-		oninput={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
+		onpointercancel={(e) => {
+			// A cancelled pan sends no change event: what the thumb reached is the edit.
+			live.commit(Number(e.currentTarget.value));
+			live.end();
+		}}
+		oninput={(e) => live.input(Number((e.currentTarget as HTMLInputElement).value))}
+		onchange={(e) => live.commit(Number((e.currentTarget as HTMLInputElement).value))}
 	/>
-	<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>
+	{#if bounds}<span class="ui-slider-bound" aria-hidden="true">{fmtBound(max)}</span>{/if}
 </div>
 
 <style>
@@ -72,6 +84,10 @@
 		min-width: 0;
 		flex: 1 1 auto;
 	}
+	/* The thumb and track are the whole state; a ring after a hover key would only say "focused". */
+	.ui-slider-range:focus-visible {
+		outline: none;
+	}
 	.ui-slider-range {
 		flex: 1 1 auto;
 		min-width: 0;
@@ -81,9 +97,6 @@
 		border: none;
 		/* A vertical touch gesture scrolls; a horizontal one drags the thumb. */
 		touch-action: pan-y;
-	}
-	.ui-slider-range:disabled {
-		opacity: var(--disabled-opacity);
 	}
 	.ui-slider-bound {
 		flex-shrink: 0;

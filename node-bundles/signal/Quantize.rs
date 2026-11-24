@@ -3,7 +3,7 @@
 
 use goofi_core::scale::{Recipe, C4_HZ, MAX_DEGREES, NOTES, OCTAVE, PRESET_NAMES};
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Quantize;
@@ -72,7 +72,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The scale whose notes a pitch may land on."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantize",
@@ -81,7 +82,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("The note the scale starts on."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantize",
@@ -90,16 +92,18 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What a value is: a frequency in Hz, or volts per octave with C4 at 0 V."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantize",
         name: "strength",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How far towards the note each pitch is pulled. Zero passes the signal through."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

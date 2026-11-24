@@ -1,8 +1,10 @@
 //! The ONE node abstraction and its runtime plumbing.
 
 use std::fmt;
+use std::sync::Arc;
 
 use goofi_core::{Data, Param, SlotType};
+pub use goofi_core::Face;
 use indexmap::IndexMap;
 
 pub mod abi;
@@ -10,14 +12,15 @@ pub mod describe;
 pub mod expr;
 pub mod mailbox;
 pub mod seam;
+pub mod sections;
 pub mod tags;
 pub mod type_id;
-pub use describe::{describe, engine_of, folder_of, foreign_output, illegal_param, illegal_slot, leak_manifest, node_file_count, node_files, parse_introspection, type_name_of};
+pub use describe::{describe, digest_of, engine_of, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_file_count, node_files, parse_introspection, type_name_of};
 pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
-    Edit, EditorAction,
+    Edit, Origin, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeView,
-    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Touched, Via,
+    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
 };
 pub use tags::Tag;
 pub use type_id::{bare, qualify, split as split_type_id};
@@ -27,6 +30,9 @@ pub use type_id::{bare, qualify, split as split_type_id};
 pub struct Uid(pub u64);
 
 impl Uid {
+    /// The patch's own producer, whose output slots are its variables. Nodes are minted from 1.
+    pub const VARIABLES: Uid = Uid(0);
+
     pub fn to_hex(self) -> String {
         format!("{:012x}", self.0)
     }
@@ -90,6 +96,24 @@ impl ParamKey {
     }
 }
 
+/// A param name split from the ELEMENT it may address: `colour[2]` is dimension 2 of `colour`,
+/// and a name with no such suffix is the whole param.
+pub fn element(name: &str) -> (&str, Option<usize>) {
+    match mailbox::split_index(name) {
+        Ok((base, index)) => (base, index),
+        Err(_) => (name, None),
+    }
+}
+
+/// The param `name` addresses, as a value of its own: the whole param, or ONE dimension of a
+/// vector as a scalar of the same kind and bounds. `None` for a name or an element out of range.
+pub fn param_dim(p: &ParamGroups, group: &str, name: &str) -> Option<Param> {
+    let (base, index) = element(name);
+    let whole = param(p, group, base)?;
+    let Some(k) = index else { return Some(whole.clone()) };
+    (k < whole.dims() && whole.dims() > 1).then(|| whole.dim(k))
+}
+
 pub fn param<'a>(p: &'a ParamGroups, group: &str, name: &str) -> Option<&'a Param> {
     p.get(group)?.get(name)
 }
@@ -106,12 +130,46 @@ pub struct ParamDecl {
     pub doc: Option<&'static str>,
     /// The index of the param's section inside its group; the inspector draws a line between two.
     pub section: u8,
-    /// Presentation only: the inspector hides the param unless this holds.
-    pub show: Option<Show>,
+    /// Presentation only: the inspector hides the param unless every rule holds.
+    pub show: &'static [Show],
+    /// The part the param plays in a declared section; `None` for a row of its own.
+    pub role: Option<Role>,
 }
 
-/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
-/// holds one of `any_of`: an option's text, an int option in decimal, or `true`/`false`.
+/// A param's place in a section of its group: the count a list section is repeated by, or a
+/// member of a section — of one `slot` of a list, where `base` is its name inside the section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Count { section: &'static str, widget: Option<goofi_core::probe::Widget> },
+    Member { section: &'static str, base: &'static str, slot: Option<u32> },
+    /// A `Str` param naming a variable's element, beside the `Str` param `group` of the same
+    /// param group naming its group: that variable's wire feeds input `slot`, as a cable would.
+    Feed { slot: &'static str, group: &'static str },
+    /// A value the node's own saved state holds — a plugin's — so the document shows what the
+    /// node reports and a saved patch leaves it out.
+    Held,
+}
+
+/// Every feed of a manifest: the input slot, the group param's name, and the element param.
+pub fn feed_decls(manifest: &NodeManifest) -> impl Iterator<Item = (&'static str, &'static str, &'static ParamDecl)> {
+    manifest.params.iter().filter_map(|d| match d.role {
+        Some(Role::Feed { slot, group }) => Some((slot, group, d)),
+        _ => None,
+    })
+}
+
+/// The variable a feed names, `group.element`, or none while either param is empty.
+pub fn feed_name(params: &ParamGroups, group_param: &str, element: &ParamDecl) -> Option<String> {
+    let text = |name: &str| match param(params, element.group, name) {
+        Some(goofi_core::Param::Str { value, .. }) if !value.is_empty() => Some(value.clone()),
+        _ => None,
+    };
+    Some(format!("{}.{}", text(group_param)?, text(element.name)?))
+}
+
+/// One rule of a param's `show`: it holds while `param` (`name` in the same group, or `group.name`)
+/// holds one of `any_of` — an option's text, an int option in decimal, or `true`/`false` — or is
+/// itself hidden, as a hidden param is absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Show {
     pub param: &'static str,
@@ -125,14 +183,12 @@ impl Show {
     }
 }
 
-/// A declared param expression: its source, whether it starts live, and whether it wakes the node.
+/// A declared param expression: its source, and whether it starts live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExprDecl {
     pub source: &'static str,
     /// Whether this expression starts live; `Off` merely retains it as the param's expression text.
     pub mode: ExprMode,
-    /// Whether re-evaluating it also wakes `process()`.
-    pub trigger: bool,
 }
 
 /// Whether a declared [`ExprDecl`] is live or merely carried.
@@ -145,18 +201,28 @@ pub enum ExprMode {
 /// The kind + defaults of a declared param.
 #[derive(Clone, Copy)]
 pub enum ParamSpec {
-    Float { default: f64, min: f64, max: f64 },
-    Int { default: i64, min: i64, max: i64, options: &'static [i64] },
+    /// A number, or a vector of them: `default` holds one value per dimension.
+    Num { default: &'static [f64], min: f64, max: f64, int: bool, options: &'static [i64], face: Face },
     Bool { default: bool },
     Str { default: &'static str, options: &'static [&'static str], refresh: bool },
     Pulse,
 }
 
 impl ParamSpec {
+    /// An RGBA colour.
+    pub const fn color(default: &'static [f64; 4]) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max: 1.0, int: false, options: &[], face: Face::Color }
+    }
+    /// An ADSR envelope: three times in seconds up to `max`, and a sustain in 0..1.
+    pub const fn envelope(default: &'static [f64; 4], max: f64) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Envelope }
+    }
+
     pub fn to_param(self) -> Param {
         match self {
-            ParamSpec::Float { default, min, max } => Param::float(default, min, max),
-            ParamSpec::Int { default, min, max, options } => Param::Int { value: default, vmin: min, vmax: max, options: options.to_vec() },
+            ParamSpec::Num { default, min, max, int, options, face } => {
+                Param::Num { value: default.to_vec(), vmin: min, vmax: max, int, options: options.to_vec(), face }
+            }
             ParamSpec::Bool { default } => Param::boolean(default),
             ParamSpec::Str { default, options, refresh } => Param::Str {
                 value: default.to_string(),
@@ -197,6 +263,10 @@ impl<'a> Params<'a> {
     pub fn bool(&self, group: &str, name: &str) -> Option<bool> {
         param(self.0, group, name).and_then(Param::as_bool)
     }
+    /// Every dimension of a number.
+    pub fn vec(&self, group: &str, name: &str) -> Option<&[f64]> {
+        param(self.0, group, name).and_then(Param::as_vec)
+    }
     pub fn str(&self, group: &str, name: &str) -> Option<&str> {
         param(self.0, group, name).and_then(Param::as_str)
     }
@@ -216,6 +286,8 @@ string_error!(
 /// The result of compiling an expression: the evaluator's opaque handle.
 pub struct Compiled {
     pub id: BindingId,
+    /// The function's code, marshaled: what a functional frame carries.
+    pub code: Arc<[u8]>,
 }
 
 /// One expression variable's value, as the graph resolved it.
@@ -223,25 +295,59 @@ pub struct Compiled {
 pub enum Local {
     Frame(Data),
     Value(Param),
+    /// A record read by attribute, as a machine's `me` and `st()` answer: `me.gain`, `st('A').residents`.
+    Record(Vec<(String, Field)>),
 }
 
-/// Per-evaluation context handed to [`ExprEvaluator::eval`].
+/// One field of a [`Local::Record`]: a frame, or a list of names.
+#[derive(Clone, Debug)]
+pub enum Field {
+    Frame(Data),
+    Names(Vec<String>),
+}
+
+/// What a binding's stateful functions (`gte()`) keep from one evaluation to the next: the
+/// evaluator's own object, which the binding holds and hands back on every call. Fresh with a
+/// binding whose text changed; none for an evaluation outside a binding, which keeps nothing.
+#[derive(Default)]
+pub struct ExprState(pub goofi_supervisor::sync::Mutex<Option<Box<dyn std::any::Any + Send + Sync>>>);
+
+impl fmt::Debug for ExprState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExprState")
+    }
+}
+
+/// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.
 pub struct EvalCtx<'a> {
-    /// The expression's variables, keyed by the generated name the rewrite minted; `None` has not
-    /// arrived yet, and the expression sees it as absent.
-    pub locals: &'a std::collections::HashMap<String, Option<Local>>,
-    /// Patch seconds (`NodeCtx::now`), off the one patch time — for time-based expressions.
+    /// The expression's variables by the generated name the rewrite minted, in its order.
+    pub locals: &'a [(String, Local)],
+    /// Patch seconds, the position of the one patch time — for time-based expressions.
     pub t: f64,
-    /// The param being driven, a type template the evaluator coerces its result to.
-    pub target: &'a Param,
+    /// The driven param's declared range, which `lfo()` and `nse()` span by default.
+    pub range: (f64, f64),
+    /// The binding's state cell, for the functions that keep one; none keeps nothing.
+    pub state: Option<&'a ExprState>,
 }
 
-/// Evaluates param expressions; implemented in `goofi-python` and injected, so the engine core
-/// carries no pyo3 dependency.
+/// Evaluates expressions; implemented in `goofi-python` and injected, so the engine core carries
+/// no pyo3 dependency. A result is a frame, read into its target through `control::read`.
 pub trait ExprEvaluator: Send + Sync {
+    /// Compile `source`, a Python expression over `t` and the rewritten variables; one text
+    /// compiles once however many bindings hold it, and `release` lets go of one hold.
     fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
-    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError>;
+    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
     fn release(&self, id: BindingId);
+    /// Run a functional's marshaled code at `ctx.t`: what a reader of a functional frame calls.
+    fn run(&self, code: &[u8], ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
+}
+
+/// A functional frame's value at `t`, and any other frame as it is.
+pub fn at(ev: &dyn ExprEvaluator, frame: &Data, t: f64, range: (f64, f64)) -> Result<Data, ExprError> {
+    match frame.as_functional() {
+        Some(code) => ev.run(code, &EvalCtx { locals: &[], t, range, state: None }),
+        None => Ok(frame.clone()),
+    }
 }
 
 /// Where a node type's code actually runs. This is the ONE owner of that fact: the palette shows
@@ -350,7 +456,7 @@ pub struct NodeManifest {
     /// Declared params; the runtime `ParamGroups` is built on demand by [`Self::default_params`].
     pub params: &'static [ParamDecl],
     /// This type is a SOURCE: it makes frames on its own schedule, so `common.autotrigger` and the
-    /// carried `variables.system.default_ufreq` expression both default on.
+    /// carried `vars.signal.default_ufreq` expression both default on.
     pub producer: bool,
 }
 
@@ -385,7 +491,7 @@ impl NodeStage {
 /// reported over the wire.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NodeFault {
-    Setup { msg: String, since: f64, last_attempt: f64 },
+    Setup { msg: String, since: f64 },
     Process { msg: String, since: f64 },
 }
 

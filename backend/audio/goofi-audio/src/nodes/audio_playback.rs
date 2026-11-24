@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_audio_sdk::{Face, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 pub const TYPE: &str = "AudioPlayback";
 
@@ -11,16 +11,18 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the WAV file to play; a bare name is looked for in the recordings folder"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     POSITION = ParamDecl {
         group: "play",
         name: "position",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("where in the file to play from; playback runs on its own, and a MOVE of this skips"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     RESET = ParamDecl {
         group: "play",
@@ -29,16 +31,18 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("play from the start again"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     LOOPING = ParamDecl {
         group: "play",
         name: "loop",
-        spec: ParamSpec::Bool { default: false },
+        spec: ParamSpec::Bool { default: true },
         expression: None,
         doc: Some("start again at the end, instead of falling silent"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 

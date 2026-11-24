@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
-import { HarnessStore, type HarnessRoster } from './harness.svelte';
+import { HarnessStore } from './harness.svelte';
 import { endTermSession, liveTermSessions, termSession, type TerminalLike } from './termSession';
 import { notify } from './notify.svelte';
-import type { GraphSnapshot } from '$lib/api/control';
+import type { GraphSnapshot, HarnessRoster } from '$lib/api/control';
 
 /** A terminal that needs no DOM — the session store's own test drives the real behaviour. */
 const fakeTerm = (): TerminalLike => ({
@@ -43,7 +43,7 @@ describe('the harness roster', () => {
 		// so it is dropped rather than kept as a frozen screen (user, 2026-08-10).
 		ctl.emit({ event: 'harness_changed', payload: roster(['a', 'exited', 0], ['b', 'running']) });
 		expect(h.instances.map((i) => i.id)).toEqual(['b']);
-		expect(h.running).toBe(1);
+		expect(h.instances.length).toBe(1);
 	});
 
 	it('takes the panel of a harness that died back to its launcher, terminal and all', () => {
@@ -80,7 +80,7 @@ describe('the harness roster', () => {
 		const ctl = new FakeControl();
 		const h = new HarnessStore(ctl);
 		ctl.emit(hello(roster(['a', 'running'], ['b', 'running'], ['c', 'running'])));
-		expect(h.running).toBe(3);
+		expect(h.instances.length).toBe(3);
 
 		// Nobody asked it to stop and it did not end well: the one case worth interrupting for.
 		notify().clear();
@@ -97,7 +97,7 @@ describe('the harness roster', () => {
 		ctl.emit({ event: 'harness_changed', payload: roster(['c', 'stopping']) });
 		ctl.emit({ event: 'harness_changed', payload: roster(['c', 'exited', 143]) });
 		expect(notify().message).toBe(null);
-		expect(h.running).toBe(0);
+		expect(h.instances.length).toBe(0);
 	});
 
 	it('gives each panel its own instance, and never takes one another panel is showing', () => {

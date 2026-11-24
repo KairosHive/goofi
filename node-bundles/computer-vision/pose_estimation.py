@@ -120,14 +120,14 @@ class PoseEstimation(goofi.Node):
                 doc="What to look for: a body's joints, hands, a hand plus the gesture it makes, a "
                 "face's mesh, a face's box and keypoints, or every one of them at once.",
             ),
-            "detections": goofi.IntParam(
-                1, 1, 4, doc="How many bodies, hands or faces to look for at once. `facebox` and `holistic` set their own count."
+            "detections": goofi.NumParam(
+                1, 1, 4, int=True, doc="How many bodies, hands or faces to look for at once. `facebox` and `holistic` set their own count."
             ),
-            "confidence": goofi.FloatParam(0.5, 0.0, 1.0, doc="How sure the model must be before it reports anything."),
-            "tracking": goofi.FloatParam(
+            "confidence": goofi.NumParam(0.5, 0.0, 1.0, doc="How sure the model must be before it reports anything."),
+            "tracking": goofi.NumParam(
                 0.5, 0.0, 1.0, doc="How sure it must stay to keep tracking rather than search again. `facebox` and `holistic` do not track."
             ),
-            "smooth": goofi.FloatParam(0.5, 0.0, 0.99, doc="How much of the last velocity to keep, so a jumpy reading walks."),
+            "smooth": goofi.NumParam(0.5, 0.0, 0.99, doc="How much of the last velocity to keep, so a jumpy reading walks."),
             "expression": goofi.BoolParam(
                 False,
                 doc="Also score the 52 named faces a face can pull — `jawOpen`, `browInnerUp`, "

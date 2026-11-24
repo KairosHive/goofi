@@ -104,8 +104,8 @@ A call exposes `op`, `args`, and `actor`. Return `call.patch(...)` or `None`; us
 `call.reject(message)` to refuse execution. The actor identifies a command client, not an
 authenticated user or recording subject.
 
-A pre-hook can override explicitly supplied arguments. Goofi validates the argument envelope
-before and after hooks; the operation's own guards still apply. Hooks run in folder/ID order.
+A pre-hook can override explicitly supplied arguments. Goofi validates the patched arguments
+against the operation's own types; the operation's own guards still apply. Hooks run in folder/ID order.
 Two plugins that patch the same top-level argument produce an error before execution. A pre-hook
 failure prevents the operation. A post-hook receives the effective arguments plus `ok`, `result`,
 and `error`. A post-hook failure is logged and does not change the completed operation's outcome.
@@ -191,27 +191,69 @@ Put Python **node** dependencies in the bundle's existing requirements files und
 Backend `pyproject.toml` dependencies belong to its private service environment and do not install
 packages into node interpreters.
 
-A param can show only while one other param of the same node has one of a list of values. That
-param must have a fixed set of values: a string or int param with options, or a bool. Name it
-`name` in the same group or `group.name`. An int compares as decimal text and a bool as `true` or
-`false`. A param that a hidden param controls is also hidden. The inspector omits hidden params
-and a group tab with no shown param. A hidden param keeps its value and source, and the node runs
+A number param is `goofi.NumParam(default, min, max, int=False, options=None)` in Python, a
+`ParamSpec::Num { default: &[…], min, max, int, options, face }` in Rust and `"kind": "num"` with
+`"int": true` where it rounds in a WGSL header. A `default` of several numbers makes it a VECTOR:
+the node reads a list, a shader a `vec2f`, `vec3f` or `vec4f` (`vec…i` for an int), the inspector
+one field per dimension, and an expression gives a sequence of that length or one number for
+every dimension. `goofi.ColorParam(default=(1, 1, 1, 1))`, `ParamSpec::color(&[…])` and
+`"kind": "color"` are the four-dimensional RGBA number from 0 to 1 that the inspector picks.
+`goofi.EnvelopeParam(default=(0.01, 0.1, 1, 0.3), max=10)`, `ParamSpec::envelope(&[…], max)` and
+`"kind": "envelope"` are the four ADSR numbers the inspector draws with four knobs: attack, decay
+and release in seconds up to `max`, sustain in 0..1. Both are `face` on a `num`, and the same
+widgets draw a control panel's `color` and `envelope` and a machine attribute of either kind.
+One ELEMENT of a vector is addressed `name[i]`: its literal is that dimension of the list, and a
+source on it — an expression or a reference — drives that dimension alone, over whatever the whole
+param's source gives the others. The inspector's vector view shows one row per element.
+
+A param can show only while other params of the same node hold given values: one rule names a
+param and the values it may hold, and a param with several rules shows while all of them hold.
+A controller must have a fixed set of values: a string or int param with options, or a bool. Name
+it `name` in the same group or `group.name`. An int compares as decimal text and a bool as `true`
+or `false`. A hidden param is absent, so a rule about it holds whatever its value. The inspector
+omits hidden params and a group tab with no shown param. A hidden param keeps its value and source, and the node runs
 as before. A group can have sections, and the inspector draws a line between two shown sections.
 Discovery refuses an unknown controller, a controller without a fixed set of values, a value that
 is not an option, a chain that returns to its param, and a name used twice in one group.
 
+A WGSL header lists a SECTION in place of a param: it names its group and itself, and lists its
+params without a group. A member is stored as `section_name`, so two sections can share names,
+and the inspector shows it under the section's heading by its own. With `repeat` it is a list: the inspector heads it with a count, shown
+with a − and a + button, and opens that many numbered slots of its params. The count is an int
+param named after the section, and each slot's param is `name_<slot>`, so an expression, a
+reference or a preset addresses one slot like any param. `defaults` gives each slot its own
+default, and the last carries on. The shader reads a list as `p.name[i]` and the count as
+`p.section`; a slot past the count keeps its value and is not shown. `max` is at most 64.
+
+```json
+{"group": "ramp", "section": "stops", "doc": "how many colour stops",
+ "repeat": {"min": 2, "max": 16, "default": 2},
+ "params": [{"name": "at", "kind": "num", "defaults": [0.0, 1.0], "min": 0.0, "max": 1.0}]}
+```
+
+A section's own `show` shows every param of it, the count included. A list with a `widget` in
+place of `params` is drawn whole by the inspector and declares its own slots: `"widget":
+"colormap"` is a colormap configurator, each slot a stop's `at` from 0 to 1, its `colour`, and
+the `blend` to the next stop — `linear`, `smooth` or `step`. The shader reads `p.at[i]`,
+`p.colour[i]` and `p.blend[i]` (0, 1, 2) up to `p.<section>`; SignalIn's `custom` colormap is one.
+
+```json
+{"group": "signal", "section": "stops", "widget": "colormap", "doc": "the stops of the custom colormap",
+ "repeat": {"min": 2, "max": 16, "default": 2}, "show": {"param": "colormap", "any_of": ["custom"]}}
+```
+
 ```python
 PARAMS = {"filter": [
     {"mode": goofi.StringParam("fir", options=["fir", "iir"])},
-    {"order": goofi.IntParam(4, 2, 8, options=[2, 4, 8], show=("mode", ["iir"])),
-     "ripple": goofi.FloatParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},
+    {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])),
+     "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=[("mode", ["iir"]), ("order", [4, 8])])},
 ]}
 ```
 
 A group that is a list of dicts has one section for each dict. In Rust, a `ParamDecl` sets
-`section: 1` and `show: Some(Show { param: "mode", any_of: &["iir"] })`, or `section: 0` and
-`show: None`. A WGSL header param adds `"section": 1` and
-`"show": {"param": "mode", "any_of": ["iir"]}`.
+`section: 1` and `show: &[Show { param: "mode", any_of: &["iir"] }]`, or `section: 0` and
+`show: &[]`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, or a list
+of such rules, and sits in a section through a section entry.
 
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and
 database access must stay outside audio callbacks and other time-critical processing. Prefer stable
@@ -221,7 +263,9 @@ recording IDs or portable paths in saved node parameters. No resource-provider A
 
 `plugins/` at the repository root holds plugins goofi ships as source. Install one by copying or
 linking its folder into `.goofi/plugins/`. `plugins/virtual-cables` creates PipeWire virtual audio
-devices on Linux and points AudioIn and AudioOut nodes at them by drag and drop.
+devices on Linux and points AudioIn and AudioOut nodes at them by drag and drop. `plugins/latency`
+times two nodes dropped on its panel: a recording of every node on the path between them, with a
+CSV beside it that sums each target tick's latency hop by hop from the frames it was made from.
 
 ## Validation
 
@@ -230,7 +274,7 @@ operation, a corpus panel, an editable header item, recording hooks, and Rust an
 It is a fixture and authoring example, not a remote database adapter.
 
 ```sh
-cargo test -p goofi-tests --test plugins
+cargo test -p goofi-tests plugins::
 cd tests/e2e
 npx playwright test --config playwright.plugins.config.ts
 ```

@@ -1,17 +1,18 @@
 /** Agent read/introspection surface — paired with `commands`. */
+import { variableValue } from '$lib/stores/variableValues.svelte';
 import { graph } from '$lib/stores/graph.svelte';
 import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
 import { history } from '$lib/stores/history.svelte';
-import { arrivalRate, latestFrame } from '$lib/api/frames';
+import { arrivalRate, latestHead } from '$lib/api/frames';
+import type { FrameHead } from '$lib/api/dataProtocol';
 import { collectPanels } from 'panelty';
 import { asStateObject, linkedNodeName } from 'panelty';
-import { isArrayFrame, isStringFrame, type DataFrame } from '$lib/codec/decode';
-import { reconstructMeta } from '$lib/editor/metaFormat';
-import { summaryOf } from '$lib/viewers/viewMeta';
+import { originShape } from '$lib/viewers/viewMeta';
 
 import type { LinkInfo, NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
 import type { VariableView } from '$lib/crdt/graphDoc';
+import type { Literal } from '$lib/api/generated';
 
 export interface FrameSummary {
 	dtype: string;
@@ -27,30 +28,26 @@ export interface FrameSummary {
 const shapesEqual = (a: number[], b: readonly number[]): boolean =>
 	a.length === b.length && a.every((n, i) => n === b[i]);
 
-/** A compact, DOM-free description of the latest frame on a slot. */
-function summarize(frame: DataFrame | null): FrameSummary | null {
-	if (!frame) return null;
-	const index = typeof frame.meta.index === 'number' ? frame.meta.index : undefined;
-	return { ...describe(frame), index };
-}
-
-function describe(frame: DataFrame): FrameSummary {
-	if (isArrayFrame(frame)) {
-		const a = frame.data;
-		const s = summaryOf(a, frame.meta);
-		const recon = reconstructMeta(frame.meta);
-		const shape = Array.isArray(recon.shape) ? (recon.shape as number[]) : a.shape;
+/** A compact, DOM-free description of the latest frame on a slot, from what its head says:
+ * the same words whether this thread holds the frame or the worker draws it. */
+function summarize(head: FrameHead | null): FrameSummary | null {
+	if (!head) return null;
+	const index = typeof head.meta.index === 'number' ? head.meta.index : undefined;
+	if (head.array) {
+		const a = head.array;
+		const shape = originShape(a.wireShape, head.meta);
 		// An AXIS reduction, so a frame whose only `reduced` entry is the depth is not one.
-		const reduced = !shapesEqual(shape, a.shape);
+		const reduced = !shapesEqual(shape, a.wireShape);
 		return {
-			dtype: s.dtype,
+			dtype: a.dtype,
 			shape,
-			numeric: s.min !== null ? { min: s.min, max: s.max as number, mean: s.mean as number } : undefined,
-			...(reduced ? { reducedLength: a.values.length } : {})
+			numeric: a.min !== null ? { min: a.min, max: a.max as number, mean: a.mean as number } : undefined,
+			...(reduced ? { reducedLength: a.length } : {}),
+			index
 		};
 	}
-	if (isStringFrame(frame)) return { dtype: 'STRING', text: frame.data };
-	return { dtype: frame.dtype };
+	if (head.dtype === 'STRING') return { dtype: 'STRING', text: head.text, index };
+	return { dtype: head.dtype, index };
 }
 
 export interface PanelView {
@@ -59,6 +56,8 @@ export interface PanelView {
 	node: string | null;
 	slot: string | null;
 	kind: string | null;
+	/** The panel's own state, whole. */
+	state: Record<string, unknown>;
 }
 
 export const query = {
@@ -81,8 +80,10 @@ export const query = {
 	nodeTypes: (): NodeTypeInfo[] | null => graph().nodeTypes,
 	/** Whether the replica has pulled from the manager yet; until true, `graph()` reads describe an EMPTY replica. */
 	docSynced: (): boolean => graph().docSynced,
-	/** Every patch variable (system + user), in system-first/creation order. */
-	variables: (): VariableView[] => graph().variables,
+	/** Every patch variable (system + user), in system-first/creation order, each with the value a
+	 * watcher of it holds — null until a panel shows it. */
+	variables: (): (VariableView & { value: Literal | null })[] =>
+		graph().variables.map((v) => ({ ...v, value: variableValue(v.name) })),
 	node: (uid: string): NodeInstanceInfo | null => graph().nodeById(uid),
 	nodeParams: (uid: string): NodeInstanceInfo['params'] | null =>
 		graph().nodeById(uid)?.params ?? null,
@@ -93,7 +94,7 @@ export const query = {
 		return { nodes: [...sel.nodes(panelId)], edges: [...sel.edges(panelId)] };
 	},
 	frameSummary: (node: string, slot: string): FrameSummary | null =>
-		summarize(latestFrame(node, slot)),
+		summarize(latestHead(node, slot)),
 	/** Frames a second the WIRE delivered for one stream — what a paint count cannot show. */
 	arrivalRate: (node: string, slot: string): number | null => arrivalRate(node, slot),
 	panels: (): PanelView[] =>
@@ -104,14 +105,14 @@ export const query = {
 				type: p.panelType,
 				node: linkedNodeName(p.state),
 				slot: typeof s.slot === 'string' ? s.slot : null,
-				kind: typeof s.kind === 'string' ? s.kind : null
+				kind: typeof s.kind === 'string' ? s.kind : null,
+				state: s
 			};
 		}),
 
 	canUndo: (): boolean => history().canUndo,
 	canRedo: (): boolean => history().canRedo,
-	undoLabel: (): string | null => history().undoLabel,
-	historyLength: (): number => history().length
+	undoLabel: (): string | null => history().undoLabel
 };
 
 export type Query = typeof query;

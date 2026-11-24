@@ -1,10 +1,12 @@
 //! A bound param's latest-wins mailboxes and the ONE rule for reading them — shared by every
-//! engine that evaluates a binding on a thread of its own.
+//! engine that holds a binding on a thread of its own.
 
 use goofi_core::{Data, Param};
 use indexmap::IndexMap;
 
-use crate::{BindingId, EvalCtx, ExprEvaluator, Local};
+use std::sync::Arc;
+
+use crate::{BindingId, ExprState, Local};
 
 /// One variable's cell. It holds a [`Local`] because that is what the evaluator's locals channel
 /// takes: a `variables.*` term is a scalar, an `nd()` term a whole frame.
@@ -44,31 +46,12 @@ impl Mailbox {
 /// value delivered inline, or the reason the graph could not resolve it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Var {
-    Stream(String),
+    Stream { service: String },
     Value(Param),
     Missing(String),
 }
 
-/// One frame as a scalar param of `target`'s type — what a reference copies on arrival.
-/// The one threshold a number crosses to read as true — for a `Bool` and for a pulse's gate.
-pub fn gate(x: f64) -> bool {
-    x > 0.0
-}
-
-/// A variable's value read into `target`'s shape, so a bare variable is coerced like any other source.
-fn value_as(value: &Param, target: &Param) -> Result<Param, String> {
-    if let (Param::Str { value, .. }, Param::Str { options, refresh, .. }) = (value, target) {
-        return Ok(Param::Str { value: value.clone(), options: options.clone(), refresh: *refresh });
-    }
-    match (value.as_f64(), target) {
-        (Some(x), Param::Float { vmin, vmax, .. }) => Ok(Param::Float { value: x, vmin: *vmin, vmax: *vmax }),
-        (Some(x), Param::Int { vmin, vmax, options, .. }) => Ok(Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() }),
-        (Some(x), Param::Bool { .. } | Param::Pulse) => Ok(Param::Bool { value: gate(x) }),
-        _ => Err(format!("`{value:?}` does not fit `{target:?}`")),
-    }
-}
-
-/// Split an optional flat array index from a reference or a resolved variable.
+/// Split an optional flat array index from a bare source.
 pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     let Some((base, tail)) = source.split_once('[') else {
         return Ok((source, None));
@@ -76,35 +59,28 @@ pub fn split_index(source: &str) -> Result<(&str, Option<usize>), String> {
     let index = tail.strip_suffix(']')
         .filter(|text| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|text| text.parse::<usize>().ok())
-        .ok_or_else(|| format!("invalid reference index in `{source}`"))?;
+        .ok_or_else(|| format!("invalid index in `{source}`"))?;
     Ok((base, Some(index)))
 }
 
-fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param, String> {
-    match (frame.value(), target) {
-        (goofi_core::Value::Texture(_), _) => Err("a reference cannot read an unrendered texture submission".into()),
-        (goofi_core::Value::Str(s), Param::Str { options, refresh, .. }) if index.is_none() => {
-            Ok(Param::Str { value: s.to_string(), options: options.clone(), refresh: *refresh })
+/// One arrival as the frame it is: the element `index` names, or the frame whole. The one rule a
+/// bare source copies by, so a tap and a binding read a producer alike.
+pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
+    let frame = match local {
+        Local::Value(value) => goofi_core::control::data_of(value).ok_or_else(|| format!("`{value:?}` holds nothing"))?,
+        Local::Frame(frame) => frame.clone(),
+        Local::Record(_) => return Err("a record is read by attribute, not bare".into()),
+    };
+    match (frame.value(), index) {
+        (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),
+        (goofi_core::Value::Table(_), _) => Err("a bare source cannot read a TABLE output".into()),
+        (goofi_core::Value::Functional(_), Some(_)) => Err("a FUNCTIONAL has no element to index".into()),
+        (goofi_core::Value::Array(a), Some(at)) => {
+            let x = a.values().nth(at).ok_or_else(|| format!("index {at} is outside frame {:?}", a.shape()))?;
+            Ok(Data::number(f64::from(x)))
         }
-        (goofi_core::Value::Array(a), _) if index.is_some() || a.shape().iter().product::<usize>() == 1 => {
-            let at = index.unwrap_or(0);
-            let bytes: [u8; 4] = a.as_bytes().chunks_exact(4).nth(at)
-                .ok_or_else(|| format!("reference index {at} is outside frame {:?}", a.shape()))?
-                .try_into().map_err(|_| "reference element is not f32".to_string())?;
-            let x = f32::from_le_bytes(bytes) as f64;
-            Ok(match target {
-                Param::Float { vmin, vmax, .. } => Param::Float { value: x, vmin: *vmin, vmax: *vmax },
-                Param::Int { vmin, vmax, options, .. } => Param::Int { value: x.round() as i64, vmin: *vmin, vmax: *vmax, options: options.clone() },
-                // A pulse is a GATE here: the same threshold, and the runtime fires on its rise.
-                Param::Bool { .. } | Param::Pulse => Param::Bool { value: gate(x) },
-                Param::Str { .. } => return Err("a string param references a STRING output".to_string()),
-            })
-        }
-        (goofi_core::Value::Array(a), _) => {
-            Err(format!("a reference needs one element, and this frame is {:?}", a.shape()))
-        }
-        (goofi_core::Value::Str(_), _) => Err("a STRING output references a string param".to_string()),
-        (goofi_core::Value::Table(_), _) => Err("a reference cannot follow a TABLE output".to_string()),
+        (goofi_core::Value::Str(_), Some(_)) => Err("a STRING output has no element to index".into()),
+        (_, None) => Ok(frame),
     }
 }
 
@@ -113,9 +89,12 @@ fn scalar_of(frame: &Data, target: &Param, index: Option<usize>) -> Result<Param
 #[derive(Clone, Debug)]
 pub struct Expression {
     pub source: String,
-    /// `None` for a bare-variable source, which needs no evaluator.
+    /// `None` for a BARE source — one target, an optional index — which needs no evaluator.
     pub id: Option<BindingId>,
     pub vars: IndexMap<String, Mailbox>,
+    /// What its stateful functions keep between evaluations; one cell per binding, kept across
+    /// a re-send of the same text.
+    pub state: Arc<ExprState>,
 }
 
 impl Expression {
@@ -124,20 +103,23 @@ impl Expression {
             .into_iter()
             .map(|(name, v)| {
                 let mailbox = match v {
-                    Var::Stream(_) => Mailbox::empty(),
+                    Var::Stream { .. } => Mailbox::empty(),
                     Var::Value(value) => Mailbox::seeded(value),
                     Var::Missing(reason) => Mailbox::missing(reason),
                 };
                 (name, mailbox)
             })
             .collect();
-        Expression { source: source.into(), id, vars }
+        Expression { source: source.into(), id, vars, state: Arc::new(ExprState::default()) }
     }
 
     /// Keep what a surviving variable already holds — for the variables `same` names, which is the
     /// caller's "still the same producer": a variable re-pointed at another stream starts empty,
-    /// or a silent producer would stand in for the one it replaced.
+    /// or a silent producer would stand in for the one it replaced. The same text keeps its state.
     pub fn carry(&mut self, previous: &Expression, same: impl Fn(&str) -> bool) {
+        if previous.source == self.source {
+            self.state = previous.state.clone();
+        }
         for (name, mailbox) in &mut self.vars {
             if mailbox.value().is_some() || mailbox.unresolved().is_some() || !same(name) {
                 continue;
@@ -148,6 +130,11 @@ impl Expression {
         }
     }
 
+    /// Whether a value this reads is a function of the time, so the same arrival reads anew each time.
+    pub fn holds_functional(&self) -> bool {
+        self.vars.values().any(|m| matches!(m.value(), Some(Local::Frame(d)) if d.as_functional().is_some()))
+    }
+
     /// Land a producer's frame in the variable named `var`.
     pub fn deliver(&mut self, var: &str, frame: Data) {
         if let Some(mailbox) = self.vars.get_mut(var) {
@@ -155,39 +142,28 @@ impl Expression {
         }
     }
 
-    /// The expression's current value: `Ok(None)` when nothing has arrived yet (the literal
-    /// stands), `Err` when it cannot be evaluated at all.
-    pub fn evaluate(
-        &self,
-        evaluator: Option<&dyn ExprEvaluator>,
-        t: f64,
-        target: &Param,
-    ) -> Result<Option<Param>, String> {
+    /// What the expression reads now: `Ok(None)` while a variable has not arrived (the literal
+    /// stands), `Err` when one cannot be resolved. A bare source is its one arrival, picked in
+    /// Rust; a computed one is every arrival, for the evaluator.
+    pub fn inputs(&self) -> Result<Option<Inputs>, String> {
         if let Some(reason) = self.vars.values().find_map(Mailbox::unresolved) {
             return Err(reason.to_string());
-        }
-        // A bare variable is read without the evaluator: a variable's value as it is, and a
-        // referenced producer's frame as the one element it must hold.
-        let (variable, index) = if self.id.is_none() {
-            split_index(self.source.trim())?
-        } else {
-            (self.source.trim(), None)
-        };
-        match self.vars.get(variable).and_then(Mailbox::value) {
-            Some(Local::Value(value)) => return value_as(value, target).map(Some),
-            Some(Local::Frame(frame)) if self.id.is_none() => return scalar_of(frame, target, index).map(Some),
-            _ => {}
         }
         if self.vars.values().any(|m| m.value().is_none()) {
             return Ok(None);
         }
-        let (Some(evaluator), Some(id)) = (evaluator, self.id) else {
-            return Err(format!("`{}` needs the expression evaluator", self.source));
-        };
-        let locals = self.vars.iter().map(|(n, m)| (n.clone(), m.value().cloned())).collect();
-        evaluator
-            .eval(id, &EvalCtx { locals: &locals, t, target })
-            .map(Some)
-            .map_err(|e| e.0)
+        if self.id.is_some() {
+            let locals = self.vars.iter().map(|(n, m)| (n.clone(), m.value().cloned().expect("arrived"))).collect();
+            return Ok(Some(Inputs::Computed(locals)));
+        }
+        let (variable, index) = split_index(self.source.trim())?;
+        let held = self.vars.get(variable).and_then(Mailbox::value).ok_or_else(|| format!("`{}` is not one target", self.source))?;
+        pick(held, index).map(|frame| Some(Inputs::Bare(frame)))
     }
+}
+
+/// What an expression has to read: the frame a bare source is, or the locals a computed one takes.
+pub enum Inputs {
+    Bare(Data),
+    Computed(Vec<(String, Local)>),
 }

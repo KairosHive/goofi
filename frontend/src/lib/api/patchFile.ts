@@ -1,7 +1,12 @@
 /** `/patch.gfi` — the patch as a file the BROWSER carries, reaching locations a containerised
  * backend cannot. A copy out and a copy in, never touching `savePath`. */
+import { errorText } from '$lib/stores/notify.svelte';
 
 export const PATCH_FILE_URL = '/patch.gfi';
+
+/** A patch path's file name, and the same without `.gfi`. */
+export const patchName = (path: string): string => path.split('/').pop() ?? path;
+export const patchStem = (path: string): string => patchName(path).replace(/\.gfi$/, '');
 
 /** Ask the browser to save the open patch. A plain navigation, so the server names the file. */
 export function downloadPatch(): void {
@@ -16,7 +21,7 @@ export async function uploadPatch(file: Blob): Promise<void> {
 		res = await fetch(PATCH_FILE_URL, { method: 'POST', body: file });
 	} catch (e) {
 		// Network-level: the server is gone, not the file is wrong.
-		throw new Error(e instanceof Error ? e.message : String(e));
+		throw new Error(errorText(e));
 	}
 	if (!res.ok) {
 		const detail = (await res.text().catch(() => '')).trim();

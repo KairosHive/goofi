@@ -1,10 +1,10 @@
-<!-- Combobox — a text field over a closed list of names: a press opens the list, typing filters
-     it, and only a name ON the list commits, by pick, Enter or blur. Typed text that is no name is
-     dropped, so a half-typed name is never sent. -->
+<!-- Combobox — a text field over a closed list of names: typing filters the list, and only a name
+     ON the list commits, by pick, Enter or blur, so a half-typed name is never sent. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
 	import Popover from './Popover.svelte';
+	import { reveal, stepWrapped } from './listNav';
 	import { claimFieldControlId } from './field';
 
 	export interface ComboOption {
@@ -35,14 +35,10 @@
 	const ownId = $props.id();
 	const fieldId = claimFieldControlId(ownId);
 	let box = $state<HTMLDivElement | null>(null);
-	let input = $state<HTMLInputElement | null>(null);
 	let open = $state(false);
-	let typed = $state('');
+	let typed = $derived(value);
 	let all = $state<ComboOption[]>([]);
 	let active = $state(0);
-	$effect(() => {
-		typed = value;
-	});
 	const shown = $derived.by(() => {
 		const q = typed.trim().toLowerCase();
 		return q === '' || q === value.toLowerCase() ? all : all.filter((o) => o.label.toLowerCase().includes(q));
@@ -76,7 +72,7 @@
 			e.preventDefault();
 			if (!open) return show();
 			const n = shown.length;
-			if (n) active = (active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+			active = stepWrapped(active, e.key === 'ArrowDown' ? 1 : -1, n);
 		} else if (e.key === 'Enter') {
 			e.preventDefault();
 			const pick = open ? shown[active] : undefined;
@@ -91,7 +87,6 @@
 
 <div {...rest} bind:this={box} class={`ui-combo ${klass}`.trim()}>
 	<input
-		bind:this={input}
 		id={fieldId}
 		type="text"
 		role="combobox"
@@ -107,8 +102,8 @@
 		value={typed}
 		data-testid={testid}
 		onfocus={show}
-		onpointerdown={() => {
-			if (!open && document.activeElement === input) show();
+		onpointerdown={(e) => {
+			if (!open && document.activeElement === e.currentTarget) show();
 		}}
 		onblur={() => {
 			if (open) settle();
@@ -123,7 +118,7 @@
 	<span class="ui-combo-caret" aria-hidden="true"><Icon name="chevron-down" /></span>
 </div>
 {#if open}
-	<Popover anchor={box} open onDismiss={close} class="ui-combo-list" data-testid={`${testid}-list`}>
+	<Popover anchor={box} open onDismiss={close} catcher={false} class="ui-combo-list" data-testid={`${testid}-list`}>
 		<div role="listbox" id={`${ownId}-list`} aria-label={placeholder || 'options'}>
 			{#each shown as o, i (o.label)}
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -131,10 +126,11 @@
 				<div
 					class="ui-combo-option"
 					class:active={i === active}
+					use:reveal={i === active}
 					role="option"
 					aria-selected={o.label === value}
 					onpointerdown={(e) => e.preventDefault()}
-					onpointerenter={() => (active = i)}
+					onpointermove={() => (active = i)}
 					onclick={() => commit(o.label)}
 				>
 					<span class="ui-combo-name">{o.label}</span>
@@ -162,10 +158,6 @@
 		padding-right: var(--space-6);
 		color: var(--text);
 		font-family: var(--font-mono);
-	}
-	.ui-combo-input:disabled {
-		opacity: var(--disabled-opacity);
-		cursor: not-allowed;
 	}
 	/* Decoration over the input's own right edge; the input owns every press. */
 	.ui-combo-caret {

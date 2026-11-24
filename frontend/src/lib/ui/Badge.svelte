@@ -18,10 +18,7 @@
 	} = $props();
 </script>
 
-<span {...rest} class={`ui-badge t-${tone} ${klass}`.trim()}>
-	<!-- The ink wrapper is the glyph run alone — the seam the gallery's ink pin measures. -->
-	<span class="ui-badge-ink">{@render children?.()}</span>
-</span>
+<span {...rest} class={`ui-badge pill-type t-${tone} ${klass}`.trim()}>{@render children?.()}</span>
 
 <style>
 	.ui-badge {
@@ -31,42 +28,16 @@
 		padding: var(--space-1) var(--space-3);
 		border: 1px solid transparent;
 		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: var(--fs-micro);
-		font-weight: 600;
-		line-height: 1;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		white-space: nowrap;
-	}
-	.ui-badge-ink {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2);
 	}
 	.ui-badge.t-neutral {
 		background: var(--surface-3);
 		border-color: var(--border);
 		color: var(--text-dim);
 	}
-	.ui-badge.t-accent {
-		background: var(--accent-fill);
-		border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-		color: var(--accent);
-	}
-	.ui-badge.t-success {
-		background: var(--success-fill);
-		border-color: color-mix(in srgb, var(--success) 40%, transparent);
-		color: var(--success);
-	}
-	.ui-badge.t-warning {
-		background: var(--warning-fill);
-		border-color: color-mix(in srgb, var(--warning) 40%, transparent);
-		color: var(--warning);
-	}
-	.ui-badge.t-danger {
-		background: var(--danger-fill);
-		border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-		color: var(--danger);
+	.ui-badge:not(.t-neutral) {
+		background: var(--tone-fill);
+		border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+		color: var(--tone);
 	}
 </style>

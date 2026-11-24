@@ -1,22 +1,23 @@
 /* goofi
-{ "doc": "noise, in four kinds\nPeriod is how far apart the peaks are, harmonics how many finer layers ride on top of them, and roughness how loud those layers are. Speed drifts the field, x and y pan across it. Brightness and contrast are Level's job.",
+{ "doc": "noise, in four kinds\nRandom is white noise, a fresh value per texel. Period is how far apart the peaks are, harmonics how many finer layers ride on top of them, and roughness how loud those layers are. Speed drifts the field, x and y pan across it. Brightness and contrast are Level's job.",
   "tags": ["image", "generator"],
   "params": [
     {"group": "noise", "name": "kind", "kind": "str", "default": "simplex",
      "options": ["simplex", "perlin", "worley", "random"]},
     {"group": "noise", "name": "fractal", "kind": "str", "default": "fbm",
      "options": ["fbm", "ridged", "billow", "warped", "multifractal", "multifractional"]},
-    {"group": "noise", "name": "amount", "kind": "float", "default": 1.0, "min": 0.0, "max": 3.0},
-    {"group": "noise", "name": "period", "kind": "float", "default": 0.25, "min": 0.002, "max": 4.0},
-    {"group": "noise", "name": "harmonics", "kind": "int", "default": 3, "min": 0, "max": 8},
-    {"group": "noise", "name": "spread", "kind": "float", "default": 2.0, "min": 1.0, "max": 8.0},
-    {"group": "noise", "name": "rough", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "noise", "name": "exponent", "kind": "float", "default": 1.0, "min": 0.1, "max": 8.0},
+    {"group": "noise", "name": "amount", "kind": "num", "default": 1.0, "min": 0.0, "max": 3.0,
+     "show": {"param": "fractal", "any_of": ["warped", "multifractal", "multifractional"]}},
+    {"group": "noise", "name": "period", "kind": "num", "default": 0.25, "min": 0.002, "max": 4.0},
+    {"group": "noise", "name": "harmonics", "kind": "num", "int": true, "default": 3, "min": 0, "max": 8},
+    {"group": "noise", "name": "spread", "kind": "num", "default": 2.0, "min": 1.0, "max": 8.0},
+    {"group": "noise", "name": "rough", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "noise", "name": "exponent", "kind": "num", "default": 1.0, "min": 0.1, "max": 8.0},
     {"group": "noise", "name": "mono", "kind": "bool", "default": true},
-    {"group": "noise", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0},
-    {"group": "move", "name": "x", "kind": "float", "default": 0.0, "min": -8.0, "max": 8.0},
-    {"group": "move", "name": "y", "kind": "float", "default": 0.0, "min": -8.0, "max": 8.0},
-    {"group": "move", "name": "speed", "kind": "float", "default": 0.2, "min": -10.0, "max": 10.0} ] }
+    {"group": "noise", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0},
+    {"group": "move", "name": "x", "kind": "num", "default": 0.0, "min": -8.0, "max": 8.0},
+    {"group": "move", "name": "y", "kind": "num", "default": 0.0, "min": -8.0, "max": 8.0},
+    {"group": "move", "name": "speed", "kind": "num", "default": 0.2, "min": -10.0, "max": 10.0} ] }
 */
 // Integer bit-mixing, not `fract(sin(dot(..)) * 43758)`: that hash turns a one-ulp difference in
 // its argument into a wholly different value, so every lattice boundary showed as a hard seam.
@@ -100,7 +101,11 @@ fn one(v: vec3f) -> f32 {
     switch p.kind {
         case 1u: { return perlin(v); }
         case 2u: { return worley(v); }
-        case 3u: { return rand(vec3i(floor(v)), 6u) * 2.0 - 1.0; }
+        // Random is white: one value per TEXEL, not per lattice cell, so period only paces time.
+        case 3u: {
+            let texel = vec3i(vec2i(floor(v.xy * p.period * resolution.y)), i32(floor(v.z)));
+            return rand(texel, 6u) * 2.0 - 1.0;
+        }
         default: { return simplex(v); }
     }
 }

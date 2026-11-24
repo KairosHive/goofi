@@ -1,5 +1,5 @@
-/** The editor's look. CSS-in-JS because CodeMirror generates these class names and mounts the popup in
- *  `document.body`, out of reach of a Svelte-scoped rule; every value stays a `var(--…)`. */
+/** The editor's look. CSS-in-JS because CodeMirror generates these class names and mounts its tooltips
+ *  in `document.body`, out of reach of a Svelte-scoped rule; every value stays a `var(--…)`. */
 import { HighlightStyle } from '@codemirror/language';
 import { EditorView } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
@@ -38,8 +38,9 @@ export const EXPR_THEME_SPEC = {
 	},
 	'.cm-placeholder': { color: 'var(--text-muted)' },
 
-	/* The completion popup: CodeMirror copies the view's theme classes onto the container it creates
-	   in `document.body`, which is what lets these rules reach it. */
+	/* The lint tooltip: CodeMirror copies the view's theme classes onto the container it creates in
+	   `document.body`, which is what lets these rules reach it. The completion popup stays hidden:
+	   `window.ts` renders the completion's state in a window of its own, styled there. */
 	'.cm-tooltip': {
 		background: 'var(--surface-2)',
 		border: '1px solid var(--border)',
@@ -48,22 +49,7 @@ export const EXPR_THEME_SPEC = {
 		color: 'var(--text)',
 		zIndex: 'var(--z-menu)'
 	},
-	'.cm-tooltip.cm-tooltip-autocomplete > ul': {
-		fontFamily: 'inherit',
-		fontSize: 'var(--fs-small)',
-		maxHeight: '14rem',
-		'& > li': {
-			display: 'flex',
-			alignItems: 'center',
-			gap: 'var(--space-4)',
-			padding: 'var(--space-2) var(--space-4)'
-		},
-		'& > li[aria-selected]': { background: 'var(--accent-fill)', color: 'var(--text)' }
-	},
-	'.cm-completionLabel': { flex: '1' },
-	'.cm-completionMatchedText': { textDecoration: 'none', color: 'var(--accent)' },
-	'.cm-completionDetail': { fontStyle: 'normal', color: 'var(--text-muted)' },
-	'.cm-completionIcon': { color: 'var(--text-dim)', opacity: '1' },
+	'.cm-tooltip.cm-tooltip-autocomplete': { display: 'none' },
 
 	/* `underline wavy` rather than the base theme's data-URI squiggle, whose colour is baked into the SVG. */
 	'.cm-lintRange-error': {
@@ -77,8 +63,7 @@ export const EXPR_THEME_SPEC = {
 
 	/* `16px` is the iOS focus-zoom threshold, a device fact rather than a scale rung. */
 	'@media (hover: none) and (pointer: coarse)': {
-		'.cm-tooltip.cm-tooltip-autocomplete > ul': { fontSize: '16px' },
-		'.cm-tooltip.cm-tooltip-autocomplete > ul > li': { minHeight: 'var(--hit)' }
+		'.cm-tooltip-lint': { fontSize: '16px' }
 	}
 };
 

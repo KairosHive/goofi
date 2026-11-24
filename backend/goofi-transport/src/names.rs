@@ -1,0 +1,102 @@
+//! Service names: pure derivation from the graph's facts, so every end of a wire spells it alike,
+//! and the hub hands both ends the same slot, door or queue by it.
+
+use goofi_node::{BoundVar, EventId, GraphView, Uid, Var};
+
+use crate::ServiceName;
+
+/// The id a producer rings a slot's view door with: a frame is out.
+pub const VIEW_EVENT_ID: EventId = 0;
+/// The id the bridge rings a view door with: what the reducer should do may have moved — a
+/// reader, a spec, a tap, an ask, or the graph itself.
+pub const VIEW_POKE_ID: EventId = 1;
+/// The id a producer rings the machines' door with: a frame a machine's expression reads is out.
+pub const MACHINES_FRAME_ID: EventId = 1;
+/// The id the manager rings the machines' door with: a message is in the thread's inbox.
+pub const MACHINES_INBOX_ID: EventId = 2;
+
+/// The name every service of one node is derived from: `<instance>_<uid>_<gen>`. `gen` is bumped on
+/// EVERY birth, because teardown never blocks and a rebirth would else race its predecessor.
+pub fn service_base(instance: &str, uid: Uid, gen: u64) -> String {
+    format!("{instance}_{}_{gen}", uid.to_hex())
+}
+
+/// The one event service a node parks on for its whole life (§3.2).
+pub fn door_service(base: &str) -> ServiceName {
+    format!("goofi_{base}_door")
+}
+
+/// One output slot's data service — the name a consumer is given in its `InSlot` set.
+pub fn output_service(base: &str, slot: &str) -> ServiceName {
+    format!("goofi_{base}_out_{slot}")
+}
+
+/// The base of the patch's own producer, [`Uid::VARIABLES`], whose slots are the variables. It
+/// lives as long as the manager, so it carries no generation.
+pub fn variables_base(instance: &str) -> String {
+    format!("{instance}_variables")
+}
+
+/// The door a slot's reducer parks on, rung by whichever generation of the node produces the
+/// slot: named without the generation, so a restart rings the same reducer.
+pub fn view_door_service(instance: &str, uid: Uid, slot: &str) -> ServiceName {
+    format!("goofi_{instance}_{}_view_{slot}", uid.to_hex())
+}
+
+/// One output slot's recording queue, one per ARMING: a new arming is a new queue, so a frame
+/// of the old one is never read as the new one's.
+pub fn record_service(base: &str, slot: &str, serial: u64) -> ServiceName {
+    format!("goofi_{base}_rec_{slot}_{serial}")
+}
+
+/// The one door the machines' thread parks on, rung for a frame it reads and for its inbox.
+pub fn machines_door(instance: &str) -> ServiceName {
+    format!("goofi_{instance}_machines_door")
+}
+
+/// One node's door, from the view's birth facts.
+pub fn door_of(view: &GraphView<'_>, uid: Uid) -> Option<ServiceName> {
+    let node = view.nodes.get(&uid)?;
+    Some(door_service(&service_base(view.instance, uid, node.generation)))
+}
+
+/// Every door one output rings: its ringers' doors, and the slot's view door while a reducer
+/// watches it. The one derivation, so every engine's producers ring the same set.
+pub fn targets_of<'a>(
+    view: &GraphView<'_>,
+    producer: Uid,
+    slot: &str,
+    ringers: impl IntoIterator<Item = goofi_node::Ringer<'a>>,
+) -> Vec<(ServiceName, EventId)> {
+    let mut targets: Vec<(ServiceName, EventId)> =
+        ringers.into_iter().filter_map(|r| Some((door_of(view, r.consumer)?, r.event_id))).collect();
+    if view.nodes.get(&producer).is_some_and(|n| n.watched.contains(&slot)) {
+        targets.push((view_door_service(view.instance, producer, slot), VIEW_EVENT_ID));
+    }
+    if view.read_by_machines(producer, slot) {
+        targets.push((machines_door(view.instance), MACHINES_FRAME_ID));
+    }
+    targets
+}
+
+/// One output slot's data service name, from the view's birth facts.
+pub fn output_of(view: &GraphView<'_>, uid: Uid, slot: &str) -> Option<ServiceName> {
+    let base = if uid == Uid::VARIABLES { variables_base(view.instance) } else { service_base(view.instance, uid, view.nodes.get(&uid)?.generation) };
+    Some(output_service(&base, slot))
+}
+
+/// A resolved variable as a node receives it: a service rather than a uid, because a node
+/// addresses a producer by service and cannot resolve anything for itself.
+pub fn var_of(view: &GraphView<'_>, v: &BoundVar) -> (String, Var) {
+    match v {
+        BoundVar::Stream { var, producer, slot, .. } => {
+            // A variable's slot holds its last frame for a late subscriber; a node's has only
+            // what comes next. The slot knows which it is, so the reader asks nothing.
+            let src = output_of(view, *producer, slot)
+                .map_or_else(|| Var::Missing(format!("`{var}` names no running node")), |service| Var::Stream { service });
+            (var.clone(), src)
+        }
+        BoundVar::Value { var, value } => (var.clone(), Var::Value(value.clone())),
+        BoundVar::Missing { var, reason } => (var.clone(), Var::Missing(reason.clone())),
+    }
+}

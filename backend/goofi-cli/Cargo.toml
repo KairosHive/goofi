@@ -12,6 +12,9 @@ name = "goofi"
 path = "src/main.rs"
 
 [dependencies]
+# The startup screen: the banner, a spinner per step, a bar per folder being scanned.
+goofi-screen = { path = "../goofi-screen" }
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
@@ -25,23 +28,26 @@ goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
 # The engine's Python door, handed the interpreters at boot.
 goofi-signal = { path = "../signal/goofi-signal" }
+goofi-runtime = { path = "../goofi-runtime" }
 goofi-audio = { path = "../audio/goofi-audio" }
 goofi-window = { path = "../goofi-window" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 # BOTH Python node tiers + the param-expression evaluator. ON by default: `cargo run -p
-# goofi-init` creates a repo-local `.gfivenv-ft` and the `.cargo/config.toml` that points pyo3 at
-# it, so `cargo run` needs no env vars. The build script only CHECKS that this happened — it
+# goofi-init` creates the free-threaded venv in goofi's runtime and the `.cargo/config.toml` that
+# points pyo3 at it, so `cargo run` needs no env vars. The build script only CHECKS that this happened — it
 # cannot provision, because cargo reads that config once, at startup. Build a pure-native binary
 # (no Python, no interpreter needed) with `--no-default-features`.
 goofi-python = { path = "../signal/goofi-python", optional = true }
-# The venv layout and the interpreter lookup, shared with `cargo run -p goofi-init` so the binary's
-# default and that command's output are one definition rather than two that can drift.
+# How a development build is provisioned, and the requirements check the scan shares with it.
 goofi-init = { path = "../goofi-init" }
+# The terminal width the human style lays out for.
+terminal_size = "0.4"
 
-# The same crate again: the build script asks it which interpreter cargo resolved, so the build
-# demands exactly what that command provides.
+# The build script asks goofi-init which interpreter cargo resolved, so the build demands exactly
+# what that command provides, and the layout where that interpreter's base install is.
 [build-dependencies]
 goofi-init = { path = "../goofi-init" }
+goofi-supervisor = { path = "../goofi-supervisor" }
 
 # One feature for Python node support, not one per tier: the free-threaded probe IS the router,
 # so without it there is nothing to decide between in-process and subprocess.
@@ -52,3 +58,4 @@ goofi-init = { path = "../goofi-init" }
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
 python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed"]
+

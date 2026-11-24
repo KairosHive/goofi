@@ -1,85 +1,74 @@
 <script lang="ts">
-	import { pluginHeaders, activateHeader } from '$lib/plugins/runtime.svelte';
+	import { pluginHeaders, activateHeader, headerInert } from '$lib/plugins/runtime.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { workspace } from 'panelty';
 	import { harnesses, harnessLabel } from '$lib/stores/harness.svelte';
-	import { perfStats } from '$lib/api/perfStats.svelte';
+	import { presence } from '$lib/stores/presence.svelte';
+	import { paints as p } from '$lib/api/frames';
+	import { patchName } from '$lib/api/patchFile';
 	import { activeOrOnlyEditor } from '$lib/panels/editorCommands';
+	import { sameKeys } from './slotProximity';
 	import { tick, untrack, type Snippet } from 'svelte';
 	import type { MenuItem } from 'panelty';
-	import { ContextMenu } from 'panelty';
-	import PerfHud from './PerfHud.svelte';
+		import PerfHud from './PerfHud.svelte';
 	import { createWidthCache, planOverflow, type OverflowItem } from 'panelty';
-	import { IconButton, Badge, Button, Icon } from '$lib/ui';
+	import { IconButton, Badge, Button, Icon, StatusDot, ContextMenu } from '$lib/ui';
 
 	// The header holds APP-GLOBAL actions only; anything acting on one panel belongs to that panel.
 	type Props = {
 		onSave: () => void;
 		onSaveAs: () => void;
 		onLoad: () => void;
+		/** Select a node in the active editor: where the errors indicator sends a click. */
+		onFocusNode: (uid: string) => void;
 		/** Workspace tab strip, rendered in the header's central gap. */
 		tabs?: Snippet;
 	};
 
-	const { onSave, onSaveAs, onLoad, tabs }: Props = $props();
+	const { onSave, onSaveAs, onLoad, onFocusNode, tabs }: Props = $props();
 
 	const g = graph();
 	const h = history();
 	const sel = selection();
 	const ws = workspace();
-	const p = perfStats();
 	const hs = harnesses();
+	const pr = presence();
 
 	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
 	const rec = $derived(g.record);
 	const dropping = $derived(g.dropping.size > 0);
+	const pathName = $derived(g.savePath ? patchName(g.savePath) : 'untitled');
 
-	function clock(seconds: number | null): string {
-		const t = Math.max(0, Math.floor(seconds ?? 0));
-		return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-	}
+	// A boolean, never raw `p.rate`: it ticks at 4Hz and would re-fire everything tracking it.
+	const hudActive = $derived(p.rate > 0.05);
 
-	// A boolean, never raw `p.fps`: fps ticks at 4Hz and would re-fire everything tracking it.
-	const hudActive = $derived(p.fps > 0.05);
+	let menu = $state<{ key: string; x: number; y: number; items: MenuItem[] } | null>(null);
 
-	let saveMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-
-	function openSaveMenu(e: MouseEvent): void {
+	/** Open one header menu under its trigger, right-aligned to it. */
+	function openMenu(e: MouseEvent, key: string, items: MenuItem[], w = 180): void {
 		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		saveMenu = {
-			x: Math.max(6, r.right - 180),
-			y: r.bottom + 4,
-			items: saveOptions()
-		};
+		menu = { key, x: Math.max(6, r.right - w), y: r.bottom + 4, items };
 	}
 
 	function saveOptions(): MenuItem[] {
 		return [{ label: 'Save As…', action: onSaveAs }];
 	}
 
-	let agentMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-
-	let exampleMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-
 	/** Which of the set this instance is. The server marks it; nothing here derives it. */
 	const example = $derived(g.examples.find((e) => e.current));
 
 	// A whole instance each, so this is a NAVIGATION: nobody else's session is replaced by it.
 	function openExamples(e: MouseEvent): void {
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		exampleMenu = {
-			x: Math.max(6, r.right - 220),
-			y: r.bottom + 4,
-			items: g.examples.map((x) => ({
-				label: x.label,
-				disabled: x.current,
-				action: () => {
-					location.href = x.url;
-				}
-			}))
-		};
+		const items: MenuItem[] = g.examples.map((x) => ({
+			label: x.label,
+			disabled: x.current,
+			action: () => {
+				location.href = x.url;
+			}
+		}));
+		openMenu(e, 'examples', items, 220);
 	}
 
 	/** Raise the detach-or-kill question, and show the terminal it is about. Writes no layout: a
@@ -93,22 +82,28 @@
 		ws.setActive(panel);
 	}
 
-	function openAgents(e: MouseEvent): void {
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		agentMenu = {
-			x: Math.max(6, r.right - 180),
-			y: r.bottom + 4,
-			items: hs.instances.map((i) => ({
-				label: `${harnessLabel(i)}${i.state === 'running' ? '' : ` (${i.state})`}`,
-				icon: 'x',
-				action: () => askClose(i.id)
-			}))
-		};
+	// The nodes in error right now, as the manager last reported them.
+	const errored = $derived(g.nodes.filter((n) => n.error));
+
+	function openErrors(e: MouseEvent): void {
+		const items: MenuItem[] = errored.map((n) => ({
+			label: `${n.name}: ${(n.error ?? '').replace(/\s+/g, ' ').slice(0, 80)}`,
+			action: () => onFocusNode(n.uid)
+		}));
+		openMenu(e, 'errors', items, 320);
 	}
 
-	// Progressive overflow: `planOverflow` owns the arithmetic, this file owns only the measuring.
-	// The budget must never read the action zone's own width — it shrinks as items leave, which
-	// oscillates; `.tabslot` is the only growable box, which is what makes the plan converge.
+	function openAgents(e: MouseEvent): void {
+		const items: MenuItem[] = hs.instances.map((i) => ({
+			label: `${harnessLabel(i)}${i.state === 'running' ? '' : ` (${i.state})`}`,
+			icon: 'x',
+			action: () => askClose(i.id)
+		}));
+		openMenu(e, 'agents', items);
+	}
+
+	// `planOverflow` owns the arithmetic, this file the measuring. The budget never reads the action
+	// zone's own width, which shrinks as items leave; `.tabslot` is the growable box, so it converges.
 
 	/** Lowest priority first: the order the bar gives its residents up. */
 	const SPILL_ORDER = $derived([
@@ -130,7 +125,6 @@
 	let zoneEl = $state<HTMLDivElement | null>(null);
 	let actionsEl = $state<HTMLDivElement | null>(null);
 	let spilled = $state<Set<string>>(new Set());
-	let overflowMenu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
 	const isSpilled = (id: string): boolean => spilled.has(id);
 
@@ -196,6 +190,7 @@
 		const residents =
 			unplanned('topbar-connection') +
 			unplanned('topbar-agents') +
+			unplanned('topbar-errors') +
 			unplanned('topbar-examples');
 		const budget =
 			bar.clientWidth -
@@ -211,7 +206,7 @@
 			trigger: trigger.getBoundingClientRect().width
 		});
 		// Write only on a real change: the observer re-fires on the layout this write causes.
-		if (next.size !== spilled.size || [...next].some((id) => !spilled.has(id))) spilled = next;
+		if (!sameKeys(next, spilled)) spilled = next;
 	}
 
 	$effect(() => {
@@ -234,9 +229,8 @@
 		};
 	});
 
-	// The residents change width from CONTENT, which no resize reports. The `tick()` is
-	// load-bearing: the tab strip is a sibling tree, so a synchronous replan measures the old one.
-	// A string of what the strip draws, so a layout edit inside a tab does not replan it.
+	// Content changes width without a resize. The `tick()` lets the sibling tab strip render first;
+	// `strip` is what it draws, so a layout edit inside a tab does not replan.
 	const strip = $derived(`${ws.state.activeWorkspaceId}\n${ws.state.workspaces.map((w) => w.name).join('\n')}`);
 	$effect(() => {
 		void pluginHeaders.entries;
@@ -245,7 +239,7 @@
 		void hudActive;
 		void rec.running;
 		void dropping;
-		void hs.running;
+		void hs.instances.length;
 		void strip;
 		widthCache.invalidate();
 		void tick().then(replan);
@@ -292,22 +286,21 @@
 	/** The bar's own residents, but only the ones that no longer fit. */
 	function spilledItems(): MenuItem[] {
 		const items: MenuItem[] = pluginHeaders.entries.filter((entry) => isSpilled(entry.key)).map((entry) => ({
-			label: entry.label, disabled: entry.disabled || !entry.onActivate, action: () => activateHeader(entry)
+			label: entry.label, disabled: headerInert(entry), action: () => activateHeader(entry)
 		}));
 		if (isSpilled('topbar-hud') && hudActive)
-			items.push({ label: `${p.fps.toFixed(0)} fps`, disabled: true, action: () => {} });
+			items.push({ label: `${p.rate.toFixed(0)} fps`, disabled: true, action: () => {} });
 		if (isSpilled('topbar-record') && rec.running)
 			items.push({
-				label: `Recording ${clock(rec.elapsed)}${dropping ? ' — dropping frames' : ''}`,
+				label: `Recording ${g.recordClock}${dropping ? ' — dropping frames' : ''}`,
 				icon: 'circle-dot',
 				disabled: true,
 				action: () => {}
 			});
 		if (isSpilled('topbar-path') && (g.savePath || g.unsavedChanges)) {
 			// The chip's own 32ch cap, applied to the DATA: a menu row does not ellipsize.
-			const name = g.savePath?.split('/').pop() ?? 'untitled';
 			items.push({
-				label: `${g.unsavedChanges ? '● ' : ''}${name.length > 32 ? `${name.slice(0, 31)}…` : name}`,
+				label: `${g.unsavedChanges ? '● ' : ''}${pathName.length > 32 ? `${pathName.slice(0, 31)}…` : pathName}`,
 				disabled: true,
 				action: () => {}
 			});
@@ -331,13 +324,8 @@
 	}
 
 	function openOverflow(e: MouseEvent): void {
-		const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		const above = spilledItems();
-		overflowMenu = {
-			x: Math.max(6, r.right - 180),
-			y: r.bottom + 4,
-			items: above.length ? [...above, { separator: true }, ...canvasItems()] : canvasItems()
-		};
+		openMenu(e, 'overflow', above.length ? [...above, { separator: true }, ...canvasItems()] : canvasItems());
 	}
 </script>
 
@@ -363,7 +351,7 @@
 				variant="ghost"
 				size="sm"
 				data-testid="topbar-examples"
-				aria-expanded={exampleMenu !== null}
+				aria-expanded={menu?.key === 'examples'}
 				title="Open another example"
 				onclick={openExamples}>{example.label}<Icon name="chevron-down" /></Button
 			>
@@ -372,21 +360,39 @@
 		{#if g.disconnected}
 			<Badge tone="warning" data-testid="topbar-connection">disconnected</Badge>
 		{/if}
-		{#if hs.running > 0}
+		<!-- Only company is worth a word: alone, the count says nothing. -->
+		{#if pr.peers.length > 1}
+			<Badge tone="accent" title="Browsers in this patch" data-testid="topbar-peers"
+				><Icon name="users" />{pr.peers.length}</Badge
+			>
+		{/if}
+		{#if hs.instances.length > 0}
 			<Button
 				variant="ghost"
 				size="sm"
 				style="--panelty-btn-ink: var(--accent)"
 				data-testid="topbar-agents"
-				aria-expanded={agentMenu !== null}
+				aria-expanded={menu?.key === 'agents'}
 				title="Running agents"
-				onclick={openAgents}><Icon name="bot" />{hs.running}</Button
+				onclick={openAgents}><Icon name="bot" />{hs.instances.length}</Button
+			>
+		{/if}
+		<!-- The nodes in error: a count that opens their list, each row selecting its node. -->
+		{#if errored.length > 0}
+			<Button
+				variant="ghost"
+				size="sm"
+				style="--panelty-btn-ink: var(--danger)"
+				data-testid="topbar-errors"
+				aria-expanded={menu?.key === 'errors'}
+				title={errored.length === 1 ? 'One node in error' : `${errored.length} nodes in error`}
+				onclick={openErrors}><StatusDot tone="danger" size="sm" />{errored.length}</Button
 			>
 		{/if}
 		<div class="actions" bind:this={actionsEl}>
 			{#each pluginHeaders.entries as entry (entry.key)}
 				<div class:spilled={isSpilled(entry.key)} data-testid={entry.key}>
-					<Button size="sm" title={entry.title ?? entry.label} disabled={entry.disabled || !entry.onActivate} onclick={() => activateHeader(entry)}>{entry.label}</Button>
+					<Button size="sm" title={entry.title ?? entry.label} disabled={headerInert(entry)} onclick={() => activateHeader(entry)}>{entry.label}</Button>
 				</div>
 			{/each}
 			<!-- Identity and actions are ONE overflow group with ONE gap. -->
@@ -400,7 +406,7 @@
 					aria-label={dropping ? 'Recording — frames are dropping' : 'Recording'}
 				>
 					<span class="record-dot"></span>
-					<span class="record-time">{clock(rec.elapsed)}</span>
+					<span class="record-time">{g.recordClock}</span>
 				</span>
 			{/if}
 			<span
@@ -409,24 +415,14 @@
 				class:spilled={isSpilled('topbar-hud')}
 				data-testid="topbar-hud"><PerfHud /></span
 			>
-			{#if g.savePath}
+			{#if g.savePath || g.unsavedChanges}
 				<span
 					class="info path"
 					class:spilled={isSpilled('topbar-path')}
 					data-testid="topbar-path"
-					title={g.savePath}
+					title={g.savePath || undefined}
 				>
-					<span class="path-value"
-						>{g.unsavedChanges ? '● ' : ''}{g.savePath.split('/').pop()}</span
-					>
-				</span>
-			{:else if g.unsavedChanges}
-				<span
-					class="info path"
-					class:spilled={isSpilled('topbar-path')}
-					data-testid="topbar-path"
-				>
-					<span class="path-value">● untitled</span>
+					<span class="path-value">{g.unsavedChanges ? '● ' : ''}{pathName}</span>
 				</span>
 			{/if}
 			<IconButton
@@ -463,7 +459,7 @@
 					class={`seg-caret ${isSpilled('topbar-save-caret') ? 'spilled' : ''}`}
 					data-testid="topbar-save-caret"
 					label="Save options"
-					onclick={openSaveMenu}><Icon name="chevron-down" /></IconButton
+					onclick={(e) => openMenu(e, 'save', saveOptions())}><Icon name="chevron-down" /></IconButton
 				>
 			</div>
 			<IconButton
@@ -480,7 +476,7 @@
 			variant="ghost"
 			data-testid="topbar-overflow"
 			class={sel.multiSelect ? 'multi-on' : ''}
-			aria-expanded={overflowMenu !== null}
+			aria-expanded={menu?.key === 'overflow'}
 			title={sel.multiSelect ? 'More actions — multi-select mode is on' : 'More actions'}
 			label="More actions"
 			onclick={openOverflow}><Icon name="ellipsis" /></IconButton
@@ -488,40 +484,8 @@
 	</div>
 </div>
 
-{#if saveMenu}
-	<ContextMenu
-		x={saveMenu.x}
-		y={saveMenu.y}
-		items={saveMenu.items}
-		onClose={() => (saveMenu = null)}
-	/>
-{/if}
-
-{#if agentMenu}
-	<ContextMenu
-		x={agentMenu.x}
-		y={agentMenu.y}
-		items={agentMenu.items}
-		onClose={() => (agentMenu = null)}
-	/>
-{/if}
-
-{#if exampleMenu}
-	<ContextMenu
-		x={exampleMenu.x}
-		y={exampleMenu.y}
-		items={exampleMenu.items}
-		onClose={() => (exampleMenu = null)}
-	/>
-{/if}
-
-{#if overflowMenu}
-	<ContextMenu
-		x={overflowMenu.x}
-		y={overflowMenu.y}
-		items={overflowMenu.items}
-		onClose={() => (overflowMenu = null)}
-	/>
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -570,9 +534,6 @@
 		padding-inline: var(--topbar-info-inset);
 		font-size: var(--fs-chrome);
 		flex: 0 0 auto;
-	}
-	.info.spilled {
-		display: none;
 	}
 	/* PerfHud owns the timer behind `hudActive`, so its host stays mounted; hide it while empty. */
 	.hud-info:not(.active) {

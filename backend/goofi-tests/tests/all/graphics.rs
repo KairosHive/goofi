@@ -41,258 +41,30 @@ fn ridge(d: &goofi_core::Data) -> Vec<Option<usize>> {
         .collect()
 }
 
-/// How far the frame disagrees with itself shifted `dx` columns, as luminance per texel.
-fn slid(d: &goofi_core::Data, dx: usize) -> f32 {
-    let (h, w) = (shape(d)[0], shape(d)[1]);
-    let v = f32s(d);
-    let lum = |i: usize| v[i * 4] + v[i * 4 + 1] + v[i * 4 + 2];
-    let mut off = 0.0;
-    for y in 0..h {
-        for x in 0..w - dx {
-            off += (lum(y * w + x) - lum(y * w + x + dx)).abs();
-        }
-    }
-    off / ((w - dx) * h) as f32
-}
-
-/// A frame as the mean of each of its 256 blocks. Fine enough that two folds which merely
-/// rearrange one tile's content disagree, coarse enough that two renders of one setting do not —
-/// a whole-frame checksum failed the first half of that, agreeing to nine digits across frames
-/// whose texels differed by thirty percent.
-fn mark(d: &goofi_core::Data) -> Vec<f32> {
-    let (h, w) = (shape(d)[0], shape(d)[1]);
-    let v = f32s(d);
-    let mut out = vec![0.0f32; 256];
-    let mut per = vec![0.0f32; 256];
-    for y in (0..h).step_by(3) {
-        for x in (0..w).step_by(3) {
-            let b = (y * 16 / h) * 16 + x * 16 / w;
-            let i = (y * w + x) * 4;
-            out[b] += v[i] + v[i + 1] + v[i + 2];
-            per[b] += 1.0;
-        }
-    }
-    out.iter().zip(per).map(|(s, n)| s / n.max(1.0)).collect()
-}
-
-/// The furthest any block moved between two frames. Two renders of one setting answer exactly 0.
-fn apart(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)
-}
-
-/// Wider than the noise between two renders, narrower than the closest two folds come.
-const MOVED: f32 = 0.02;
-
 fn close(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
 }
 
-#[test]
-fn texture_math_maps_ranges_and_selected_channels() {
-    let g = Goofi::new();
-    let source = g.add("graphics:Constant");
-    let math = g.add("graphics:Math");
-    for node in [source, math] {
-        g.ready(node);
-        g.set_param(node, "common", "width", 8);
-        g.set_param(node, "common", "height", 4);
-    }
-    for (channel, value) in [("r", 0.25), ("g", 0.5), ("b", 1.0), ("a", 0.75)] {
-        g.set_param(source, "colour", channel, value);
-    }
-    g.link(source, "out", math, "input");
-    let expect = |what: &str, expected: [f32; 4]| {
-        drawn(&g, math, what, |d| shape(d) == vec![4, 8, 4] && close(px(d, 0, 0), expected));
-    };
-    expect("identity", [0.25, 0.5, 1.0, 0.75]);
-    g.set_param(math, "math", "pre_add", -0.5);
-    g.set_param(math, "math", "multiply", 2.0);
-    g.set_param(math, "math", "post_add", 0.25);
-    expect("ordered arithmetic with HDR output", [-0.25, 0.25, 1.25, 0.75]);
-    g.set_param(math, "math", "channels", "rgba");
-    g.set_param(math, "math", "post_add", 0.5);
-    expect("all four channels", [0.0, 0.5, 1.5, 1.0]);
-    g.set_param(math, "math", "channels", "alpha");
-    expect("alpha only", [0.25, 0.5, 1.0, 1.0]);
-    g.set_param(math, "math", "channels", "rgb");
-    g.set_param(math, "math", "pre_add", 0.0);
-    g.set_param(math, "math", "multiply", 1.0);
-    g.set_param(math, "math", "post_add", 0.0);
-    g.set_param(math, "range", "from_low", 0.25);
-    g.set_param(math, "range", "from_high", 0.75);
-    g.set_param(math, "range", "to_low", -1.0);
-    g.set_param(math, "range", "to_high", 1.0);
-    expect("range expansion", [-1.0, 0.0, 2.0, 0.75]);
-    g.set_param(math, "range", "bound", "clamp");
-    expect("clamp", [-1.0, 0.0, 1.0, 0.75]);
-    g.set_param(math, "range", "bound", "wrap");
-    expect("wrap", [-1.0, 0.0, 0.0, 0.75]);
-    g.set_param(math, "range", "to_low", 1.0);
-    g.set_param(math, "range", "to_high", -1.0);
-    g.set_param(math, "range", "bound", "clamp");
-    expect("reversed target", [1.0, 0.0, -1.0, 0.75]);
-    g.set_param(math, "range", "from_high", 0.25);
-    expect("zero-width source", [1.0, 1.0, 1.0, 0.75]);
-    g.set_param(math, "range", "from_low", 0.75);
-    expect("reversed source and target", [-1.0, 0.0, 1.0, 0.75]);
+const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
-    g.set_param(math, "range", "from_low", 0.0);
-    g.set_param(math, "range", "from_high", 1.0);
-    g.set_param(math, "range", "to_low", 1.0);
-    g.set_param(math, "range", "to_high", 2.0);
-    g.set_param(math, "math", "multiply", 8.0);
-    g.set_param(math, "range", "bound", "fold");
-    expect("octave fold matches signal Math", [1.5, 1.25, 1.125, 0.75]);
-    g.set_param(math, "range", "to_high", 1.0);
-    expect("zero-width target", [1.0, 1.0, 1.0, 0.75]);
-}
+/// A widget section with params of its own, which a widget declares itself.
+const WIDGETED: &str = "/* goofi\n{ \"doc\": \"two stop lists\", \"params\": [{\"group\": \"look\", \"section\": \"stops\", \"widget\": \"colormap\", \"repeat\": {\"min\": 2, \"max\": 4, \"default\": 2}, \"params\": [{\"name\": \"v\", \"kind\": \"num\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
-#[test]
-fn blur_modes_spread_a_spot_without_hidden_color() {
-    let g = Goofi::new();
-    let dir = g.state.mount().join("nodes_graphics");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("BlurSpot.wgsl"), include_str!("../fixtures/blur_spot.wgsl")).unwrap();
-    g.call("library refresh", j!({}));
-    let spot = g.add("graphics:BlurSpot");
-    let blur = g.add("graphics:Blur");
-    for node in [spot, blur] {
-        g.ready(node);
-        g.set_param(node, "common", "width", 96);
-        g.set_param(node, "common", "height", 48);
-    }
-    g.link(spot, "out", blur, "input");
-    g.set_param(blur, "blur", "radius", 0.0);
-    let original = drawn(&g, blur, "radius zero copies the input", |d| {
-        shape(d) == vec![48, 96, 4] && close(px(d, 24, 62), [1.0, 0.0, 0.0, 1.0])
-    });
-    assert!(close(px(&original, 0, 0), [0.0, 0.0, 1.0, 0.0]));
-    let spread = |d: &goofi_core::Data| {
-        let mut total = 0.0;
-        let mut xx = 0.0;
-        let mut yy = 0.0;
-        let values = f32s(d);
-        for y in 0..48 {
-            for x in 0..96 {
-                let alpha = values[(y * 96 + x) * 4 + 3];
-                total += alpha;
-                xx += alpha * (x as f32 + 0.5 - 62.4).powi(2);
-                yy += alpha * (y as f32 + 0.5 - 24.0).powi(2);
-            }
-        }
-        [xx / total, yy / total]
-    };
-    let baseline = spread(&original);
-    g.set_param(blur, "blur", "radius", 0.125);
-    let mut frames = Vec::new();
-    for mode in ["gaussian", "box", "disk", "directional", "radial", "zoom"] {
-        g.set_param(blur, "blur", "mode", mode);
-        let frame = drawn(&g, blur, mode, |d| {
-            let v = spread(d);
-            let changed = frames.last().is_none_or(|previous| f32s(d) != f32s(previous));
-            changed && (v[0] > baseline[0] + 0.5 || v[1] > baseline[1] + 0.5)
-                && close(px(d, 0, 0), [0.0; 4])
-        });
-        for pixel in f32s(&frame).chunks_exact(4).filter(|p| p[3] > 0.001) {
-            assert!((pixel[0] - 1.0).abs() < 0.001 && pixel[1] == 0.0 && pixel[2] == 0.0,
-                    "{mode} mixed hidden color into the spot: {pixel:?}");
-        }
-        frames.push(frame);
-    }
-    let gaussian = spread(&frames[0]);
-    let box_blur = spread(&frames[1]);
-    let disk = spread(&frames[2]);
-    assert!(gaussian[0] < disk[0] && disk[0] < box_blur[0]);
-    assert!(((box_blur[0] - baseline[0]) - (box_blur[1] - baseline[1])).abs() < 0.5,
-            "equal blur distances on a wide image: {box_blur:?}, source: {baseline:?}");
-    let horizontal = spread(&frames[3]);
-    assert!(horizontal[0] > horizontal[1] * 3.0);
-    let radial = spread(&frames[4]);
-    assert!(radial[1] > radial[0] * 3.0);
+const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"section\": \"colour\", \"params\": [{\"name\": \"hue\", \"kind\": \"num\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
-    g.set_param(blur, "blur", "mode", "directional");
-    g.set_param(blur, "blur", "angle", 90.0);
-    for quality in ["low", "medium", "high"] {
-        g.set_param(blur, "blur", "quality", quality);
-        drawn(&g, blur, quality, |d| {
-            let v = spread(d);
-            v[1] > v[0] * 3.0
-        });
-    }
-    g.set_param(blur, "blur", "mode", "zoom");
-    g.set_param(blur, "blur", "center_x", 0.65);
-    drawn(&g, blur, "zoom center follows the spot", |d| spread(d)[0] < baseline[0] + 0.5);
-}
+/// A colour param, read whole by the shader.
+const INKED: &str = "/* goofi\n{ \"doc\": \"one ink\", \"params\": [{\"group\": \"look\", \"name\": \"ink\", \"kind\": \"color\", \"default\": [1.0, 0.0, 0.0, 1.0]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return p.ink; }\n";
 
-#[test]
-fn composite_modes_blend_colors_and_transparency() {
-    let g = Goofi::new();
-    let a = g.add("graphics:Constant");
-    let b = g.add("graphics:Constant");
-    let composite = g.add("graphics:Composite");
-    for node in [a, b, composite] {
-        g.ready(node);
-        g.set_param(node, "common", "width", 8);
-        g.set_param(node, "common", "height", 8);
-    }
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 0.25);
-        g.set_param(b, "colour", channel, 0.75);
-    }
-    g.link(a, "out", composite, "a");
-    g.link(b, "out", composite, "b");
-    let expect = |mode: &str, expected: [f32; 4]| {
-        g.set_param(composite, "composite", "mode", mode);
-        drawn(&g, composite, mode, |d| close(px(d, 0, 0), expected));
-    };
-    for (mode, value) in [
-        ("over", 0.25), ("under", 0.75), ("add", 1.0), ("subtract", 0.5),
-        ("multiply", 0.1875), ("divide", 3.0), ("minimum", 0.25), ("maximum", 0.75),
-        ("screen", 0.8125), ("overlay", 0.625), ("hard light", 0.375),
-        ("soft light", 0.65625), ("color dodge", 1.0), ("color burn", 0.0),
-        ("difference", 0.5), ("exclusion", 0.625), ("in", 0.25), ("atop", 0.25),
-    ] {
-        expect(mode, [value, value, value, 1.0]);
-    }
-    expect("out", [0.0; 4]);
-    expect("xor", [0.0; 4]);
+/// A list section whose `max` is past what a shader keeps.
+const OVERLONG: &str = "/* goofi\n{ \"doc\": \"too many\", \"params\": [{\"group\": \"look\", \"section\": \"many\", \"repeat\": {\"min\": 1, \"max\": 100, \"default\": 1}, \"params\": [{\"name\": \"v\", \"kind\": \"num\", \"default\": 0.0, \"min\": 0.0, \"max\": 1.0}]}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
 
-    // Unequal alpha exposes straight/premultiplied color errors and mask direction.
-    g.set_param(a, "colour", "a", 0.5);
-    g.set_param(b, "colour", "a", 0.25);
-    expect("over", [0.35, 0.35, 0.35, 0.625]);
-    expect("under", [0.45, 0.45, 0.45, 0.625]);
-    expect("multiply", [0.3375, 0.3375, 0.3375, 0.625]);
-    expect("in", [0.25, 0.25, 0.25, 0.125]);
-    expect("out", [0.25, 0.25, 0.25, 0.375]);
-    expect("atop", [0.5, 0.5, 0.5, 0.25]);
-    expect("xor", [0.375, 0.375, 0.375, 0.5]);
-    g.set_param(composite, "composite", "blend", 0.5);
-    expect("over", [0.4642857, 0.4642857, 0.4642857, 0.4375]);
-    g.set_param(composite, "composite", "blend", 0.0);
-    expect("over", [0.75, 0.75, 0.75, 0.25]);
-    g.set_param(composite, "composite", "blend", 1.0);
+const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
 
-    // Hidden RGB must not enter the result, even for arithmetic modes.
-    g.set_param(a, "colour", "a", 0.0);
-    expect("add", [0.75, 0.75, 0.75, 0.25]);
-    g.set_param(b, "colour", "a", 0.0);
-    expect("over", [0.0; 4]);
-    for node in [a, b] {
-        g.set_param(node, "colour", "a", 1.0);
-    }
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 0.0);
-    }
-    expect("divide", [0.0, 0.0, 0.0, 1.0]);
-    expect("color burn", [0.0, 0.0, 0.0, 1.0]);
-    for channel in ["r", "g", "b"] {
-        g.set_param(a, "colour", channel, 1.0);
-    }
-    expect("color dodge", [1.0; 4]);
-    expect("add", [1.75, 1.75, 1.75, 1.0]);
-    expect("subtract", [-0.25, -0.25, -0.25, 1.0]);
-}
+const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
+
+const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";
+
+const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.25, c.a); }\n";
 
 #[test]
 fn shaders_render_on_the_gpu() {
@@ -313,9 +85,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a Constant reads back the colour it was given, at the generator's own size.
     let c = g.add("graphics:Constant");
     g.ready(c);
-    g.set_param(c, "colour", "r", 0.25);
-    g.set_param(c, "colour", "g", 0.5);
-    g.set_param(c, "colour", "b", 1.0);
+    g.set_param(c, "constant", "colour", j!([0.25, 0.5, 1.0, 1.0]));
     let frame = drawn(&g, c, "the constant's colour", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
     assert_eq!(shape(&frame), vec![1024, 1024, 4], "a node with nothing behind it is 1024 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
@@ -325,6 +95,54 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "common", "height", 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
+    // Step: a pad's sheet reaches the GPU through a Variable node: the `[H, W, 4]` variable is the
+    // texture, top row first, so the red painted over the top half is red there and clear below.
+    g.call("control add", j!({ "group": "paint", "kind": "paint", "element": "pad", "resolution": 4 }));
+    g.call("control paint", j!({ "group": "paint", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
+    let var = g.add("graphics:Variable");
+    g.ready(var);
+    g.set_param(var, "variable", "group", "paint");
+    g.set_param(var, "variable", "element", "pad");
+    drawn(&g, var, "the pad as a texture", |d| shape(d) == vec![4, 4, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]) && px(d, 3, 3)[3] < 0.01);
+    g.call("node remove", j!({ "node": hex(var) }));
+    g.call("variable entry remove", j!({ "name": "paint.pad" }));
+
+    // Step: a Shape's colour is RGBA with STRAIGHT alpha: its tint is untouched inside, and the
+    // coverage scales the colour's own alpha, which is nothing outside.
+    let disc = g.add("graphics:Shape");
+    g.ready(disc);
+    g.set_param(disc, "common", "width", 64);
+    g.set_param(disc, "common", "height", 64);
+    g.set_param(disc, "shape", "colour", j!([1.0, 0.5, 0.0, 0.5]));
+    drawn(&g, disc, "a half-clear orange disc", |d| close(px(d, 32, 32), [1.0, 0.5, 0.0, 0.5]) && px(d, 0, 0)[3] < 0.01);
+    g.call("node remove", j!({ "node": hex(disc) }));
+
+    // Step: Threshold takes two RGBA colours, and EACH carries its alpha onto the texel: the
+    // constant's luminance is 0.48, so the level picks the side.
+    let th = g.add("graphics:Threshold");
+    g.ready(th);
+    g.link(c, "out", th, "input");
+    g.set_param(th, "threshold", "below", j!([1.0, 0.0, 0.0, 0.5]));
+    g.set_param(th, "threshold", "above", j!([0.0, 0.0, 1.0, 0.25]));
+    g.set_param(th, "threshold", "level", 0.3);
+    drawn(&g, th, "above: quarter-clear blue", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.25]));
+    g.set_param(th, "threshold", "level", 0.6);
+    drawn(&g, th, "below: half-clear red", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 0.5]));
+    g.call("node remove", j!({ "node": hex(th) }));
+
+    // Step: ColorMap runs one channel of the texel through its colormap; alpha reads 1 here,
+    // red 0.25, and the stop's alpha rides on the texel's own.
+    let map = g.add("graphics:ColorMap");
+    g.ready(map);
+    g.link(c, "out", map, "input");
+    g.set_param(map, "map", "colour_0", j!([0.0, 1.0, 0.0, 1.0]));
+    g.set_param(map, "map", "colour_1", j!([1.0, 0.0, 1.0, 0.5]));
+    g.set_param(map, "map", "channel", "alpha");
+    drawn(&g, map, "alpha 1 lands on the last stop", |d| close(px(d, 0, 0), [1.0, 0.0, 1.0, 0.5]));
+    g.set_param(map, "map", "channel", "red");
+    drawn(&g, map, "red 0.25 is a quarter of the way", |d| close(px(d, 0, 0), [0.25, 0.75, 0.25, 0.875]));
+    g.call("node remove", j!({ "node": hex(map) }));
+
     let level = g.add("graphics:Level");
     g.ready(level);
     g.link(c, "out", level, "input");
@@ -351,9 +169,7 @@ fn shaders_render_on_the_gpu() {
     g.ready(img);
     let up = g.add("graphics:SignalIn");
     g.ready(up);
-    // A door for frames follows the frame: its size rests at a constant 0, not the patch's default.
-    let width = g.doc()["nodes"][hex(up)]["params"]["common"]["width"].clone();
-    assert_eq!(width, j!({ "value": 0 }), "the size is a constant 0, not a seeded expression");
+    // Its size is the patch's default, seeded below once an evaluator is present; here, by hand.
     g.set_param(up, "common", "width", 4);
     g.set_param(up, "common", "height", 4);
     g.link(img, "out", up, "input");
@@ -374,12 +190,23 @@ fn shaders_render_on_the_gpu() {
     g.link(ramp, "out", up, "input");
     g.set_param(up, "common", "width", 64);
     g.set_param(up, "common", "height", 32);
-    let frame = drawn(&g, up, "the raw [1, 64] frame", |d| shape(d) == vec![32, 64, 4] && px(d, 0, 0)[3] == 1.0);
-    assert!(close(px(&frame, 0, 0), [0.267, 0.004, 0.329, 1.0]), "a one-channel frame reads through the colormap, its floor at viridis's: {:?}", px(&frame, 0, 0));
+    // Waited to the ramp's own colour: the resized stage draws the upload it still holds until the
+    // ramp's frame lands, and that frame is opaque too.
+    let frame = drawn(&g, up, "the raw [1, 64] frame reading through the colormap, its floor at viridis's", |d| {
+        shape(d) == vec![32, 64, 4] && close(px(d, 0, 0), [0.267, 0.004, 0.329, 1.0])
+    });
     assert!(close(px(&frame, 0, 63), [0.992, 0.906, 0.145, 1.0]), "and its ceiling at the top: {:?}", px(&frame, 0, 63));
     g.set_param(up, "signal", "colormap", "gray");
     let frame = drawn(&g, up, "the gray frame", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
     assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "gray is the value itself: {:?}", px(&frame, 0, 63));
+    // A frame past the half floats' reach is carried over a power of two, so it reads the same;
+    // held raw, every value over 65504 would be infinite and read as the ceiling.
+    g.set_param(ramp, "ramp", "scale", 1e6);
+    let mid = 31.0 / 63.0;
+    let frame = drawn(&g, up, "the frame of millions", |d| close(px(d, 0, 31), [mid, mid, mid, 1.0]));
+    assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "from the floor: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 63), [1.0, 1.0, 1.0, 1.0]), "to the ceiling: {:?}", px(&frame, 0, 63));
+    g.set_param(ramp, "ramp", "scale", 1.0);
     // Off autoscale, the range is the one asked for: the ramp's last step, 63/64, on a window
     // to 2 is half that gray.
     g.set_param(up, "signal", "autoscale", false);
@@ -397,6 +224,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "common", "height", 32);
 
     g.set_param(up, "signal", "mode", "line");
+    g.set_param(up, "signal", "colormap", "viridis");
     g.set_param(up, "signal", "autoscale", false);
     g.set_param(up, "signal", "min", 0.0);
     g.set_param(up, "signal", "max", 1.0);
@@ -409,8 +237,10 @@ fn shaders_render_on_the_gpu() {
     assert!(first > 28 && last < 3, "the ramp rises from the floor to the ceiling: {first} to {last}");
     assert!(path.windows(2).all(|w| w[1] <= w[0]), "and never turns back down: {path:?}");
     assert!(close(px(&plot, 0, 0), [0.0, 0.0, 0.0, 0.0]), "on transparent ground: {:?}", px(&plot, 0, 0));
+    // One series takes the colormap's centre, viridis's teal, over the transparent ground.
     let ink = px(&plot, last, 63);
-    assert!(ink[2] > ink[1] && ink[1] > ink[0], "drawn in the viewers' first series colour: {ink:?}");
+    let cover = ink[3];
+    assert!(cover > 0.5 && (ink[0] / cover - 0.129).abs() < 0.02 && (ink[1] / cover - 0.565).abs() < 0.02, "the centre of viridis: {ink:?}");
 
     // …and the same frame with two channels is a trajectory: one against the other, the range
     // shared so the shape is not distorted.
@@ -427,9 +257,58 @@ fn shaders_render_on_the_gpu() {
     assert!(at_right < at_left, "channel 1 against channel 0 climbs: {at_left} to {at_right}");
     assert!(right < 63, "and both axes share one range, so it does not fill the width: {right}");
 
+    // …and channels named for 10-20 electrodes are a topomap: the field between them on the head
+    // disc, transparent off it, under the outline — and nothing for channels without names.
+    g.set_param(up, "signal", "mode", "topomap");
+    g.set_param(up, "signal", "colormap", "gray");
+    g.set_param(up, "signal", "electrodes", false);
+    g.set_param(up, "common", "width", 64);
+    g.set_param(up, "common", "height", 64);
+    g.set_param(ramp, "ramp", "channels", 3);
+    g.set_param(ramp, "ramp", "named", true);
+    let head = drawn(&g, up, "the topomap", |d| shape(d) == vec![64, 64, 4] && px(d, 32, 32)[3] == 1.0 && px(d, 32, 3)[3] > 0.9);
+    assert!(close(px(&head, 0, 0), [0.0, 0.0, 0.0, 0.0]), "off the head is transparent: {:?}", px(&head, 0, 0));
+    // Cz, C3 and C4 rise in that order, so the field reads brighter from the centre to the left
+    // and brightest on the right.
+    let (centre, left, right) = (px(&head, 32, 32)[0], px(&head, 32, 17)[0], px(&head, 32, 47)[0]);
+    assert!(centre < left && left < right, "Cz under C3 under C4: {centre} {left} {right}");
+    let rim = px(&head, 32, 3);
+    assert!(rim[0] > 0.7 && rim[2] > rim[0], "the outline in the viewers' head grey: {rim:?}");
+    g.set_param(up, "signal", "electrodes", true);
+    drawn(&g, up, "the electrodes", |d| px(d, 32, 17)[0] < 0.1 && px(d, 32, 17)[3] == 1.0);
+    g.set_param(ramp, "ramp", "named", false);
+    drawn(&g, up, "the unnamed topomap", |d| px(d, 32, 32)[3] == 0.0 && px(d, 32, 3)[3] == 0.0);
+    g.set_param(up, "common", "height", 32);
+
     g.set_param(up, "signal", "mode", "texture");
     g.set_param(ramp, "ramp", "channels", 1);
     drawn(&g, up, "the gray frame again", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 1.0]));
+
+    // Step: `custom` is the node's own stops. A stop's alpha thins the texel; the blend to the next
+    // stop runs straight, eased or held; and a stop opened between two takes its place by `at`.
+    g.set_param(up, "signal", "colormap", "custom");
+    g.set_param(up, "signal", "colour_0", j!([1.0, 0.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "colour_1", j!([0.0, 0.0, 1.0, 0.5]));
+    let f = 31.0 / 63.0;
+    let frame = drawn(&g, up, "the custom map, red to half-clear blue", |d| close(px(d, 0, 63), [0.0, 0.0, 1.0, 0.5]));
+    assert!(close(px(&frame, 0, 0), [1.0, 0.0, 0.0, 1.0]), "the first stop: {:?}", px(&frame, 0, 0));
+    assert!(close(px(&frame, 0, 31), [1.0 - f, 0.0, f, 1.0 - 0.5 * f]), "straight between: {:?}", px(&frame, 0, 31));
+    g.set_param(up, "signal", "blend_0", "step");
+    drawn(&g, up, "held to the next stop", |d| close(px(d, 0, 31), [1.0, 0.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "blend_0", "smooth");
+    let e = f * f * (3.0 - 2.0 * f);
+    drawn(&g, up, "eased between", |d| close(px(d, 0, 31), [1.0 - e, 0.0, e, 1.0 - 0.5 * e]));
+    g.set_param(up, "signal", "stops", 3);
+    g.set_param(up, "signal", "at_1", 0.5);
+    g.set_param(up, "signal", "colour_1", j!([0.0, 1.0, 0.0, 1.0]));
+    g.set_param(up, "signal", "at_2", 1.0);
+    g.set_param(up, "signal", "colour_2", j!([0.0, 0.0, 1.0, 1.0]));
+    // 31/63 sits just under the middle stop, so the eased red-to-green there is all but green.
+    let frame = drawn(&g, up, "a third stop at the middle", |d| close(px(d, 0, 63), [0.0, 0.0, 1.0, 1.0]));
+    let mid = px(&frame, 0, 31);
+    assert!(mid[1] > 0.95 && mid[0] < 0.05 && mid[3] == 1.0, "green at the middle stop: {mid:?}");
+    g.set_param(up, "signal", "colormap", "gray");
+    g.set_param(up, "signal", "stops", 2);
     g.call("link remove", j!({ "from": ep(hex(ramp), "out"), "to": ep(hex(up), "input") }));
 
     // Step: the audio plane and this one, both ways, over the ONE cross-engine transport. Each
@@ -492,7 +371,7 @@ fn shaders_render_on_the_gpu() {
     // …and the other way: `audio:GraphicsIn` reads a texture's texels in scan order, so the
     // PICTURE's size is the crossing's length. A gradient across the frame arrives as a sweep,
     // and its channels arrive as channels — alpha among them, since a texture is RGBA.
-    let field = g.add("graphics:Ramp");
+    let field = g.add("graphics:Gradient");
     g.ready(field);
     g.set_param(field, "common", "width", 64);
     g.set_param(field, "common", "height", 64);
@@ -526,7 +405,7 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a texture chain does not flip either. A gradient down the frame, copied by a Level,
     // still runs the same way — the half of the orientation rule an upload cannot see.
-    let vert = g.add("graphics:Ramp");
+    let vert = g.add("graphics:Gradient");
     g.ready(vert);
     g.set_param(vert, "ramp", "angle", 90.0);
     g.set_param(vert, "common", "width", 8);
@@ -540,24 +419,24 @@ fn shaders_render_on_the_gpu() {
     assert!(close(px(&copied, 0, 0), px(&direct, 0, 0)), "and the copy is not mirrored");
     assert!(close(px(&copied, 7, 0), px(&direct, 7, 0)));
 
-    // Step: a reference moves a param at control rate, the one door every modulation uses.
+    // Step: a bare read moves a param at control rate, the one door every modulation uses.
     let knob = g.add("_TestScalar");
     g.ready(knob);
     g.set_param(knob, "control", "value", 0.5);
     let knob_name = g.name(&hex(knob));
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain",
-                                  "reference": format!("{knob_name}.out"), "mode": "reference" }));
+                                  "expression": format!("nd('{knob_name}')") }));
     drawn(&g, level, "half gain by reference", |d| close(px(d, 0, 0), [0.125, 0.25, 0.5, 1.0]));
     g.set_param(knob, "control", "value", 2.0);
     drawn(&g, level, "double gain by reference", |d| close(px(d, 0, 0), [0.5, 1.0, 2.0, 1.0]));
 
-    // Step: the size is a param like any other, so a reference DRIVES it — a signal decides how
-    // many texels a stage has, and the engine re-plans around what the reference last said.
+    // Step: the size is a param like any other, so a bare read DRIVES it — a signal decides how
+    // many texels a stage has, and the engine re-plans around what the read last said.
     g.set_param(knob, "control", "value", 96.0);
     g.call("node param edit", j!({ "node": hex(level), "param": "common/width",
-                                   "reference": format!("{knob_name}.out"), "mode": "reference" }));
+                                   "expression": format!("nd('{knob_name}')") }));
     drawn(&g, level, "the referenced width", |d| shape(d) == vec![32, 96, 4]);
-    assert!(g.error(level).is_none(), "a reference on the size is not a fault");
+    assert!(g.error(level).is_none(), "a bare read on the size is not a fault");
     g.call("node param edit", j!({ "node": hex(level), "param": "common/width", "mode": "constant" }));
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain", "mode": "constant" }));
     drawn(&g, level, "and it follows its input again", |d| shape(d) == vec![32, 64, 4]);
@@ -606,7 +485,7 @@ fn shaders_render_on_the_gpu() {
     }
 
     // Step: two shaders compose.
-    let ramp = g.add("graphics:Ramp");
+    let ramp = g.add("graphics:Gradient");
     g.ready(ramp);
     let comp = g.add("graphics:Composite");
     g.ready(comp);
@@ -660,18 +539,152 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("TEXTURE, ARRAY or AUDIO"), "{row}");
 
-    // Step: a header param sits in a section of its page and shows by another param; one that
-    // shows by a param the header does not declare is greyed, with the reason.
+    // Step: a header declares a SECTION in place of a param: its members sit in a section of their
+    // own, named, and show by another param; one that shows by a param the header does not
+    // declare is greyed, with the reason, and so is a list that repeats past what a shader keeps.
     std::fs::write(dir.join("Tinted.wgsl"), TINTED).unwrap();
     std::fs::write(dir.join("Untinted.wgsl"), TINTED.replace("\"tint\", \"any_of\"", "\"tone\", \"any_of\"")).unwrap();
+    std::fs::write(dir.join("Overlong.wgsl"), OVERLONG).unwrap();
+    std::fs::write(dir.join("Widgeted.wgsl"), WIDGETED).unwrap();
     g.call("library refresh", j!({}));
-    let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["hue"];
-    assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!({ "group": "look", "name": "tint", "any_of": ["true"] })));
+    let hue = &g.call("library get", j!({ "type": "graphics:Tinted" }))["params"]["look"]["colour_hue"];
+    assert_eq!((&hue["section"], &hue["show"]), (&j!(1), &j!([{ "group": "look", "name": "tint", "any_of": ["true"] }])));
+    assert_eq!(hue["role"], j!({ "as": "member", "section": "colour", "base": "hue", "slot": null }));
     let listed = g.call("library list", j!({ "full": true }));
     let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Untinted").cloned();
     let row = row.expect("a shader whose param shows by nothing is still a row");
     assert_eq!(row["available"], false, "{row}");
     assert!(row["doc"].as_str().unwrap_or_default().contains("`tone`, which this node does not declare"), "{row}");
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Overlong").cloned();
+    let row = row.expect("a shader whose list is too long is still a row");
+    assert_eq!(row["available"], false, "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("section `many` repeats 1 to 100 times"), "{row}");
+    let row = listed["types"].as_array().unwrap().iter().find(|r| r["type"] == "graphics:Widgeted").cloned();
+    let row = row.expect("a shader whose widget lists params is still a row");
+    assert_eq!(row["available"], false, "{row}");
+    assert!(row["doc"].as_str().unwrap_or_default().contains("section `stops` is a widget, which declares its own params"), "{row}");
+
+    // A `widget` section declares its own slots — a colormap's at, colour and blend — and a
+    // section's `show` shows the whole list, count included.
+    let sig = &g.call("library get", j!({ "type": "graphics:SignalIn" }))["params"]["signal"];
+    assert_eq!(sig["stops"]["role"], j!({ "as": "count", "section": "stops", "widget": "colormap" }));
+    assert_eq!(sig["stops"]["show"], j!([{ "group": "signal", "name": "colormap", "any_of": ["custom"] }]));
+    assert_eq!(sig["blend_3"]["role"], j!({ "as": "member", "section": "stops", "base": "blend", "slot": 3 }));
+    assert_eq!(sig["blend_3"]["options"], j!(["linear", "smooth", "step"]));
+    assert_eq!((&sig["colour_1"]["face"], &sig["colour_1"]["show"]), (&j!("color"), &sig["stops"]["show"]));
+    assert!(sig.get("at_16").is_none(), "no slot past the list's max");
+
+    // Step: a LIST section is one param per slot, counted by an int named after the section, and
+    // the shader reads it as an array. A default given as a list is each slot's own, the last
+    // carrying on; a third stop opened in the middle of a ramp shows at its centre.
+    let ramp = &g.call("library get", j!({ "type": "graphics:Gradient" }))["params"]["ramp"];
+    assert_eq!(ramp["stops"]["role"], j!({ "as": "count", "section": "stops", "widget": null }));
+    assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
+    assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0), &j!(1), &j!(1)));
+    assert!(ramp.get("at_16").is_none(), "no slot past the list's max");
+    let stops = g.add("graphics:Gradient");
+    g.ready(stops);
+    g.set_param(stops, "common", "width", 64);
+    g.set_param(stops, "common", "height", 4);
+    g.set_param(stops, "ramp", "stops", 3);
+    g.set_param(stops, "ramp", "at_1", 0.5);
+    g.set_param(stops, "ramp", "colour_1", j!([1.0, 0.0, 0.0, 1.0]));
+    g.set_param(stops, "ramp", "at_2", 1.0);
+    g.set_param(stops, "ramp", "colour_2", j!([1.0, 1.0, 1.0, 0.5]));
+    drawn(&g, stops, "red at the middle stop, half-clear white past it", |d| {
+        let (mid, end) = (px(d, 0, 32), px(d, 0, 63));
+        mid[0] > 0.95 && mid[1] < 0.1 && mid[3] > 0.95 && end[1] > 0.9 && (end[3] - 0.5).abs() < 0.05
+    });
+    g.set_param(stops, "ramp", "stops", 2);
+    drawn(&g, stops, "two stops read only the first two slots", |d| px(d, 0, 63)[1] < 0.05);
+    g.call("node remove", j!({ "node": hex(stops) }));
+
+    // Step: a colour is a four-dimensional number: the shader reads a `vec4f`, the palette says
+    // `num` with the `color` face, a list sets every dimension and one number fills them all.
+    std::fs::write(dir.join("Inked.wgsl"), INKED).unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Inked"]));
+    let ink = &g.call("library get", j!({ "type": "graphics:Inked" }))["params"]["look"]["ink"];
+    assert_eq!((&ink["type"], &ink["face"], &ink["value"]), (&j!("num"), &j!("color"), &j!([1, 0, 0, 1])));
+    let inked = g.add("graphics:Inked");
+    g.ready(inked);
+    g.set_param(inked, "common", "width", 8);
+    g.set_param(inked, "common", "height", 8);
+    drawn(&g, inked, "the default ink", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
+    g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 0.5]));
+    drawn(&g, inked, "an ink set as a list", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
+    g.set_param(inked, "look", "ink", 0.25);
+    drawn(&g, inked, "one number fills every dimension", |d| close(px(d, 0, 0), [0.25, 0.25, 0.25, 0.25]));
+
+    // Step: ONE element of a vector takes a source of its own, addressed `ink[3]`: it drives that
+    // dimension alone, a literal on an element lands in its dimension of the list, and a source on
+    // the whole param gives the dimensions no element drives. The state and a copy both carry it.
+    let dial = g.add("_TestScalar");
+    g.ready(dial);
+    g.set_param(dial, "control", "value", 0.5);
+    let dial_name = g.name(&hex(dial));
+    g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 1.0]));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "expression": format!("nd('{dial_name}')") }));
+    drawn(&g, inked, "an element reference", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
+    g.set_param(inked, "look", "ink[1]", 0.75);
+    drawn(&g, inked, "an element literal", |d| close(px(d, 0, 0), [0.0, 0.75, 1.0, 0.5]));
+    let full = g.add("_TestScalar");
+    g.ready(full);
+    g.set_param(full, "control", "value", 1.0);
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("nd('{}')", g.name(&hex(full))) }));
+    drawn(&g, inked, "the element over the whole", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 0.5]));
+    // The evaluated values reach the state on the status drain's pace, after the frame.
+    let (whole, element) = (format!("look.ink = expr: nd('{}') → [1, 1, 1, 0.5]", g.name(&hex(full))), format!("look.ink[3] = expr: nd('{dial_name}') → 0.5"));
+    g.until("the state to show both sources' values", |g| {
+        let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+        (text.contains(&whole) && text.contains(&element)).then_some(())
+    });
+    let copied = g.call("nodes copy", j!({ "nodes": [hex(inked)] }));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink[3]"]["expression"], j!(format!("nd('{dial_name}')")));
+    assert_eq!(copied["doc"]["nodes"][hex(inked)]["params"]["look"]["ink"]["value"], j!([0, 0.75, 1, 1]));
+    assert!(g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink[4]", "value": 1.0 })).contains("no param"));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink[3]", "expression": "" }));
+    drawn(&g, inked, "the element let go", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 1.0]));
+    // A vector's literal may come as bare numbers, and a LIST of expressions is one per element.
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "mode": "constant" }));
+    g.set_param(inked, "look", "ink", "0.5 0.25 1 1");
+    drawn(&g, inked, "bare numbers, one per element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
+    let before = g.doc()["nodes"][hex(inked)].clone();
+    let why = g.refuse("node add", j!({ "type": "graphics:Inked", "param": [
+        { "name": "look/ink", "expression": "[0, 0, 0, 1]", "unexpected": true }
+    ] }));
+    assert!(why.contains("unknown field `unexpected`"), "a list source uses the same validation: {why}");
+    let why = g.refuse("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]", "mode": "invalid" }));
+    assert!(why.contains("mode"), "a list source validates its mode: {why}");
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": "[0, 0, 0, 1]",
+                                   "value": [0.25, 0.5, 0.75, 1.0], "mode": "constant" }));
+    let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
+    assert_eq!(params["ink"]["value"], j!([0.25, 0.5, 0.75, 1]), "the whole literal lands beside the list");
+    for k in 0..4 {
+        let element = &params[format!("ink[{k}]")];
+        assert_eq!((&element["mode"], &element["expression"]), (&j!("constant"), &j!(if k == 3 { "1" } else { "0" })), "the list keeps each supplied source field: {element}");
+    }
+    drawn(&g, inked, "inactive list elements keep the supplied literal", |d| close(px(d, 0, 0), [0.25, 0.5, 0.75, 1.0]));
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["nodes"][hex(inked)], before, "one undo restores every element and the literal");
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": r#"['a\',b' and 0.5, 0.25, 1, 1]"# }));
+    let params = g.doc()["nodes"][hex(inked)]["params"]["look"].clone();
+    assert_eq!(params["ink"]["mode"], j!("constant"), "a string's escaped quote does not split the list: {params}");
+    for (k, expression) in [r#"'a\',b' and 0.5"#, "0.25", "1", "1"].iter().enumerate() {
+        assert_eq!(params[format!("ink[{k}]")]["expression"], j!(expression), "element {k}: {params}");
+    }
+    drawn(&g, inked, "an escaped quote and comma in one list element", |d| close(px(d, 0, 0), [0.5, 0.25, 1.0, 1.0]));
+    g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("[{dial_name}.out, 0.25, (1, 2)[0], 'a,b']") }));
+    // The elements' values reach the state on the status drain's pace, as above: the whole param
+    // is back on its literal once the element the earlier source drove has been let go there too.
+    let lines = ["look.ink[1] = expr: 0.25", "look.ink[2] = expr: (1, 2)[0]", "look.ink[3] = expr: 'a,b'", "look.ink = [0.5, 0.25, 1, 1]"];
+    g.until("the state to show each list element and the whole param on its literal", |g| {
+        let text = g.call("node state", j!({ "node": hex(inked) }))["text"].as_str().expect("text").to_string();
+        lines.iter().all(|line| text.contains(line)).then_some(())
+    });
+    for node in [dial, full] {
+        g.call("node remove", j!({ "node": hex(node) }));
+    }
+    g.call("node remove", j!({ "node": hex(inked) }));
 
     // Step: a node holds its own state between two ticks. A state buffer starts empty, so a body
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
@@ -688,16 +701,16 @@ fn shaders_render_on_the_gpu() {
         read().filter(|t| t[0] > 0.0)
     });
     let mut held = opened;
-    for _ in 0..40 {
-        render(&g, 1);
-        let Some(now) = read() else { continue };
+    g.until("the buffer to accumulate", |g| {
+        render(g, 1);
+        let now = read()?;
         // Green is what the seed wrote and nothing since has touched; red is what each tick adds
         // to what the last one left. A buffer remade under the node loses both.
         assert!((now[1] - 0.75).abs() < 1e-3, "the seed the first tick wrote is gone: {now:?}");
         assert!(now[0] + 1e-3 >= held[0], "the buffer went backwards: {held:?} then {now:?}");
         held = now;
-    }
-    assert!(held[0] > opened[0], "nothing accumulated: {opened:?} then {held:?}");
+        (now[0] > opened[0]).then_some(())
+    });
     assert!(g.error(counter).is_none(), "a node with state is not a fault");
     g.call("node remove", j!({ "node": hex(counter) }));
 
@@ -751,10 +764,10 @@ fn shaders_render_on_the_gpu() {
     let source = g.call("library get", j!({ "type": "graphics:Half", "source": true }));
     assert!(source["text"].as_str().is_some_and(|t| t.contains("textureSample")), "{source}");
 
-    // Step: the crossing OUT. A texture output wires straight into any ARRAY input, so the
-    // crossing itself needs no node; `signal:GraphicsIn` is what makes it a size the rest of the
-    // patch can carry, and the readings a picture is usually wanted for.
-    let field = g.add("graphics:Ramp");
+    // Step: the crossing OUT. A texture output feeds a TEXTURE input only, and on the signal plane
+    // `signal:GraphicsIn` is that door: it makes the picture a size the rest of the patch can
+    // carry, and the readings a picture is usually wanted for.
+    let field = g.add("graphics:Gradient");
     g.ready(field);
     g.set_param(field, "common", "width", 128);
     g.set_param(field, "common", "height", 64);
@@ -793,7 +806,7 @@ fn shaders_render_on_the_gpu() {
     // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
     // whole frame, in the engine's own 0..1.
     let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
-    g.state.graph.lock().unwrap().set_view_demand(field, "out", Some(tiny));
+    g.graph().set_view_demand(field, "out", Some(tiny));
     render(&g, 3);
     let whole = waited(&g, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
     assert!(f32s(&whole).iter().all(|v| (0.0..=1.0).contains(v)), "in the engine's range, not texel bytes");
@@ -821,12 +834,20 @@ fn shaders_render_on_the_gpu() {
     g.set_param(win, "common", "height", 32);
     g.link(c, "out", win, "input");
     let ui = g.ui();
-    let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.state.graph.lock().unwrap()).window_of(win);
+    let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.graph()).window_of(win);
     let id = g.until("the window is open", |g| {
         render(g, 1);
         opened(g)
     });
-    assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(1), "status names the window");
+    let status = g.call("session status", j!({}))["graphics"].clone();
+    assert_eq!(status["windows"], j!(1), "status names the window");
+    // The suite's screen answers no handles, so the frame goes through the window thread.
+    assert_eq!(status["surfaces"], j!(0), "and no GPU surface on a headless screen");
+    assert_eq!(status["fps"], j!(goofi_core::variables::DEFAULT_FPS), "and the clock's pace is the variable's default");
+    g.call("variable entry edit", j!({ "name": "graphics.fps", "value": 24 }));
+    assert_eq!(g.call("session status", j!({}))["graphics"]["fps"], j!(24), "`graphics.fps` sets the pace");
+    g.call("variable entry edit", j!({ "name": "graphics.fps", "value": 100000 }));
+    assert_eq!(g.call("session status", j!({}))["graphics"]["fps"], j!(240), "held to the range");
     let frames = g.until("and the screen is given frames", |g| {
         render(g, 1);
         let seen = ui.run(move |host| host.presents(id));
@@ -838,17 +859,42 @@ fn shaders_render_on_the_gpu() {
     assert!(ui.run(move |host| host.presents(id)) > frames, "the window keeps being fed");
     // And what it shows is what it was wired: the node is a pass-through like any other.
     drawn(&g, win, "the window's own output", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
+
+    // Step: fullscreen reopens the window over its monitor, and the frame takes the monitor's
+    // size; the suite's screen has one monitor of 1280 by 720.
+    g.set_param(win, "window", "fullscreen", true);
+    let covering = g.until("the window reopens fullscreen", |g| {
+        render(g, 1);
+        opened(g).filter(|now| *now != id)
+    });
+    drawn(&g, win, "a frame of the monitor's size", |d| shape(d) == vec![720, 1280, 4]);
+    // A screen the machine does not have is refused by name, and no window stands.
+    g.set_param(win, "window", "screen", 1);
+    g.until("the missing screen is refused", |g| {
+        render(g, 1);
+        g.error(win).filter(|e| e.contains("no screen 1"))
+    });
+    assert!(opened(&g).is_none_or(|now| now != covering), "the fullscreen window closed");
+    // Back on the primary, windowed: the frame is the node's own size again.
+    g.set_param(win, "window", "screen", 0);
+    g.set_param(win, "window", "fullscreen", false);
+    let id = g.until("the window reopens windowed", |g| {
+        render(g, 1);
+        opened(g)
+    });
+    drawn(&g, win, "a frame of the node's own size", |d| shape(d) == vec![32, 64, 4]);
+    assert!(g.error(win).is_none(), "a window that opened clears the refusal: {:?}", g.error(win));
     g.call("node remove", j!({ "node": hex(win) }));
     render(&g, 2);
     assert_eq!(ui.run(move |host| host.presents(id)), 0, "a removed node takes its window with it");
     assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(0), "and status says so");
 
     // Step: a restart is a rebirth through the same trait doors — new generation, new services.
-    let generation = g.state.graph.lock().unwrap().node_generation(c);
+    let generation = g.graph().node_generation(c);
     let stale = g.probe(c, "out");
     g.call("node restart", j!({ "node": hex(c) }));
     g.ready(c);
-    assert_eq!(g.state.graph.lock().unwrap().node_generation(c), generation + 1);
+    assert_eq!(g.graph().node_generation(c), generation + 1);
     drawn(&g, c, "the reborn constant", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
     let seen = stale.count();
     render(&g, 5);
@@ -862,16 +908,37 @@ fn shaders_render_on_the_gpu() {
     // Step: a node that makes its own frames carries the patch's default size as a live
     // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
     // present; reading a bare variable does not, which is why this one needs no interpreter.
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let gen = g.add("graphics:Noise");
     g.ready(gen);
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
-    assert_eq!((&bound["expr"], &bound["mode"]), (&j!("variables.system.default_width"), &j!("expression")),
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
     drawn(&g, gen, "the patch's default size", |d| shape(d) == vec![1024, 1024, 4]);
-    g.call("variable entry edit", j!({ "name": "system.default_width", "value": 96 }));
-    g.call("variable entry edit", j!({ "name": "system.default_height", "value": 48 }));
+    g.call("variable entry edit", j!({ "name": "graphics.default_width", "value": 96 }));
+    g.call("variable entry edit", j!({ "name": "graphics.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    // A door for frames has no texture to follow, so it takes the patch's default the same way.
+    let door = g.add("graphics:SignalIn");
+    g.ready(door);
+    let bound = g.doc()["nodes"][hex(door)]["params"]["common"]["height"].clone();
+    assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_height"), &j!("expression")),
+               "a door for frames is seeded live too: {bound}");
+    drawn(&g, door, "the door at the patch's default", |d| shape(d) == vec![48, 96, 4]);
+    g.call("node remove", j!({ "node": hex(door) }));
+    // A loop that follows itself at 0,0 can follow nothing: it takes the patch's default too, not
+    // the number the variables were born with.
+    let (fb, comp) = (g.add("graphics:Feedback"), g.add("graphics:Composite"));
+    for node in [fb, comp] {
+        g.ready(node);
+        g.set_param(node, "common", "width", 0);
+        g.set_param(node, "common", "height", 0);
+    }
+    g.link(fb, "out", comp, "a");
+    g.link(comp, "out", fb, "input");
+    drawn(&g, comp, "a loop at 0,0 follows the variable", |d| shape(d) == vec![48, 96, 4]);
+    g.call("node remove", j!({ "node": hex(fb) }));
+    g.call("node remove", j!({ "node": hex(comp) }));
 
     // Step: the noise itself, walked one param at a time on the small frame the variable just made.
     // Speed 0 stops the drift, which is the only thing that lets one frame be compared with the
@@ -932,14 +999,14 @@ fn the_engine_draws_on_its_own_clock() {
     let g = Goofi::timed();
     let c = g.add("graphics:Constant");
     g.ready(c);
-    g.set_param(c, "colour", "r", 0.75);
+    g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
 
     // Step: with no reader the clock turns and nothing is drawn — the demand rule holds here too.
     let idle = |g: &Goofi| g.call("session status", j!({}))["graphics"].clone();
     let start = g.until("the clock turns", |g| {
         idle(g)["frames"].as_u64().filter(|f| *f > 3)
     });
-    assert_eq!(idle(&g)["clock"], "timer");
+    assert_eq!(idle(&g)["clock"], "internal");
     assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage, whatever the clock does");
 
     // Step: a viewer arrives and the frames it gets were drawn by nobody's hand.
@@ -959,7 +1026,7 @@ fn the_engine_draws_on_its_own_clock() {
 async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let g = Goofi::timed();
     let base = g.serve().await;
-    let big = g.add("graphics:Ramp");
+    let big = g.add("graphics:Gradient");
     g.ready(big);
     g.set_param(big, "common", "width", 1024);
     g.set_param(big, "common", "height", 512);
@@ -976,8 +1043,7 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let mut viewer = Viewer::open(&base, &hex(big), "out").await;
     viewer
         .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
-                               { "dim": 1, "max": 128, "method": "area" }] }]))
+                    "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true }]))
         .await;
     let small = made(vec![64, 128, 4]);
     let reduced = small.meta().reduced().cloned().expect("a frame shrunk on the way out says so");
@@ -1042,233 +1108,51 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let mut cannot = Viewer::open(&base, &hex(big), "out").await;
     cannot
         .view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 300, "method": "subsample" },
-                               { "dim": -1, "max": 800, "method": "envelope" }] }]))
+                    "reduce": [{ "dim": 0, "max": 300 }, { "dim": -1, "max": 800 }] }]))
         .await;
     holds_at(vec![1, 1, 4], "a viewer that cannot draw the frame widened the readback");
 
     // Step: and beside one that CAN draw it, the fold takes the largest box per dim rather than
-    // falling out to the whole frame — the line panel drops out, it does not degrade the kernel.
+    // falling out to the whole frame — the line panel drops out, it does not uncouple the box.
     let mut draws = Viewer::open(&base, &hex(big), "out").await;
     draws
         .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
-                    "reduce": [{ "dim": 0, "max": 128, "method": "area" },
-                               { "dim": 1, "max": 128, "method": "area" }] }]))
+                    "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true }]))
         .await;
     holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
+
+    // Step: a frame cut TWICE — by `GraphicsIn` on the way over and by the reducer for a viewer —
+    // still names what `GraphicsIn` read as its origin — the engine's box, never its own 16 —
+    // on the dim the reducer cut and on the one it left alone.
+    let down = g.add("signal:GraphicsIn");
+    g.link(big, "out", down, "input");
+    g.set_param(down, "graphics", "size", 16);
+    let mut twice = Viewer::open(&base, &hex(down), "out").await;
+    twice
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 1, "max": 8 }] }]))
+        .await;
+    // `GraphicsIn` bounds each axis at 16, so a width of 8 is the reducer's own cut.
+    let cut = twice.until(|d| shape(d).len() == 3 && shape(d)[1] == 8).await;
+    let origin = |dim: &str| match cut.meta().reduced() {
+        Some(goofi_core::MetaValue::Map(dims)) => match dims.get(dim) {
+            Some(goofi_core::MetaValue::Map(axis)) => match axis.get("orig_len") {
+                Some(goofi_core::MetaValue::Uint(n)) => Some(*n),
+                Some(goofi_core::MetaValue::Int(n)) => Some(*n as u64),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    assert!(origin("1").is_some_and(|n| n > 16), "{:?}", cut.meta().reduced());
+    assert!(origin("0").is_some_and(|n| n > 16), "{:?}", cut.meta().reduced());
 }
-
-/// A division of the plane, walked through its four geometries. The law under all of them is the
-/// same: whatever a fold does to a picture, a tile carried onto its neighbour must land exactly —
-/// and it must go on landing exactly after the Escher displacement has bent every boundary. The
-/// ground is a gradient rather than a flat colour, because two groups can divide the plane along
-/// the very same seams and differ only in what each tile then shows.
-#[test]
-fn a_tessellation_holds_its_symmetry() {
-    const SIDE: usize = 360;
-    const CELL: usize = 120;
-
-    let g = Goofi::new();
-    let ground = g.add("graphics:Ramp");
-    g.ready(ground);
-    g.set_param(ground, "ramp", "angle", 35.0);
-    for (name, value) in [("r0", 0.15), ("g0", 0.1), ("b0", 0.6), ("r1", 1.0), ("g1", 0.85), ("b1", 0.2)] {
-        g.set_param(ground, "ramp", name, value);
-    }
-    let t = g.add("graphics:Tessellate");
-    g.ready(t);
-    g.link(ground, "out", t, "input");
-    for node in [ground, t] {
-        g.set_param(node, "common", "width", SIDE as i64);
-        g.set_param(node, "common", "height", SIDE as i64);
-    }
-    g.set_param(t, "gestalt", "contour", 1.0);
-    g.set_param(t, "tile", "scale", 3.0);
-    assert!(g.error(t).is_none(), "{:?}", g.error(t));
-    let probe = g.probe(t, "out");
-
-    // Step: all seventeen groups fold, and each is exactly periodic on its own lattice — three
-    // cells across the frame, so one lattice vector is 160 columns. A fold that is not constant on
-    // the group's orbits leaves a seam, and a seam is what this reading catches.
-    let groups = ["p1", "p2", "pm", "pg", "cm", "pmm", "pmg", "pgg", "cmm", "p4", "p4m", "p4g", "p3", "p3m1",
-                  "p31m", "p6", "p6m"];
-    let mut seen: Vec<(&str, Vec<f32>)> = Vec::new();
-    for group in groups {
-        g.set_param(t, "wallpaper", "group", group);
-        // A frame is this group's only once it has stopped being the last one's, which is what
-        // keeps every reading below off a frame the param change had not reached yet.
-        let was = seen.last().map(|(_, m)| m.clone());
-        let f = drawn(&g, t, group, |d| {
-            shape(d) == vec![SIDE, SIDE, 4] && was.as_ref().is_none_or(|m| apart(&mark(d), m) > MOVED)
-        });
-        let drift = slid(&f, CELL);
-        assert!(drift < 0.02, "{group} is not periodic on its own lattice: {drift}");
-        seen.push((group, mark(&f)));
-    }
-    // …and they are seventeen folds rather than one arm of a switch answering for several. pmm and
-    // pgg draw the very same seams and are told apart only here, by what each tile is shown of.
-    for (i, (a, ma)) in seen.iter().enumerate() {
-        for (b, mb) in &seen[i + 1..] {
-            assert!(apart(ma, mb) > MOVED, "{a} and {b} folded to the same picture");
-        }
-    }
-
-    // Step: figure trades the two hands of a tile — so it has something to trade only where the
-    // group carries a reflection. p4 is built from rotations alone and cannot answer it; p4m is
-    // the same lattice with mirrors, and turns half its tiles over.
-    g.set_param(t, "wallpaper", "group", "p4");
-    let one_hand = drawn(&g, t, "p4 again", |d| apart(&mark(d), &seen[9].1) < MOVED);
-    g.set_param(t, "gestalt", "figure", 1.0);
-    assert!(
-        g.stays(|g| {
-            render(g, 1);
-            probe.latest().is_none_or(|d| apart(&mark(&d), &mark(&one_hand)) < MOVED)
-        }),
-        "figure turned a tile p4 has only one of",
-    );
-    g.set_param(t, "wallpaper", "group", "p4m");
-    drawn(&g, t, "p4m with its hands traded", |d| apart(&mark(d), &seen[10].1) > MOVED);
-    g.set_param(t, "gestalt", "figure", 0.0);
-
-    // Step: the Escher displacement. It bends every boundary — and because the field is averaged
-    // over the point group, the bent tiling is still EXACTLY the same tiling, which is the whole
-    // claim the page rests on.
-    g.set_param(t, "wallpaper", "group", "p4");
-    let plain = drawn(&g, t, "p4's straight grid", |d| apart(&mark(d), &seen[9].1) < MOVED);
-    g.set_param(t, "escher", "amount", 1.0);
-    let bent = drawn(&g, t, "the boundaries bent", |d| apart(&mark(d), &mark(&plain)) > MOVED);
-    assert!(slid(&bent, CELL) < 0.02, "the displacement broke the tiling: {}", slid(&bent, CELL));
-
-    // Step: the parquet drift. The tiles go on interlocking, but they no longer MATCH — the shape
-    // is read off where in the frame it stands, so the lattice period goes and the fit stays.
-    g.set_param(t, "morph", "drift", 1.5);
-    drawn(&g, t, "the shape drifting across the frame", |d| slid(d, CELL) > 0.05);
-    g.set_param(t, "morph", "drift", 0.0);
-    g.set_param(t, "escher", "amount", 0.0);
-
-    // Step: curvature. The three angles decide the geometry and nothing else does — (6, 3, 2) sums
-    // to a flat plane and repeats, (7, 3, 2) does not sum to one and cannot, and what a hyperbolic
-    // fold cannot reach is left transparent rather than filled with a guess. The (2, 3, 6) group's
-    // own translation is 180 columns at this scale, which is the reading that says it came out flat.
-    g.set_param(t, "tile", "kind", "kaleido");
-    g.set_param(t, "kaleido", "sides", 6.0);
-    g.set_param(t, "kaleido", "meet", 3.0);
-    g.set_param(t, "kaleido", "hinge", 2.0);
-    g.set_param(t, "tile", "scale", 6.0);
-    let flat = drawn(&g, t, "a Euclidean kaleidoscope", |d| px(d, 2, 2)[3] > 0.5 && slid(d, 180) < 0.02);
-    assert!(slid(&flat, 97) > 0.05, "a flat kaleidoscope that repeats at any shift is a blank one");
-    g.set_param(t, "kaleido", "sides", 7.0);
-    g.set_param(t, "tile", "scale", 9.0);
-    let curved = drawn(&g, t, "a circle limit", |d| px(d, 2, 2)[3] < 0.5);
-    assert!(slid(&curved, 120) > 0.05, "a hyperbolic tiling repeats: {}", slid(&curved, 120));
-    assert!(px(&curved, SIDE / 2, SIDE / 2)[3] > 0.5, "the disk itself is empty");
-
-    // Step: the multigrid. Two families cross into a lattice; five cut a pattern that never
-    // repeats, which is the difference between a crystal and a Penrose tiling — and the reason one
-    // knob covers both.
-    g.set_param(t, "tile", "kind", "quasi");
-    g.set_param(t, "tile", "scale", 3.0);
-    g.set_param(t, "quasi", "fold", 2);
-    drawn(&g, t, "a periodic multigrid", |d| px(d, 2, 2)[3] > 0.5 && slid(d, CELL) < 0.02);
-    g.set_param(t, "quasi", "fold", 5);
-    let never = drawn(&g, t, "a multigrid that never repeats", |d| slid(d, CELL) > 0.05);
-    for dx in [40, 80, 120, 200] {
-        assert!(slid(&never, dx) > 0.03, "the pentagrid repeats at {dx}: {}", slid(&never, dx));
-    }
-    assert!(g.error(t).is_none(), "{:?}", g.error(t));
-}
-
-/// The mosaic's solver, the one part of this node that has to CONVERGE rather than be computed.
-/// One Lloyd step a frame walks the sites onto the picture, and what proves the step ran is where
-/// the cells end up: told to follow nothing they settle into a lattice of their own, and told to
-/// follow the edges they crowd onto the one edge a disc has.
-#[test]
-fn the_mosaic_walks_its_cells_onto_the_picture() {
-    /// Seams per texel in a ring: the disc's rim, or a patch of its flat middle. Small cells mean
-    /// more seam for the same room, so this reads as how finely the ring is divided.
-    fn seams(d: &goofi_core::Data, rim: bool) -> f32 {
-        let (h, w) = (shape(d)[0], shape(d)[1]);
-        let v = f32s(d);
-        let mut hit = 0.0f32;
-        let mut room = 0.0f32;
-        for y in 0..h {
-            for x in 0..w {
-                let q = ((x as f32 / w as f32 - 0.5).powi(2) + (y as f32 / h as f32 - 0.5).powi(2)).sqrt();
-                if rim != ((q - 0.3).abs() < 0.04) || (!rim && q > 0.2) {
-                    continue;
-                }
-                room += 1.0;
-                let t = &v[(y * w + x) * 4..];
-                hit += f32::from(t[0] + t[1] + t[2] < 0.6 && t[3] > 0.5);
-            }
-        }
-        hit / room.max(1.0)
-    }
-
-    let g = Goofi::new();
-    let disc = g.add("graphics:Shape");
-    g.ready(disc);
-    let t = g.add("graphics:Tessellate");
-    g.ready(t);
-    g.link(disc, "out", t, "input");
-    for node in [disc, t] {
-        g.set_param(node, "common", "width", 192);
-        g.set_param(node, "common", "height", 192);
-    }
-    g.set_param(disc, "shape", "size", 0.6);
-    g.set_param(disc, "shape", "soft", 0.01);
-    g.set_param(t, "tile", "kind", "mosaic");
-    g.set_param(t, "mosaic", "cells", 12);
-    g.set_param(t, "mosaic", "rate", 0.5);
-    g.set_param(t, "gestalt", "contour", 1.0);
-    let probe = g.probe(t, "out");
-    let ring = |d: &goofi_core::Data| seams(d, true) / seams(d, false).max(1e-4);
-
-    // Step: with no density to follow the sites relax into an even packing — Lloyd's own answer to
-    // a flat picture — so the rim and the middle are divided alike wherever the disc is white.
-    g.set_param(t, "mosaic", "density", "flat");
-    let even = g.until("the cells settle on nothing in particular", |g| {
-        render(g, 60);
-        probe.latest().filter(|d| seams(d, false) > 0.05)
-    });
-    render(&g, 240);
-    let even = probe.latest().unwrap_or(even);
-    assert!(ring(&even) < 1.12, "a flat density already crowded the rim: {}", ring(&even));
-
-    // Step: told to follow the edges, the same solver walks the same sites onto the one edge the
-    // picture has. Nothing about the fold changed — only what the quadrature weighs.
-    // The sites never come to rest — a step at this rate overshoots, and the ratio swings a tenth
-    // either way from frame to frame — so the claim is read off a mean of frames, not off one.
-    g.set_param(t, "mosaic", "density", "edges");
-    render(&g, 30);
-    let mut seen = probe.count();
-    let frames: Vec<goofi_core::Data> = (0..10)
-        .map(|_| {
-            g.until("a frame drawn after the sites moved", |g| {
-                render(g, 10);
-                let fresh = probe.count() > seen;
-                seen = probe.count();
-                fresh.then(|| probe.latest()).flatten()
-            })
-        })
-        .collect();
-    let found = frames.iter().map(ring).sum::<f32>() / frames.len() as f32;
-    assert!(found > ring(&even) * 1.1, "the rim is no finer than the middle: {found} against {}", ring(&even));
-    assert!(frames.iter().all(|d| seams(d, false) > 0.0), "the middle lost its cells entirely");
-    assert!(g.error(t).is_none(), "{:?}", g.error(t));
-}
-
-const TEXTY: &str = "/* goofi\n{ \"doc\": \"claims a string slot\", \"inputs\": [{\"name\": \"input\", \"kind\": \"STRING\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
-const TINTED: &str = "/* goofi\n{ \"doc\": \"a tint that shows its hue\", \"params\": [{\"group\": \"look\", \"name\": \"tint\", \"kind\": \"bool\", \"default\": false}, {\"group\": \"look\", \"name\": \"hue\", \"kind\": \"float\", \"default\": 0.5, \"min\": 0.0, \"max\": 1.0, \"section\": 1, \"show\": {\"param\": \"tint\", \"any_of\": [\"true\"]}}] }\n*/\nfn shade(uv: vec2f) -> vec4f { return vec4f(uv, 0.0, 1.0); }\n";
-const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(uv: vec2f) -> vec4f { return nothing(uv); }\n";
-const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
-const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";
-const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.25, c.a); }\n";
 
 #[test]
 fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
     let g = Goofi::new();
-    let node = g.add("graphics:Ramp");
+    let node = g.add("graphics:Gradient");
     g.ready(node);
     g.set_param(node, "common", "width", 8192);
     g.set_param(node, "common", "height", 8192);
@@ -1349,12 +1233,22 @@ fn native_host_program_writes_the_shared_output() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
     g.call("library refresh", j!({}));
+    // Authored after boot, so it runs HOSTED, as a signal node does: its library in a child of
+    // goofi's own binary, listed while the instance lives, and never in this process.
+    let r = g.call("library get", j!({ "type": "graphics:TextureHost" }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
     let source = g.add("graphics:TextureHost");
     let math = g.add("graphics:Math");
     g.ready(source);
     g.ready(math);
     g.link(source, "out", math, "input");
     g.set_param(source, "image", "mode", "render");
+    let hosts = |g: &Goofi| -> Vec<String> {
+        g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+            .filter(|e| e["kind"] == "child")
+            .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node TextureHost")).map(str::to_string).collect()
+    };
+    g.until("one host child for the one instance", |g| (hosts(g).len() == 1).then_some(()));
     let frame = drawn(&g, math, "host GPU program sampled downstream", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [0.25, 0.25, 0.5, 1.0]));
     assert!(close(px(&frame, 1, 1), [0.75, 0.75, 0.5, 1.0]));
     g.set_param(source, "image", "mode", "broken");
@@ -1362,4 +1256,38 @@ fn native_host_program_writes_the_shared_output() {
     g.set_param(source, "image", "mode", "pixels");
     drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
     g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
+}
+
+/// A texture that crosses to the signal plane is stamped with the tick that drew it, so a node
+/// reading it tells a new frame from the one it already holds without comparing texels.
+#[test]
+fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
+    let _py = goofi_tests::require_python();
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_signal");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Stamp.py"),
+        "import goofi\nimport numpy as np\n\nclass Stamp(goofi.Node):\n    \
+         INPUTS = {\"input\": goofi.InputSlot(goofi.DataType.TEXTURE)}\n    \
+         OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n\n    \
+         def process(self, input):\n        self.clear_input(\"input\")\n        \
+         at = input.meta.get(\"procend\")\n        \
+         return {\"out\": np.array([-1.0 if at is None else at], dtype=\"float32\")}\n",
+    )
+    .unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["signal:Stamp"]));
+    let field = g.add("graphics:Gradient");
+    g.ready(field);
+    let stamp = g.add("Stamp");
+    g.link(field, "out", stamp, "input");
+    let read = g.probe(stamp, "out");
+    let first = g.until("a texture frame with the tick that drew it", |g| {
+        render(g, 1);
+        read.latest().map(|d| f32s(&d)[0]).filter(|at| *at > 0.0)
+    });
+    g.until("a later frame carries a later tick", |g| {
+        render(g, 1);
+        read.latest().map(|d| f32s(&d)[0]).filter(|at| *at > first)
+    });
 }

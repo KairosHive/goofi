@@ -19,15 +19,15 @@ class HarmonicTransport(goofi.Node):
     OUTPUTS = {"geometry": goofi.DataType.ARRAY}
     PARAMS = {"transport": {
         "method": goofi.StringParam("sand", ["sand", "particles", "tracer", "streaming"], doc="Equilibrium grains or a vector flow field."),
-        "affinity": goofi.FloatParam(1.0, -2.0, 2.0, doc="Positive collects sand at nodes; negative collects powder at antinodes."),
-        "temperature": goofi.FloatParam(0.035, 0.001, 2.0, doc="Lower values give sharper grain concentrations."),
+        "affinity": goofi.NumParam(1.0, -2.0, 2.0, doc="Positive collects sand at nodes; negative collects powder at antinodes."),
+        "temperature": goofi.NumParam(0.035, 0.001, 2.0, doc="Lower values give sharper grain concentrations."),
         "potential": goofi.StringParam("displacement", ["displacement", "energy_gradient"], doc="Grain potential from field displacement or energy gradient."),
         "flow_kind": goofi.StringParam("mixed", ["gradient", "curl", "mixed"], doc="Flow along gradients, around level curves, or between them."),
-        "mixing": goofi.FloatParam(0.15, 0.0, 1.0, doc="Mixed tracer flow: 0 is curl, 1 is gradient."),
-        "viscosity": goofi.FloatParam(1.0, 0.01, 10.0, doc="Streaming viscosity."),
-        "particles": goofi.IntParam(1500, 32, 8000, doc="Number of equilibrium samples; this is not an evolving particle state."),
-        "seed": goofi.IntParam(7, 0, 65535, doc="Repeatable seed for particle sampling."),
-    }, "common": {"max_frequency": goofi.FloatParam(10.0, 0.0, 30.0)}}
+        "mixing": goofi.NumParam(0.15, 0.0, 1.0, doc="Mixed tracer flow: 0 is curl, 1 is gradient."),
+        "viscosity": goofi.NumParam(1.0, 0.01, 10.0, doc="Streaming viscosity."),
+        "particles": goofi.NumParam(1500, 32, 8000, int=True, doc="Number of equilibrium samples; this is not an evolving particle state."),
+        "seed": goofi.NumParam(7, 0, 65535, int=True, doc="Repeatable seed for particle sampling."),
+    }, "common": {"max_frequency": goofi.NumParam(10.0, 0.0, 30.0)}}
 
     def process(self, input):
         p, table = self.params.transport, decode(input.data, input.meta)

@@ -11,6 +11,8 @@ for (const narrow of [false, true]) {
 			await page.goto('/');
 			await waitForApp(page);
 			const press = (target: Locator) => narrow ? target.tap() : target.click();
+			// A press beside an open menu closes it and does nothing else: it lands on the layer under it.
+			const away = () => press(page.locator('.ui-catcher').last());
 			let split = false;
 			try {
 				const multi = await addNode(page, 'signal:Quantize', [30, 60]);
@@ -39,7 +41,7 @@ for (const narrow of [false, true]) {
 				await press(page.getByRole('menuitemcheckbox', { name: 'index', exact: true }));
 				await expect(page.getByRole('menuitemcheckbox', { name: 'index', exact: true })).toHaveAttribute('aria-checked', 'false');
 				await expect(rows).toHaveCount(0);
-				await press(panel.getByTestId('recorder-elapsed'));
+				await away();
 				await expect(rows).toHaveCount(1);
 				await expect(rows.first()).toHaveAttribute('data-output', `${multi}/out`);
 				await expect(rows.first()).toContainText('Native');
@@ -62,13 +64,13 @@ for (const narrow of [false, true]) {
 				await expect(page.getByRole('menuitemcheckbox', { name: 'out', exact: true })).toHaveAttribute('aria-checked', 'false');
 				await press(page.getByRole('menuitem', { name: 'Select all', exact: true }));
 				await expect(page.getByRole('menuitemcheckbox', { name: 'out', exact: true })).toHaveAttribute('aria-checked', 'true');
-				await press(panel.getByTestId('recorder-elapsed'));
+				await away();
 				await expect(rows).toHaveCount(2);
 				await page.evaluate(() => (window as any).goofi.commands.undo());
 				await expect(rows).toHaveCount(0);
 				await openMulti();
 				await press(page.getByRole('menuitem', { name: 'Deselect all', exact: true }));
-				await press(panel.getByTestId('recorder-elapsed'));
+				await away();
 				await expect(rows).toHaveCount(0);
 
 				await press(panel.getByTestId('recorder-add-node'));

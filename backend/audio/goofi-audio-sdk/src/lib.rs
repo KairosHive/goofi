@@ -3,9 +3,10 @@
 //! the file that authors one, so the two halves cannot drift.
 
 pub use goofi_core;
-pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+pub use goofi_node::{ExprDecl, ExprMode, Face, OutputDecl, ParamDecl, ParamSpec, Role, Show, SlotDecl, Tag};
 
 pub mod abi;
+pub mod timing;
 #[cfg(feature = "host")]
 pub mod host;
 
@@ -59,7 +60,7 @@ pub struct Manifest {
 }
 
 /// The params a node declares, as ONE list that is both the manifest's slice and the indices a
-/// node reads them by: `params! { CUTOFF = ParamDecl { …, section: 0, show: None }, GAIN = ParamDecl { …, section: 0, show: None } }` yields
+/// node reads them by: `params! { CUTOFF = ParamDecl { …, section: 0, show: &[], role: None }, GAIN = ParamDecl { …, section: 0, show: &[], role: None } }` yields
 /// `PARAMS` and `P::CUTOFF == 0`, `P::GAIN == 1`.
 #[macro_export]
 macro_rules! params {
@@ -162,7 +163,7 @@ pub trait AudioNode: Send {
     }
     /// Once on the control thread before the first block, again only when the rate changes.
     /// Allocate here, for `BLOCK` frames; per-channel state is a `Lanes` fitted in `process`.
-    fn prepare(&mut self, rate: f64);
+    fn prepare(&mut self, _rate: f64) {}
     /// One block, on the audio thread.
     fn process(&mut self, b: &mut Block<'_>);
     /// `true` for a type whose outputs come from the PREVIOUS block's inputs — the one way a
@@ -184,9 +185,9 @@ pub trait AudioNode: Send {
 /// so transposition is an addition.
 pub const C4_HZ: f32 = 261.63;
 
-/// Whether a gate is HIGH, by goofi's one rule for it — the same one the signal plane reads.
+/// Whether a gate is HIGH, by goofi's one rule for it — the same one `control::truth` reads.
 pub fn high(v: f32) -> bool {
-    goofi_node::mailbox::gate(v as f64)
+    v > 0.0
 }
 
 pub fn hz_of(pitch: f32) -> f32 {
@@ -221,8 +222,14 @@ pub mod cross {
     /// The options of a `mode` that sets how the engine PLAYS the frames a node takes in: each
     /// looped until the next, or each value a sine at that many Hz. A waveform reads the params
     /// beside it: a bool `mix` plays the rows as one channel, `low..high` are the values that are
-    /// full scale, and a float `smoothing` in seconds crossfades one frame into the next.
+    /// full scale, `speed` is frame samples per audio sample, made between by a `resample` of
+    /// [`RESAMPLE`], a bool `morph` glides from the frame before over the time between arrivals,
+    /// and `smoothing` audio samples on each side of the loop point blend across it, a gaussian
+    /// `sigma` of them wide.
     pub const PLAYBACK: &[&str] = &["waveform", "oscillator"];
+
+    /// The options of a waveform's `resample`, in the order the engine reads their index.
+    pub const RESAMPLE: &[&str] = &["linear", "nearest", "cubic"];
 
     /// `v` on the plane it is crossing into: itself, or its place in `lo..hi` as a full-scale
     /// bipolar or unipolar signal. `min`..`max` is a declaration, so what falls outside it is

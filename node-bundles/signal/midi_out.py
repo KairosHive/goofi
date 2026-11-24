@@ -21,9 +21,9 @@ class MidiOut(goofi.Node):
     PARAMS = {
         "midi": {
             "port": goofi.StringParam("", options=[""], refresh=True, doc="Which port to send on."),
-            "channel": goofi.IntParam(1, 1, 16, doc="Which channel to send on."),
-            "velocity": goofi.IntParam(100, 1, 127, doc="How hard every note is struck."),
-            "controller": goofi.IntParam(1, 0, 127, doc="Which controller `value` is sent as."),
+            "channel": goofi.NumParam(1, 1, 16, int=True, doc="Which channel to send on."),
+            "velocity": goofi.NumParam(100, 1, 127, int=True, doc="How hard every note is struck."),
+            "controller": goofi.NumParam(1, 0, 127, int=True, doc="Which controller `value` is sent as."),
         }
     }
 

@@ -1,21 +1,71 @@
 //! The phrase layer: ONE parser from a command line to an op call, and one renderer from a
-//! result to the text a caller reads. Every transport that speaks lines shares it — the MCP tool
-//! and, next, `/exec` and the CLI — so the surfaces cannot drift.
+//! result to text. Every transport that speaks lines shares it, so the surfaces cannot drift.
 
 use serde_json::{json, Map, Value};
 
-use crate::ops::{Entry, Op, TREE};
+use crate::ops::{ArgDecl, Entry, Row, TREE};
+use crate::text::{self, Role, Style};
 
-/// A command line as bash would hand it to argv — same words, same quoting.
-pub fn split(line: &str) -> Result<Vec<String>, String> {
-    shell_words::split(line).map_err(|e| format!("{e}"))
+/// A refusal that teaches: `why`, and what answers it in the shape [`help`] answers — the op
+/// whose arguments were wrong (`{op}`), the ops under the words that matched (`{group}`), or the
+/// index — laid out by [`Refusal::render`] for the reader's style.
+#[derive(Debug)]
+pub struct Refusal {
+    pub why: String,
+    pub help: Option<Value>,
+}
+
+impl From<String> for Refusal {
+    fn from(why: String) -> Refusal {
+        Refusal { why, help: None }
+    }
+}
+
+/// The compact line: what a transport with no style of its own says.
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&Style::COMPACT))
+    }
+}
+
+impl Refusal {
+    fn teaching(why: String, help: Value) -> Refusal {
+        Refusal { why, help: Some(help) }
+    }
+
+    /// The refusal as text. Compact is one line: why, then what answers it after a dash. Human
+    /// parts them: the why reflowed, the answer laid out as help is.
+    pub fn render(&self, style: &Style) -> String {
+        let Some(h) = &self.help else {
+            return match style.human {
+                true => text::reflow(&self.why, style.width),
+                false => self.why.clone(),
+            };
+        };
+        if !style.human {
+            let tail = if let Some(op) = h.get("op") {
+                usage_words(&text::cell(&op["op"]), &strings(&op["args"]))
+            } else if let Some(g) = h.get("group") {
+                let names: Vec<String> = g["ops"].as_array().into_iter().flatten().map(|o| text::cell(&o["op"])).collect();
+                format!("under `{}`: {}", text::cell(&g["word"]), names.join(", "))
+            } else {
+                "`op list` answers every op this server speaks".to_string()
+            };
+            return format!("{} — {tail}", self.why);
+        }
+        let answer = match h.get("op") {
+            Some(op) => text::table(&[vec![text::cell(&op["op"]), strings(&op["args"]).join(" "), text::cell(&op["doc"])]], 2, style, op_row),
+            None => render_help(h, style),
+        };
+        format!("{}\n\n{answer}", text::painted(&self.why, Role::Alert, style))
+    }
 }
 
 /// Where a word-by-word descent of the phrase tree ended — the one state machine under
 /// [`resolve`] and [`complete`].
 enum Stop {
-    /// The words named a leaf: its full phrase, and how many words it took.
-    Op(String, usize),
+    /// The words named a leaf: its full phrase.
+    Op(String),
     /// The words ran out inside a group: what can come next, and the phrase so far.
     Children(&'static [Entry], String),
     /// A word matched nothing at its level; the phrase walked before the miss.
@@ -25,26 +75,24 @@ enum Stop {
 fn walk(words: &[String]) -> Stop {
     let mut children = TREE;
     let mut prefix = String::new();
-    for (i, word) in words.iter().enumerate() {
-        match children.iter().find(|e| word_of(e) == word) {
+    for word in words {
+        match children.iter().find(|e| e.word() == word) {
             Some(Entry::Group(w, _, kids)) => {
                 prefix.push_str(w);
                 prefix.push(' ');
                 children = kids;
             }
-            Some(Entry::Leaf(op)) => return Stop::Op(format!("{prefix}{}", op.name), i + 1),
+            Some(Entry::Leaf(op)) => return Stop::Op(op.name.to_string()),
             None => return Stop::Unknown(prefix),
         }
     }
     Stop::Children(children, prefix)
 }
 
-/// The op a word sequence names, against the rows THIS server serves. Answers the op and how many
-/// words its phrase consumed. A refusal teaches: the served phrases under the words that DID
-/// match — and a phrase the tree spells that no row serves is a mode withholding that group,
-/// which the refusal names rather than naming the mode: several modes withhold, and the caller
-/// wants to know WHAT is missing.
-pub fn resolve<'a>(ops: &[&'a Op<'a>], words: &[String]) -> Result<(&'a Op<'a>, usize), String> {
+/// The op a word sequence names among the served rows, and how many words it took. A group word
+/// alone is its `list` op where it has one (`goofi guide` is `guide list`). A refusal names the
+/// served phrases under the words that matched, or the group a mode withholds.
+pub fn resolve<'a>(ops: &'a [Row], words: &[String]) -> Result<(&'a Row, usize), Refusal> {
     let line = words.join(" ");
     if let Some(op) = ops.iter().find(|op| {
         let name: Vec<_> = op.name.split(' ').collect();
@@ -53,79 +101,98 @@ pub fn resolve<'a>(ops: &[&'a Op<'a>], words: &[String]) -> Result<(&'a Op<'a>, 
         return Ok((op, op.name.split(' ').count()));
     }
     let prefix = match walk(words) {
-        Stop::Op(name, used) => match ops.iter().find(|o| o.name == name) {
-            Some(op) => return Ok((op, used)),
-            None => name,
-        },
-        Stop::Children(_, prefix) | Stop::Unknown(prefix) => prefix,
+        Stop::Op(name) => name,
+        Stop::Children(kids, prefix) => {
+            let listing = format!("{prefix}list");
+            if let Some(op) = kids.iter().any(|k| k.word() == "list").then(|| ops.iter().find(|o| o.name == listing)).flatten() {
+                return Ok((op, words.len()));
+            }
+            prefix
+        }
+        Stop::Unknown(prefix) => prefix,
     };
-    let near: Vec<&str> = match prefix.is_empty() {
+    let near: Vec<&Row> = match prefix.is_empty() {
         true => Vec::new(),
-        false => ops.iter().map(|o| o.name).filter(|n| n.starts_with(&prefix)).collect(),
+        false => ops.iter().filter(|o| o.name.starts_with(&prefix)).collect(),
     };
     Err(match (near.is_empty(), prefix.is_empty()) {
         // The tree spells the phrase and no row serves it: a subtree this server withholds.
         (true, false) => {
             let group = prefix.split(' ').next().unwrap_or(&prefix);
-            format!("unknown op `{line}` — this server does not serve the `{group}` ops")
+            format!("unknown op `{line}` — this server does not serve the `{group}` ops").into()
         }
-        (true, true) => {
-            format!("unknown op `{line}` — `op list` answers every op this server speaks")
-        }
-        _ => format!("unknown op `{line}` — under `{}`: {}", prefix.trim_end(), near.join(", ")),
+        (true, true) => Refusal::teaching(format!("unknown op `{line}`"), json!({ "index": index(ops) })),
+        _ => Refusal::teaching(format!("unknown op `{line}`"), json!({ "group": group_value(prefix.trim_end(), &near, &[]) })),
     })
 }
 
 /// One line, parsed against the registry: the phrase, then every argument as a flag the op's own
-/// schema types. Answers the op and the payload the socket envelope would carry — one payload
-/// shape, whichever surface spelled it.
-pub fn parse<'a>(ops: &[&'a Op<'a>], line: &str) -> Result<(&'a Op<'a>, Value), String> {
-    let words = split(line)?;
+/// schema types. Answers the op and the payload the socket envelope would carry.
+pub fn parse<'a>(ops: &'a [Row], line: &str) -> Result<(&'a Row, Value), Refusal> {
+    let words = shell_words::split(line).map_err(|e| Refusal::from(e.to_string()))?;
     if words.is_empty() {
-        return Err("empty command".into());
+        return Err("empty command".to_string().into());
     }
     let (op, used) = resolve(ops, &words)?;
     let payload = parse_flags(op, &words[used..])?;
     Ok((op, payload))
 }
 
-/// The arguments an op offers, for a refusal that teaches: leading positionals as `<name>`,
-/// then `--name <type>`, `!` marking required.
-fn usage(op: &Op) -> String {
-    let spelled: Vec<String> = op
-        .args()
+/// The arguments an op offers, one word each: leading positionals as `<name>`, then
+/// `--name <type>`, `!` marking required.
+fn spelled(op: &Row) -> Vec<String> {
+    op.args()
+        .iter()
         .enumerate()
-        .map(|(i, (name, ty, req))| match (i < op.positional, ty, req) {
-            (true, _, true) => format!("<{name}>"),
-            (true, _, false) => format!("[{name}]"),
-            (false, "bool", _) => format!("--[no-]{name}"),
-            (false, ty, true) => format!("--{name} <{ty}>!"),
-            (false, ty, false) => format!("--{name} <{ty}>"),
+        .map(|(i, a)| match (i < op.positional, a.ty.as_str(), a.required) {
+            (true, _, true) => format!("<{}>", a.name),
+            (true, _, false) => format!("[{}]", a.name),
+            (false, "bool", _) => format!("--[no-]{}", a.name),
+            (false, ty, true) => format!("--{} <{ty}>!", a.name),
+            (false, ty, false) => format!("--{} <{ty}>", a.name),
         })
-        .collect();
+        .collect()
+}
+
+/// An op's usage from its spelled arguments: what a refusal that teaches ends with.
+fn usage_words(name: &str, spelled: &[String]) -> String {
     match spelled.is_empty() {
-        true => format!("`{}` takes no arguments", op.name),
-        false => format!("`{}` takes: {}", op.name, spelled.join(" ")),
+        true => format!("`{name}` takes no arguments"),
+        false => format!("`{name}` takes: {}", spelled.join(" ")),
     }
 }
 
+/// An op's usage line for a person, wrapped: the name painted as a title, its arguments after it.
+fn usage_lines(name: &str, args: &[String], style: &Style) -> String {
+    let lines = text::wrap(&format!("{name} {}", args.join(" ")), style.width);
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| match i {
+            0 => format!("{}{}", style.paint(Role::Title, name), style.paint(Role::Arg, &l[name.len()..])),
+            _ => style.paint(Role::Arg, l),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One raw flag value, typed by the schema. A list type `T[]` is typed by its item.
-fn typed(op: &Op, key: &str, ty: &str, raw: String) -> Result<Value, String> {
+fn typed(op: &Row, key: &str, ty: &str, raw: String) -> Result<Value, Refusal> {
     match ty {
         "int" => raw.parse::<i64>().map(Value::from).map_err(|_| {
-            format!("{}: `--{key}` takes an integer, not `{raw}`", op.name)
+            format!("{}: `--{key}` takes an integer, not `{raw}`", op.name).into()
         }),
         "float" => raw.parse::<f64>().map(Value::from).map_err(|_| {
-            format!("{}: `--{key}` takes a number, not `{raw}`", op.name)
+            format!("{}: `--{key}` takes a number, not `{raw}`", op.name).into()
         }),
         "float2" => {
             let parsed = raw.split_once(',').and_then(|(x, y)| {
                 Some(json!([x.trim().parse::<f64>().ok()?, y.trim().parse::<f64>().ok()?]))
             });
-            parsed.ok_or_else(|| format!("{}: `--{key}` takes `x,y`, not `{raw}`", op.name))
+            parsed.ok_or_else(|| format!("{}: `--{key}` takes `x,y`, not `{raw}`", op.name).into())
         }
         "json" => serde_json::from_str(&raw)
-            .map_err(|e| format!("{}: `--{key}` takes JSON — {e}", op.name)),
+            .map_err(|e| format!("{}: `--{key}` takes JSON — {e}", op.name).into()),
         // `any`: JSON when it parses, otherwise the bare string — `--value 2.5` and `--value hi`.
         "any" => Ok(serde_json::from_str(&raw).unwrap_or(Value::String(raw))),
         // uid, string, param_addr and the rest ride as the string they are.
@@ -133,38 +200,34 @@ fn typed(op: &Op, key: &str, ty: &str, raw: String) -> Result<Value, String> {
     }
 }
 
-/// Where a scan of an op's argument words rests — what the NEXT word may be. The one grammar
-/// under [`parse_flags`] and [`complete_args`]: the parser folds the emitted values, completion
-/// reads the resting state.
+/// Where a scan of an op's argument words rests: what the NEXT word may be. The one grammar
+/// under [`parse_flags`] and [`complete_args`].
 enum Expect<'a> {
     /// `--name` was given and its value is pending.
     Value(&'a str, &'a str),
     /// Between words: a flag, or this declared arg as a positional while they are still open.
-    Open(Option<&'a (&'a str, &'a str, bool)>),
+    Open(Option<&'a ArgDecl>),
 }
 
-/// Step through `words` against the op's args schema, emitting each `(decl name, typed value)`.
-/// Leading bare words fill the positionals in declaration order — a list-typed one is variadic,
-/// and the first flag closes them. Each positional stays reachable as a flag too, so the sugar
-/// never hides a spelling; a bool is `--x` / `--no-x`; any value can ride inline as `--flag=v`.
+/// Step through `words` against the op's args, emitting each `(decl name, typed value)`. Leading
+/// bare words fill the positionals (a list one is variadic) until the first flag.
 fn scan<'a>(
-    op: &Op,
-    decls: &'a [(&'a str, &'a str, bool)],
+    op: &Row,
+    decls: &'a [ArgDecl],
     words: &[String],
-    emit: &mut dyn FnMut(&'a str, Value) -> Result<(), String>,
-) -> Result<Expect<'a>, String> {
-    let fail = |msg: String| format!("{}: {msg} — {}", op.name, usage(op));
+    emit: &mut dyn FnMut(&'a str, Value) -> Result<(), Refusal>,
+) -> Result<Expect<'a>, Refusal> {
+    let fail = |msg: String| Refusal::teaching(format!("{}: {msg}", op.name), json!({ "op": op_entry(op) }));
     let (mut pos, mut open, mut i) = (0, true, 0);
     while i < words.len() {
         let word = &words[i];
         i += 1;
         let Some(flag) = word.strip_prefix("--") else {
-            let Some((name, ty, _)) = decls.get(pos).filter(|_| open && pos < op.positional)
-            else {
+            let Some(a) = decls.get(pos).filter(|_| open && pos < op.positional) else {
                 return Err(fail(format!("unexpected `{word}`")));
             };
-            emit(name, typed(op, name, ty.trim_end_matches("[]"), word.clone())?)?;
-            pos += usize::from(!ty.ends_with("[]"));
+            emit(&a.name, typed(op, &a.name, a.item(), word.clone())?)?;
+            pos += usize::from(!a.is_list());
             continue;
         };
         open = false;
@@ -175,53 +238,129 @@ fn scan<'a>(
         let mut negated = false;
         if let Some(bare) = key.strip_prefix("no-") {
             // `--no-x` only where `x` is a declared bool: an op's own `no-…` name stays reachable.
-            if decls.iter().any(|(n, t, _)| *n == bare && *t == "bool") {
+            if decls.iter().any(|a| a.name == bare && a.is_bool()) {
                 (key, negated) = (bare, true);
             }
         }
-        let Some((name, ty, _)) = decls.iter().find(|(n, ..)| *n == key) else {
+        let Some(a) = decls.iter().find(|a| a.name == key) else {
             return Err(fail(format!("no flag `--{key}`")));
         };
-        match (*ty, inline, words.get(i)) {
+        match (a.ty.as_str(), inline, words.get(i)) {
             ("bool", Some(_), _) => {
-                return Err(format!("{}: `--{key}` is a flag and takes no value", op.name))
+                return Err(format!("{}: `--{key}` is a flag and takes no value", op.name).into())
             }
-            ("bool", None, _) => emit(name, Value::Bool(!negated))?,
-            (ty, Some(v), _) => emit(name, typed(op, key, ty.trim_end_matches("[]"), v)?)?,
-            (ty, None, Some(next)) => {
+            ("bool", None, _) => emit(&a.name, Value::Bool(!negated))?,
+            (_, Some(v), _) => emit(&a.name, typed(op, key, a.item(), v)?)?,
+            (_, None, Some(next)) => {
                 i += 1;
-                emit(name, typed(op, key, ty.trim_end_matches("[]"), next.clone())?)?;
+                emit(&a.name, typed(op, key, a.item(), next.clone())?)?;
             }
-            (ty, None, None) => return Ok(Expect::Value(name, ty)),
+            (ty, None, None) => return Ok(Expect::Value(&a.name, ty)),
         }
     }
     Ok(Expect::Open(decls.get(pos).filter(|_| open && pos < op.positional)))
 }
 
 /// A command line's argument words as the payload the socket envelope would carry.
-fn parse_flags(op: &Op, words: &[String]) -> Result<Value, String> {
-    let decls: Vec<(&str, &str, bool)> = op.args().collect();
+fn parse_flags(op: &Row, words: &[String]) -> Result<Value, Refusal> {
+    let decls = op.args();
     let mut payload = Map::new();
     let mut put = |name: &str, v: Value| {
-        if decls.iter().any(|(n, t, _)| *n == name && t.ends_with("[]")) {
+        if decls.iter().any(|a| a.name == name && a.is_list()) {
             match payload.entry(name.to_string()).or_insert_with(|| json!([])) {
                 Value::Array(list) => list.push(v),
                 _ => unreachable!("a list arg only ever inserts an array"),
             }
         } else if payload.insert(name.to_string(), v).is_some() {
-            return Err(format!("{}: `{name}` was given twice", op.name));
+            return Err(format!("{}: `{name}` was given twice", op.name).into());
         }
         Ok(())
     };
+    let teach = |msg: String| Refusal::teaching(format!("{}: {msg}", op.name), json!({ "op": op_entry(op) }));
     if let Expect::Value(name, _) = scan(op, &decls, words, &mut put)? {
-        return Err(format!("{}: `--{name}` needs a value — {}", op.name, usage(op)));
+        return Err(teach(format!("`--{name}` needs a value")));
     }
-    for (name, _, required) in &decls {
-        if *required && !payload.contains_key(*name) {
-            return Err(format!("{}: `--{name}` is required — {}", op.name, usage(op)));
+    for a in decls.iter().filter(|a| a.required) {
+        if !payload.contains_key(&a.name) {
+            return Err(teach(format!("`--{}` is required", a.name)));
         }
     }
     Ok(Value::Object(payload))
+}
+
+/// A value one table cell holds whole: a scalar, a list of scalars, or a record of scalars.
+fn cellable(v: &Value) -> bool {
+    let scalar = |x: &Value| !matches!(x, Value::Array(_) | Value::Object(_));
+    match v {
+        Value::Array(a) => a.iter().all(scalar),
+        Value::Object(m) => m.values().all(scalar),
+        _ => true,
+    }
+}
+
+/// A non-empty list of records — objects whose every value a cell holds — what the human style
+/// draws as a table.
+fn records(rows: &[Value]) -> bool {
+    !rows.is_empty() && rows.iter().all(|r| r.as_object().is_some_and(|m| m.values().all(cellable)))
+}
+
+/// An object for a person: its cell-sized values as key and value, then each list of records
+/// as a table under its key, and anything else as JSON under its key.
+fn sections(o: &Map<String, Value>, style: &Style) -> String {
+    let mut pairs: Vec<Vec<String>> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
+    for (k, v) in o {
+        match v {
+            v if cellable(v) => pairs.push(vec![k.clone(), text::cell(v)]),
+            Value::Array(rows) if records(rows) => parts.push(format!("{}\n{}", style.paint(Role::Title, k), records_table(rows, style))),
+            v => parts.push(format!("{}\n{}", style.paint(Role::Title, k), pretty(v).lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n"))),
+        }
+    }
+    let mut out = Vec::new();
+    if !pairs.is_empty() {
+        out.push(text::table(&pairs, 0, style, key_value));
+    }
+    out.extend(parts);
+    out.join("\n\n")
+}
+
+/// Records as a table: a header of every key in first-seen order, then one row per record.
+fn records_table(rows: &[Value], style: &Style) -> String {
+    let mut keys: Vec<&str> = Vec::new();
+    for r in rows {
+        for k in r.as_object().expect("a record").keys() {
+            if !keys.contains(&k.as_str()) {
+                keys.push(k);
+            }
+        }
+    }
+    // The widest column goes last: it is the prose, and the last column is the one that wraps.
+    let widest = keys.iter().enumerate().max_by_key(|(_, k)| rows.iter().map(|r| text::cell(&r[**k]).chars().count()).max()).map(|(i, _)| i);
+    if let Some(i) = widest {
+        let k = keys.remove(i);
+        keys.push(k);
+    }
+    let mut table = vec![keys.iter().map(|k| k.to_string()).collect::<Vec<String>>()];
+    table.extend(rows.iter().map(|r| keys.iter().map(|k| text::cell(&r[*k])).collect()));
+    text::table(&table, 0, style, |i, j| match (i, j) {
+        (0, _) => Some(Role::Header),
+        (_, 0) => Some(Role::Name),
+        _ => None,
+    })
+}
+
+/// The roles of an op's row in a listing: the op, then its arguments, then prose.
+fn op_row(_: usize, column: usize) -> Option<Role> {
+    match column {
+        0 => Some(Role::Name),
+        1 => Some(Role::Arg),
+        _ => None,
+    }
+}
+
+/// The roles of a key and value table: the key.
+fn key_value(_: usize, column: usize) -> Option<Role> {
+    (column == 0).then_some(Role::Name)
 }
 
 /// Whether a value fits on one line: a scalar, or a RECORD — an object with no container in it.
@@ -234,8 +373,7 @@ fn flat(v: &Value) -> bool {
 }
 
 /// JSON as a caller reads it, with ONE departure from a plain pretty print: a list of flat
-/// records puts one record per line. Every catalog read answers that shape, and a field per line
-/// spent three lines of punctuation on every line of content.
+/// records puts one record per line, the shape every catalog read answers.
 pub fn pretty(v: &Value) -> String {
     fn go(v: &Value, pad: usize) -> String {
         let (inner, close) = (" ".repeat(pad + 2), " ".repeat(pad));
@@ -263,10 +401,11 @@ pub fn pretty(v: &Value) -> String {
     go(v, 0)
 }
 
-/// An op's answer as the text a caller reads: prose and bare strings verbatim, everything else
-/// as JSON. A result carrying NPY is DATA, not text — the text form points at the pipe,
-/// and only the CLI's own renderer writes the bytes.
-pub fn render(result: &Value) -> String {
+/// An op's answer as text: prose and bare strings verbatim, help laid out, everything else as
+/// JSON — except that the human style draws a list of records as a table and an object as
+/// sections. A result carrying NPY is DATA: the text form points at the pipe, and only the CLI
+/// writes the bytes.
+pub fn render(result: &Value, style: &Style) -> String {
     if let Value::String(s) = result {
         return s.clone();
     }
@@ -276,50 +415,57 @@ pub fn render(result: &Value) -> String {
             b64.len()
         );
     }
-    match result.as_object() {
-        Some(o) if o.len() == 1 => match o.get("text").and_then(|t| t.as_str()) {
-            Some(t) => t.to_string(),
-            None => pretty(result),
-        },
+    match result {
+        Value::Object(o) if o.len() == 1 && o.contains_key("help") => render_help(&o["help"], style),
+        Value::Object(o) if o.len() == 1 && o.get("text").is_some_and(Value::is_string) => text::cell(&o["text"]),
+        Value::Array(rows) if style.human && records(rows) => records_table(rows, style),
+        Value::Object(o) if style.human && !o.is_empty() => sections(o, style),
         _ => pretty(result),
     }
 }
 
-/// One or several command lines, run as every line transport runs them — `goofi_exec`, `/exec`
-/// and `goofi -` share this door. A single line answers help when it asks for it, else executes
-/// directly; several lines run as ONE batch. A parse refusal names its command index.
+/// The command lines a `{commands: [...]}` body carries; a line that is not a string is empty.
+pub fn command_lines(body: &Value) -> Vec<String> {
+    body["commands"].as_array().map(|c| c.iter().map(|l| l.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default()
+}
+
+/// One or several command lines, as every line transport runs them. A single line may ask for
+/// help; several lines run as ONE batch, where a parse refusal names its command index.
 pub fn exec_lines(
     state: &crate::AppState,
     lines: &[String],
     actor: &str,
-) -> Result<Vec<Value>, String> {
-    let rows = state.ops();
-    let table: Vec<_> = rows.iter().collect();
+) -> Result<Vec<Value>, Refusal> {
+    let table = state.ops();
     if lines.is_empty() {
-        return Err("`commands` is a non-empty list of command lines".into());
+        return Err("`commands` is a non-empty list of command lines".to_string().into());
     }
     if let [line] = lines {
-        let words = split(line).map_err(|e| format!("command 0: {e}"))?;
-        if let Some(text) = help(&table, &words) {
-            return Ok(vec![json!({ "text": text })]);
+        let words = shell_words::split(line).map_err(|e| Refusal::from(e.to_string()))?;
+        if let Some(help) = help(&table, &words) {
+            return Ok(vec![help]);
         }
-        let (op, payload) = parse(&table, line).map_err(|e| format!("command 0: {e}"))?;
-        return state.call(op.name, payload, actor).map(|r| vec![r]);
+        let (op, payload) = parse(&table, line)?;
+        return state.call(op.name, payload, actor).map(|r| vec![r]).map_err(Refusal::from);
     }
     let mut steps = Vec::with_capacity(lines.len());
     for (i, line) in lines.iter().enumerate() {
-        let (op, payload) =
-            parse(&table, line).map_err(|e| format!("command {i}: {e}"))?;
+        let (op, payload) = parse(&table, line).map_err(|mut r| {
+            r.why = format!("command {i}: {}", r.why);
+            r
+        })?;
         steps.push(json!({ "op": op.name, "payload": payload }));
     }
-    match state.call("compound", json!({ "ops": steps }), actor)? {
+    match state.call("compound", json!({ "ops": steps }), actor).map_err(Refusal::from)? {
         Value::Array(results) => Ok(results),
         other => Ok(vec![other]),
     }
 }
 
 /// The help door: `help [words…]` or `<words…> --help`. `None` when the line is not asking.
-pub fn help(ops: &[&Op], words: &[String]) -> Option<String> {
+/// The answer is DATA under `help` — the index, a group, one op, or a miss with the index —
+/// and [`render`] lays it out for the reader's style.
+pub fn help(ops: &[Row], words: &[String]) -> Option<Value> {
     let target: Vec<String> = match words.first().map(String::as_str) {
         Some("help") => words[1..].to_vec(),
         _ if words.iter().any(|w| w == "--help") => {
@@ -328,62 +474,170 @@ pub fn help(ops: &[&Op], words: &[String]) -> Option<String> {
         _ => return None,
     };
     if target.is_empty() {
-        return Some(top_help(ops));
+        return Some(json!({ "help": { "index": index(ops) } }));
     }
     if let Ok((op, _)) = resolve(ops, &target) {
-        return Some(op_help(op));
+        return Some(json!({ "help": { "op": op_help(op) } }));
     }
     let first = target[0].as_str();
-    let near: Vec<String> = ops
-        .iter()
-        .filter(|o| o.name.split(' ').next() == Some(first))
-        .map(|o| format!("  {}", usage(o)))
-        .chain(
-            crate::ops::RESERVED
-                .iter()
-                .filter(|r| r.split(' ').next() == Some(first) && r.contains(' '))
-                .map(|r| format!("  `{r}` — the client's own door")),
-        )
-        .collect();
-    match near.is_empty() {
-        true => Some(format!("nothing under `{}` — {}", target.join(" "), top_help(ops))),
-        false => Some(format!("under `{first}`:\n{}", near.join("\n"))),
+    let ops_under: Vec<&Row> = ops.iter().filter(|o| o.name.split(' ').next() == Some(first)).collect();
+    let doors: Vec<&str> = crate::ops::RESERVED.iter().copied().filter(|r| r.split(' ').next() == Some(first) && r.contains(' ')).collect();
+    if ops_under.is_empty() && doors.is_empty() {
+        return Some(json!({ "help": { "missing": target.join(" "), "index": index(ops) } }));
     }
+    Some(json!({ "help": { "group": group_value(first, &ops_under, &doors) } }))
 }
 
-fn top_help(ops: &[&Op]) -> String {
-    let mut groups: Vec<String> = Vec::new();
+/// A group as help carries it: its word and doc, the ops under it, and the client's own doors there.
+fn group_value(word: &str, ops: &[&Row], doors: &[&str]) -> Value {
+    let doc = TREE.iter().find_map(|e| match e {
+        Entry::Group(w, doc, _) if *w == word => Some(*doc),
+        _ => None,
+    });
+    let ops: Vec<Value> = ops.iter().map(|o| op_entry(o)).collect();
+    json!({ "word": word, "doc": doc, "ops": ops, "doors": doors })
+}
+
+/// The top of the vocabulary: the served groups, the subjectless ops and the client's own words.
+fn index(ops: &[Row]) -> Value {
+    let mut groups: Vec<Value> = Vec::new();
     let mut bare: Vec<&str> = Vec::new();
     for e in TREE {
         match e {
-            Entry::Group(word, doc, _) if served(ops, "", e) => {
-                groups.push(format!("  {word} — {doc}"));
-            }
+            Entry::Group(word, doc, _) if served(ops, "", e) => groups.push(json!({ "word": word, "doc": doc })),
             Entry::Group(..) => {}
             Entry::Leaf(op) => bare.push(op.name),
         }
     }
-    format!(
-        "goofi speaks noun-first phrases. `help <group>` lists one group,\n\
-         `<phrase> --help` explains one op, and `op list` answers the registry as data —\n\
-         `op list --doc` explains every op at once, which is the whole manual.\n\
-         groups:\n{}\n\
-         subjectless: {}.\n\
-         reserved words: {} — and `goofi -` runs stdin lines as one batch.",
-        groups.join("\n"),
-        bare.join(", "),
-        crate::ops::RESERVED.join(", "),
-    )
+    json!({ "groups": groups, "subjectless": bare, "reserved": crate::ops::RESERVED })
+}
+
+/// One op as a group listing carries it: the phrase, its argument words and its first sentence.
+fn op_entry(op: &Row) -> Value {
+    json!({ "op": op.name, "args": spelled(op), "doc": first_sentence(op.doc) })
+}
+
+/// The first sentence of a doc: up to the first full stop that ends a word, or its first line.
+fn first_sentence(doc: &str) -> &str {
+    let line = doc.lines().next().unwrap_or_default();
+    match line.match_indices(". ").next() {
+        Some((at, _)) => &line[..=at],
+        None => line,
+    }
+}
+
+fn op_help(op: &Row) -> Value {
+    json!({ "op": op.name, "args": spelled(op), "doc": op.doc(), "answers": op.result })
+}
+
+/// The doors on the index, as the human style tables them.
+const DOORS: &[(&str, &str)] = &[
+    ("help <group>", "the ops of one group"),
+    ("<phrase> --help", "one op, explained"),
+    ("op list [--doc]", "the registry as data; `--doc` explains every op at once, the whole manual"),
+    ("goofi -", "stdin lines, run as one batch"),
+];
+
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array().map(|a| a.iter().map(text::cell).collect()).unwrap_or_default()
+}
+
+/// A help value as text. Compact is one dense block; human parts it and aligns it.
+fn render_help(h: &Value, style: &Style) -> String {
+    if let Some(op) = h.get("op") {
+        let (name, args, doc, answers) = (text::cell(&op["op"]), strings(&op["args"]), text::cell(&op["doc"]), text::cell(&op["answers"]));
+        let usage = match args.is_empty() {
+            true => format!("`{name}` takes no arguments"),
+            false => format!("`{name}` takes: {}", args.join(" ")),
+        };
+        return match style.human {
+            false => format!("{usage}\n\n{doc}\n\nanswers: {answers}"),
+            true => format!(
+                "{}\n\n{}\n\n{}\n{}",
+                usage_lines(&name, &args, style),
+                text::reflow(&doc, style.width),
+                style.paint(Role::Title, "answers"),
+                text::reflow(&format!("  {answers}"), style.width),
+            ),
+        };
+    }
+    if let Some(g) = h.get("group") {
+        let ops: Vec<&Value> = g["ops"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+        let doors = strings(&g["doors"]);
+        if !style.human {
+            let lines: Vec<String> = ops
+                .iter()
+                .map(|o| {
+                    let args = strings(&o["args"]);
+                    match args.is_empty() {
+                        true => format!("  `{}` takes no arguments", text::cell(&o["op"])),
+                        false => format!("  `{}` takes: {}", text::cell(&o["op"]), args.join(" ")),
+                    }
+                })
+                .chain(doors.iter().map(|d| format!("  `{d}` — the client's own door")))
+                .collect();
+            return format!("under `{}`:\n{}", text::cell(&g["word"]), lines.join("\n"));
+        }
+        let mut rows: Vec<Vec<String>> = ops
+            .iter()
+            .map(|o| vec![text::cell(&o["op"]), strings(&o["args"]).join(" "), text::cell(&o["doc"])])
+            .collect();
+        rows.extend(doors.iter().map(|d| vec![d.clone(), String::new(), "the client's own door".to_string()]));
+        let word = text::cell(&g["word"]);
+        let head = match g["doc"].as_str() {
+            Some(doc) => format!("{word} — {doc}"),
+            None => word.clone(),
+        };
+        // Painted after the wrap: the word leads the first line, and the rest is prose.
+        let head = text::reflow(&head, style.width).replacen(&word, &style.paint(Role::Title, &word), 1);
+        return format!("{head}\n\n{}", text::table(&rows, 2, style, op_row));
+    }
+    let index = &h["index"];
+    let groups: Vec<&Value> = index["groups"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    let (bare, reserved) = (strings(&index["subjectless"]), strings(&index["reserved"]));
+    let missing = h.get("missing").map(text::cell);
+    if !style.human {
+        let top = format!(
+            "goofi speaks noun-first phrases. `help <group>` lists one group, a group word\n\
+             alone runs its `list`, `<phrase> --help` explains one op, and `op list` answers\n\
+             the registry as data — `op list --doc` explains every op at once, the whole manual.\n\
+             groups:\n{}\n\
+             subjectless: {}.\n\
+             reserved words: {} — and `goofi -` runs stdin lines as one batch.",
+            groups.iter().map(|g| format!("  {} — {}", text::cell(&g["word"]), text::cell(&g["doc"]))).collect::<Vec<_>>().join("\n"),
+            bare.join(", "),
+            reserved.join(", "),
+        );
+        return match missing {
+            Some(m) => format!("nothing under `{m}` — {top}"),
+            None => top,
+        };
+    }
+    let doors: Vec<Vec<String>> = DOORS.iter().map(|(d, doc)| vec![d.to_string(), doc.to_string()]).collect();
+    let group_rows: Vec<Vec<String>> = groups.iter().map(|g| vec![text::cell(&g["word"]), text::cell(&g["doc"])]).collect();
+    let words = vec![
+        vec!["subjectless".to_string(), bare.join(", ")],
+        vec!["reserved".to_string(), format!("{} — the client's own words", reserved.join(", "))],
+    ];
+    let mut out = String::new();
+    if let Some(m) = missing {
+        out.push_str(&format!("{}\n\n", style.paint(Role::Alert, &format!("nothing under `{m}`"))));
+    }
+    out.push_str(&format!(
+        "goofi speaks noun-first phrases: `goofi <group> <op> [args]`; a group word alone runs its `list`\n\n{}\n\n{}\n{}\n\n{}",
+        text::table(&doors, 2, style, key_value),
+        style.paint(Role::Title, "groups"),
+        text::table(&group_rows, 2, style, key_value),
+        text::table(&words, 0, style, key_value),
+    ));
+    out
 }
 
 /// Whether anything under `entry` (at the phrase position `prefix`) is in the served set — how a
 /// headless server's listings drop the layout group without a second spelling of the mode.
-fn served(ops: &[&Op], prefix: &str, entry: &Entry) -> bool {
+fn served(ops: &[Row], prefix: &str, entry: &Entry) -> bool {
     match entry {
-        Entry::Leaf(op) => {
-            let name = format!("{prefix}{}", op.name);
-            ops.iter().any(|o| o.name == name)
-        }
+        Entry::Leaf(op) => ops.iter().any(|o| o.name == op.name),
         Entry::Group(word, _, _) => {
             let below = format!("{prefix}{word} ");
             ops.iter().any(|o| o.name.starts_with(&below))
@@ -406,12 +660,10 @@ fn doc_line(entry: &Entry) -> String {
     }
 }
 
-/// What can come NEXT on a partial command line, as `(word, doc)` candidates — the completion
-/// read behind `op complete`. The line's trailing word, unless the line ends in whitespace, is a
-/// partial that filters. `state` is where the LIVE candidates come from — a `uid` offers the
-/// patch's own nodes — and `None` (the offline client) still answers everything static.
+/// What can come NEXT on a partial command line, as `(word, doc)` candidates; a trailing partial
+/// word filters. `state` gives the LIVE candidates, and `None` still answers everything static.
 pub fn complete(
-    ops: &[&Op],
+    ops: &[Row],
     state: Option<&crate::AppState>,
     line: &str,
 ) -> Vec<(String, String)> {
@@ -420,14 +672,19 @@ pub fn complete(
         true => (&words[..], String::new()),
         false => (&words[..words.len() - 1], words[words.len() - 1].clone()),
     };
-    if let Ok((op, used)) = resolve(ops, done) {
-        return complete_args(op, &done[used..], &partial, state);
+    // A group word alone is its `list` for a call; for completion it is still a group being typed
+    // under (`log li` wants `list`), so the walk decides before the resolver does.
+    let stop = walk(done);
+    if !matches!(stop, Stop::Children(..)) {
+        if let Ok((op, used)) = resolve(ops, done) {
+            return complete_args(op, &done[used..], &partial, state);
+        }
     }
     let mut candidates = std::collections::BTreeMap::new();
-    if let Stop::Children(children, prefix) = walk(done) {
+    if let Stop::Children(children, prefix) = stop {
         for entry in children {
-            if word_of(entry).starts_with(&partial) && served(ops, &prefix, entry) {
-                candidates.insert(word_of(entry).to_string(), doc_line(entry));
+            if entry.word().starts_with(&partial) && served(ops, &prefix, entry) {
+                candidates.insert(entry.word().to_string(), doc_line(entry));
             }
         }
     }
@@ -444,12 +701,12 @@ pub fn complete(
 }
 
 fn complete_args(
-    op: &Op,
+    op: &Row,
     given: &[String],
     partial: &str,
     state: Option<&crate::AppState>,
 ) -> Vec<(String, String)> {
-    let decls: Vec<(&str, &str, bool)> = op.args().collect();
+    let decls = op.args();
     let mut spent: Vec<String> = Vec::new();
     let mut note = |name: &str, _: Value| {
         spent.push(name.to_string());
@@ -461,19 +718,19 @@ fn complete_args(
         Err(_) => return Vec::new(),
     };
     let mut out: Vec<(String, String)> =
-        positional.map(|(_, ty, _)| values_for(ty, state, partial)).unwrap_or_default();
-    for (name, ty, required) in &decls {
-        if spent.iter().any(|spent| spent == name) && *ty != "bool" && !ty.ends_with("[]") {
+        positional.map(|a| values_for(&a.ty, state, partial)).unwrap_or_default();
+    for a in decls.iter() {
+        if spent.contains(&a.name) && !a.is_bool() && !a.is_list() {
             continue;
         }
-        let doc = match (ty.strip_suffix("[]"), *ty, required) {
-            (_, "bool", _) => "flag; --no- negates".to_string(),
-            (Some(item), _, true) => format!("<{item}>, repeats, required"),
-            (Some(item), _, false) => format!("<{item}>, repeats"),
-            (None, ty, true) => format!("<{ty}>, required"),
-            (None, ty, false) => format!("<{ty}>"),
+        let doc = match (a.is_list(), a.is_bool(), a.required) {
+            (_, true, _) => "flag; --no- negates".to_string(),
+            (true, _, true) => format!("<{}>, repeats, required", a.item()),
+            (true, _, false) => format!("<{}>, repeats", a.item()),
+            (false, _, true) => format!("<{}>, required", a.ty),
+            (false, _, false) => format!("<{}>", a.ty),
         };
-        let flag = format!("--{name}");
+        let flag = format!("--{}", a.name);
         if flag.starts_with(partial) {
             out.push((flag, doc));
         }
@@ -491,7 +748,7 @@ fn values_for(ty: &str, state: Option<&crate::AppState>, partial: &str) -> Vec<(
             .collect(),
         "uid" | "endpoint" => {
             let Some(state) = state else { return Vec::new() };
-            let doc = state.doc.lock().unwrap().to_json();
+            let doc = state.doc.lock().to_json();
             let Some(nodes) = doc.get("nodes").and_then(Value::as_object) else {
                 return Vec::new();
             };
@@ -513,10 +770,3 @@ fn values_for(ty: &str, state: Option<&crate::AppState>, partial: &str) -> Vec<(
     out
 }
 
-fn op_help(op: &Op) -> String {
-    format!("{}\n\n{}\n\nanswers: {}", usage(op), op.doc(), op.result)
-}
-
-fn word_of(entry: &Entry) -> &'static str {
-    match entry { Entry::Group(word, _, _) => word, Entry::Leaf(op) => op.name }
-}

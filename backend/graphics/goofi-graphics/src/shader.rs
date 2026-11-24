@@ -1,11 +1,11 @@
 //! A `.wgsl` node file: the header block that IS its manifest, the prelude the engine appends,
 //! and naga's verdict on the two together.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use goofi_core::probe::Introspection;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, ParamDecl, ParamSpec};
+use goofi_node::{NodeManifest, ParamDecl, ParamSpec, Role};
 
 /// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
 const RESERVED: &[&str] =
@@ -22,9 +22,16 @@ pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_
 }
 
 /// The fields the engine adds to `Params` for one ARRAY input: the range its last frame spanned,
-/// which a body cannot reduce for itself, and how many channels the frame had.
-fn range_fields(input: &str) -> [String; 3] {
-    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels")]
+/// which a body cannot reduce for itself, how many channels the frame had, and the power of two
+/// the texels and the range are both over, so a frame past the half floats still fits.
+fn range_fields(input: &str) -> [String; 4] {
+    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels"), format!("{input}_scale")]
+}
+
+/// The texture bound beside one ARRAY input: where each channel of the frame's first axis sits
+/// on the 10-20 head, `(x, y, known, 0)` per channel, or the blank texel for unnamed channels.
+fn layout_name(input: &str) -> String {
+    format!("{input}_layout")
 }
 
 /// The header's manifest, with the one output added. The file's WHOLE text stays the source that
@@ -63,6 +70,7 @@ pub fn header(source: &str) -> Result<Introspection, String> {
     for input in &intro.inputs {
         if SlotType::from_name(&input.kind) != Some(SlotType::Texture) {
             taken.extend(range_fields(&input.name));
+            taken.push(layout_name(&input.name));
         }
     }
     let clash = intro
@@ -88,12 +96,25 @@ pub fn writer(buffer: &str) -> String {
     format!("next_{buffer}")
 }
 
-fn wgsl_type(spec: &ParamSpec) -> &'static str {
+fn wgsl_type(spec: &ParamSpec) -> String {
     match spec {
-        ParamSpec::Float { .. } => "f32",
-        ParamSpec::Int { .. } => "i32",
-        ParamSpec::Bool { .. } | ParamSpec::Str { .. } | ParamSpec::Pulse => "u32",
+        ParamSpec::Num { default, int, .. } => match (default.len(), int) {
+            (0 | 1, false) => "f32".into(),
+            (0 | 1, true) => "i32".into(),
+            (n, false) => format!("vec{n}f"),
+            (n, true) => format!("vec{n}i"),
+        },
+        ParamSpec::Bool { .. } | ParamSpec::Str { .. } | ParamSpec::Pulse => "u32".into(),
     }
+}
+
+/// A param's size and alignment in the storage layout: a scalar 4, a vec2 8, a vec3 or vec4 16.
+fn layout(spec: &ParamSpec) -> (usize, usize) {
+    let n = match spec {
+        ParamSpec::Num { default, .. } => default.len().max(1),
+        _ => 1,
+    };
+    (n * 4, match n { 1 => 4, 2 => 8, _ => 16 })
 }
 
 /// What the engine appends after the file: the bindings a body reads, and the stages that call it.
@@ -109,16 +130,26 @@ pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
     if !manifest.params.is_empty() || !ranges.is_empty() {
         s.push_str("struct Params {\n");
         for d in manifest.params {
-            s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec)));
+            // A list is one array field, declared where its first slot stands.
+            match d.role {
+                Some(Role::Member { section, base, slot: Some(0) }) => {
+                    s.push_str(&format!("    {base}: array<{}, {}>,\n", wgsl_type(&d.spec), slots(manifest.params, section, base)));
+                }
+                Some(Role::Member { slot: Some(_), .. }) => {}
+                _ => s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec))),
+            }
         }
         for field in &ranges {
             s.push_str(&format!("    {field}: f32,\n"));
         }
-        s.push_str("}\n@group(0) @binding(3) var<uniform> p: Params;\n");
+        s.push_str("}\n@group(0) @binding(3) var<storage, read> p: Params;\n");
     }
     s.push_str("@group(0) @binding(4) var<uniform> frame: u32;\n");
     for (i, input) in manifest.inputs.iter().enumerate() {
         s.push_str(&format!("@group(1) @binding({i}) var {}: texture_2d<f32>;\n", input.name));
+    }
+    for (k, input) in array_inputs(manifest).enumerate() {
+        s.push_str(&format!("@group(1) @binding({}) var {}: texture_2d<f32>;\n", manifest.inputs.len() + k, layout_name(input)));
     }
     // A state buffer reads as the LAST tick left it and is written through its own function, so
     // the two never name one thing.
@@ -160,17 +191,42 @@ pub fn validate(full: &str) -> Result<(), String> {
         .map_err(|e| e.emit_to_string(full))
 }
 
-/// One stage's `Params` buffer: a 4-byte scalar per declared param, then the range and channel
-/// count of each ARRAY input's last frame, padded to 16. Every field is a scalar, so the layout
-/// needs no layouter.
-pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 3]]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 3) * 4 + 16);
-    for (d, a) in decls.iter().zip(atomics) {
-        let v = f64::from_bits(a.load(Ordering::Relaxed));
-        match d.spec {
-            ParamSpec::Float { .. } => out.extend_from_slice(&(v as f32).to_le_bytes()),
-            ParamSpec::Int { .. } => out.extend_from_slice(&(v.round() as i32).to_le_bytes()),
-            _ => out.extend_from_slice(&(v.round().max(0.0) as u32).to_le_bytes()),
+/// How many slots the list `section.base` keeps: the length of its array field.
+fn slots(decls: &[ParamDecl], section: &str, base: &str) -> usize {
+    decls.iter().filter(|d| matches!(d.role, Some(Role::Member { section: s, base: b, slot: Some(_) }) if s == section && b == base)).count()
+}
+
+/// One stage's `Params` buffer in WGSL's storage layout: each declared param at its alignment,
+/// a vector's dimensions in a row, a list as an array of them where its first slot stands, then
+/// the range, channel count and scale of each ARRAY input's last frame, padded to 16.
+pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 4) * 4 + 16);
+    let mut arrays: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
+    for (i, d) in decls.iter().enumerate() {
+        let (size, align) = layout(&d.spec);
+        let stride = size.next_multiple_of(align);
+        let at = match d.role {
+            Some(Role::Member { section, base, slot: Some(slot) }) => {
+                let start = *arrays.entry((section, base)).or_insert_with(|| {
+                    let start = out.len().next_multiple_of(align);
+                    out.resize(start + stride * slots(decls, section, base), 0);
+                    start
+                });
+                start + stride * slot as usize
+            }
+            _ => {
+                let start = out.len().next_multiple_of(align);
+                out.resize(start + size, 0);
+                start
+            }
+        };
+        for (k, v) in goofi_runtime::dims(atomics, decls, i).into_iter().enumerate() {
+            let bytes = match d.spec {
+                ParamSpec::Num { int: false, .. } => (v as f32).to_le_bytes(),
+                ParamSpec::Num { int: true, .. } => (v.round() as i32).to_le_bytes(),
+                _ => (v.round().max(0.0) as u32).to_le_bytes(),
+            };
+            out[at + 4 * k..at + 4 * k + 4].copy_from_slice(&bytes);
         }
     }
     for field in ranges.iter().flatten() {

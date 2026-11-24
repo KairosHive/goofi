@@ -1,11 +1,8 @@
+import { wsUrl } from './wsUrl';
+
 export interface LiveSource {
 	values: Record<string, Record<string, unknown>>;
 	errors: Record<string, Record<string, string>>;
-}
-
-/** Where one node's live params come from. */
-export function paramsUrl(proto: string, host: string, node: string): string {
-	return `${proto}//${host}/params/${encodeURIComponent(node)}`;
 }
 
 interface Watch {
@@ -42,8 +39,7 @@ export class ParamLive {
 	}
 
 	private connect(uid: string, held: Watch): void {
-		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const ws = new WebSocket(paramsUrl(proto, location.host, uid));
+		const ws = new WebSocket(wsUrl(['params', uid]));
 		held.ws = ws;
 		ws.addEventListener('message', (e: MessageEvent) => {
 			if (held.ws === ws && held.holders > 0) this.receive(String(e.data));

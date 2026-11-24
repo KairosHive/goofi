@@ -1,0 +1,107 @@
+//! The one way goofi starts a thread that outlives its caller: named, listed while it runs, and
+//! joinable within a deadline so a hung thread cannot hold a shutdown hostage.
+
+use std::io;
+use std::sync::Arc;
+use crate::sync::Latch;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use crate::scope::{self, Kind};
+
+/// The stack every goofi thread gets unless its builder says otherwise: a debug build's deep
+/// frames — serde through toml, a node's own recursion — overflow a platform default of 2 MiB
+/// for a spawned thread and 1 MiB for the Windows main thread. Every goofi thread — a worker
+/// here, a tokio runtime's — is built with this, so the platform default never decides.
+pub const STACK: usize = 8 * 1024 * 1024;
+
+/// A thread being described: its name, and the stack it gets.
+pub struct Builder {
+    name: String,
+    stack: usize,
+}
+
+/// Describe a thread named `name`.
+pub fn thread(name: impl Into<String>) -> Builder {
+    Builder { name: name.into(), stack: STACK }
+}
+
+/// Start `f` on a thread named `name`. The handle may be dropped: the thread runs on, listed
+/// until it ends.
+pub fn spawn<T: Send + 'static>(name: impl Into<String>, f: impl FnOnce() -> T + Send + 'static) -> io::Result<Worker<T>> {
+    thread(name).spawn(f)
+}
+
+impl Builder {
+    pub fn stack_size(mut self, bytes: usize) -> Self {
+        self.stack = bytes;
+        self
+    }
+
+    pub fn spawn<T: Send + 'static>(self, f: impl FnOnce() -> T + Send + 'static) -> io::Result<Worker<T>> {
+        let lease = scope::lease(Kind::Worker, self.name.clone());
+        let done = Arc::new(Latch::default());
+        let finished = done.clone();
+        let handle = std::thread::Builder::new().name(self.name.clone()).stack_size(self.stack).spawn(move || {
+            // Held by the thread itself: the entry is there exactly while the thread runs.
+            let _lease = lease;
+            let _ending = Ending(finished);
+            f()
+        })?;
+        Ok(Worker { handle, done })
+    }
+}
+
+/// Marks the thread finished on every exit, a panic included.
+struct Ending(Arc<Latch>);
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        self.0.open();
+    }
+}
+
+/// A running thread. Dropping the handle detaches it; the thread stays listed until it ends.
+pub struct Worker<T = ()> {
+    handle: JoinHandle<T>,
+    done: Arc<Latch>,
+}
+
+/// A watch on a thread's end that any number of holders can wait on, the handle kept elsewhere.
+#[derive(Clone)]
+pub struct Done(Arc<Latch>);
+
+impl Done {
+    /// Wait up to `within` for the thread to end; whether it did.
+    pub fn wait_within(&self, within: Duration) -> bool {
+        self.0.wait_until(Instant::now() + within)
+    }
+}
+
+impl<T> Worker<T> {
+    /// The watch on this thread's end.
+    pub fn done(&self) -> Done {
+        Done(self.done.clone())
+    }
+
+    /// Wait for the thread to end, however long that takes.
+    pub fn join(self) -> std::thread::Result<T> {
+        self.handle.join()
+    }
+
+    /// The thread itself, for a caller that parks and wakes it.
+    pub fn thread(&self) -> &std::thread::Thread {
+        self.handle.thread()
+    }
+
+    /// Whether the thread has ended.
+    pub fn is_done(&self) -> bool {
+        self.done.is_open()
+    }
+
+    /// Wait up to `within` for the thread to end. `None` is the deadline: the thread runs on,
+    /// detached, and stays listed until it ends.
+    pub fn join_within(self, within: Duration) -> Option<std::thread::Result<T>> {
+        self.done().wait_within(within).then(|| self.handle.join())
+    }
+}

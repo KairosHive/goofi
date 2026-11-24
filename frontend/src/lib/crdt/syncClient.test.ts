@@ -1,24 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { SyncClient } from './syncClient.svelte';
-import { nodeView } from './graphDoc';
+import { nodesMap } from './graphDoc';
+import type { Op } from './ops';
 
-const OSC = { type: 'Oscillator', name: 'osc', pos: { x: 0, y: 0 } };
+const OSC = { type: 'Oscillator', name: 'osc', pos: [0, 0] };
 
 /** A document as the manager sends it, whole. */
 const stateWith = (nodes: Record<string, unknown>) => ({
 	nodes,
-	links: [],
-	instances: {},
+	links: {},
 	variables: {},
 	arrangement: {}
 });
 
-function started(): { ctl: FakeControl; client: SyncClient } {
+function started(changed: (ops: Op[] | null) => void = () => {}): { ctl: FakeControl; client: SyncClient } {
 	const ctl = new FakeControl();
-	const client = new SyncClient(ctl);
-	client.start();
-	return { ctl, client };
+	return { ctl, client: new SyncClient(ctl, changed) };
 }
 
 describe('SyncClient', () => {
@@ -30,7 +28,7 @@ describe('SyncClient', () => {
 		ctl.emit({ event: 'doc_state', payload: { v: 7, doc: stateWith({ '1': OSC }) } });
 		expect(client.synced).toBe(true);
 		expect(client.version).toBe(7);
-		expect(nodeView(client.doc, '1')).toMatchObject({ type: 'Oscillator', name: 'osc' });
+		expect(nodesMap(client.doc)['1']).toMatchObject({ type: 'Oscillator', name: 'osc' });
 	});
 
 	it('applies a delta onto the version it names', () => {
@@ -38,20 +36,33 @@ describe('SyncClient', () => {
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
 		ctl.emit({
 			event: 'doc_patch',
-			payload: { from: 1, v: 2, patch: { nodes: { '2': { type: 'Buffer', name: 'buf' } } } }
+			payload: { from: 1, v: 2, ops: [{ op: 'put', path: ['nodes', '2'], value: { type: 'Buffer', name: 'buf' } }] }
 		});
 		expect(client.version).toBe(2);
-		expect(nodeView(client.doc, '2')).toMatchObject({ type: 'Buffer', name: 'buf' });
-		expect(nodeView(client.doc, '1'), 'and leaves the untouched node alone').not.toBeNull();
+		expect(nodesMap(client.doc)['2']).toMatchObject({ type: 'Buffer', name: 'buf' });
+		expect(nodesMap(client.doc)['1'], 'and leaves the untouched node alone').toBeDefined();
 	});
 
-	it('a null in a delta REMOVES the key — how a merge patch spells a delete', () => {
-		// The half a delta format is easiest to get wrong. A replica that merged nulls as values
-		// would keep every removed node for ever and look perfectly healthy doing it.
+	it('a del REMOVES the path — and a put lands leaf by leaf', () => {
+		// The half a delta format is easiest to get wrong. A replica that dropped deletes would keep
+		// every removed node for ever and look perfectly healthy doing it.
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
-		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, patch: { nodes: { '1': null } } } });
-		expect(nodeView(client.doc, '1')).toBeNull();
+		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops: [{ op: 'del', path: ['nodes', '1'] }] } });
+		expect(nodesMap(client.doc)['1']).toBeUndefined();
+	});
+
+	it('a whole-map put takes the manager key order, which a list shows', () => {
+		const { ctl, client } = started();
+		const vars = (names: string[]) => Object.fromEntries(names.map((n) => [n, { value: 1 }]));
+		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: { ...stateWith({}), variables: vars(['p.a', 'p.b']) } } });
+		// A rename keeps its place: the manager sends the reordered map whole.
+		const put = { op: 'put' as const, path: ['variables'], value: vars(['p.z', 'p.b']) };
+		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops: [put] } });
+		expect(Object.keys(client.doc.variables as object)).toEqual(['p.z', 'p.b']);
+		// A move alone: the same keys, in another order, as a track moved among the tracks.
+		ctl.emit({ event: 'doc_patch', payload: { from: 2, v: 3, ops: [{ op: 'put', path: ['variables'], value: vars(['p.b', 'p.z']) }] } });
+		expect(Object.keys(client.doc.variables as object)).toEqual(['p.b', 'p.z']);
 	});
 
 	it('skips a stale delta in silence — the seed already carried it', () => {
@@ -62,31 +73,31 @@ describe('SyncClient', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 5, doc: stateWith({ '1': OSC }) } });
-		ctl.emit({ event: 'doc_patch', payload: { from: 3, v: 4, patch: { nodes: { '1': null } } } });
-		expect(nodeView(client.doc, '1'), 'the already-applied delete was not replayed').not.toBeNull();
+		ctl.emit({ event: 'doc_patch', payload: { from: 3, v: 4, ops: [{ op: 'del', path: ['nodes', '1'] }] } });
+		expect(nodesMap(client.doc)['1'], 'the already-applied delete was not replayed').toBeDefined();
 		expect(client.version).toBe(5);
 		expect(warn, 'and it is not worth a word').not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
 
-	it('refuses a delta that reaches PAST this replica, and waits for a fresh doc_state', () => {
-		// A gap can only mean the client fell behind the broadcast ring. Applying anyway would leave
-		// a replica that looks healthy and is wrong, so it stops until the manager re-seeds it —
-		// which the manager does on exactly that lag.
+	it('refuses a delta that reaches PAST this replica, and asks for a fresh doc_state', () => {
+		// Applying anyway would leave a replica that looks healthy and is wrong, so it stops and asks
+		// for a re-seed: waiting would wait for ever on any gap the manager did not see as a lag.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
 		ctl.emit({
 			event: 'doc_patch',
-			payload: { from: 5, v: 6, patch: { nodes: { '9': { type: 'Buffer', name: 'b' } } } }
+			payload: { from: 5, v: 6, ops: [{ op: 'put', path: ['nodes', '9'], value: { type: 'Buffer', name: 'b' } }] }
 		});
-		expect(nodeView(client.doc, '9'), 'the out-of-order delta was not applied').toBeNull();
+		expect(nodesMap(client.doc)['9'], 'the out-of-order delta was not applied').toBeUndefined();
 		expect(client.version, 'and the replica did not move').toBe(1);
 		expect(warn).toHaveBeenCalled();
+		expect(ctl.resyncs, 'and it asked for the seed').toBe(1);
 
 		ctl.emit({ event: 'doc_state', payload: { v: 6, doc: stateWith({ '9': OSC }) } });
 		expect(client.version).toBe(6);
-		expect(nodeView(client.doc, '9'), 'the re-seed healed it').not.toBeNull();
+		expect(nodesMap(client.doc)['9'], 'the re-seed healed it').toBeDefined();
 		warn.mockRestore();
 	});
 
@@ -97,29 +108,21 @@ describe('SyncClient', () => {
 		ctl.emit({ event: 'doc_state', payload: { v: 3, doc: stateWith({ '1': OSC }) } });
 		client.reset();
 		expect(client.synced).toBe(false);
-		expect(nodeView(client.doc, '1')).toBeNull();
+		expect(nodesMap(client.doc)['1']).toBeUndefined();
 
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': { type: 'Buffer', name: 'b' } }) } });
-		expect(nodeView(client.doc, '1')).toMatchObject({ type: 'Buffer' });
+		expect(nodesMap(client.doc)['1']).toMatchObject({ type: 'Buffer' });
 	});
 
 	it('fires the change callback on a seed, on a delta and on a reset, naming what moved', () => {
-		// A seed and a reset replace the whole document (`null`); a delta hands over its own patch,
-		// so the store re-derives only the roots — and under `nodes`, the uids — it names.
-		const { ctl, client } = started();
+		// A seed and a reset replace the whole document (`null`); a delta hands over its own ops,
+		// so the store re-derives only the roots — and under `nodes`, the uids — they name.
 		const changes: unknown[] = [];
-		client.onDocChange((patch) => changes.push(patch));
-		const patch = { nodes: { '1': { name: 'renamed' } } };
+		const { ctl, client } = started((ops) => changes.push(ops));
+		const ops = [{ op: 'put' as const, path: ['nodes', '1'], value: { ...OSC, name: 'renamed' } }];
 		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
-		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, patch } });
+		ctl.emit({ event: 'doc_patch', payload: { from: 1, v: 2, ops } });
 		client.reset();
-		expect(changes).toEqual([null, patch, null]);
-	});
-
-	it('stop() unsubscribes, so a later event no longer moves the replica', () => {
-		const { ctl, client } = started();
-		client.stop();
-		ctl.emit({ event: 'doc_state', payload: { v: 1, doc: stateWith({ '1': OSC }) } });
-		expect(client.synced).toBe(false);
+		expect(changes).toEqual([null, ops, null]);
 	});
 });

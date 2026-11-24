@@ -51,11 +51,11 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 	}
 });
 
-test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resumes it', async ({ page }) => {
-	// `ViewerFeed.svelte` unsubscribes below a 0.3 zoom and keeps the last frame; a pinch is how a
-	// phone gets there. The proof is on the wire: `/data` stops arriving for the slot, then arrives
-	// again. The fingers close ABOUT the card, so it shrinks in place and never leaves the viewport,
-	// which would let the stream go for a reason that is not the zoom.
+test('a pinch far out keeps a viewer\'s stream, however small the card draws', async ({ page }) => {
+	// `ViewerFeed.svelte` sizes its demand to the zoom and never lets the stream go for zoom alone;
+	// a pinch is how a phone gets far out. The proof is on the wire: `/data` keeps arriving for the
+	// slot past a 0.3 zoom. The fingers close ABOUT the card, so it shrinks in place and never leaves
+	// the viewport, which would let the stream go for a reason that is not the zoom.
 	await page.goto('/');
 	await waitForApp(page);
 	try {
@@ -63,8 +63,8 @@ test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resum
 		await waitForNode(page, osc);
 		await page.evaluate((u) => {
 			const g = (window as any).goofi;
-			g.commands.updateParam(u, 'output', 'mode', 'block');
-			g.commands.updateParam(u, 'output', 'sfreq', 64);
+			g.commands.updateParam(u, 'lfo', 'mode', 'block');
+			g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		await expect(card.locator('.slot-viewer .body')).toBeVisible();
@@ -73,7 +73,7 @@ test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resum
 			page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out') ?? 0, osc);
 		await expect.poll(rate, 'the viewer draws the stream').toBeGreaterThan(0);
 
-		// The pane's own scale, read off its transform: the number the freeze is decided from.
+		// The pane's own scale, read off its transform: the number the demand is sized from.
 		const zoom = () =>
 			page.locator('.svelte-flow__viewport').evaluate(
 				(el) => Number(/scale\(([\d.]+)\)/.exec(el.style.transform)?.[1] ?? 1)
@@ -92,10 +92,10 @@ test('a pinch past legibility lets a viewer\'s stream go, and a pinch back resum
 				.toBe(true);
 		};
 		await pinchTo((z) => z < 0.28, 0.5);
-		await expect.poll(rate, 'past the threshold, nothing arrives for the slot').toBe(0);
-		await expect.poll(() => frameSummary(page, osc)).toBeNull();
+		await expect.poll(rate, 'far out, the stream still arrives for the slot').toBeGreaterThan(0);
+		await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
 		await pinchTo((z) => z > 0.4, 2);
-		await expect.poll(rate, 'and back above it, the stream is demanded again').toBeGreaterThan(0);
+		await expect.poll(rate, 'and back in, it still does').toBeGreaterThan(0);
 	} finally {
 		await tearDown(page);
 	}
@@ -160,7 +160,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await expect(pane(page), 'a single selection opens the inspector').toHaveClass(/open/);
 		});
 
-		await test.step('a reference is picked by finger: the mode chip, then the node, then its slot', async () => {
+		await test.step('a source is chosen by finger: the fx chip seeds an expression, and = retains it', async () => {
 			lfo = await addNode(page, 'LFO', [40, 260]);
 			await waitForNode(page, lfo);
 			const nameOf = (u: string): Promise<string> =>
@@ -175,56 +175,43 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			// The entry background opens the source controls.
 			await field.tap({ position: { x: 2, y: 2 } });
 			await expect(field.getByTestId('param-more'), 'the background opened the source row').toBeVisible();
-			await field.getByTestId('param-mode-reference').tap();
-			await field.getByTestId('param-ref-node').tap();
-			const option = page.getByTestId('param-ref-node-list').getByRole('option', { name: lfoName });
-			await expect(option, 'the list opens on focus and names the producer').toBeVisible();
-			await option.tap();
-			const frequency = (key: 'mode' | 'expression' | 'reference'): Promise<unknown> =>
+			const frequency = (key: 'mode' | 'expression'): Promise<unknown> =>
 				page.evaluate(
 					([u, k]) =>
 						(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.params
 							.lfo.frequency[k],
 					[osc, key] as const
 				);
-			await expect
-				.poll(() => frequency('reference'), {
-					message: 'the producer has one output, so the pair committed as node.slot'
-				})
-				.toBe(`${lfoName}.out`);
-			// The other two chips by the same finger: fx seeds an expression from the literal, and `=`
-			// returns to the constant with the reference RETAINED.
 			await field.getByTestId('param-mode-expression').tap();
 			await expect.poll(() => frequency('mode')).toBe('expression');
 			await expect
 				.poll(async () => typeof (await frequency('expression')) === 'string', {
-					message: 'switching to fx seeded an expression'
+					message: 'switching to fx seeded an expression from the literal'
 				})
 				.toBe(true);
+			const seeded = await frequency('expression');
+			// `=` by the same finger returns to the constant with the expression RETAINED.
 			await field.getByTestId('param-mode-constant').tap();
 			await expect.poll(() => frequency('mode')).toBe('constant');
-			expect.soft(await frequency('reference'), 'a mode switch retains the reference').toBe(`${lfoName}.out`);
+			expect.soft(await frequency('expression'), 'a mode switch retains the expression').toBe(seeded);
 		});
 
-		await test.step('a node carried onto a param row offers the two ways to drive it', async () => {
+		await test.step('a node carried onto a param row is read by it', async () => {
 			const row = pane(page).getByTestId('param-field-amplitude');
 			const card = (await page.locator(`.svelte-flow__node[data-id="${lfo}"] .header`).boundingBox())!;
 			const at = (await row.boundingBox())!;
 			const to = { x: Math.round(at.x + at.width / 2), y: Math.round(at.y + at.height / 2) };
 			await swipe(page, { x: Math.round(card.x + card.width / 2), y: Math.round(card.y + card.height / 2) }, to);
-			const menu = page.locator('.context-menu');
-			await expect(menu, 'the drop asks which kind of link it is').toBeVisible();
-			await menu.getByText(/^Reference/).tap();
 			await expect
 				.poll(() =>
 					page.evaluate(
 						(u) =>
 							(window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.params
-								.lfo.amplitude.reference,
+								.lfo.amplitude.expression,
 						osc
 					)
 				)
-				.toBe(`${lfoName}.out`);
+				.toBe(`nd('${lfoName}')`);
 		});
 
 		await test.step('a long press on a control tells what it does, and does NOT do it', async () => {
@@ -296,7 +283,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			// still has its canvas.
 			await page.evaluate(async () => {
 				const g = (window as any).goofi;
-				await g.commands.addVariable('desk.level', 0.5, 'float', {
+				await g.commands.addVariable('desk.level', 0.5, {
 					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
 				});
 				const panel = g.query.panels()[0];
@@ -322,7 +309,34 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await page.getByTestId('control-edit-toggle').tap();
 			// The strip opening above the board is the sign the mode landed, and it moves the board.
 			await expect(page.getByTestId('control-palette'), 'edit mode opened the palette').toBeVisible();
+			// The bar's tabs are the groups — `desk`, and `control0` the panel was born over: ＋ makes
+			// a fresh `controlN` and shows it, its ✕ takes the group away, and a tap on a tab shows it.
+			const tabs = page.getByTestId('control-tabs');
+			await tabs.locator('.ui-tab-add').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			// The ＋ was one step: undo takes the group and the panel's place on it back together.
+			await page.getByTestId('topbar-undo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'desk');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			await page.getByTestId('topbar-redo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			await tabs.locator('.ui-tab.active .ui-tab-close').tap();
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			// The ✕ was one step: undo puts the group and the panel's place on it back together.
+			await page.getByTestId('topbar-undo').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'control1');
+			await expect(tabs.locator('[role=tab]')).toHaveCount(3);
+			await page.getByTestId('topbar-redo').tap();
+			await expect(tabs.locator('[role=tab]')).toHaveCount(2);
+			// The label, not the pill's centre: under a finger the rested-open ✕ spans most of a short pill.
+			await tabs.getByRole('tab', { name: 'desk' }).locator('.ui-tab-label').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-group', 'desk');
+			await expect(knob).toBeVisible();
 			const before = (await knob.boundingBox())!;
+			// The panel was away from `desk` for the undo, so its value stream is reopening.
+			await expect.poll(level).not.toBeNull();
 			const held = await level();
 			const grip = { x: Math.round(before.x + 6), y: Math.round(before.y + 6) };
 			await swipe(page, grip, { x: grip.x + Math.round(before.width), y: grip.y });
@@ -348,10 +362,16 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 				'the drop bore a slider with a fresh name'
 			).toBeVisible();
 
-			// The grab picked the knob, so its form is open; a finger's learn is there, and a patch with
-			// no MIDI node is told so rather than handed an empty list.
-			await page.getByTestId('control-props').getByTestId('control-learn').tap();
-			await expect(page.getByTestId('toast'), 'learn with no MIDI node says so').toContainText('MIDI');
+			// The grab picked the knob, so its form is open; a finger's learn is there, and a machine
+			// with no MIDI device is told so rather than left listening to nothing.
+			const learn = page.getByTestId('control-props').getByTestId('control-learn');
+			await learn.tap();
+			if (((await rawCall(page, 'midi list', {})).result.ports as unknown[]).length === 0) {
+				await expect(page.getByTestId('toast'), 'learn with no MIDI device says so').toContainText('MIDI');
+			} else {
+				await expect(learn).toHaveAttribute('aria-pressed', 'true');
+				await learn.tap();
+			}
 		});
 	} finally {
 		await restorePanelType(page);
@@ -422,6 +442,115 @@ test('a finger held on a viewer reads it, and follows as it moves, without movin
 		const after = (await card.boundingBox())!;
 		expect([after.x, after.y], 'the card stayed where it was').toEqual([before.x, before.y]);
 	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a held slot or control element is picked for reference, and a held param takes it', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	const param = (u: string, name: string, key: 'mode' | 'expression'): Promise<unknown> =>
+		page.evaluate(
+			([uid, n, k]) =>
+				(window as any).goofi.query.graph().nodes.find((x: { uid: string }) => x.uid === uid)?.params.lfo[n][k],
+			[u, name, key] as const
+		);
+	const centre = async (l: Locator) => {
+		const b = (await l.boundingBox())!;
+		return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+	};
+	const corner = async (l: Locator) => {
+		const b = (await l.boundingBox())!;
+		return { x: Math.round(b.x + 2), y: Math.round(b.y + 2) };
+	};
+	try {
+		const osc = await addNode(page, 'LFO', [40, 40]);
+		const lfo = await addNode(page, 'LFO', [40, 260]);
+		await waitForNode(page, osc);
+		await waitForNode(page, lfo);
+
+		await test.step('a double tap on the inspector\'s name field renames the node', async () => {
+			await tapNode(page, lfo);
+			const name = pane(page).getByTestId('node-name');
+			// A trial waits for the sheet to come to rest under the name.
+			await name.tap({ trial: true });
+			const at = await centre(name);
+			const touch = await touchSession(page);
+			for (let i = 0; i < 2; i++) {
+				await touch.down(at);
+				await touch.up();
+			}
+			const input = pane(page).getByTestId('node-name-input');
+			await expect(input, 'the taps opened the field and kept it').toBeFocused();
+			await input.fill('carrier');
+			await input.press('Enter');
+			await expect
+				.poll(() => page.evaluate((u) => (window as any).goofi.query.graph().nodes.find((n: { uid: string }) => n.uid === u)?.name, lfo))
+				.toBe('carrier');
+		});
+
+		await test.step('a held output slot is picked, and a held param reads it', async () => {
+			const pin = page.locator(`.svelte-flow__node[data-id="${lfo}"] [data-testid="slot-output-pin"]`);
+			const pick = page.getByRole('menuitem', { name: 'Select for reference' });
+			// The sheet covers the canvas; its ✕ clears the way to the slot.
+			await pane(page).getByTestId('inspector-close').tap();
+			await expect(pane(page)).not.toHaveClass(/open/);
+			await longPress(page, await centre(pin), pick);
+			await pick.tap();
+			await tapNode(page, osc);
+			const field = pane(page).getByTestId('param-field-frequency');
+			await field.scrollIntoViewIfNeeded();
+			const take = page.getByRole('menuitem', { name: "Reference selection: nd('carrier')" });
+			await longPress(page, await corner(field), take);
+			await take.tap();
+			await expect.poll(() => param(osc, 'frequency', 'mode')).toBe('expression');
+			expect(await param(osc, 'frequency', 'expression')).toBe("nd('carrier')");
+			await expect(page.getByTestId('reference-edge'), 'the selected node draws what it reads').toHaveCount(1);
+		});
+
+		await test.step('a held control element is picked, and a held param reads it', async () => {
+			await page.evaluate(async () => {
+				const g = (window as any).goofi;
+				await g.commands.addVariable('desk.level', 0.5, {
+					kind: 'knob', min: 0, max: 1, step: 0.01, x: 0, y: 0, w: 3, h: 3
+				});
+				const panel = g.query.panels()[0];
+				g.commands.setPanelType(panel.panelId, 'control');
+				g.commands.setPanelState(panel.panelId, { group: 'desk' });
+			});
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+			await page.getByTestId('control-edit-toggle').tap();
+			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'false');
+			const label = page.getByTestId('control-desk-level').locator('.label');
+			await label.dblclick();
+			const rename = page.getByTestId('control-rename');
+			await rename.fill('other');
+			await rename.press('Escape');
+			await expect(rename, 'Escape closes the rename field').toHaveCount(0);
+			await expect(label, 'and keeps the old name').toHaveText('level');
+			const pick = page.getByRole('menuitem', { name: 'Select for reference' });
+			await longPress(page, await centre(label), pick);
+			await pick.tap();
+			await restorePanelType(page);
+			await tapNode(page, osc);
+			const field = pane(page).getByTestId('param-field-amplitude');
+			await field.scrollIntoViewIfNeeded();
+			const take = page.getByRole('menuitem', { name: 'Reference selection: vars.desk.level' });
+			await longPress(page, await corner(field), take);
+			await take.tap();
+			await expect.poll(() => param(osc, 'amplitude', 'expression')).toBe('vars.desk.level');
+			await expect(
+				page.locator(`.svelte-flow__node[data-id="${osc}"]`).getByTestId('node-control-chips'),
+				'the node names the element that drives it'
+			).toHaveText('desk.level');
+		});
+	} finally {
+		await restorePanelType(page);
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			for (const v of g.query.variables().filter((v: { name: string }) => v.name.startsWith('desk.')))
+				await g.commands.removeVariable(v.name);
+		});
 		await tearDown(page);
 	}
 });

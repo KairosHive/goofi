@@ -1,10 +1,12 @@
 /* goofi
-{ "doc": "brightness to black and white\nSoft widens the step into a ramp around the level.",
+{ "doc": "brightness to two colours\nBelow the level a texel takes one colour, above it the other. Soft widens the step into a ramp around the level.",
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
-    {"group": "threshold", "name": "level", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "threshold", "name": "soft", "kind": "float", "default": 0.0, "min": 0.0, "max": 0.5} ] }
+    {"group": "threshold", "name": "level", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "threshold", "name": "soft", "kind": "num", "default": 0.0, "min": 0.0, "max": 0.5},
+    {"group": "threshold", "name": "below", "kind": "color", "default": [0.0, 0.0, 0.0, 1.0]},
+    {"group": "threshold", "name": "above", "kind": "color", "default": [1.0, 1.0, 1.0, 1.0]} ] }
 */
 fn shade(uv: vec2f) -> vec4f {
     let c = textureSample(input, samp, uv);
@@ -12,5 +14,6 @@ fn shade(uv: vec2f) -> vec4f {
     // A `smoothstep` with two equal edges divides by zero; a hard step is what soft 0 asks for.
     let soft = max(p.soft, 1e-5);
     let t = smoothstep(p.level - soft, p.level + soft, l);
-    return vec4f(vec3f(t), c.a);
+    let ink = mix(p.below, p.above, t);
+    return vec4f(ink.rgb, ink.a * c.a);
 }

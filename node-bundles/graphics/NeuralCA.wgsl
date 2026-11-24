@@ -4,18 +4,18 @@
   "state": ["cells0", "cells1", "cells2"],
   "inputs": [{"name": "weights", "kind": "ARRAY"}],
   "params": [
-    {"group": "neuralca", "name": "rate", "kind": "float", "default": 1.0, "min": 0.0, "max": 2.0,
+    {"group": "neuralca", "name": "rate", "kind": "num", "default": 1.0, "min": 0.0, "max": 2.0,
      "doc": "How much of the step a cell takes. 1.0 is what a model was trained at."},
-    {"group": "neuralca", "name": "fire", "kind": "float", "default": 0.5, "min": 0.05, "max": 1.0,
+    {"group": "neuralca", "name": "fire", "kind": "num", "default": 0.5, "min": 0.05, "max": 1.0,
      "doc": "The chance a cell updates on a tick. 0.5 is what a model was trained at."},
-    {"group": "neuralca", "name": "reach", "kind": "int", "default": 1, "min": 1, "max": 12,
+    {"group": "neuralca", "name": "reach", "kind": "num", "int": true, "default": 1, "min": 1, "max": 12,
      "doc": "How many texels away a cell looks. Above 1 coarsens a trained texture."},
     {"group": "neuralca", "name": "alive", "kind": "bool", "default": false,
      "doc": "Growth: a cell with no living neighbour holds at zero, so a pattern spreads from its seed. Off for a texture."},
     {"group": "neuralca", "name": "start", "kind": "str", "default": "noise", "options": ["noise", "dot", "zero"]},
-    {"group": "neuralca", "name": "density", "kind": "float", "default": 0.3, "min": 0.0, "max": 1.0},
-    {"group": "neuralca", "name": "scale", "kind": "float", "default": 4.0, "min": 1.0, "max": 32.0},
-    {"group": "neuralca", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "neuralca", "name": "density", "kind": "num", "default": 0.3, "min": 0.0, "max": 1.0},
+    {"group": "neuralca", "name": "scale", "kind": "num", "default": 4.0, "min": 1.0, "max": 32.0},
+    {"group": "neuralca", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 const CH: i32 = 12;
 const GROUPS: i32 = CH / 4;

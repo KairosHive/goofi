@@ -1,16 +1,16 @@
 <script lang="ts">
 	import { graph } from '$lib/stores/graph.svelte';
 	import { consoleStore } from '$lib/stores/console.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
-	import { FS_SORTS, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
-	import { downloadPatch } from '$lib/api/patchFile';
-	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput } from '$lib/ui';
+	import { FS_SORTS, getControl, type DirListing, type FsEntry, type FsRoot, type FsSort } from '$lib/api/control';
+	import { downloadPatch, patchStem } from '$lib/api/patchFile';
+	import { errorText } from '$lib/stores/notify.svelte';
+	import { Bar, Button, ConfirmDialog, Dialog, EmptyState, Icon, IconButton, ScrollArea, TextInput, Wave } from '$lib/ui';
 	import { onMount, untrack } from 'svelte';
 
 	type Props = {
 		mode: 'save' | 'load';
 		suggestedName?: string;
-		/** Settles when the pick is done; the dialog shows the log meanwhile. */
+		/** Settles when the pick is done; the dialog shows the log meanwhile and keeps it on a rejection. */
 		onPick: (path: string, overwrite?: boolean) => Promise<void>;
 		onClose: () => void;
 		/** The through-the-browser copy, for locations the backend cannot reach. */
@@ -38,10 +38,11 @@
 	let pathBarEl = $state<HTMLDivElement | null>(null);
 	let fileInput = $state<HTMLInputElement | null>(null);
 
-	// While a pick runs, the dialog is its progress: a spinner over what the backend has logged
+	// While a pick runs, the dialog is its progress: a wave beside what the backend has logged
 	// since the pick, read off the one console store.
 	const cs = consoleStore();
 	let working = $state<number | null>(null);
+	let failure = $state<string | null>(null);
 	let logEl = $state<HTMLElement | null>(null);
 	const progress = $derived.by(() => {
 		if (working === null) return [];
@@ -50,6 +51,7 @@
 	});
 	$effect(() => {
 		void progress.length;
+		void failure;
 		if (logEl) logEl.scrollTop = logEl.scrollHeight;
 	});
 	async function run(task: () => Promise<void>): Promise<void> {
@@ -57,20 +59,19 @@
 		working = cs.mark();
 		try {
 			await task();
-		} finally {
 			working = null;
+		} catch (e) {
+			// The log stays up under the error, so the user can read what the backend said.
+			failure = errorText(e);
 		}
+	}
+	function back(): void {
+		failure = null;
+		working = null;
 	}
 	function pick(path: string, overwrite?: boolean): void {
 		void run(() => onPick(path, overwrite));
 	}
-
-	// A modal: the app's global chords stand down while it is up.
-	const standdownId = $props.id();
-	$effect(() => {
-		ui().openEditor(standdownId);
-		return () => ui().closeEditor(standdownId);
-	});
 
 	// The order is this viewer's own convenience, so it lives in the browser, best-effort.
 	const SORT_KEY = 'goofi.fs.sort';
@@ -133,7 +134,7 @@
 		error = null;
 		selected = null;
 		try {
-			const res = await g.listDir(path || undefined, sort.by, sort.reverse);
+			const res = await getControl().call<DirListing>('dir list', { path: path || undefined, sort: sort.by, reverse: sort.reverse });
 			if (seq !== navSeq) return;
 			cwd = res.path;
 			pathDraft = res.path;
@@ -142,7 +143,7 @@
 			roots = res.roots;
 		} catch (e) {
 			if (seq !== navSeq) return;
-			error = e instanceof Error ? e.message : String(e);
+			error = errorText(e);
 		}
 	}
 
@@ -157,7 +158,7 @@
 			void go(entry.path);
 		} else if (entry.is_gfi) {
 			if (mode === 'load') pick(entry.path);
-			else filename = entry.name.replace(/\.gfi$/, '');
+			else filename = patchStem(entry.name);
 		}
 	}
 
@@ -165,7 +166,7 @@
 		if (entry.kind === 'dir') return;
 		if (entry.is_gfi) {
 			selected = entry.path;
-			if (mode === 'save') filename = entry.name.replace(/\.gfi$/, '');
+			if (mode === 'save') filename = patchStem(entry.name);
 		}
 	}
 
@@ -176,12 +177,12 @@
 		const full = `${dir}/${name.endsWith('.gfi') ? name : name + '.gfi'}`;
 		checking = true;
 		try {
-			const target = await g.statPath(full);
+			const target = await getControl().call<{ path: string; kind: 'file' | 'dir' | 'missing' }>('dir stat', { path: full });
 			if (target.kind === 'dir') error = 'Choose a file name. This path is a folder.';
 			else if (target.kind === 'file') replacing = target.path;
 			else pick(target.path);
 		} catch (e) {
-			error = e instanceof Error ? e.message : String(e);
+			error = errorText(e);
 		} finally {
 			checking = false;
 		}
@@ -197,17 +198,18 @@
 	});
 
 	const title = $derived(
-		working !== null
-			? mode === 'save' ? 'Saving patch…' : 'Loading patch…'
-			: mode === 'save' ? 'Save patch' : 'Load patch'
+		failure !== null
+			? mode === 'save' ? 'Save failed' : 'Load failed'
+			: working !== null
+				? mode === 'save' ? 'Saving patch…' : 'Loading patch…'
+				: mode === 'save' ? 'Save patch' : 'Load patch'
 	);
+	const busy = $derived(working !== null && failure === null);
 </script>
 
-<!-- `nokey`: SvelteFlow's delete key is a bare window listener, so Backspace here would delete the canvas selection. -->
 <Dialog
 	open
-	class="nokey"
-	onClose={() => working === null && onClose()}
+	onClose={() => !busy && onClose()}
 	style="--dialog-pad: 0; --dialog-bg: var(--surface-1); --dialog-max-width: min(1100px, 94vw); width: 100%"
 	aria-label={title}
 	data-testid="fs-browser"
@@ -218,7 +220,7 @@
 				<span class="title">{title}</span>
 			{/snippet}
 			{#snippet end()}
-				<IconButton variant="ghost" size="sm" label="Close" onclick={onClose}
+				<IconButton variant="ghost" size="sm" label="Close" disabled={busy} onclick={onClose}
 					><Icon name="x" /></IconButton
 				>
 			{/snippet}
@@ -226,12 +228,15 @@
 
 		{#if working !== null}
 			<div class="body progress" data-testid="fs-progress" aria-live="polite">
-				<!-- Three dots in turn, no ring: the frame's own accent, drawn small and quiet. -->
-				<span class="spinner" aria-hidden="true"><i></i><i></i><i></i></span>
+				<!-- Beside the log the wave travels down; above it, in a narrow dialog, across. -->
+				<Wave class="wave" halted={failure !== null} />
 				<ul class="log" bind:this={logEl}>
 					{#each progress as row (row.uid)}
 						<li class={row.level}>{row.text}</li>
 					{/each}
+					{#if failure !== null}
+						<li class="error" data-testid="fs-failure">{failure}</li>
+					{/if}
 				</ul>
 			</div>
 		{:else}
@@ -319,7 +324,8 @@
 
 		<Bar class="fs-footer" style="--bar-wrap: wrap; --bar-pad-y: var(--space-2)">
 			{#snippet start()}
-				{#if mode === 'save'}
+				<!-- The name field and the upload belong to the browser stage, not to a running pick. -->
+				{#if working !== null}{:else if mode === 'save'}
 					<TextInput
 						style="width: 14rem; flex: 0 1 auto; min-width: 0"
 						value={filename}
@@ -352,11 +358,13 @@
 				{/if}
 			{/snippet}
 			{#snippet end()}
-				<Button variant="ghost" onclick={onClose} disabled={working !== null}>Cancel</Button>
-				{#if mode === 'save'}
-					<Button variant="primary" onclick={confirmSave} disabled={checking || working !== null} data-testid="fs-save">Save</Button>
+				<Button variant="ghost" onclick={onClose} disabled={busy}>Cancel</Button>
+				{#if failure !== null}
+					<Button variant="primary" onclick={back} data-testid="fs-back">Back</Button>
+				{:else if mode === 'save'}
+					<Button variant="primary" onclick={confirmSave} disabled={checking || busy} data-testid="fs-save">Save</Button>
 				{:else}
-					<Button variant="primary" disabled={!selected || working !== null} onclick={confirmOpen} data-testid="fs-open">
+					<Button variant="primary" disabled={!selected || busy} onclick={confirmOpen} data-testid="fs-open">
 						Open
 					</Button>
 				{/if}
@@ -397,43 +405,17 @@
 		/* `dvh`, not `vh`: on a phone `vh` is the largest viewport, so the modal would overflow. */
 		height: min(42rem, 70dvh);
 	}
-	/* The spinner beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
+	/* The wave beside the log; a narrow dialog, taller than it is wide, stacks them instead. */
 	.progress {
 		flex-direction: row;
 		align-items: center;
 		gap: var(--space-6);
 		padding: var(--space-6);
 	}
-	.spinner {
-		flex: 0 0 auto;
-		display: flex;
-		gap: var(--space-2);
-		padding: var(--space-4);
-	}
-	.spinner i {
-		width: 0.5rem;
-		height: 0.5rem;
-		border-radius: 50%;
-		background: var(--accent);
-		animation: fs-pulse 1.2s ease-in-out infinite;
-	}
-	.spinner i:nth-child(2) {
-		animation-delay: 0.2s;
-	}
-	.spinner i:nth-child(3) {
-		animation-delay: 0.4s;
-	}
-	@keyframes fs-pulse {
-		0%,
-		60%,
-		100% {
-			opacity: 0.25;
-			transform: scale(0.8);
-		}
-		30% {
-			opacity: 1;
-			transform: scale(1);
-		}
+	.progress :global(.wave) {
+		--wave-flow: column;
+		--wave-dx: 1;
+		--wave-dy: 0;
 	}
 	.log {
 		flex: 1 1 auto;
@@ -474,7 +456,6 @@
 		color: var(--text-muted);
 	}
 	.root {
-		font: inherit;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -484,7 +465,6 @@
 		text-align: left;
 		padding: var(--space-3) var(--space-4);
 		border-radius: var(--radius-sm);
-		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.root.active,
@@ -524,19 +504,14 @@
 		font-family: var(--font-mono);
 	}
 	.col {
-		font: inherit;
 		background: transparent;
 		border: none;
 		padding: 0;
 		color: var(--text-muted);
 		text-align: left;
-		cursor: pointer;
 	}
 	.col.on {
 		color: var(--text);
-	}
-	.col:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 	}
 	.col.size,
 	.entry .size {
@@ -557,7 +532,6 @@
 		padding: var(--space-2) 0;
 	}
 	.entry {
-		font: inherit;
 		font-family: var(--font-mono);
 		width: 100%;
 		text-align: left;
@@ -565,7 +539,6 @@
 		border: none;
 		border-radius: var(--radius-sm);
 		color: var(--text);
-		cursor: pointer;
 		transition: background var(--dur-fast) var(--ease);
 	}
 	.entry:hover {
@@ -597,6 +570,11 @@
 		.body,
 		.progress {
 			flex-direction: column;
+		}
+		.progress :global(.wave) {
+			--wave-flow: row;
+			--wave-dx: 0;
+			--wave-dy: 1;
 		}
 		.roots {
 			flex: 0 0 auto;

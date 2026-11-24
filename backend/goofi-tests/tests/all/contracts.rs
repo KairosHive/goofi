@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use goofi_bridge::ops::{find, registry, typescript};
 use goofi_bridge::vocab;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
+use goofi_node::{Face, NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
 use goofi_tests::{fixtures::LibraryEngine, hex, j, Client, Goofi};
 use serde_json::Value;
 
@@ -46,31 +46,37 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
         }
     }
     for op in registry() {
-        // The args schema is a STRING, so a typo in it would otherwise be a fact only at read time.
-        assert_eq!(op.args().count(), op.args.split_whitespace().count(),
-                   "`{}` has an argument with no `name:type`: {:?}", op.name, op.args);
-        for (arg, ty, _) in op.args() {
-            assert!(ARG_TYPES.contains(&ty), "`{}`'s `{arg}` has unknown type `{ty}`", op.name);
+        for a in op.args().iter() {
+            assert!(ARG_TYPES.contains(&a.ty.as_str()), "`{}`'s `{}` has unknown type `{}`", op.name, a.name, a.ty);
             // `--json` is client-consumed and `--help` server-intercepted, ANYWHERE on a line —
             // an op declaring either would silently never receive it.
-            assert!(arg != "json" && arg != "help",
-                    "`{}` declares the reserved flag `--{arg}`", op.name);
+            assert!(a.name != "json" && a.name != "help",
+                    "`{}` declares the reserved flag `--{}`", op.name, a.name);
         }
         assert!(!op.doc.is_empty() && !op.result.is_empty(), "`{}` is undocumented", op.name);
-        assert!(op.positional <= op.args().count() && op.positional <= 2,
+        assert!(op.positional <= op.args().len() && op.positional <= 2,
                 "`{}` claims more positionals than it declares args", op.name);
         assert!(!op.doc().contains("{panel_types}") && !op.doc().contains("{viewer_kinds}") && !op.doc().contains("{boundary_types}"),
                 "`{}` has an unexpanded placeholder — a model would read it verbatim", op.name);
+        // Every op's arguments are a JSON Schema an MCP client can read, closed over its fields.
+        assert_eq!(op.schema()["additionalProperties"], j!(false), "`{}` admits unknown arguments", op.name);
     }
-    // The `!` has to reach the parse, or every argument is advertised as optional.
-    let add: Vec<_> = find("node add").expect("node add is registered").args().collect();
-    assert_eq!((add[0], add[1]), (("type", "string", true), ("pos", "float2", false)));
-    // A request is addressed exactly as every other param op is, and names its kind.
-    assert_eq!(find("node param request").expect("node param request is registered").args,
-               "node:uid! param:param_addr! request:string!");
+    // The declarations are READ off the `Args` type: a required field, an optional one, and the
+    // vocabulary words a newtype spells.
+    let spelled = |name: &str| -> Vec<(String, String, bool)> {
+        find(name).expect("registered").args().iter().map(|a| (a.name.clone(), a.ty.clone(), a.required)).collect()
+    };
+    let add = spelled("node add");
+    assert_eq!((&add[0], &add[1]), (&("type".into(), "string".into(), true), &("pos".into(), "float2".into(), false)));
+    assert_eq!(spelled("node param request"),
+               vec![("node".into(), "uid".into(), true), ("param".into(), "param_addr".into(), true), ("request".into(), "string".into(), true)]);
+    assert!(spelled("node add").iter().any(|(n, t, _)| n == "param" && t == "json[]"), "a list rides as `T[]`");
+    // An unknown argument is refused on every op, hooked or not: the type is the validation.
+    let g = Goofi::new();
+    let why = g.refuse("node add", j!({ "type": "signal:LFO", "colour": "red" }));
+    assert!(why.contains("colour"), "the refusal names the stray field: {why}");
 
     // A row with no dispatch arm answers `unknown op` while palette and tool list advertise it.
-    let g = Goofi::new();
     for op in registry() {
         if let Err(e) = g.try_call(op.name, j!({})) {
             assert!(!e.contains(&format!("unknown op `{}`", op.name)),
@@ -96,7 +102,7 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
         assert!(doc.contains(word), "`{word}` is not offered by node edit's doc: {doc}");
     }
     let doc = find("node param edit").expect("registered").doc();
-    for word in ["`triggers` defaults false", "triggers: true"] {
+    for word in ["never runs a node", "`common.trigger`"] {
         assert!(doc.contains(word), "`{word}` is not offered by node param edit's doc: {doc}");
     }
 
@@ -129,6 +135,8 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
 fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
     regenerated("frontend/src/lib/api/ops.ts", typescript());
     regenerated("frontend/src/lib/api/vocab.ts", vocab::typescript());
+    regenerated("frontend/src/lib/api/generated.ts", goofi_bridge::schemas::typescript());
+    regenerated("frontend/src/lib/codec/frame.ts", goofi_codec::typescript());
 
     // `PROTOCOL_VERSION` is the one number both halves declare by hand, and each comments that the
     // other must be bumped with it — which is the definition of a pair that drifts. A client one
@@ -177,42 +185,42 @@ static MULTI_IN: &[SlotDecl] = &[
 ];
 static TRANSFORM: NodeManifest = manifest("MultiThing", MULTI_IN, &[], false);
 static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "welch", name: "nperseg", spec: ParamSpec::Int { default: 256, min: 16, max: 4096, options: &[] },
+    group: "welch", name: "nperseg", spec: ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], face: Face::Plain },
     expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 static DOCUMENTED: NodeManifest = manifest("DocumentedThing", &[], DOCUMENTED_PARAMS, true);
 static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "common", name: "autotrigger", spec: ParamSpec::Bool { default: true },
     expression: None, doc: Some("On by default: this node is a source."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 static OVERRIDES_COMMON: NodeManifest = manifest("OverridesCommon", &[], OVERRIDE_PARAMS, false);
 static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "count", name: "reset", spec: ParamSpec::Pulse,
     expression: None, doc: Some("Start the count over."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 static PULSING: NodeManifest = manifest("PulsingThing", &[], PULSE_PARAMS, true);
-const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: Option<Show>) -> ParamDecl {
-    ParamDecl { group, name, spec, expression: None, doc: None, section, show }
-}
-const fn when(param: &'static str, any_of: &'static [&'static str]) -> Option<Show> {
-    Some(Show { param, any_of })
+const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: &'static [Show]) -> ParamDecl {
+    ParamDecl { group, name, spec, expression: None, doc: None, section, show, role: None }
 }
 const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
-const LEVEL: ParamSpec = ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 };
+const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain };
 /// Three sections of `filter`, each shown for its own mode, and a page shown only for `iir`.
 static SECTIONED_PARAMS: &[ParamDecl] = &[
-    decl("filter", "mode", MODE, 0, None),
-    decl("filter", "taps", ParamSpec::Int { default: 64, min: 1, max: 512, options: &[] }, 1, when("mode", &["fir"])),
-    decl("filter", "order", ParamSpec::Int { default: 4, min: 2, max: 8, options: &[2, 4, 8] }, 2, when("mode", &["iir"])),
-    decl("filter", "ripple", LEVEL, 2, when("order", &["4", "8"])),
-    decl("shape", "gate", ParamSpec::Bool { default: false }, 0, when("filter.mode", &["iir"])),
+    decl("filter", "mode", MODE, 0, &[]),
+    decl("filter", "taps", ParamSpec::Num { default: &[64.0], min: 1.0, max: 512.0, int: true, options: &[], face: Face::Plain }, 1, &[Show { param: "mode", any_of: &["fir"] }]),
+    decl("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 8.0, int: true, options: &[2, 4, 8], face: Face::Plain }, 2, &[Show { param: "mode", any_of: &["iir"] }]),
+    decl("filter", "ripple", LEVEL, 2, &[Show { param: "order", any_of: &["4", "8"] }]),
+    decl("shape", "gate", ParamSpec::Bool { default: false }, 0, &[Show { param: "filter.mode", any_of: &["iir"] }]),
 ];
 static SECTIONED: NodeManifest = manifest("SectionedThing", &[], SECTIONED_PARAMS, false);
 
@@ -230,7 +238,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let g = Goofi::new();
     // The lock is DROPPED before the first op: `library list` takes the same one.
     let (declared, names): (Vec<(String, Vec<String>)>, Vec<&str>) = {
-        let graph = g.state.graph.lock().unwrap();
+        let graph = g.graph();
         let declared = graph.library_entries().into_iter()
             .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
             .map(|(engine, l)| {
@@ -310,8 +318,8 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let pages: Vec<&str> = got["params"].as_object().expect("pages").keys().map(String::as_str).collect();
     assert_eq!(pages, ["own", "common"], "{got}");
     let common: Vec<&str> = got["params"]["common"].as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode"], "the engine's order: {common:?}");
-    assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5.0), "the author's default: {got}");
+    assert_eq!(common, ["autotrigger", "max_frequency", "frequency_mode", "trigger"], "the engine's order: {common:?}");
+    assert_eq!(got["params"]["common"]["max_frequency"]["value"], j!(5), "the author's default: {got}");
 
     // The two fixtures differ only in the `producer` flag, and it decides who paces the node.
     assert_eq!(row("signal:MyPyThing")["params"]["common"]["autotrigger"]["value"], true,
@@ -320,7 +328,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
                "a transform is driven by its input");
     let common = &row("signal:MyPyThing")["params"]["common"];
     assert_eq!((&common["max_frequency"]["type"], &common["autotrigger"]["type"],
-                &common["frequency_mode"]["type"]), (&j!("float"), &j!("bool"), &j!("string")));
+                &common["frequency_mode"]["type"]), (&j!("num"), &j!("bool"), &j!("string")));
     assert_eq!(row("signal:MultiThing")["input_multi"], j!(["many"]));
     assert_eq!(row("signal:MyPyThing")["input_multi"], j!([]));
 
@@ -338,14 +346,14 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     let pulse = &row("signal:PulsingThing")["params"]["count"]["reset"];
     assert_eq!((&pulse["type"], &pulse["value"]), (&j!("pulse"), &j!(null)), "{pulse}");
 
-    // A row names its section and the one param that shows it, resolved to `group` and `name`.
+    // A row names its section and the params that show it, each resolved to `group` and `name`.
     let params = &row("signal:SectionedThing")["params"];
     let layout = |g: &str, n: &str| (params[g][n]["section"].clone(), params[g][n]["show"].clone());
-    assert_eq!(layout("filter", "mode"), (j!(0), j!(null)));
-    assert_eq!(layout("filter", "taps"), (j!(1), j!({ "group": "filter", "name": "mode", "any_of": ["fir"] })));
-    assert_eq!(layout("filter", "ripple"), (j!(2), j!({ "group": "filter", "name": "order", "any_of": ["4", "8"] })));
-    assert_eq!(layout("shape", "gate").1["group"], "filter", "a page may show by another page's param");
-    assert_eq!(layout("common", "autotrigger"), (j!(0), j!(null)), "the engine's own params always show");
+    assert_eq!(layout("filter", "mode"), (j!(0), j!([])));
+    assert_eq!(layout("filter", "taps"), (j!(1), j!([{ "group": "filter", "name": "mode", "any_of": ["fir"] }])));
+    assert_eq!(layout("filter", "ripple"), (j!(2), j!([{ "group": "filter", "name": "order", "any_of": ["4", "8"] }])));
+    assert_eq!(layout("shape", "gate").1[0]["group"], "filter", "a page may show by another page's param");
+    assert_eq!(layout("common", "autotrigger"), (j!(0), j!([])), "the engine's own params always show");
 }
 
 #[test]
@@ -363,20 +371,20 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
         let reason = read(params).err().unwrap_or_else(|| panic!("loaded, not refused for `{why}`"));
         assert!(reason.contains(why), "{reason}");
     };
-    let mode = decl("filter", "mode", MODE, 0, None);
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("shape", &["fir"]))], "`shape`, which this node does not declare");
-    refused(&[decl("filter", "gain", LEVEL, 0, None), decl("filter", "q", LEVEL, 0, when("gain", &["1"]))],
+    let mode = decl("filter", "mode", MODE, 0, &[]);
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "shape", any_of: &["fir"] }])], "`shape`, which this node does not declare");
+    refused(&[decl("filter", "gain", LEVEL, 0, &[]), decl("filter", "q", LEVEL, 0, &[Show { param: "gain", any_of: &["1"] }])],
             "`gain`, which has no fixed set of values");
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &["fft"]))], "`fft`, which `mode` does not offer: fir, iir");
-    refused(&[mode, decl("filter", "q", LEVEL, 0, when("mode", &[]))], "shows for no value");
-    refused(&[decl("filter", "mode", MODE, 0, when("mode", &["fir"]))], "leads back to it");
-    refused(&[decl("filter", "a", MODE, 0, when("b", &["fir"])), decl("filter", "b", MODE, 0, when("a", &["iir"]))],
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "mode", any_of: &["fft"] }])], "`fft`, which `mode` does not offer: fir, iir");
+    refused(&[mode, decl("filter", "q", LEVEL, 0, &[Show { param: "mode", any_of: &[] }])], "shows for no value");
+    refused(&[decl("filter", "mode", MODE, 0, &[Show { param: "mode", any_of: &["fir"] }])], "leads back to it");
+    refused(&[decl("filter", "a", MODE, 0, &[Show { param: "b", any_of: &["fir"] }]), decl("filter", "b", MODE, 0, &[Show { param: "a", any_of: &["iir"] }])],
             "leads back to it");
-    refused(&[mode, decl("filter", "mode", MODE, 1, None)], "`filter.mode` is declared twice");
+    refused(&[mode, decl("filter", "mode", MODE, 1, &[])], "`filter.mode` is declared twice");
 
     // The declarations a fresh goofi carries in its own binary pass the same rule.
     let g = Goofi::new();
-    for (_, l) in g.state.graph.lock().unwrap().library_entries() {
+    for (_, l) in g.graph().library_entries() {
         assert_eq!(goofi_node::illegal_param(l.manifest.params), None, "{}", l.manifest.type_name);
     }
 }
@@ -385,7 +393,7 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
 fn a_node_that_could_not_load_explains_itself_instead_of_vanishing() {
     let g = Goofi::new();
     {
-        let mut graph = g.state.graph.lock().unwrap();
+        let mut graph = g.graph();
         graph.register_unavailable("signal:PsdScipy".into(), "scipy".into());
         goofi_bridge::register_dyn_type(&mut graph, &SOURCE, Box::new(|_| never()), &goofi_node::NATIVE);
         // Provenance is the only thing the scan knows that the catalog cannot re-derive, greyed rows too.
@@ -415,8 +423,16 @@ async fn the_palette_rides_the_snapshot_and_the_graph_never_does() {
     g.call("node param edit", j!({ "node": hex(a), "param": "common/max_frequency",
                                    "expression": "@@@ not an expression @@@" }));
     g.ready(b);
+    // The beat carries the bad source's error; a tab that connects after it is seeded with it,
+    // because a beat sends only what moved.
+    let mut ev = g.events();
+    g.until("the beat to carry the error", |_| {
+        ev.next("param_values")["nodes"][hex(a)]["errors"]["common"]["max_frequency"].is_string().then_some(())
+    });
 
     let (_c, hello) = Client::connect(&g.serve().await).await;
+    assert!(hello["param_values"][hex(a)]["errors"]["common"]["max_frequency"].is_string(),
+            "the seed carries the beat's readings: {}", hello["param_values"]);
     assert_eq!(hello["node_types"], g.call("library list", j!({ "full": true }))["types"],
                "hello embeds the same palette `library list --full` answers");
     for dead in ["nodes", "links", "instances"] {
@@ -443,7 +459,7 @@ fn two_engines_may_share_a_type_name_and_never_an_id() {
     // advertised and both are addressable. It cost a shipped audio filter its name, and twice
     // before that a node was renamed to dodge the silence a first-advertiser-wins lookup made.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
+    g.graph().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
 
     assert_ne!(g.add("signal:LFO"), g.add("twin:LFO"), "each engine's own is reachable");
     let why = g.refuse("node add", j!({ "type": "LFO" }));
@@ -453,11 +469,11 @@ fn two_engines_may_share_a_type_name_and_never_an_id() {
     // …because the ENGINE id is what tells them apart, it is the one thing that cannot be shared:
     // a second `twin` would name both engines from one id and send every insert to the first.
     let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        g.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["Other"])));
+        g.graph().register_engine(Box::new(LibraryEngine::named("twin", &["Other"])));
     }));
     assert!(twice.is_err(), "a second engine was allowed to take the id `twin`");
-    // The refusal poisoned the lock, and this instance's workers are still parked on it.
-    g.state.graph.clear_poison();
+    // The refusal panicked under the graph lock, and the instance's workers still get it.
+    assert_eq!(g.graph().node_count(), 2);
 }
 
 #[test]
@@ -465,7 +481,7 @@ fn every_slot_name_is_letters_and_digits() {
     // A reference spells `node.slot`, and an expression reads a slot as an attribute: one rule,
     // held by every manifest a fresh goofi offers — the shipped nodes and the fixtures.
     let g = Goofi::new();
-    let graph = g.state.graph.lock().unwrap();
+    let graph = g.graph();
     for (_, l) in graph.library_entries() {
         let m = l.manifest;
         let slots = m.inputs.iter().map(|s| s.name).chain(m.outputs.iter().map(|o| o.name));
@@ -489,10 +505,10 @@ fn every_slot_name_is_letters_and_digits() {
 
 #[test]
 fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
-    // Cheap and evaluator-free: a typo'd `variables.defualt_ufreq` compiles, binds, then errors on every
+    // Cheap and evaluator-free: a typo'd `vars.defualt_ufreq` compiles, binds, then errors on every
     // instance. Read AS EACH TYPE SEES IT, since a declaration may condition on the manifest.
     let g = Goofi::new();
-    let graph = g.state.graph.lock().unwrap();
+    let graph = g.graph();
     let decls = graph.library_entries().into_iter().flat_map(|(engine, l)| {
         let m = l.manifest;
         m.params.iter().copied().chain(graph.universal_decls(engine, m)).map(move |d| (m.type_name, d))
@@ -503,69 +519,129 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
                 "{owner}: {}/{} has an empty expression", decl.group, decl.name);
         for read in goofi_node::expr::scan_variables(expr.source) {
             assert!(goofi_core::variables::SYSTEM_VARIABLES.iter().any(|g| g.name == read.name),
-                    "{owner}: the expression on {}/{} reads `variables.{}`, which no fresh patch has",
+                    "{owner}: the expression on {}/{} reads `vars.{}`, which no fresh patch has",
                     decl.group, decl.name, read.name);
         }
     }
 }
 
 #[test]
-fn the_control_plane_document_carries_no_null_leaf() {
-    // A delta is an RFC 7386 merge patch, which spends `null` on "delete this key", so a null leaf
-    // would be ambiguous. If one is ever needed this fails and NAMES the path.
+fn the_control_plane_document_is_the_patch_and_a_delta_is_path_ops() {
+    // The replica is the archive's own shape with every root present, blobs as the JSON they are,
+    // and a delta names the record it moves. A panel's state and a node's viewers once rode as
+    // JSON strings for a merge patch's sake; a put of the record carries them whole.
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
-    // A pulse holds no value, which is the one param that could reach the doc as a null leaf.
     g.add("_TestResettable");
     g.link(osc, "out", buf, "input");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency",
-                                   "expression": "variables.system.default_ufreq" }));
-    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" }));
+                                   "expression": "vars.signal.default_ufreq" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" }));
     let inst = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
-    // Grouping a node fed from outside mints a WIRED port, which is how this reaches the two
-    // optional leaves a scope has: a record's `scope` key, and the link that is its inner wire.
     let doc = g.doc();
     let ports: Vec<String> = doc["nodes"].as_object().unwrap().iter()
         .filter(|(_, n)| n["scope"] == inst).map(|(u, _)| u.clone()).collect();
     assert!(!ports.is_empty(), "the group left no port: {}", doc["nodes"]);
-    assert!(doc["links"].as_array().unwrap().iter().any(|l| {
+    assert!(doc["links"].as_object().unwrap().values().any(|l| {
                 ports.iter().any(|p| l["node_out"] == p.as_str() || l["node_in"] == p.as_str())
             }),
             "no port is wired, so this test would not reach the inner-wire link: {}", doc["links"]);
-    g.call("layout panel add", j!({ "beside": panel_id(&g), "side": "right", "ratio": 0.5 }));
+    let panel = panel_id(&g);
+    g.call("layout panel edit", j!({ "panel": panel, "type": "viewer", "state": { "node": hex(osc), "slot": "out" } }));
+    g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "kind": "line" }] }));
 
     let doc = g.doc();
-    for root in ["nodes", "links", "variables", "arrangement"] {
+    for root in ["nodes", "links", "variables", "variable_groups", "arrangement"] {
         assert!(doc.get(root).is_some(), "the document is missing its `{root}` root: {doc}");
     }
-    let mut nulls = Vec::new();
-    find_nulls(&doc, &mut Vec::new(), &mut nulls);
-    assert!(nulls.is_empty(), "these leaves are null, so a merge patch cannot express them: {nulls:?}");
+    assert_eq!(doc["nodes"][hex(osc)]["viewers"]["out"]["kind"], "line", "a viewer blob is JSON: {}", doc["nodes"][hex(osc)]);
+    let state = goofi_tests::arrangement_node(&doc["arrangement"], &panel).expect("the panel")["state"].clone();
+    assert_eq!(state["node"], hex(osc), "a panel's state is JSON: {state}");
+    assert_eq!(doc["nodes"][hex(osc)]["params"]["lfo"]["frequency"]["mode"], "expression", "a source rides inline");
+    // A value is a frame on the data plane, never a document field; the list answers it.
+    assert!(doc["variables"]["patch.subject"].is_object() && doc["variables"]["patch.subject"].get("value").is_none(), "{}", doc["variables"]);
+    assert_eq!(g.variable("patch.subject"), "P07");
+}
+
+#[tokio::test]
+async fn a_delta_names_the_leaf_it_moved_and_lands_a_replica_equal_to_the_document() {
+    // A param edit moves one literal of one node: the delta a tab receives names that leaf, not
+    // the whole record, and a tab applying every delta holds the document the manager holds.
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.add("Buffer");
+    let (mut tab, _hello) = Client::connect(&g.serve().await).await;
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/frequency", "value": 7.5 }));
+    let patch = tab.event("doc_patch").await;
+    let ops = patch["ops"].as_array().expect("a delta is a list of ops");
+    assert!(!ops.is_empty(), "{patch}");
+    for op in ops {
+        assert_eq!(op["path"], j!(["nodes", hex(osc), "params", "lfo", "frequency", "value"]), "one literal moved: {patch}");
+    }
+    assert_eq!(tab.doc().to_json(), g.doc(), "the replica after the delta is the document");
+    // A record whose shape moves — a node born — still lands whole.
+    let buf = g.add("Buffer");
+    let patch = tab.event("doc_patch").await;
+    assert!(patch["ops"].as_array().unwrap().iter().any(|op| op["path"] == j!(["nodes", hex(buf)])), "{patch}");
+    assert_eq!(tab.doc().to_json(), g.doc());
+    // A root that fills moves in the projection's order; the roots are named, so the delta still
+    // names one, and never re-sends the whole document at the empty path.
+    g.link(osc, "out", buf, "input");
+    let patch = tab.event("doc_patch").await;
+    for op in patch["ops"].as_array().unwrap() {
+        assert!(op["path"].as_array().is_some_and(|p| !p.is_empty()), "every op names a root: {patch}");
+    }
+    assert_eq!(tab.doc().to_json(), g.doc());
+    // A replaced patch empties every root, and the replica follows it there.
+    g.call("session new", j!({}));
+    let want = g.doc();
+    assert!(want["nodes"].as_object().is_some_and(|n| n.is_empty()), "{want}");
+    tab.until_doc(|d| d.to_json() == want).await;
 }
 
 fn panel_id(g: &Goofi) -> String {
     goofi_tests::panel_ids(&g.doc()["arrangement"]).first().cloned().expect("the default panel")
 }
 
-fn find_nulls(v: &Value, path: &mut Vec<String>, out: &mut Vec<String>) {
-    match v {
-        Value::Null => out.push(path.join(".")),
-        Value::Object(m) => {
-            for (k, x) in m {
-                path.push(k.clone());
-                find_nulls(x, path, out);
-                path.pop();
-            }
-        }
-        Value::Array(a) => {
-            for (i, x) in a.iter().enumerate() {
-                path.push(i.to_string());
-                find_nulls(x, path, out);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
+
+/// The replicated document is one projection carried as deltas: after every kind of write, what a
+/// client holds equals the whole document read fresh off the graph.
+#[test]
+fn the_document_a_client_holds_is_the_whole_projection_after_every_write() {
+    let g = Goofi::new();
+    let same = |what: &str| {
+        let held = g.doc();
+        let whole = g.graph().replica();
+        assert_eq!(held, whole, "after {what}, the replicated document is not the whole projection");
+    };
+    same("the boot");
+    let src = g.add("_TestConst");
+    let sink = g.add("_TestSink");
+    same("two nodes added");
+    g.link(src, "out", sink, "input");
+    same("a link");
+    g.call("node param edit", j!({ "node": hex(src), "param": "constant/value", "value": 0.5 }));
+    same("a literal");
+    let name = g.name(&hex(src));
+    g.call("node param edit", j!({ "node": hex(sink), "param": "control/value",
+                                   "expression": format!("nd('{name}').out"), "mode": "expression" }));
+    same("an expression");
+    g.call("node edit", j!({ "node": hex(src), "name": "source", "pos": [10.0, 20.0] }));
+    same("a rename and a move");
+    g.call("variable entry add", j!({ "name": "knobs.gain", "value": 0.25 }));
+    same("a variable");
+    g.call("machine add", j!({ "name": "seq" }));
+    same("a machine");
+    g.call("layout panel add", j!({}));
+    same("a panel");
+    g.call("record arm", j!({ "output": format!("{}/out", hex(src)) }));
+    same("an arming");
+    g.call("node remove", j!({ "node": hex(sink) }));
+    same("a removal");
+    g.call("undo", j!({}));
+    same("an undo");
+    g.call("session new", j!({}));
+    same("a new session");
 }

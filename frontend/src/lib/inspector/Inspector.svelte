@@ -1,47 +1,933 @@
-<!-- Shared inspector content for the editor side pane and the Inspector panel. -->
+<!-- The node inspector of the editor side pane and the Inspector panel: identity, group tabs, one
+     ParamField per shown param, metadata and the node's error. -->
+<script lang="ts" module>
+	import { SvelteMap } from 'svelte/reactivity';
+
+	/** Each node's front group while the page lives; never part of the patch. */
+	const frontGroups = new SvelteMap<string, string>();
+</script>
+
 <script lang="ts">
-	import ParamForm from './ParamForm.svelte';
+	import { numValue, PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
+	import { getControl, type NodeInstanceInfo } from '$lib/api/control';
+	import type { MenuItem } from 'panelty';
+	import { createLongPress } from 'panelty';
+	import { ContextMenu } from '$lib/ui';
+	import { graph, paramLive } from '$lib/stores/graph.svelte';
+	import { ui } from '$lib/stores/ui.svelte';
+	import { selection } from '$lib/stores/selection.svelte';
+	import { notify } from '$lib/stores/notify.svelte';
+	import { isValidName } from '$lib/crdt/graphDoc';
+	import { formatName } from '$lib/editor/categoryColor';
+	import { bareName } from '$lib/editor/typeId';
+	import { nodeHealth } from '$lib/editor/nodeHealth';
+	import { isTextEditingTarget } from '$lib/ui/textEditing';
+	import type { DragSource } from '$lib/drag';
+	import ParamField from './ParamField.svelte';
+	import ColormapField from './ColormapField.svelte';
+	import type { Stop } from './colormap';
+	import IdentityBar from './IdentityBar.svelte';
+	import RenameField from './RenameField.svelte';
+	import { isNumeric } from './controlKind';
+	import { MODE_FACE, sourceForMode } from './paramSeed';
+	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import MetadataPanel from '$lib/editor/MetadataPanel.svelte';
-	import { Button, ScrollArea } from '$lib/ui';
-	import { graph } from '$lib/stores/graph.svelte';
-	import type { NodeInstanceInfo } from '$lib/api/control';
+	import { matchParams, type ParamHit } from './paramSearch';
+	import {
+		admits,
+		narrowing,
+		paramKey,
+		settleNonDefault,
+		zero,
+		shown,
+		SHOW_ALL,
+		toggleSource,
+		type Filters,
+		type NonDefault
+	} from './paramFilters';
+	import {
+		Tabs,
+		Badge,
+		Button,
+		ConfirmDialog,
+		Disclosure,
+		EmptyState,
+		Icon,
+		IconButton,
+		MODE_ATTRS,
+		ScrollArea,
+		Segmented
+	} from '$lib/ui';
 
 	let { node, onClose }: {
 		node: NodeInstanceInfo | null;
+		/** Renders a ✕ in the identity Bar; only the slide-in inspector supplies one. */
 		onClose?: () => void;
 	} = $props();
 
-	function restart(): void {
-		if (!node) return;
-		void graph()
-			.restartNode(node.uid)
-			.catch((e) => console.warn('restart failed', e));
+	const g = graph();
+	const uiStore = ui();
+	const live = paramLive();
+
+	// A driven param's value is a READOUT, and the control plane paces one for health rather than
+	// for reading: the socket is open only while this form is showing the node.
+	$effect(() => (node ? live.watch(node.uid) : undefined));
+
+	// Each RPC is fire-and-forget with a logged failure, so a rejection is never unhandled.
+	function send(what: string, call: (uid: string) => Promise<unknown>): void {
+		if (node) void call(node.uid).catch((e) => console.warn(`${what} failed`, e));
 	}
+	const setValue = (group: string, name: string, value: unknown): void =>
+		send('update', (uid) => g.updateParam(uid, group, name, value));
+	const setSource = (group: string, name: string, source: SourcePatch): void =>
+		send('set source', (uid) => g.setSource(uid, group, name, source));
+
+	// Custom nodes can be saved from the patch or from the library.
+	const savable = $derived.by(() => {
+		const n = node;
+		return n != null && (g.nodeTypes ?? []).some((t) => t.type === n.type && (t.source === 'patch' || t.source === 'custom'));
+	});
+	let saving = $state(false);
+	let libraryName = $state('');
+	// The type rides with the path: the inspector follows the selection, so by the time the dialog
+	// is answered the node under it need not be the one the question was about.
+	let replacing = $state<{ type: string; path: string } | null>(null);
+
+	type LibraryEntry = { provenance?: string; path?: string; shadowed?: { provenance: string; path: string }[] };
+	// A file the library already holds is a question before it is a save; an answered one is not
+	// asked again.
+	async function saveToLibrary(type: string, overwrite: boolean, name?: string): Promise<void> {
+		saving = true;
+		try {
+			const r = overwrite || name ? null : await getControl().call<LibraryEntry>('library get', { type });
+			const held = r?.provenance === 'custom' ? r.path : r?.shadowed?.find((s) => s.provenance === 'custom')?.path;
+			if (held) {
+				libraryName = bareName(type);
+				replacing = { type, path: held };
+			} else {
+				await getControl().call('library save', { type, overwrite, ...(name ? { name } : {}) });
+				replacing = null;
+				notify().raise(`${bareName(type)} is in your library`);
+			}
+		} catch (e) {
+			notify().failure('Save to library', e);
+		} finally {
+			saving = false;
+		}
+	}
+
+	function replace(): void {
+		const at = replacing;
+		replacing = null;
+		if (at) void saveToLibrary(at.type, true);
+	}
+
+	const formId = $props.id();
+	$effect(() => {
+		if (!replacing) return;
+		const id = `${formId}-library`;
+		uiStore.openEditor(id);
+		return () => uiStore.closeEditor(id);
+	});
+	// A row takes a dropped value of its own type from anything but the node it belongs to, so a
+	// drop never binds what the manager would refuse.
+	const notSelf = (source: DragSource): boolean => !(source.tags.includes('node') && source.key === node?.uid);
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+	function modulate(group: string, name: string, kind: 'lfo' | 'nse'): void {
+		const freq = 0.01 + Math.random() * 0.19;
+		setSource(group, name, { expression: `${kind}(freq=${freq})` });
+	}
+
+	/** The expression the app-wide pick gives this param, or null where the param may not take it. */
+	function pickedSource(d: ParamDescriptor): SourcePatch | null {
+		const pick = selection().reference;
+		if (!pick) return null;
+		if ('variable' in pick) {
+			return g.variables.some((v) => v.name === pick.variable) ? { expression: `vars.${pick.variable}` } : null;
+		}
+		const expression = pick.node === node?.uid ? null : g.readFor(pick.node, d.type, pick.slot);
+		return expression ? { expression } : null;
+	}
+
+	/** A row's menu, from a right click or a held touch: LFO and Noise on a numeric row, and the pick. */
+	function rowItems({ group, name, descriptor }: ParamHit): MenuItem[] {
+		const items: MenuItem[] = isNumeric(descriptor)
+			? [
+					{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
+					{ label: 'Noise', action: () => modulate(group, name, 'nse') }
+				]
+			: [];
+		const source = pickedSource(descriptor);
+		if (source) {
+			const label = `Reference selection: ${source.expression}`;
+			items.push({ label, icon: 'circle-dot', action: () => setSource(group, name, source) });
+		}
+		return items;
+	}
+	function rowMenu(x: number, y: number, hit: ParamHit): boolean {
+		const items = rowItems(hit);
+		if (items.length) menu = { x, y, items };
+		return items.length > 0;
+	}
+
+	// One hold for the form: movement cancels it, and the click its release fires is swallowed.
+	let pressed = false;
+	let pressHit: ParamHit | undefined;
+	const press = createLongPress((at) => {
+		pressed = true;
+		if (pressHit) rowMenu(at.clientX, at.clientY, pressHit);
+	});
+	function release(): void {
+		activeParam = null;
+		press.cancel();
+	}
+
+	/** Move between the main value controls in the displayed parameter rows. */
+	function paramTabOrder(el: HTMLElement): { destroy(): void } {
+		const keydown = (event: KeyboardEvent): void => {
+			if (event.key !== 'Tab' || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+			const controls = Array.from(el.querySelectorAll<HTMLElement>('[data-param-edit]'))
+				.map((control) => control.matches('input, select, button')
+					? control : control.querySelector<HTMLElement>('input, select, button'))
+				.filter((control): control is HTMLElement =>
+					control !== null && !control.matches(':disabled') && control.getClientRects().length > 0);
+			const index = controls.indexOf(event.target as HTMLElement);
+			if (index < 0) return;
+			const next = controls[index + (event.shiftKey ? -1 : 1)];
+			if (!next) return;
+			event.preventDefault();
+			next.focus();
+		};
+		el.addEventListener('keydown', keydown);
+		return { destroy: () => el.removeEventListener('keydown', keydown) };
+	}
+
+	function onParamKey(event: KeyboardEvent): void {
+		if (
+			event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey ||
+			event.altKey || event.shiftKey || event.isComposing || menu || isTextEditingTarget(event.target)
+		) return;
+		const key = event.key;
+		if (!['l', 'n', 'r', 'x', 'c', 'e'].includes(key)) return;
+		// The row under the pointer, or failing that the one holding the focus.
+		const row =
+			document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`) ??
+			(event.target as HTMLElement | null)?.closest<HTMLElement>(`[data-param-form="${formId}"]`) ??
+			null;
+		const hit = rows.find((r) => paramKey(r.group, r.name) === row?.dataset.paramKey);
+		if (!hit) return;
+		const { group, name, descriptor: d } = hit;
+		if (key === 'c' || key === 'e') {
+			event.preventDefault();
+			const mode = key === 'c' ? 'constant' : 'expression';
+			if (d.mode !== mode) setSource(group, name, sourceForMode(d, mode));
+			return;
+		}
+		if (key === 'r') {
+			if (d.type === 'pulse') return;
+			event.preventDefault();
+			send('reset', (uid) => g.resetParam(uid, group, name, zero(d, node?.baseline, group, name)));
+			return;
+		}
+		if (!isNumeric(d)) return;
+		if (key === 'x') {
+			const min = d.int ? Math.ceil(d.vmin) : d.vmin;
+			const max = d.int ? Math.floor(d.vmax) : d.vmax;
+			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
+			event.preventDefault();
+			const draw = (): number => {
+				const fraction = Math.random();
+				return d.int ? Math.min(max, min + Math.floor(fraction * (max - min + 1))) : min * (1 - fraction) + max * fraction;
+			};
+			setValue(group, name, Array.isArray(d.value) ? d.value.map(draw) : draw());
+		} else {
+			event.preventDefault();
+			modulate(group, name, key === 'l' ? 'lfo' : 'nse');
+		}
+	}
+
+	// A group whose every param is hidden has no tab.
+	const groupNames = $derived(
+		node ? Object.keys(node.params).filter((g) => Object.keys(node.params[g]).some((n) => shown(node.params, g, n))) : []
+	);
+	const health = $derived(nodeHealth(node));
+
+	// A docstring leads with its one-line summary, so that line IS the row and the caret opens what
+	// follows it. A node whose whole doc is that line has nothing to open, and gets no caret.
+	const docHead = $derived((node?.doc ?? '').split('\n')[0].trim());
+	const docRest = $derived((node?.doc ?? '').split('\n').slice(1).join('\n').trim());
+
+	const tabItems = $derived(groupNames.map((name) => ({ id: name, label: name })));
+
+	// DERIVED, so the right tab is in the first paint and there is no `.ui-tab` background transition to
+	// animate. A node opens on the group last fronted on it, else on its first.
+	const activeGroup = $derived.by<string | null>(() => {
+		const valid = groupNames;
+		if (valid.length === 0) return null;
+		const front = node ? frontGroups.get(node.uid) : undefined;
+		return front && valid.includes(front) ? front : valid[0];
+	});
+
+	// One search box over every family, because a plugin's parameters are spread across as many tabs
+	// as it has units and the one you want is rarely in the tab you are on.
+	let query = $state('');
+	const searching = $derived(query.trim().length > 0);
+
+	// The filters narrow the GROUP the reader is in rather than dissolving the tabs, and they open
+	// showing everything again whenever the selection moves.
+	let filters = $state<Filters>(SHOW_ALL);
+	let filtered = $state<string | null>(null);
+	let activeParam = $state<string | null>(null);
+	let nonDefault = $state<NonDefault>(new Map());
+	$effect(() => {
+		const uid = node?.uid ?? null;
+		if (uid !== filtered) {
+			filtered = uid;
+			filters = SHOW_ALL;
+			activeParam = null;
+			nonDefault = new Map();
+			menu = null; // its items act on the node it opened on
+		}
+	});
+	$effect(() => {
+		nonDefault = settleNonDefault(nonDefault, node?.params, node?.baseline, activeParam);
+	});
+	const changed = $derived(nonDefault.size);
+	const narrowed = $derived(narrowing(filters));
+
+	// A search spans every group, since the tabs cannot say where a plugin filed a knob; it still
+	// finds only what the filters admit.
+	const rows = $derived.by<ParamHit[]>(() => {
+		const n = node;
+		if (!n) return [];
+		const all = searching
+			? matchParams(n.params, query)
+			: activeGroup ? Object.entries(n.params[activeGroup]).map(([name, descriptor]) => ({ group: activeGroup, name, descriptor })) : [];
+		return all.filter((r) => admits(filters, r.descriptor, nonDefault, r.group, r.name) && shown(n.params, r.group, r.name) && !inWidget(r));
+	});
+	/** The count of a list section, whose role says what widget draws the list whole. */
+	const countOf = (group: string, section: string): ParamDescriptor | undefined =>
+		Object.values(node?.params?.[group] ?? {}).find((d) => d.role?.as === 'count' && d.role.section === section);
+	/** Whether a row is a slot's member that its section's widget draws, so it has no row of its own. */
+	const inWidget = (r: ParamHit): boolean => {
+		const role = r.descriptor.role;
+		if (role?.as !== 'member' || role.slot == null) return false;
+		const count = countOf(r.group, role.section)?.role;
+		return count?.as === 'count' && count.widget != null;
+	};
+	/** A colormap list's open slots as stops, and whether a hand may set them: the count and every
+	 *  open member hold a value of their own. */
+	function colormapOf(group: string, section: string, count: number): { stops: Stop[]; held: boolean } {
+		const params = node?.params?.[group] ?? {};
+		let held = params[section]?.mode === 'constant';
+		const stops: Stop[] = [];
+		for (let k = 0; k < count; k++) {
+			const at = params[`at_${k}`];
+			const colour = params[`colour_${k}`];
+			const blend = params[`blend_${k}`];
+			if (!at || !colour || !blend) break;
+			held &&= at.mode === 'constant' && colour.mode === 'constant' && blend.mode === 'constant';
+			stops.push({
+				at: typeof at.value === 'number' ? at.value : 0,
+				colour: Array.isArray(colour.value) ? (colour.value as number[]) : [0, 0, 0, 1],
+				blend: blend.value === 'smooth' || blend.value === 'step' ? blend.value : 'linear'
+			});
+		}
+		return { stops, held };
+	}
+	/** The section a row sits in, so a named section's heading opens once. */
+	const sectionOf = (r: ParamHit | undefined): string | null => {
+		const role = r?.descriptor.role;
+		return role && role.as !== 'feed' ? role.section : null;
+	};
+	const slotOf = (r: ParamHit): { section: string; index: number } | null => {
+		const role = r.descriptor.role;
+		return role?.as === 'member' && role.slot != null ? { section: role.section, index: role.slot } : null;
+	};
+	/** A slot under the hand: where it came from, and the slot it is over now. */
+	let drag = $state<{ group: string; section: string; from: number; to: number } | null>(null);
+	function liftSlot(e: PointerEvent, group: string, section: string, from: number): void {
+		if (!canCloseSlot(group, section)) return;
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		drag = { group, section, from, to: from };
+	}
+	function dragSlot(e: PointerEvent): void {
+		if (!drag) return;
+		// The slot whose middle the pointer has crossed is the one it lands on.
+		const slots = document.querySelectorAll<HTMLElement>(`[data-slot-form="${formId}"][data-slot-section="${drag.section}"]`);
+		let to = drag.from;
+		for (const el of slots) {
+			const box = el.getBoundingClientRect();
+			const index = Number(el.dataset.slotIndex);
+			if (index < drag.from && e.clientY < box.top + box.height / 2) {
+				to = Math.min(to, index);
+			} else if (index > drag.from && e.clientY > box.top + box.height / 2) {
+				to = Math.max(to, index);
+			}
+		}
+		drag.to = to;
+	}
+	function dropSlot(): void {
+		const d = drag;
+		drag = null;
+		if (d && d.to !== d.from) send('move slot', (uid) => g.moveListSlot(uid, d.group, d.section, d.from, d.to));
+	}
+	/** Whether a slot of the list may go: its count is a hand-set value above its floor. */
+	function canCloseSlot(group: string, section: string): boolean {
+		const params = node?.params?.[group] ?? {};
+		const count = Object.values(params).find((d) => d.role?.as === 'count' && d.role.section === section);
+		return count?.type === 'num' && count.mode === 'constant' && numValue(count) > count.vmin;
+	}
+	type Block = { key: string; slot: { section: string; index: number } | null; rows: (ParamHit & { index: number })[] };
+	// The rows in blocks: a slot of a list is one block holding its members, every other row its own.
+	const blocks = $derived.by<Block[]>(() => {
+		const out: Block[] = [];
+		rows.forEach((r, index) => {
+			const slot = searching ? null : slotOf(r);
+			const last = out[out.length - 1];
+			if (slot && last?.slot && last.slot.section === slot.section && last.slot.index === slot.index) {
+				last.rows.push({ ...r, index });
+			} else {
+				const key = slot ? `${node?.uid}/${r.group}/${slot.section}/${slot.index}` : `${node?.uid}/${r.group}/${r.name}`;
+				out.push({ key, slot, rows: [{ ...r, index }] });
+			}
+		});
+		return out;
+	});
+
+	const FILTER_TITLE: Record<ParamMode, string> = {
+		constant: 'the params holding a value set by hand',
+		expression: 'the params an expression drives'
+	};
 </script>
 
+<svelte:window
+	onkeydown={onParamKey}
+	onpointerdown={(e) => {
+		const row = (e.target as Element).closest<HTMLElement>('[data-param-key]');
+		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
+		pressed = false;
+		const hit = row?.dataset.paramForm === formId ? rows.find((r) => paramKey(r.group, r.name) === row.dataset.paramKey) : undefined;
+		if (e.pointerType !== 'mouse' && hit && rowItems(hit).length) {
+			pressHit = hit;
+			press.start(e);
+		}
+	}}
+	onpointermove={press.move}
+	onpointerup={release}
+	onpointercancel={release}
+/>
+
 <ScrollArea>
-	<ParamForm {node} {onClose} />
-	{#if node}
-		<MetadataPanel {node} />
-		{#if node.error}
-			<section class="node-error" data-testid="inspector-error">
-				<div class="err-head">
-					<header>Error</header>
-					<Button
-						variant="danger"
-						size="sm"
-						onclick={restart}
-						title="Restart this node (respawn with the same params + links)"
-						data-testid="inspector-restart">↻ Restart</Button
-					>
+	<section class="param-form">
+		{#if !node}
+			<EmptyState data-testid="param-empty">
+				{#snippet title()}No node selected{/snippet}
+				{#snippet hint()}Select a node to edit its parameters.{/snippet}
+			</EmptyState>
+		{:else}
+			{#key node.uid}
+				<IdentityBar type={formatName(bareName(node.type))} {onClose}>
+					{#snippet title()}
+						<RenameField value={node.name} valid={isValidName} label="Node name" testid="node-name"
+							onRename={(name) => send('rename', (uid) => g.renameNode(uid, name))} />
+					{/snippet}
+					{#snippet end()}
+						{#if savable}
+							<IconButton
+								variant="ghost"
+								density="chrome"
+								label="Save to custom library"
+								title="Move this node's file into your private library, where every patch finds it"
+								data-testid="save-to-library"
+								disabled={saving}
+								onclick={() => void saveToLibrary(node.type, false)}><Icon name="save" /></IconButton
+							>
+						{/if}
+						{#if node.editor}
+							<IconButton
+								variant="ghost"
+								density="chrome"
+								label="Open plugin editor"
+								title="Open this plugin's own editor, in a window on the machine goofi runs on"
+								data-testid="inspector-editor"
+								onclick={() => send('editor', (uid) => getControl().call('node editor', { node: uid }))}
+								><Icon name="app-window" /></IconButton
+							>
+						{/if}
+						<Badge
+							tone={health.tone}
+							class="pf-state"
+							title={health.hint}
+							data-testid="node-state"
+						>
+							{health.status}{#if health.runtime}<span class="pf-runtime" data-testid="node-runtime"
+									>{health.runtime}</span
+								>{/if}
+						</Badge>
+					{/snippet}
+				</IdentityBar>
+			{/key}
+
+			{#if docRest}
+				<Disclosure class="pf-docs">
+					{#snippet summary()}
+						<span data-testid="docs-toggle">{docHead}</span>
+					{/snippet}
+					{#snippet children()}
+						<p class="pf-docstring" data-testid="docstring">{docRest}</p>
+					{/snippet}
+				</Disclosure>
+			{:else if docHead}
+				<p class="pf-doc-line" data-testid="docstring">{docHead}</p>
+			{/if}
+
+			{#if node.subpatch}
+				<SubPatchInspector {node} />
+			{:else}
+				<div class="pf-tools" data-testid="param-filters">
+					<!-- Native, not `TextInput`: this filters per keystroke and owns Escape. -->
+					<input
+						class="pf-search"
+						{...MODE_ATTRS.search}
+						bind:value={query}
+						onkeydown={(e) => {
+							if (e.key === 'Escape') query = '';
+						}}
+						placeholder={narrowed ? 'Search filtered…' : 'Search parameters…'}
+						autocomplete="off"
+						aria-label="Search parameters"
+						data-testid="param-search"
+					/>
+
+					<div class="pf-nondefault">
+						<Segmented
+							value={filters.nonDefault ? 'non-default' : null}
+							segments={[
+								{
+									id: 'non-default',
+									label: '',
+									icon: 'hand',
+									count: changed,
+									name: 'Non-default only',
+									title:
+										'Non-default only — the params on this node that no longer hold their default',
+									testid: 'param-non-default-only'
+								}
+							]}
+							onChange={() => (filters = { ...filters, nonDefault: !filters.nonDefault })}
+						/>
+						<!-- Clearing moves the default this counts from; it edits no param, so an expression
+						     keeps driving and keeps answering the source strip. -->
+						<IconButton
+							variant="ghost"
+							density="chrome"
+							class="pf-clear"
+							label="Clear non-default"
+							title="Take every param's default from what this node holds now. Mappings keep working."
+							data-testid="param-non-default-clear"
+							disabled={changed === 0}
+							onclick={() => send('clear non-default', (uid) => getControl().call('node baseline', { node: uid }))}
+							><Icon name="eraser" /></IconButton
+						>
+					</div>
+					<Segmented
+						value={filters.sources}
+						segments={PARAM_MODES.map((id) => ({
+							id,
+							...MODE_FACE[id],
+							title: `${MODE_FACE[id].name} — ${FILTER_TITLE[id]}`,
+							testid: `param-${id}-only`
+						}))}
+						onChange={(id) => (filters = toggleSource(filters, id as ParamMode))}
+					/>
 				</div>
-				<pre>{node.error}</pre>
-			</section>
+
+				{#if tabItems.length > 0 && !searching}
+					<Tabs
+						items={tabItems}
+						active={activeGroup ?? undefined}
+						onSelect={(id) => node && frontGroups.set(node.uid, id)}
+						data-testid="param-tabs"
+						style="overflow-x: auto; flex-shrink: 0"
+						tabProps={() => ({ style: 'min-width: 3rem; max-width: max-content' })}
+					/>
+				{/if}
+
+				<!-- A tabpanel only when a tablist exists: an orphaned `tabpanel` role would have no owning tablist. -->
+				<div
+					class="pf-rows"
+					use:paramTabOrder
+					role={tabItems.length > 0 && !searching ? 'tabpanel' : undefined}
+					aria-label={searching ? undefined : (activeGroup ?? undefined)}
+					data-testid="param-rows"
+					onclickcapture={(e) => {
+						if (!pressed) return;
+						pressed = false;
+						e.preventDefault();
+						e.stopPropagation();
+					}}
+				>
+					{#if rows.length === 0}
+						<div class="pf-empty-group" data-testid={searching ? 'param-no-matches' : 'param-empty-group'}>
+							{#if searching}{narrowed ? 'No filtered parameters match.' : 'No parameters match.'}{:else if narrowed}Nothing in this group matches these filters — another group may still hold one.{:else}No parameters in this group.{/if}
+						</div>
+					{:else}
+						{#snippet paramRow(group: string, paramName: string, descriptor: ParamDescriptor, i: number)}
+							{@const role = descriptor.role}
+							<!-- A line only between two shown rows, so a hidden section draws nothing. -->
+							{#if !searching && i > 0 && rows[i - 1].descriptor.section !== descriptor.section}
+								<hr class="pf-section" data-testid="param-section-break" />
+							{/if}
+							{#if !searching && role?.as === 'member' && role.slot == null && sectionOf(rows[i - 1]) !== role.section}
+								<div class="pf-section-name" data-testid={`param-section-${role.section}`}>{role.section}</div>
+							{/if}
+							<div
+								class="pf-row"
+								class:pf-count={role?.as === 'count' && !role.widget}
+								role="group"
+								aria-label={paramName}
+								data-param-form={formId}
+								data-param-node={node?.uid}
+								data-param-key={paramKey(group, paramName)}
+								oncontextmenu={(e) => {
+									if (!rowMenu(e.clientX, e.clientY, { group, name: paramName, descriptor })) return;
+									e.preventDefault();
+									e.stopPropagation();
+								}}
+							>
+								{#if searching}
+									<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
+								{/if}
+								{#if role?.as === 'count' && descriptor.type === 'num' && role.widget === 'colormap'}
+									{@const map = colormapOf(group, role.section, numValue(descriptor))}
+									<!-- A colormap list is one row: the map, opening its configurator. -->
+									<ColormapField
+										section={role.section}
+										doc={descriptor.doc ?? undefined}
+										stops={map.stops}
+										min={descriptor.vmin}
+										max={descriptor.vmax}
+										disabled={!map.held}
+										onWrite={(stops) => send('write stops', (uid) => g.writeListSlots(uid, group, role.section, stops))}
+										onPreview={(slot, base, value) => node && g.previewParam(node.uid, group, `${base}_${slot}`, value)}
+										data-testid={`param-field-${paramName}`}
+									/>
+								{:else if role?.as === 'count' && descriptor.type === 'num'}
+									{@const held = numValue(descriptor)}
+									<!-- A list's count is its heading: the name, how many, and a step either way. -->
+									<span class="pf-count-name" title={descriptor.doc ?? undefined}>{paramName}</span>
+									<IconButton
+										label={`One ${paramName} fewer`}
+										variant="ghost"
+										size="sm"
+										disabled={held <= descriptor.vmin || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, held - 1)}
+										data-testid={`param-count-less-${paramName}`}
+									>
+										<Icon name="minus" />
+									</IconButton>
+									<span class="pf-count-value" data-testid={`param-count-${paramName}`}>{held}</span>
+									<IconButton
+										label={`One ${paramName} more`}
+										variant="ghost"
+										size="sm"
+										disabled={held >= descriptor.vmax || descriptor.mode !== 'constant'}
+										onclick={() => setValue(group, paramName, held + 1)}
+										data-testid={`param-count-more-${paramName}`}
+									>
+										<Icon name="plus" />
+									</IconButton>
+								{:else}
+									<ParamField
+										{paramName}
+										label={role?.as === 'member' ? role.base : paramName}
+										selfName={node?.name}
+										viewKey={`${node?.uid}/${group}/${paramName}`}
+										{descriptor}
+										accept={notSelf}
+										data-testid={`param-field-${paramName}`}
+										refreshing={node != null && g.isRefreshing(node.uid, group, paramName)}
+										onCommit={(v) => setValue(group, paramName, v)}
+										onPreview={(v) => node && g.previewParam(node.uid, group, paramName, v)}
+										onSetSource={(source) => setSource(group, paramName, source)}
+										onCommitElement={(i, v) => setValue(group, `${paramName}[${i}]`, v)}
+										onSetElementSource={(i, source) => setSource(group, `${paramName}[${i}]`, source)}
+										onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
+										onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
+									/>
+								{/if}
+							</div>
+						{/snippet}
+						{#each blocks as block (block.key)}
+							{#if block.slot}
+								<!-- One slot of a list: its number and its members on a tone of their own, alternating. -->
+								{@const slot = block.slot}
+								{@const group = block.rows[0].group}
+								<div
+									class="pf-slot"
+									class:alt={slot.index % 2 === 1}
+									class:lifted={drag?.section === slot.section && drag.from === slot.index}
+									class:before={drag?.section === slot.section && drag.to === slot.index && drag.to < drag.from}
+									class:after={drag?.section === slot.section && drag.to === slot.index && drag.to > drag.from}
+									data-slot-form={formId}
+									data-slot-section={slot.section}
+									data-slot-index={slot.index}
+									data-testid={`param-slot-${slot.section}-${slot.index}`}
+								>
+									<!-- The slot's own row: a handle that drags it into another place, its number, and its close. -->
+									<div class="pf-slot-head">
+										<!-- svelte-ignore a11y_no_static_element_interactions -->
+										<span
+											class="pf-slot-grip"
+											title="Drag to reorder"
+											data-testid="param-slot-grip"
+											onpointerdown={(e) => liftSlot(e, group, slot.section, slot.index)}
+											onpointermove={dragSlot}
+											onpointerup={dropSlot}
+											onpointercancel={() => (drag = null)}
+										>
+											<Icon name="grip-vertical" />
+										</span>
+										<span class="pf-slot-number" data-testid="param-slot-number">{slot.index + 1}</span>
+										<IconButton
+											label={`Remove ${slot.section} ${slot.index + 1}`}
+											variant="ghost"
+											size="sm"
+											disabled={!canCloseSlot(group, slot.section)}
+											onclick={() => send('remove slot', (uid) => g.removeListSlot(uid, group, slot.section, slot.index))}
+											data-testid="param-slot-remove"
+										>
+											<Icon name="x" />
+										</IconButton>
+									</div>
+									{#each block.rows as { group, name: paramName, descriptor, index } (group + '/' + paramName)}
+										{@render paramRow(group, paramName, descriptor, index)}
+									{/each}
+								</div>
+							{:else}
+								{@render paramRow(block.rows[0].group, block.rows[0].name, block.rows[0].descriptor, block.rows[0].index)}
+							{/if}
+						{/each}
+					{/if}
+				</div>
+			{/if}
+			<MetadataPanel {node} />
+			{#if node.error}
+				<section class="node-error" data-testid="inspector-error">
+					<div class="err-head">
+						<header>Error</header>
+						<Button
+							variant="danger"
+							size="sm"
+							onclick={() => send('restart', (uid) => g.restartNode(uid))}
+							title="Restart this node (respawn with the same params + links)"
+							data-testid="inspector-restart"><Icon name="refresh-cw" /> Restart</Button
+						>
+					</div>
+					<pre>{node.error}</pre>
+				</section>
+			{/if}
 		{/if}
+	</section>
+
+	{#if menu}
+		<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 	{/if}
+
+	<ConfirmDialog
+		open={!!replacing}
+		question="Replace the node in your library?"
+		detail={replacing
+			? `Your library already holds ${bareName(replacing.type)}, at ${replacing.path}. Choose Overwrite to replace it, or enter another file name and choose Adapt name.`
+			: ''}
+		onClose={() => (replacing = null)}
+		data-testid="library-replace-dialog"
+	>
+		<Button variant="danger" disabled={saving} data-testid="library-replace" onclick={replace}>Overwrite</Button>
+		<!-- The button state follows each keystroke, before the field loses focus. -->
+		<input aria-label="New file name" bind:value={libraryName} data-testid="library-name" />
+		<Button disabled={saving || !libraryName.trim() || libraryName.trim() === bareName(replacing?.type ?? '')}
+			data-testid="library-rename" onclick={() => {
+				if (replacing) void saveToLibrary(replacing.type, false, libraryName.trim());
+			}}>Adapt name</Button>
+		<Button variant="ghost" onclick={() => (replacing = null)}>Cancel</Button>
+	</ConfirmDialog>
 </ScrollArea>
 
 <style>
+	.param-form {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	.pf-docstring {
+		margin: 0;
+		font-size: var(--fs-small);
+		color: var(--text-dim);
+		white-space: pre-wrap;
+	}
+	/* The docs row is chrome too, so it wears the header block's ground; what it opens keeps the
+	   body's dark behind it. */
+	.param-form :global(.pf-docs) {
+		--disclosure-surface: var(--surface-2);
+		--disclosure-hover: var(--surface-3);
+	}
+	/* A whole docstring that IS its summary line: the same row, with nothing to open. */
+	.pf-doc-line {
+		margin: 0;
+		padding: var(--space-2) var(--space-3);
+		background: var(--surface-2);
+		color: var(--text);
+		font-size: var(--fs-small);
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	/* The runtime rides INSIDE the state pill rather than beside it: one pill is what the row has
+	   space for, and a second would be the first thing a narrow pane drops. */
+	.param-form :global(.pf-state .pf-runtime) {
+		margin-inline-start: var(--space-2);
+		padding-inline-start: var(--space-2);
+		border-inline-start: 1px solid currentColor;
+		opacity: 0.7;
+	}
+	/* Below this the row cannot seat name + state + ✕, and the overflow would walk the ✕ off screen; the
+	   badge is what yields. Asked of the PANE, not the host panel. */
+	@container (max-width: 180px) {
+		.param-form :global(.pf-identity-bar .pf-state) {
+			display: none;
+		}
+	}
+	/* The SAME surface the active tab drops to, so the tab merges into the body with no seam line. */
+	.pf-rows {
+		display: flex;
+		flex-direction: column;
+		padding: var(--space-6);
+		background: var(--surface-1);
+	}
+	.pf-empty-group {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+		text-align: center;
+		padding: var(--space-6) 0;
+	}
+	/* Chrome, not body: it wears the tab strip's own surface and horizontal padding, so the search,
+	   the filters and the group tabs beneath them read as one header block. */
+	.pf-tools {
+		display: flex;
+		align-items: center;
+		gap: var(--space-4);
+		padding: var(--space-2);
+		background: var(--surface-2);
+	}
+	.pf-search {
+		flex: 1 1 auto;
+		min-width: 0;
+		height: var(--chrome-control-h);
+		padding: 0 var(--space-3);
+		font-size: var(--fs-small);
+	}
+	.pf-search::placeholder {
+		color: var(--text-muted);
+	}
+	/* The clear moves the default this one filter reads, so it rides against that toggle. */
+	.pf-nondefault {
+		display: flex;
+		align-items: center;
+	}
+	.param-form :global(.pf-clear) {
+		--panelty-icon-btn-size: var(--chrome-control-h);
+		color: var(--text-muted);
+	}
+	.param-form :global(.pf-clear:hover:not(:disabled)) {
+		color: var(--text);
+	}
+	.pf-section {
+		margin: 0;
+		border: none;
+		border-top: 1px solid var(--border);
+	}
+	/* A heading hangs close to the rows it opens. */
+	.pf-section-name {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+		margin-bottom: var(--space-2);
+	}
+	/* Slots alternate between the two surface steps above the form's own, so each reads as one. */
+	.pf-slot {
+		display: flex;
+		flex-direction: column;
+		padding: var(--space-2) var(--space-4) var(--space-3);
+		border-radius: var(--radius-sm);
+		background: var(--surface-2);
+		/* The drop line draws in the border, so a target never moves the slots around it. */
+		border-top: 2px solid transparent;
+		border-bottom: 2px solid transparent;
+	}
+	.pf-slot.alt {
+		background: var(--surface-3);
+	}
+	.pf-slot.lifted {
+		opacity: 0.5;
+	}
+	.pf-slot.before {
+		border-top-color: var(--accent);
+	}
+	.pf-slot.after {
+		border-bottom-color: var(--accent);
+	}
+	.pf-slot-head {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+	}
+	.pf-slot-grip {
+		display: inline-flex;
+		cursor: grab;
+		touch-action: none;
+	}
+	.pf-slot.lifted .pf-slot-grip {
+		cursor: grabbing;
+	}
+	.pf-slot-number {
+		flex: 1 1 auto;
+	}
+	.pf-row.pf-count {
+		flex-direction: row;
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.pf-count-name {
+		flex: 1 1 auto;
+		font-size: var(--fs-small);
+	}
+	.pf-count-value {
+		min-width: 2ch;
+		text-align: center;
+		font-variant-numeric: tabular-nums;
+	}
+	.pf-row {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		min-width: 0;
+	}
+	.pf-row-group {
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+	}
+	/* The field restates app.css's 16px coarse floor, which its own size would outrank, so focusing
+	   it does not force-zoom iOS. */
+	@media (hover: none) and (pointer: coarse) {
+		.pf-search {
+			font-size: 16px;
+		}
+	}
 	.node-error {
 		padding: var(--space-6);
 		border-top: 1px solid var(--border);

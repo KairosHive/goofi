@@ -30,6 +30,8 @@ fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_signal_sdk::NodeResult
 
 #[test]
 fn a_serialized_interpreter_is_reported_every_tick_and_demotes_its_type() {
+    // This binary hosts the interpreter itself, so it hands it its venv as the product does.
+    goofi_python::inproc::configure_embedded();
     let p = ParamGroups::new();
     // The tier a registry would hold for this type: routed nodes read it at every build, so writing
     // it is the whole re-route.

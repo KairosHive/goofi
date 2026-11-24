@@ -3,12 +3,12 @@
   "tags": ["image", "generator", "simulation"],
   "state": ["now", "past"],
   "params": [
-    {"group": "wave", "name": "speed", "kind": "float", "default": 0.5, "min": 0.0, "max": 0.7},
-    {"group": "wave", "name": "damping", "kind": "float", "default": 0.002, "min": 0.0, "max": 0.2},
-    {"group": "wave", "name": "drive", "kind": "float", "default": 0.5, "min": 0.0, "max": 4.0},
-    {"group": "wave", "name": "frequency", "kind": "float", "default": 2.0, "min": 0.0, "max": 60.0},
-    {"group": "wave", "name": "spot", "kind": "float", "default": 3.0, "min": 0.5, "max": 40.0},
-    {"group": "wave", "name": "gain", "kind": "float", "default": 4.0, "min": 0.1, "max": 40.0} ] }
+    {"group": "wave", "name": "speed", "kind": "num", "default": 0.5, "min": 0.0, "max": 0.7},
+    {"group": "wave", "name": "damping", "kind": "num", "default": 0.002, "min": 0.0, "max": 0.2},
+    {"group": "wave", "name": "drive", "kind": "num", "default": 0.5, "min": 0.0, "max": 4.0},
+    {"group": "wave", "name": "frequency", "kind": "num", "default": 2.0, "min": 0.0, "max": 60.0},
+    {"group": "wave", "name": "spot", "kind": "num", "default": 3.0, "min": 0.5, "max": 40.0},
+    {"group": "wave", "name": "gain", "kind": "num", "default": 4.0, "min": 0.1, "max": 40.0} ] }
 */
 fn height(at: vec2i) -> f32 {
     let size = vec2i(resolution);

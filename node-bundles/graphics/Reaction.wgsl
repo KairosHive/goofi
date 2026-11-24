@@ -4,13 +4,13 @@
   "state": ["chem"],
   "params": [
     {"group": "reaction", "name": "model", "kind": "str", "default": "grayscott", "options": ["grayscott", "brusselator"]},
-    {"group": "reaction", "name": "feed", "kind": "float", "default": 0.037, "min": 0.0, "max": 4.0},
-    {"group": "reaction", "name": "kill", "kind": "float", "default": 0.06, "min": 0.0, "max": 6.0},
-    {"group": "reaction", "name": "spread_a", "kind": "float", "default": 1.0, "min": 0.0, "max": 2.0},
-    {"group": "reaction", "name": "spread_b", "kind": "float", "default": 0.5, "min": 0.0, "max": 2.0},
-    {"group": "reaction", "name": "rate", "kind": "float", "default": 1.0, "min": 0.01, "max": 1.5},
-    {"group": "reaction", "name": "density", "kind": "float", "default": 0.02, "min": 0.0, "max": 1.0},
-    {"group": "reaction", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "reaction", "name": "feed", "kind": "num", "default": 0.037, "min": 0.0, "max": 4.0},
+    {"group": "reaction", "name": "kill", "kind": "num", "default": 0.06, "min": 0.0, "max": 6.0},
+    {"group": "reaction", "name": "spread_a", "kind": "num", "default": 1.0, "min": 0.0, "max": 2.0},
+    {"group": "reaction", "name": "spread_b", "kind": "num", "default": 0.5, "min": 0.0, "max": 2.0},
+    {"group": "reaction", "name": "rate", "kind": "num", "default": 1.0, "min": 0.01, "max": 1.5},
+    {"group": "reaction", "name": "density", "kind": "num", "default": 0.02, "min": 0.0, "max": 1.0},
+    {"group": "reaction", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 fn hash2(v: vec2f) -> f32 {
     let q = vec2u(vec2i(v) + 65536);

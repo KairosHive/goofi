@@ -1,8 +1,5 @@
-/**
- * The 8-bit viewer hop: the reducer quantizes an image frame to texels and says what range they
- * span, so a viewer maps one back to what the node emitted. The source of truth is
- * `backend/goofi-core/src/reduce.rs`.
- */
+/** The 8-bit viewer hop: the reducer quantizes an image frame to texels and says what range they
+ * span (`backend/goofi-core/src/reduce.rs`), so a viewer maps one back to what the node emitted. */
 
 /** Whether an array frame carries 8-bit texels rather than the wire's f32. */
 export function isU8(dtype: string): boolean {
@@ -15,11 +12,12 @@ export function reportedDtype(wire: string): string {
 	return isU8(wire) ? 'float32' : wire;
 }
 
-/** The `[lo, hi]` the texels span, off `meta.reduced.depth`; null for an f32 frame. */
-export function sampleRange(meta: Record<string, unknown> | undefined): [number, number] | null {
+/** The `[lo, hi]` the texels span, off `meta.reduced.depth` or else `[0, 1]`; null for an f32 frame. */
+export function sampleRange(dtype: string, meta: Record<string, unknown> | undefined): [number, number] | null {
+	if (!isU8(dtype)) return null;
 	const reduced = meta?.reduced as Record<string, unknown> | undefined;
 	const depth = reduced?.depth as { lo?: unknown; hi?: unknown } | undefined;
-	if (typeof depth?.lo !== 'number' || typeof depth?.hi !== 'number') return null;
+	if (typeof depth?.lo !== 'number' || typeof depth?.hi !== 'number') return [0, 1];
 	return [depth.lo, depth.hi];
 }
 

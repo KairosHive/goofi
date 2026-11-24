@@ -15,7 +15,7 @@ import goofi
 class Affine(goofi.Node):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PARAMS = {"gain": {"factor": goofi.IntParam(1, 0, 100)}}
+    PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
     def setup(self):
         self._base = 10
     def process(self, data):
@@ -50,6 +50,64 @@ fn a_python_file_in_the_workspace_becomes_a_node_that_runs_and_takes_its_params(
         probe.latest().filter(|d| f32s(d)[0] == 10.0).map(|_| ())
     });
     assert!(g.error(node).is_none(), "a healthy python node carries no error");
+}
+
+/// A node that launches an agent of its own and types into it: the harness plane from a node.
+const SPAWNER: &str = r#"
+import goofi
+class Spawner(goofi.Node):
+    OUTPUTS = {"out": goofi.DataType.STRING}
+    PRODUCER = True
+    def setup(self):
+        self.id = goofi.agent.spawn("_sh")
+        goofi.agent.send(self.id, "echo SPAWNED-BY-A''-NODE")
+    def process(self):
+        return {"out": self.id}
+"#;
+
+#[test]
+fn a_python_node_reaches_the_harness_plane_and_the_server_sees_what_it_spawned() {
+    // The harness plane is the SESSION's, whichever process spawned into it: what the node's own
+    // process launches, the server lists, attaches to and stops.
+    let _py = require_python();
+    let g = Goofi::new();
+    let at = goofi_supervisor::layout::config_file();
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    std::fs::write(&at, format!("{}\n[[agents]]\nname = \"_sh\"\ncommand = \"sh\"\n", goofi_supervisor::layout::DEFAULT_CONFIG)).unwrap();
+    install(&g, "spawner.py", SPAWNER);
+    let node = g.add("Spawner");
+    let probe = g.probe(node, "out");
+    let id = g.until("the node's instance id", |_| probe.latest().and_then(|d| text(&d).map(str::to_string)));
+    let roster = g.call("agent list", j!({}));
+    let row = roster["instances"].as_array().unwrap().iter().find(|i| i["id"] == id)
+        .unwrap_or_else(|| panic!("the server does not list the node's instance: {roster}")).clone();
+    assert_eq!(row["harness"], "_sh", "{row}");
+    assert_eq!(row["state"], "running", "{row}");
+
+    // The server attaches to a PTY another end owns, and the words the node typed replay.
+    let view = g.state.agents.attach(&id).expect("a view on the node's instance");
+    let mut seen = String::new();
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
+    while !seen.contains("SPAWNED-BY-A-NODE") {
+        assert!(std::time::Instant::now() < deadline, "the typed line never showed: {seen:?}");
+        match view.read().expect("the view reads") {
+            Some(goofi_agent::Frame::Bytes(b)) => seen.push_str(&String::from_utf8_lossy(&b)),
+            Some(goofi_agent::Frame::Control(_)) => {}
+            None => panic!("the view ended before the typed line showed: {seen:?}"),
+        }
+    }
+    view.close();
+
+    // The server stops it, the owner reaps it, and the roster is where both read the outcome.
+    g.call("agent stop", j!({ "instance": id }));
+    g.until("the instance exited", |g| {
+        g.call("agent list", j!({}))["instances"].as_array().unwrap().iter()
+            .find(|i| i["id"] == id).filter(|i| i["state"] == "exited").map(|_| ())
+    });
+    g.call("agent stop", j!({ "instance": id }));
+    g.until("the instance dismissed", |g| {
+        (!g.call("agent list", j!({}))["instances"].as_array().unwrap().iter().any(|i| i["id"] == id)).then_some(())
+    });
 }
 
 #[test]
@@ -94,7 +152,7 @@ import numpy as np
 class Once(goofi.Node):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PRODUCER = True
-    PARAMS = {"send": {"value": goofi.IntParam(0, 0, 100)}}
+    PARAMS = {"send": {"value": goofi.NumParam(0, 0, 100, int=True)}}
     def setup(self):
         self.last = 0
     def process(self):
@@ -110,7 +168,7 @@ import numpy as np
 class Consume(goofi.Node):
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY, "ran": goofi.DataType.ARRAY}
-    PARAMS = {"consume": {"mode": goofi.IntParam(0, 0, 4)}}
+    PARAMS = {"consume": {"mode": goofi.NumParam(0, 0, 4, int=True)}}
     def process(self, data):
         mode = self.params.consume.mode
         ran = np.array([mode], dtype=np.float32)
@@ -256,11 +314,11 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let made = std::process::Command::new(&py.py).args(["-m", "venv", "--without-pip"]).arg(&venv)
         .env_remove("PYTHONPATH").env_remove("PYTHONHOME").status().unwrap();
     assert!(made.success(), "a venv of the test's own");
-    let site = goofi_init::site_packages(&venv).expect("the new venv's site-packages");
+    let site = goofi_supervisor::layout::site_packages(&venv).expect("the new venv's site-packages");
     let shared = std::path::Path::new(&py.py).parent().unwrap().parent().unwrap();
-    let shared = goofi_init::site_packages(shared).expect("the test interpreter is a venv");
+    let shared = goofi_supervisor::layout::site_packages(shared).expect("the test interpreter is a venv");
     std::fs::write(site.join("goofi_shared.pth"), shared.to_string_lossy().as_bytes()).unwrap();
-    let own_py = goofi_init::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
+    let own_py = goofi_supervisor::layout::venv_python(&venv).expect("the new venv's python").to_string_lossy().into_owned();
     let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("needs_scipy.py");
@@ -278,7 +336,7 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
             assert_eq!(type_name, "NeedsScipy");
             assert!(reason.contains(&module), "the reason names the module: {reason}");
             let ty = goofi_node::qualify("signal", &type_name);
-            g.state.graph.lock().unwrap().register_unavailable(ty, reason);
+            g.graph().register_unavailable(ty, reason);
         }
         goofi_python::Discovery::Found(_) =>
             panic!("a node with a missing import must not probe as loadable"),
@@ -489,7 +547,7 @@ mod inproc {
     use goofi_node::{ParamGroups, Params};
     use goofi_signal_sdk::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
     use goofi_python::inproc::PyNode;
-    use goofi_python::subproc::RemoteNode;
+    use goofi_python::subproc::{subproc, RemoteNode};
     use indexmap::IndexMap;
 
     /// Run one node once with `data` on its single slot, one frame per source on its multi slot
@@ -518,7 +576,7 @@ mod inproc {
     /// The interpreter the subprocess half of a parity test spawns.
     fn subproc_python() -> String {
         let ft = goofi_python::inproc::interpreter_path()
-            .expect("no FT interpreter (PYO3_PYTHON) — run `cargo run -p goofi-init`");
+            .expect("no FT interpreter in the runtime — run `cargo run -p goofi-init`");
         std::env::var("GOOFI_SUBPROC_TEST_PYTHON").unwrap_or(ft)
     }
 
@@ -530,7 +588,7 @@ import numpy as np
 class Parity(goofi.Node):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
-    PARAMS = {"gain": {"factor": goofi.IntParam(1, 0, 100)}}
+    PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
     def setup(self):
         self._base = 10
     def process(self, data):
@@ -556,11 +614,12 @@ class Absent(goofi.Node):
         let mut params = ParamGroups::new();
         params.insert("gain".into(), IndexMap::from([("factor".to_string(), Param::int(3, 0, 100))]));
 
-        // In-process seeds params and runs setup; the child runs setup lazily on its first request.
+        // Both tiers seed params and run setup before the first process call.
         let mut here = PyNode::from_source(PARITY, vec![("data", false)], vec!["out"]).expect("PyNode");
         here.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("in-process setup");
         let (_, a) = once(&mut here, Some(frame()), &[], &params);
-        let mut there = RemoteNode::new(&py, PARITY, vec![("data", false)]);
+        let mut there = RemoteNode::new(subproc(goofi_tests::hub(), &py, PARITY), vec![("data", false)]);
+        there.setup(&mut NodeCtx::new(), &Params::new(&params)).expect("subprocess setup");
         let (_, b) = once(&mut there, Some(frame()), &[], &params);
 
         let (a, b) = (a.expect("in-process frame"), b.expect("subprocess frame"));
@@ -582,7 +641,8 @@ class Absent(goofi.Node):
         let mut here = PyNode::from_source(ABSENT, vec![("data", false)], vec!["out"]).expect("PyNode");
         here.setup(&mut NodeCtx::new(), &Params::new(&p)).expect("in-process setup");
         let (a_res, a) = once(&mut here, None, &[], &p);
-        let mut there = RemoteNode::new(&py, ABSENT, vec![("data", false)]);
+        let mut there = RemoteNode::new(subproc(goofi_tests::hub(), &py, ABSENT), vec![("data", false)]);
+        there.setup(&mut NodeCtx::new(), &Params::new(&p)).expect("subprocess setup");
         let (b_res, b) = once(&mut there, None, &[], &p);
 
         assert!(a_res.is_ok(), "in-process tier errored on an absent input: {:?}", a_res.err());
@@ -645,12 +705,12 @@ class Meeting(goofi.Node):
     #[test]
     fn a_param_reference_reads_this_node_and_follows_its_edit() {
         let g = Goofi::new();
-        g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
+        g.graph().set_evaluator(std::sync::Arc::new(
             goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
         let osc = g.add("LFO");
         let probe = g.probe(osc, "out");
         g.ready(osc);
-        g.set_param(osc, "output", "mode", "block");
+        g.set_param(osc, "lfo", "mode", "block");
         g.set_param(osc, "lfo", "frequency", 8.0);
         // `me` is this node: the amplitude follows the node's OWN frequency param.
         let r = g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
@@ -668,7 +728,7 @@ class Meeting(goofi.Node):
         let osc2 = g.add("LFO");
         let probe2 = g.probe(osc2, "out");
         g.ready(osc2);
-        g.set_param(osc2, "output", "mode", "block");
+        g.set_param(osc2, "lfo", "mode", "block");
         let name = g.doc()["nodes"][hex(osc)]["name"].as_str().unwrap().to_string();
         let r = g.call("node param edit", j!({ "node": hex(osc2), "param": "lfo/amplitude",
             "expression": format!("nd('{name}').params.lfo.frequency + 1") }));
@@ -680,17 +740,17 @@ class Meeting(goofi.Node):
 
     #[test]
     fn the_patch_rate_variable_re_rates_every_producer_at_once() {
-        // `common.max_frequency` is BOUND to `variables.system.default_ufreq`, and a binding needs the evaluator.
+        // `common.max_frequency` is BOUND to `vars.signal.default_ufreq`, and a binding needs the evaluator.
         let g = Goofi::new();
-        g.state.graph.lock().unwrap().set_evaluator(std::sync::Arc::new(
+        g.graph().set_evaluator(std::sync::Arc::new(
             goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
-        g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 5.0 }));
+        g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 5.0 }));
 
         let osc = g.add("LFO");
         let probe = g.probe(osc, "out");
         g.ready(osc);
         let bound = g.doc()["nodes"][hex(osc)]["params"]["common"]["max_frequency"].clone();
-        assert_eq!((&bound["expr"], &bound["mode"]), (&j!("variables.system.default_ufreq"), &j!("expression")),
+        assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.signal.default_ufreq"), &j!("expression")),
                    "the manifest's declared binding was seeded live, not flattened to a literal");
 
         // Counting emitted frames is the only way to see a rate: a stated value reads correct anyway.
@@ -709,17 +769,17 @@ class Meeting(goofi.Node):
         let slow = runs(Duration::from_millis(800));
         assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the variable is not pacing it");
 
-        g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 60.0 }));
+        g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 60.0 }));
         // Half the old period apart, which the 5 Hz rate never allows.
         goofi_tests::until_faster_than(&g, &probe, 0.1);
 
-        // The evaluator's namespace: `math`'s names and `time()` are simply there, beside `np`.
+        // The evaluator's namespace: `math`'s names and `t` are simply there, beside `np`.
         let r = g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-            "expression": "2 * sin(pi / 2) + exp(0) * (1 if time() > 0 else 0)" }));
+            "expression": "2 * sin(pi / 2) + exp(0) * (1 if t >= 0 else 0)" }));
         assert!(r["error"].is_null(), "the namespace compiles: {r}");
         // The doc keeps the STORED value; the evaluated one shows in `node state`'s text.
         // Observed in the output, where an amplitude IS observable: a ±1 sine cannot cross 2.
-        g.until("math and time to evaluate into the output's swing", |_| {
+        g.until("math and t to evaluate into the output's swing", |_| {
             probe.latest().filter(|d| f32s(d).iter().any(|v| v.abs() > 2.0)).map(|_| ())
         });
     }

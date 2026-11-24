@@ -1,9 +1,9 @@
 import type { ParamDescriptor } from '$lib/api/types';
+import type { NodeInstanceInfo } from '$lib/api/control';
 
 export type ParamHit = { group: string; name: string; descriptor: ParamDescriptor };
 
-/** A node's params as the document carries them: group, then name. */
-export type ParamGroups = Record<string, Record<string, ParamDescriptor>>;
+export type ParamGroups = NodeInstanceInfo['params'];
 
 /** True where `i` starts a word in `name`: the first letter, one after a separator, or a capital. */
 function isWordStart(name: string, i: number): boolean {
@@ -22,10 +22,8 @@ function atWordStart(name: string, q: string): boolean {
 	return false;
 }
 
-/**
- * How well one param answers `q`, best first and 0 for a miss. The name outranks the family, which
- * outranks the doc, so typing a family name still surfaces that family without burying an exact hit.
- */
+/** How well one param answers `q`, best first and 0 for a miss. The name outranks the family, which
+ *  outranks the doc, so typing a family name still surfaces that family without burying an exact hit. */
 export function scoreParam(name: string, group: string, doc: string, q: string): number {
 	const n = name.toLowerCase();
 	if (n === q) return 6;
@@ -37,20 +35,17 @@ export function scoreParam(name: string, group: string, doc: string, q: string):
 	return 0;
 }
 
-/**
- * Every param matching `query`, across all families, best first. An empty query matches nothing —
- * the caller shows its tabs instead.
- */
+/** Every param matching `query`, across all families, best first. An empty query matches nothing:
+ *  the caller shows its tabs instead. */
 export function matchParams(params: ParamGroups, query: string): ParamHit[] {
 	const q = query.trim().toLowerCase();
 	if (q === '') return [];
 	const scored: { hit: ParamHit; rank: number }[] = [];
-	for (const [group, named] of Object.entries(params ?? {})) {
-		for (const [name, descriptor] of Object.entries(named ?? {})) {
-			const rank = scoreParam(name, group, descriptor?.doc ?? '', q);
+	for (const [group, named] of Object.entries(params)) {
+		for (const [name, descriptor] of Object.entries(named)) {
+			const rank = scoreParam(name, group, descriptor.doc ?? '', q);
 			if (rank > 0) scored.push({ hit: { group, name, descriptor }, rank });
 		}
 	}
-	// Stable within a rank: Object.entries keeps the document's order, which is the plugin's own.
-	return scored.map((s, i) => ({ s, i })).sort((a, b) => b.s.rank - a.s.rank || a.i - b.i).map(({ s }) => s.hit);
+	return scored.sort((a, b) => b.rank - a.rank).map((s) => s.hit);
 }

@@ -1,2 +1,4 @@
 # OpenCV capture runs on the subprocess Python tier.
 opencv-contrib-python
+# NDI send and receive; the wheel carries the NDI runtime.
+cyndilib

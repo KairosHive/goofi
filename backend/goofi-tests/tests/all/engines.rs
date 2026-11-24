@@ -1,17 +1,18 @@
-//! A scheduled engine beside the signal one (roadmap/multi-engine-graph.md): two skeletons — one
+//! A scheduled engine beside the signal one: two skeletons — one
 //! audio-shaped, one graphics-shaped — each publishing static data at its own fixed tick over
 //! the shared transport, registered through the one seam and driven through the one op surface.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
-use goofi_audio_sdk::{AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
 use goofi_core::SlotType;
 use goofi_node::{
     DrainWaker, Engine, EventId, GraphView, LibraryEntry, NodeManifest, NodeStage,
-    OutputDecl, ParamGroups, SlotDecl, Status, Touched, Uid,
+    OutputDecl, ParamGroups, SlotDecl, Status, Uid,
 };
 use goofi_tests::{ep, f32s, fixtures::LibraryEngine, hex, j, shape, Goofi};
 
@@ -62,19 +63,17 @@ type Rings = Vec<(goofi_transport::Doorbell, EventId)>;
 struct Feed {
     generation: u64,
     /// One entry per output slot: its publisher, and who to wake.
-    outs: Vec<(&'static str, goofi_transport::BytePublisher, Rings)>,
+    outs: Vec<(&'static str, goofi_transport::Publisher, Rings)>,
     /// The boundary wires feeding `in`, drained latest-wins before each tick.
-    ins: Vec<goofi_transport::ByteSubscriber>,
-    /// The freshest boundary frame, kept ENCODED — the echo republishes it verbatim.
-    latest_in: Option<Vec<u8>>,
+    ins: Vec<goofi_transport::Subscriber>,
+    /// The freshest boundary frame, as it came — the echo republishes it verbatim.
+    latest_in: Option<goofi_transport::Payload>,
 }
 
 struct Shared {
     feeds: HashMap<Uid, Feed>,
-    /// The static payload every non-echo slot publishes, pre-encoded once.
-    block: Vec<u8>,
-    /// Last: every port above is built from it, and fields drop in declaration order.
-    iox: goofi_transport::IoxNode,
+    /// The static payload every non-echo slot publishes.
+    block: goofi_transport::Payload,
 }
 
 /// A scheduled engine: one thread, one fixed tick, static data. No doorbells in — it drains its
@@ -101,8 +100,7 @@ impl Skeleton {
     ) -> Skeleton {
         let shared = Arc::new(Mutex::new(Shared {
             feeds: HashMap::new(),
-            block: goofi_codec::encode(block),
-            iox: goofi_transport::iox_node().expect("an iceoryx2 node for the skeleton"),
+            block: goofi_transport::Payload::Data(block.clone()),
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let tick = {
@@ -129,32 +127,32 @@ impl Skeleton {
 
 /// One tick: drain every boundary input to its freshest frame, then publish and ring.
 fn tick_once(shared: &Mutex<Shared>) {
-    let Ok(mut s) = shared.lock() else { return };
-    let mut fresh: HashMap<Uid, Vec<u8>> = HashMap::new();
-    for (uid, feed) in &s.feeds {
+    let mut s = shared.lock();
+    for feed in s.feeds.values_mut() {
         let mut newest = None;
-        for sub in &feed.ins {
-            while let Ok(Some(sample)) = sub.receive() {
-                newest = Some(sample.payload().to_vec());
+        for sub in &mut feed.ins {
+            if let Some(payload) = sub.receive() {
+                newest = Some(payload);
             }
         }
-        if let Some(bytes) = newest {
-            fresh.insert(*uid, bytes);
+        if newest.is_some() {
+            feed.latest_in = newest;
         }
     }
-    for (uid, bytes) in fresh {
-        s.feeds.get_mut(&uid).expect("just seen").latest_in = Some(bytes);
-    }
+    let block = s.block.clone();
     for feed in s.feeds.values() {
         for (slot, publisher, rings) in &feed.outs {
             let payload = match *slot {
                 "echo" => match &feed.latest_in {
-                    Some(bytes) => bytes.as_slice(),
+                    Some(payload) => payload.clone(),
                     None => continue,
                 },
-                _ => s.block.as_slice(),
+                _ => block.clone(),
             };
-            goofi_transport::publish(publisher, payload, rings.iter().map(|(b, id)| (b, *id)));
+            publisher.publish(payload);
+            for (bell, id) in rings {
+                bell.ring(*id);
+            }
         }
     }
 }
@@ -164,9 +162,6 @@ impl Engine for Skeleton {
         self.id
     }
 
-    fn doorbell_driven(&self) -> bool {
-        false
-    }
 
     fn dirty(&self) -> bool {
         self.dirty
@@ -185,7 +180,6 @@ impl Engine for Skeleton {
     ) -> Option<String> {
         self.shared
             .lock()
-            .unwrap()
             .feeds
             .insert(uid, Feed { generation, ..Feed::default() });
         // A synchronous engine is ready the moment its insert answers.
@@ -196,15 +190,16 @@ impl Engine for Skeleton {
     }
 
     fn remove(&mut self, uid: Uid) {
-        self.shared.lock().unwrap().feeds.remove(&uid);
+        self.shared.lock().feeds.remove(&uid);
         self.pending.retain(|(u, _)| *u != uid);
         self.dirty = true;
     }
 
-    fn settle(&mut self, view: &GraphView<'_>, _touched: &[Touched]) {
+    fn settle(&mut self, view: &GraphView<'_>, _changed: &[Uid]) {
         self.dirty = false;
-        let mut s = self.shared.lock().unwrap();
-        let Shared { feeds, block, iox } = &mut *s;
+        let hub = goofi_tests::hub();
+        let mut s = self.shared.lock();
+        let Shared { feeds, block } = &mut *s;
         for (uid, node) in &view.nodes {
             if node.engine != self.id {
                 continue;
@@ -214,7 +209,7 @@ impl Engine for Skeleton {
             // A rebirth renamed every service, so its publishers are rebuilt; a same-generation
             // settle reuses each slot's publisher, taken by NAME before anything is created —
             // two publishers on one one-publisher service, however briefly, is a refusal.
-            let mut held: HashMap<&'static str, goofi_transport::BytePublisher> =
+            let mut held: HashMap<&'static str, goofi_transport::Publisher> =
                 if feed.generation == node.generation {
                     std::mem::take(&mut feed.outs).into_iter().map(|(n, p, _)| (n, p)).collect()
                 } else {
@@ -224,13 +219,9 @@ impl Engine for Skeleton {
             feed.generation = node.generation;
             let mut outs = Vec::new();
             for out in node.manifest.outputs {
-                let publisher = held.remove(out.name).unwrap_or_else(|| {
-                    let service = goofi_transport::output_service(&base, out.name);
-                    let svc = goofi_transport::data_service(iox, &service)
-                        .expect("the skeleton's data service");
-                    goofi_transport::publisher(&svc, out.name, 64 * 1024)
-                        .expect("the skeleton's publisher")
-                });
+                let publisher = held
+                    .remove(out.name)
+                    .unwrap_or_else(|| hub.publisher(&goofi_transport::output_service(&base, out.name), false));
                 let rings = rings_for(view, *uid, out.name);
                 outs.push((out.name, publisher, rings));
             }
@@ -243,14 +234,17 @@ impl Engine for Skeleton {
                         &goofi_transport::service_base(view.instance, producer, p.generation),
                         slot,
                     );
-                    goofi_transport::open_output_subscriber(iox, &service).ok()
+                    Some(hub.subscribe(&service))
                 })
                 .collect();
             // The static block needs no tick to be current: publish on settle, so a consumer
             // wired later still sees data within one of ITS OWN wakes, and the tick re-publishes.
             for (slot, publisher, rings) in &feed.outs {
                 if *slot != "echo" {
-                    goofi_transport::publish(publisher, block, rings.iter().map(|(b, id)| (b, *id)));
+                    publisher.publish(block.clone());
+                    for (bell, id) in rings {
+                        bell.ring(*id);
+                    }
                 }
             }
         }
@@ -276,7 +270,7 @@ impl Engine for Skeleton {
         if let Some(tick) = self.tick.take() {
             let _ = tick.join();
         }
-        self.shared.lock().unwrap().feeds.clear();
+        self.shared.lock().feeds.clear();
     }
 }
 
@@ -289,10 +283,10 @@ impl Drop for Skeleton {
 /// Every doorbell one of this engine's output slots must ring, read off the view through the one
 /// derivation every engine uses: its consumers that wake on doorbells, and a reducer watching it.
 fn rings_for(view: &GraphView<'_>, producer: Uid, slot: &'static str) -> Rings {
-    let node_iox = goofi_transport::iox_node().expect("an iceoryx2 node for the rings");
+    let hub = goofi_tests::hub();
     goofi_transport::targets_of(view, producer, slot, view.ringers(producer, slot))
         .into_iter()
-        .filter_map(|(door, id)| Some((goofi_transport::Doorbell::open(&node_iox, &door).ok()?, id)))
+        .map(|(door, id)| (goofi_transport::Doorbell::on(hub.door(&door)), id))
         .collect()
 }
 
@@ -304,11 +298,12 @@ goofi_audio_sdk::params! {
     LEVEL = ParamDecl {
         group: "tone",
         name: "level",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         doc: Some("the block's level"),
         expression: None,
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 
@@ -340,7 +335,7 @@ fn gfx_frame() -> goofi_core::Data {
 }
 
 fn register_skeletons(t: &Goofi) {
-    let mut g = t.state.graph.lock().unwrap();
+    let mut g = t.graph();
     let waker = g.drain_waker();
     g.set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     g.register_engine(Box::new(Skeleton::new(
@@ -378,7 +373,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a THIRD engine takes a name the signal engine ships. A type id is `engine:Name`, so
     // both are advertised, both are addressable, and the bare name is refused as ambiguous.
-    t.state.graph.lock().unwrap().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
+    t.graph().register_engine(Box::new(LibraryEngine::named("twin", &["LFO"])));
 
     let rows = t.call("library list", j!({}))["types"].clone();
     let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|r| r["type"].as_str().unwrap()).collect();
@@ -437,8 +432,8 @@ fn a_scheduled_engine_beside_the_signal_one() {
     assert_eq!(f32s(&block)[0], 0.25, "the static block, decoded off the shared transport");
     assert_eq!(f32s(&block).len(), 64);
 
-    // Step: an audio output feeds an audio input, or an ARRAY input through the tap; nothing but
-    // audio feeds an audio input, and the refusal names both kinds.
+    // Step: an audio output feeds an audio input; nothing but audio feeds an audio input,
+    // and the refusal names both kinds.
     let other = t.add("SkelAudioOsc");
     t.link(audio, "out", other, "audio");
     let refused = t.refuse("link add", j!({ "from": ep(hex(audio), "echo"), "to": ep(hex(other), "audio") }));
@@ -471,10 +466,14 @@ fn a_scheduled_engine_beside_the_signal_one() {
     drop(again);
     t.call("node remove", j!({ "node": inst }));
 
-    // Step: skeleton → signal. The signal consumer subscribes to the derived name and the
-    // skeleton rings its slot doorbell, so data crosses without a protocol.
+    // Step: skeleton → signal. AudioIn receives the audio tap and emits signal frames.
+    let audio_in = t.add("signal:AudioIn");
+    t.ready(audio_in);
+    t.link(audio, "out", audio_in, "input");
     let echo = t.add("_TestEcho");
-    t.link(audio, "out", echo, "input");
+    let refused = t.refuse("link add", j!({ "from": ep(hex(audio), "out"), "to": ep(hex(echo), "input") }));
+    assert!(refused.contains("AUDIO") && refused.contains("ARRAY"), "{refused}");
+    t.link(audio_in, "out", echo, "input");
     let echoed = t.probe(echo, "out");
     let crossed = t.until("the crossed block", |_| echoed.latest());
     assert_eq!(f32s(&crossed), f32s(&block), "the signal node re-emits what the skeleton made");
@@ -483,21 +482,28 @@ fn a_scheduled_engine_beside_the_signal_one() {
     // exists on a scheduled engine — and the echo slot republishes the freshest frame verbatim.
     // Named by engine, since the twin registered above offers `Oscillator` too.
     let osc = t.add("signal:LFO");
+    // Lifted off zero: its phase starts at 0, and a first sample equal to the meter's literal
+    // 0 below would be no change, so the bound write the meter counts would never come.
+    t.call("node param edit", j!({ "node": hex(osc), "param": "lfo/offset", "value": 2.0 }));
     t.link(osc, "out", audio, "input");
     let back = t.probe(audio, "echo");
     let boundary = t.until("the boundary echo", |_| back.latest());
     assert!(!f32s(&boundary).is_empty(), "the oscillator's block came back through the boundary");
 
-    // Step: cross-engine modulation. A signal param binds to nd('SkelAudioOsc'); the skeleton
-    // rings the binding's own event id, the mailbox holds the frame latest-wins, and the
-    // evaluated value lands exactly once — static data cannot spam writes.
+    // Step: cross-engine modulation. A signal param binds to the skeleton's ARRAY echo — its
+    // AUDIO output never leaves its plane — which republishes the last boundary frame verbatim once
+    // the wire into it is cut; the skeleton rings the binding's own event id, the mailbox holds the
+    // frame latest-wins, and the evaluated value lands exactly once — static data cannot spam writes.
+    t.call("link remove", j!({ "from": ep(hex(osc), "out"), "to": ep(hex(audio), "input") }));
+    let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
     let meter = t.add("_TestParamWrites");
-    t.link(audio, "out", meter, "input");
-    t.call(
+    t.link(audio_in, "out", meter, "input");
+    let bound = t.call(
         "node param edit",
         j!({ "node": hex(meter), "param": "control/value",
-             "expression": "nd('SkelAudioOsc')", "mode": "expression" }),
+             "expression": format!("nd('{audio_name}').out.echo"), "mode": "expression" }),
     );
+    assert!(bound["error"].is_null(), "a signal param binds to a skeleton's output: {bound}");
     let writes = t.probe(meter, "out");
     t.until("the binding's one write landed (init replay + the bound arrival)", |_| {
         writes.latest().filter(|c| f32s(c)[0] >= 2.0)
@@ -507,29 +513,34 @@ fn a_scheduled_engine_beside_the_signal_one() {
         "latest-wins modulation of a STATIC value writes once, however many ticks pass"
     );
 
-    // Step: a reference obeys the same rule a cable does — a Float param may read an audio
-    // output, a Str param may not — and the refusal names the kinds.
-    let audio_name = t.doc()["nodes"][hex(audio)]["name"].as_str().unwrap().to_string();
+    // Step: a bare read obeys the same rule a cable does: a signal Float param reads the
+    // AudioIn frame, while a direct read of an audio output is refused with both kinds named.
+    let refused = t.call(
+        "node param edit",
+        j!({ "node": hex(meter), "param": "control/value", "expression": format!("nd('{audio_name}').out.out") }),
+    );
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("ARRAY")), "{refused}");
+    let audio_in_name = t.doc()["nodes"][hex(audio_in)]["name"].as_str().unwrap().to_string();
     let bound = t.call(
         "node param edit",
-        j!({ "node": hex(meter), "param": "control/value", "reference": format!("{audio_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(meter), "param": "control/value", "expression": format!("nd('{audio_in_name}')") }),
     );
-    assert!(bound["error"].is_null(), "a Float param references an audio output: {bound}");
+    assert!(bound["error"].is_null(), "a Float param references the audio frame: {bound}");
     let picker = t.add("_TestPicker");
     let refused = t.call(
         "node param edit",
-        j!({ "node": hex(picker), "param": "io/device", "reference": format!("{audio_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(picker), "param": "io/device", "expression": format!("nd('{audio_name}').out.out") }),
     );
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("STRING")), "{refused}");
     t.call("node remove", j!({ "node": hex(picker) }));
 
     // Step: a restart is a rebirth through the same trait doors — new generation, new services.
-    let generation = t.state.graph.lock().unwrap().node_generation(audio);
+    let generation = t.graph().node_generation(audio);
     let stale_probe = t.probe(audio, "out");
     t.call("node restart", j!({ "node": hex(audio) }));
     t.ready(audio);
     assert_eq!(
-        t.state.graph.lock().unwrap().node_generation(audio),
+        t.graph().node_generation(audio),
         generation + 1,
         "the rebirth minted a fresh generation"
     );
@@ -545,8 +556,8 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let frame = t.until("the gfx frame", |_| frame_probe.latest());
     assert_eq!(shape(&frame), vec![8, 8], "the graphics skeleton's static frame");
 
-    // Step: a texture output feeds a texture input, or an ARRAY input through the tap; nothing
-    // but a texture feeds a texture input, and the refusal names both kinds.
+    // Step: a texture output feeds a texture input; GraphicsIn receives its tap and emits
+    // signal frames. The cables refuse other kinds.
     let types = t.call("library list", j!({ "full": true }));
     let row = types["types"].as_array().unwrap().iter().find(|r| r["type"] == "skelgfx:SkelGfxFrame").unwrap();
     assert_eq!(row["output_slots"]["tex"], "TEXTURE", "{row}");
@@ -554,8 +565,13 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let gfx2 = t.add("SkelGfxFrame");
     t.ready(gfx2);
     t.link(gfx, "tex", gfx2, "tex");
+    let graphics_in = t.add("signal:GraphicsIn");
+    t.ready(graphics_in);
+    t.link(gfx, "tex", graphics_in, "input");
     let sink = t.add("_TestEcho");
-    t.link(gfx, "tex", sink, "input");
+    let refused = t.refuse("link add", j!({ "from": ep(hex(gfx), "tex"), "to": ep(hex(sink), "input") }));
+    assert!(refused.contains("TEXTURE") && refused.contains("ARRAY"), "{refused}");
+    t.link(graphics_in, "out", sink, "input");
     let crossed = t.probe(sink, "out");
     let crossed = t.until("the tapped texture", |_| crossed.latest());
     assert_eq!(shape(&crossed), vec![8, 8], "a texture reaches a signal node as a frame");

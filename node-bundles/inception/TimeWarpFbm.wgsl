@@ -19,7 +19,7 @@
     {
       "group": "brush",
       "name": "brush_x",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0,
       "max": 1,
@@ -28,7 +28,7 @@
     {
       "group": "brush",
       "name": "brush_y",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0,
       "max": 1,
@@ -37,7 +37,7 @@
     {
       "group": "brush",
       "name": "inject",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 1,
@@ -46,7 +46,7 @@
     {
       "group": "brush",
       "name": "erase",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": 0,
       "max": 1,
@@ -55,7 +55,7 @@
     {
       "group": "brush",
       "name": "auto_orbit",
-      "kind": "float",
+      "kind": "num",
       "default": 0.6,
       "min": 0,
       "max": 1,
@@ -64,7 +64,7 @@
     {
       "group": "optics",
       "name": "depth",
-      "kind": "float",
+      "kind": "num",
       "default": 1.2,
       "min": 0,
       "max": 4,
@@ -73,7 +73,7 @@
     {
       "group": "optics",
       "name": "refraction",
-      "kind": "float",
+      "kind": "num",
       "default": 0.8,
       "min": 0,
       "max": 2,
@@ -82,7 +82,7 @@
     {
       "group": "optics",
       "name": "dispersion",
-      "kind": "float",
+      "kind": "num",
       "default": 0.3,
       "min": 0,
       "max": 1,
@@ -91,7 +91,7 @@
     {
       "group": "optics",
       "name": "absorption",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 2,
@@ -100,7 +100,7 @@
     {
       "group": "optics",
       "name": "relief",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 2,
@@ -109,7 +109,7 @@
     {
       "group": "optics",
       "name": "light_x",
-      "kind": "float",
+      "kind": "num",
       "default": -0.45,
       "min": -1,
       "max": 1,
@@ -118,7 +118,7 @@
     {
       "group": "optics",
       "name": "light_y",
-      "kind": "float",
+      "kind": "num",
       "default": 0.55,
       "min": -1,
       "max": 1,
@@ -127,7 +127,7 @@
     {
       "group": "fractal",
       "name": "scale",
-      "kind": "float",
+      "kind": "num",
       "default": 3.2,
       "min": 0.5,
       "max": 10
@@ -135,7 +135,7 @@
     {
       "group": "fractal",
       "name": "octaves",
-      "kind": "int",
+      "kind": "num", "int": true,
       "default": 6,
       "min": 1,
       "max": 8
@@ -143,7 +143,7 @@
     {
       "group": "fractal",
       "name": "roughness",
-      "kind": "float",
+      "kind": "num",
       "default": 0.5,
       "min": 0.15,
       "max": 0.8
@@ -151,7 +151,7 @@
     {
       "group": "fractal",
       "name": "warp",
-      "kind": "float",
+      "kind": "num",
       "default": 4,
       "min": 0,
       "max": 8
@@ -159,7 +159,7 @@
     {
       "group": "fractal",
       "name": "stages",
-      "kind": "int",
+      "kind": "num", "int": true,
       "default": 2,
       "min": 0,
       "max": 2
@@ -167,7 +167,7 @@
     {
       "group": "fractal",
       "name": "seed",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": 0,
       "max": 100
@@ -175,7 +175,7 @@
     {
       "group": "motion",
       "name": "speed",
-      "kind": "float",
+      "kind": "num",
       "default": 0.22,
       "min": -1,
       "max": 1
@@ -183,7 +183,7 @@
     {
       "group": "motion",
       "name": "time_warp",
-      "kind": "float",
+      "kind": "num",
       "default": 0.65,
       "min": 0,
       "max": 2
@@ -208,7 +208,7 @@
     {
       "group": "color",
       "name": "veins",
-      "kind": "float",
+      "kind": "num",
       "default": 0.35,
       "min": 0,
       "max": 1
@@ -216,7 +216,7 @@
     {
       "group": "color",
       "name": "contrast",
-      "kind": "float",
+      "kind": "num",
       "default": 1.25,
       "min": 0.5,
       "max": 2.5
@@ -224,7 +224,7 @@
     {
       "group": "color",
       "name": "exposure",
-      "kind": "float",
+      "kind": "num",
       "default": 1.1,
       "min": 0.25,
       "max": 2.5
@@ -232,7 +232,7 @@
     {
       "group": "color",
       "name": "complexity",
-      "kind": "float",
+      "kind": "num",
       "default": 0.7,
       "min": 0,
       "max": 1
@@ -240,7 +240,7 @@
     {
       "group": "color",
       "name": "palette_shift",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -1,
       "max": 1
@@ -248,7 +248,7 @@
     {
       "group": "color",
       "name": "color_spread",
-      "kind": "float",
+      "kind": "num",
       "default": 1.35,
       "min": 0.25,
       "max": 3
@@ -256,7 +256,7 @@
     {
       "group": "color",
       "name": "iridescence",
-      "kind": "float",
+      "kind": "num",
       "default": 0.25,
       "min": 0,
       "max": 1
@@ -264,7 +264,7 @@
     {
       "group": "color",
       "name": "saturation",
-      "kind": "float",
+      "kind": "num",
       "default": 1.05,
       "min": 0,
       "max": 2
@@ -296,7 +296,7 @@
     {
       "group": "fractal",
       "name": "fold_mix",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 1,
@@ -305,7 +305,7 @@
     {
       "group": "fractal",
       "name": "lacunarity",
-      "kind": "float",
+      "kind": "num",
       "default": 2.03,
       "min": 1.1,
       "max": 3.5,
@@ -314,7 +314,7 @@
     {
       "group": "fractal",
       "name": "octave_angle",
-      "kind": "float",
+      "kind": "num",
       "default": 36.869898,
       "min": -180,
       "max": 180,
@@ -323,7 +323,7 @@
     {
       "group": "geometry",
       "name": "rotation",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -180,
       "max": 180,
@@ -332,7 +332,7 @@
     {
       "group": "geometry",
       "name": "stretch",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -3,
       "max": 3,
@@ -341,7 +341,7 @@
     {
       "group": "geometry",
       "name": "twist",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -4,
       "max": 4,
@@ -350,7 +350,7 @@
     {
       "group": "geometry",
       "name": "pan_x",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -10,
       "max": 10,
@@ -359,7 +359,7 @@
     {
       "group": "geometry",
       "name": "pan_y",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -10,
       "max": 10,
@@ -368,7 +368,7 @@
     {
       "group": "geometry",
       "name": "symmetry",
-      "kind": "int",
+      "kind": "num", "int": true,
       "default": 0,
       "min": 0,
       "max": 12,
@@ -377,7 +377,7 @@
     {
       "group": "warping",
       "name": "warp_scale",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.15,
       "max": 4,
@@ -386,7 +386,7 @@
     {
       "group": "warping",
       "name": "second_scale",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0.15,
       "max": 4,
@@ -395,7 +395,7 @@
     {
       "group": "warping",
       "name": "second_gain",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 2,
@@ -404,7 +404,7 @@
     {
       "group": "warping",
       "name": "warp_angle",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -180,
       "max": 180,
@@ -413,7 +413,7 @@
     {
       "group": "warping",
       "name": "cross_mix",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": 0,
       "max": 1,
@@ -422,7 +422,7 @@
     {
       "group": "motion",
       "name": "evolution",
-      "kind": "float",
+      "kind": "num",
       "default": 1,
       "min": 0,
       "max": 3,
@@ -431,7 +431,7 @@
     {
       "group": "motion",
       "name": "drift_x",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -1,
       "max": 1,
@@ -440,7 +440,7 @@
     {
       "group": "motion",
       "name": "drift_y",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": -1,
       "max": 1,
@@ -449,7 +449,7 @@
     {
       "group": "structure",
       "name": "terraces",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": 0,
       "max": 1,
@@ -458,7 +458,7 @@
     {
       "group": "structure",
       "name": "terrace_count",
-      "kind": "float",
+      "kind": "num",
       "default": 6,
       "min": 2,
       "max": 24,
@@ -467,7 +467,7 @@
     {
       "group": "structure",
       "name": "marbling",
-      "kind": "float",
+      "kind": "num",
       "default": 0,
       "min": 0,
       "max": 1,
@@ -476,7 +476,7 @@
     {
       "group": "structure",
       "name": "band_frequency",
-      "kind": "float",
+      "kind": "num",
       "default": 12,
       "min": 1,
       "max": 40,

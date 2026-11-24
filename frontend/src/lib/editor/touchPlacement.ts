@@ -13,19 +13,6 @@ export interface PlacementPoint {
 	y: number;
 }
 
-export interface TouchPlacement {
-	/** True while a gesture this recognizer took is in flight. */
-	readonly active: boolean;
-	/** Take this pointerdown, or leave it. Returns where the ghost goes; null if it is not ours. */
-	down(e: PlacementPointer, inCanvas: boolean): PlacementPoint | null;
-	/** Where the ghost goes now; null if this move belongs to some other pointer. */
-	move(e: PlacementPointer): PlacementPoint | null;
-	/** Where to commit; null if this up belongs to some other pointer. Ends the gesture. */
-	up(e: PlacementPointer): PlacementPoint | null;
-	/** End the gesture without committing — the placement stays pending, the ghost stays put. */
-	cancel(e: PlacementPointer): void;
-}
-
 /** How the ghost hangs off the point carrying it. */
 export type GhostAnchor = 'top-left' | 'centre';
 
@@ -40,30 +27,35 @@ export function ghostOrigin(
 	return { x: at.x - size.w / 2, y: at.y - size.h / 2 };
 }
 
-export function createTouchPlacement(): TouchPlacement {
+export function createTouchPlacement() {
 	// Held by id, so a SECOND finger landing mid-drag cannot teleport the ghost.
 	let held: number | null = null;
 	const mine = (e: PlacementPointer): boolean => held !== null && e.pointerId === held;
 	const point = (e: PlacementPointer): PlacementPoint => ({ x: e.clientX, y: e.clientY });
 
 	return {
+		/** True while a gesture this recognizer took is in flight. */
 		get active(): boolean {
 			return held !== null;
 		},
-		down(e, inCanvas) {
+		/** Take this pointerdown, or leave it. Returns where the ghost goes; null if it is not ours. */
+		down(e: PlacementPointer, inCanvas: boolean): PlacementPoint | null {
 			if (e.pointerType !== 'touch' || !inCanvas || held !== null) return null;
 			held = e.pointerId;
 			return point(e);
 		},
-		move(e) {
+		/** Where the ghost goes now; null if this move belongs to some other pointer. */
+		move(e: PlacementPointer): PlacementPoint | null {
 			return mine(e) ? point(e) : null;
 		},
-		up(e) {
+		/** Where to commit; null if this up belongs to some other pointer. Ends the gesture. */
+		up(e: PlacementPointer): PlacementPoint | null {
 			if (!mine(e)) return null;
 			held = null;
 			return point(e);
 		},
-		cancel(e) {
+		/** End the gesture without committing — the placement stays pending, the ghost stays put. */
+		cancel(e: PlacementPointer): void {
 			if (mine(e)) held = null;
 		}
 	};

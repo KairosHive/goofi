@@ -2,7 +2,7 @@
 
 use goofi_core::normalize::{apply, scale_of, validate, Running};
 use goofi_core::{indexmap::IndexMap, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Member {
@@ -78,7 +78,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "normalize",
@@ -90,19 +91,21 @@ static PARAMS: &[ParamDecl] = &[
              0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "window",
         name: "size",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How many past values each member is measured against. 0 keeps running statistics \
              instead. Robust mode needs a positive size.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -111,7 +114,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Stop taking in new values and keep scaling by what is already known."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "window",
@@ -120,7 +124,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget every member's statistics and start again."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 

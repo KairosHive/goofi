@@ -1,15 +1,15 @@
-<!-- Knob — a dumb rotary control: `value` in, `onChange` out. A vertical drag turns it, and the
-     arrow keys step it, so it is reachable without a pointer. The latch is released on pointer-up
-     OR pointer-cancel, because a touch pan the UA claims fires cancel and never up. -->
+<!-- Knob — a rotary control: a vertical drag or the arrow keys turn it. The latch is released on
+     pointer-up OR pointer-cancel, because a touch pan the UA claims fires cancel and never up. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { turnedBy } from './knob';
+	import { stepOf, turnedBy } from './knob';
 	import { claimFieldControlId } from './field';
 	import { useLiveValue } from './liveValue.svelte';
 
 	let {
 		value,
 		onChange,
+		onInput,
 		min = 0,
 		max = 1,
 		step = 0,
@@ -20,6 +20,8 @@
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: number;
 		onChange: (v: number) => unknown;
+		/** Each step of a turn, before the release commits it. */
+		onInput?: (v: number) => unknown;
 		min?: number;
 		max?: number;
 		step?: number;
@@ -31,14 +33,15 @@
 	const fieldId = claimFieldControlId(ownId);
 	const live = useLiveValue<number>(
 		() => value,
-		(v) => onChange(v)
+		(v) => onChange(v),
+		(v) => onInput?.(v)
 	);
 
 	const span = $derived(max - min || 1);
 	const fraction = $derived(Math.min(1, Math.max(0, (live.value - min) / span)));
 	// A knob sweeps 270°, from the lower left round to the lower right.
 	const angle = $derived(-135 + fraction * 270);
-	const stp = $derived(step > 0 ? step : span / 200);
+	const stp = $derived(stepOf(min, max, step));
 
 	let from: { y: number; value: number } | null = $state(null);
 
@@ -52,10 +55,11 @@
 
 	function move(e: PointerEvent): void {
 		if (!from) return;
-		live.commit(turnedBy(from.value, e.clientY - from.y, min, max, stp));
+		live.input(turnedBy(from.value, e.clientY - from.y, min, max, stp));
 	}
 
 	function up(): void {
+		if (from) live.commit(live.value);
 		from = null;
 		live.end();
 	}
@@ -117,12 +121,11 @@
 		border-radius: 50%;
 	}
 	.ui-knob-dial:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 	}
 	.ui-knob.disabled .ui-knob-dial {
 		cursor: default;
-		opacity: 0.5;
+		opacity: var(--disabled-opacity);
 	}
 	svg {
 		display: block;

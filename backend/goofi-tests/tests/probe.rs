@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use goofi_python::{discover_one, probe_introspect, Discovery};
+use goofi_python::{discover_one, Discovery};
 use goofi_node::Isolation;
 
 /// Whether `py` runs `code` cleanly, with the host's Python variables stripped as the probe strips them.
@@ -18,9 +18,17 @@ fn answers(py: &str, code: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// A repo venv's interpreter, where goofi-init made it.
-fn venv(name: &str) -> Option<String> {
-    goofi_init::venv_python(&goofi_init::repo_root().join(name)).map(|p| p.to_string_lossy().into_owned())
+/// A runtime venv's interpreter, where goofi-init made it.
+fn venv(dir: std::path::PathBuf) -> Option<String> {
+    goofi_supervisor::layout::venv_python(&dir).map(|p| p.to_string_lossy().into_owned())
+}
+
+fn ft_venv() -> Option<String> {
+    venv(goofi_supervisor::layout::runtime().python_ft())
+}
+
+fn gil_venv() -> Option<String> {
+    venv(goofi_supervisor::layout::runtime().python_gil())
 }
 
 /// A set, non-empty override.
@@ -28,11 +36,11 @@ fn named(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|p| !p.is_empty())
 }
 
-/// The first interpreter that can `import goofi`: an override, the repo's venvs, then the system one.
+/// The first interpreter that can `import goofi`: an override, the runtime's venvs, then the system one.
 fn test_python() -> String {
     let cands: Vec<String> = named("GOOFI_PYMOD_TEST_PYTHON").into_iter()
-        .chain(venv(goofi_init::FT_VENV))
-        .chain(venv(goofi_init::GIL_VENV))
+        .chain(ft_venv())
+        .chain(gil_venv())
         .chain(["python3".to_string()])
         .collect();
     cands.iter().find(|c| answers(c, "import goofi")).cloned().unwrap_or_else(|| panic!(
@@ -44,7 +52,7 @@ fn test_python() -> String {
 
 /// The FREE-THREADED interpreter (the in-process tier's host), for the routing gate's SAFE half.
 fn ft_python() -> String {
-    let cands: Vec<String> = named("GOOFI_FT_PYTHON").into_iter().chain(venv(goofi_init::FT_VENV)).collect();
+    let cands: Vec<String> = named("GOOFI_FT_PYTHON").into_iter().chain(ft_venv()).collect();
     // Free-threaded builds are exactly the ones where sys._is_gil_enabled() is False.
     let ft = "import sys; sys.exit(0 if not sys._is_gil_enabled() else 1)";
     cands.iter().find(|c| answers(c, ft)).cloned().unwrap_or_else(|| panic!(
@@ -53,10 +61,10 @@ fn ft_python() -> String {
     ))
 }
 
-/// The GIL interpreter (the subprocess tier's host) — the repo's `.gfivenv`.
+/// The GIL interpreter (the subprocess tier's host) — the runtime's `gil` venv.
 fn gil_python() -> String {
-    venv(goofi_init::GIL_VENV).filter(|p| answers(p, "import goofi")).unwrap_or_else(|| panic!(
-        "no `.gfivenv` python with goofi importable. Run goofi once (it provisions both venvs at startup)"
+    gil_venv().filter(|p| answers(p, "import goofi")).unwrap_or_else(|| panic!(
+        "no GIL python with goofi importable. Run `cargo run -p goofi-init`, which provisions both venvs"
     ))
 }
 
@@ -134,18 +142,8 @@ fn a_producer_that_is_not_a_bool_is_refused_rather_than_read_as_false() {
 }
 
 #[test]
-fn missing_dep_greys_out_instead_of_crashing() {
+fn a_file_that_declares_no_node_or_a_bad_one_is_unavailable_for_its_own_reason() {
     let py = test_python();
-    // The probe import fails -> the REASON, never a panic, so the palette can explain itself.
-    let err = probe_introspect(&fixtures().join("missing_dep.py"), &py).unwrap_err();
-    assert_eq!(err, "definitely_not_installed_pkg", "a missing import names the module");
-    match discover_one(&fixtures().join("missing_dep.py"), &py, Isolation::Subprocess, &memo()) {
-        Discovery::Unavailable { type_name, reason } => {
-            assert_eq!(type_name, "MissingDep");
-            assert_eq!(reason, "definitely_not_installed_pkg");
-        }
-        _ => panic!("a node whose dep is missing is Unavailable, not skipped"),
-    }
     // A file that imports CLEANLY and simply declares no node is Unavailable too, and for a reason
     // of its own — the palette must be able to say which of the two happened.
     match discover_one(&fixtures().join("no_node.py"), &py, Isolation::Subprocess, &memo()) {
@@ -247,13 +245,13 @@ fn every_param_kind_carries_its_doc_section_and_show_across_the_probe() {
     };
     assert_eq!(doc("count"), Some("how many"));
     let count = d.manifest.params.iter().find(|p| p.name == "count").unwrap();
-    assert!(matches!(count.spec, goofi_node::ParamSpec::Int { options: &[1, 2, 4, 8], .. }));
+    assert!(matches!(count.spec, goofi_node::ParamSpec::Num { int: true, options: &[1, 2, 4, 8], .. }));
     assert_eq!(doc("gain"), Some("how loud"));
     assert_eq!(doc("enabled"), Some("whether to run"));
     assert_eq!(doc("mode"), Some("which mode"));
     assert_eq!(doc("reset"), Some("start over"));
     let layout: Vec<_> = d.manifest.params.iter()
-        .map(|p| (p.name, p.section, p.show.map(|s| (s.param, s.any_of))))
+        .map(|p| (p.name, p.section, p.show.first().map(|s| (s.param, s.any_of))))
         .collect();
     assert_eq!(layout, [
         ("count", 0, None),

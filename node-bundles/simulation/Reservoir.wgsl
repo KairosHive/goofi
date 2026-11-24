@@ -4,8 +4,8 @@
   "inputs": [{"name": "state", "kind": "ARRAY"}],
   "state": ["history"],
   "params": [
-    {"group": "carpet", "name": "speed", "kind": "int", "default": 1, "min": 1, "max": 16},
-    {"group": "carpet", "name": "gain", "kind": "float", "default": 1.0, "min": 0.05, "max": 8.0} ] }
+    {"group": "carpet", "name": "speed", "kind": "num", "int": true, "default": 1, "min": 1, "max": 16},
+    {"group": "carpet", "name": "gain", "kind": "num", "default": 1.0, "min": 0.05, "max": 8.0} ] }
 */
 
 const MAX_FOLD: i32 = 32;

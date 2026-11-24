@@ -2,7 +2,7 @@
 //! patch. Exact, not approximate: ten qubits is a thousand amplitudes and costs nothing.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -194,29 +194,32 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "quantum",
         name: "qubits",
-        spec: ParamSpec::Int { default: 6, min: 1, max: 12, options: &[] },
+        spec: ParamSpec::Num { default: &[6.0], min: 1.0, max: 12.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many qubits. The statevector is two to this power, so 12 is four thousand amplitudes."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantum",
         name: "layers",
-        spec: ParamSpec::Int { default: 3, min: 1, max: 12, options: &[] },
+        spec: ParamSpec::Num { default: &[3.0], min: 1.0, max: 12.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many rounds of rotations. More layers reach further into the space."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantum",
         name: "angle",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 4.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 4.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Scales every rotation. At 0 the circuit does nothing and the state stays at the ground."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "quantum",
@@ -225,16 +228,18 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Put a ring of controlled-nots between the layers. Without it every qubit stays its own, and `entropy` stays 0."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "sim",
         name: "seed",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Seeds the per-gate offsets, which is what makes one circuit differ from another."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "sim",
@@ -243,7 +248,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Draw the circuit again."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 

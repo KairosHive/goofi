@@ -89,9 +89,9 @@ class WaveletLeaders(goofi.Node):
                 "signal", options=["signal", "image"], doc="Read the last axis as time, or the last two as a field."
             ),
             "wavelet": goofi.StringParam("db3", options=["db2", "db3", "db4", "sym4"], doc="The analysing wavelet."),
-            "levels": goofi.IntParam(0, 0, 12, doc="Scales to decompose over. 0 takes as many as the length allows."),
-            "first": goofi.IntParam(2, 1, 10, doc="First scale in the straight-line fit; the finest are the noisiest."),
-            "last": goofi.IntParam(8, 2, 14, doc="Last scale in it; the coarsest have the fewest coefficients."),
+            "levels": goofi.NumParam(0, 0, 12, int=True, doc="Scales to decompose over. 0 takes as many as the length allows."),
+            "first": goofi.NumParam(2, 1, 10, int=True, doc="First scale in the straight-line fit; the finest are the noisiest."),
+            "last": goofi.NumParam(8, 2, 14, int=True, doc="Last scale in it; the coarsest have the fewest coefficients."),
         }
     }
 

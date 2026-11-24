@@ -14,13 +14,14 @@ describe('the 8-bit viewer hop', () => {
 	});
 
 	it('reads the range the texels span off the meta', () => {
-		expect(sampleRange({ reduced: { depth: { lo: -2, hi: 2 } } })).toEqual([-2, 2]);
+		expect(sampleRange('|u1', { reduced: { depth: { lo: -2, hi: 2 } } })).toEqual([-2, 2]);
 	});
 
-	it('answers null when the frame carries no range', () => {
-		expect(sampleRange({})).toBeNull();
-		expect(sampleRange(undefined)).toBeNull();
-		expect(sampleRange({ reduced: { orig_len: 8 } })).toBeNull();
+	it('answers null for an f32 frame, and [0, 1] for texels that carry no range', () => {
+		expect(sampleRange('<f4', { reduced: { depth: { lo: -2, hi: 2 } } })).toBeNull();
+		expect(sampleRange('|u1', {})).toEqual([0, 1]);
+		expect(sampleRange('|u1', undefined)).toEqual([0, 1]);
+		expect(sampleRange('|u1', { reduced: { orig_len: 8 } })).toEqual([0, 1]);
 	});
 
 	it('maps a texel back into the frame’s units', () => {

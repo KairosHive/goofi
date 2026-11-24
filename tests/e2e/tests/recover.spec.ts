@@ -10,7 +10,7 @@ import { backendDoc, rawCall } from '../lib/raw';
  * folder: `patch.yaml` beside `workspace/` in a nonce directory of a session nobody holds. */
 function crashed(manifest: string, home: string | null): string {
 	const dir = path.join(
-		E2E_HOME, '.goofi', 'system', 'recovery',
+		E2E_HOME, '.goofi', 'recovery',
 		crypto.randomBytes(8).toString('hex'), crypto.randomBytes(16).toString('hex')
 	);
 	fs.mkdirSync(path.join(dir, 'workspace'), { recursive: true });
@@ -57,6 +57,36 @@ test('a crash is offered at the start: one recovery opened as unsaved work, one 
 		expect(fs.readFileSync(path.join(status.workspace, 'notes.md'), 'utf8')).toBe('kept');
 	} finally {
 		for (const dir of [lost, stray]) fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+		await resetPatch(page);
+	}
+});
+
+test('skip keeps every recovery for next time; remove all takes them off disk at once', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	const manifest = (await rawCall(page, 'session manifest')).result.yaml as string;
+	const dirs = [crashed(manifest, '/home/someone/patches/a.gfi'), crashed(manifest, null), crashed(manifest, null)];
+	try {
+		await page.reload();
+		await waitForApp(page);
+		const dialog = page.getByTestId('recover-dialog');
+		await expect(dialog).toBeVisible();
+		await expect(dialog.getByTestId('recover-entry')).toHaveCount(3);
+
+		// Skip is the focused answer: Enter takes it, and nothing leaves the disk.
+		await expect(dialog.getByTestId('recover-skip')).toBeFocused();
+		await page.keyboard.press('Enter');
+		await expect(dialog).toBeHidden();
+		for (const dir of dirs) expect(fs.existsSync(dir)).toBe(true);
+
+		await page.reload();
+		await waitForApp(page);
+		await expect(dialog.getByTestId('recover-entry')).toHaveCount(3);
+		await dialog.getByTestId('recover-discard-all').click();
+		await expect(dialog).toBeHidden();
+		for (const dir of dirs) await expect.poll(() => fs.existsSync(dir)).toBe(false);
+	} finally {
+		for (const dir of dirs) fs.rmSync(path.dirname(dir), { recursive: true, force: true });
 		await resetPatch(page);
 	}
 });

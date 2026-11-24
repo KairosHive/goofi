@@ -10,10 +10,10 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 	try {
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.5, 'float', {
+			await g.commands.addVariable('desk.level', 0.5, {
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
-			await g.commands.addVariable('other.value', 1, 'float');
+			await g.commands.addVariable('other.value', 1);
 			await g.commands.setPanelType(g.query.panels()[0].panelId, 'variables');
 		});
 		const panel = page.getByTestId('variables-panel');
@@ -89,11 +89,11 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 		await row.getByTestId('variable-name').fill('message');
 		await row.getByTestId('variable-name').press('Enter');
 		row = group.locator('[data-name="fresh.message"]');
-		await row.getByTestId('variable-type').locator('select').selectOption('string');
+		await row.getByTestId('variable-type').locator('select').selectOption('text');
 		await row.locator('input.ui-text[data-testid="variable-value"]').fill('hello');
 		await row.getByTestId('variable-value').press('Enter');
 		await expect.poll(() => page.evaluate(() => (window as any).goofi.query.variables()
-			.find((entry: { name: string }) => entry.name === 'fresh.message'))).toMatchObject({ type: 'string', value: 'hello' });
+			.find((entry: { name: string }) => entry.name === 'fresh.message'))).toMatchObject({ value: 'hello' });
 		await expect(panel.locator('[data-testid^="variable-lock"], [data-testid^="variable-group-lock"]')).toHaveCount(0);
 		await group.getByTestId('variable-group-edit').tap();
 		input = group.getByTestId('variable-group-name');
@@ -113,9 +113,12 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 			expect(await button.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('center');
 		}
 		const editedRow = group.locator('[data-name="renamed.message"]');
-		const nameBox = (await editedRow.getByTestId('variable-name').boundingBox())!;
-		const valueBox = (await editedRow.getByTestId('variable-value').boundingBox())!;
-		expect(Math.abs(nameBox.y - valueBox.y)).toBeLessThan(1);
+		// Polled: the rename re-keys the group, and its rows settle a frame after they are counted.
+		await expect.poll(async () => {
+			const nameBox = (await editedRow.getByTestId('variable-name').boundingBox())!;
+			const valueBox = (await editedRow.getByTestId('variable-value').boundingBox())!;
+			return Math.abs(nameBox.y - valueBox.y);
+		}).toBeLessThan(1);
 		expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 		await page.screenshot({ path: testInfo.outputPath('variables-editing-phone.png') });
 		await panel.getByTestId('variable-add-group-btn').tap();
@@ -123,6 +126,22 @@ test('variables group markers stay at the right edge on desktop and touch', asyn
 		await panel.locator('[data-group="group0"]').getByTestId('variable-group-name').press('Escape');
 		await panel.getByTestId('variable-add-group-btn').tap();
 		await expect(panel.locator('[data-group="group1"]').getByTestId('variable-group-name')).toBeFocused();
+		// A list taller than the panel scrolls inside it: the panel keeps its height and the last
+		// row comes into view.
+		await page.setViewportSize({ width: 390, height: 500 });
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			for (let i = 0; i < 24; i += 1) await g.commands.addVariable(`renamed.row${i}`, i);
+		});
+		await expect(group.getByTestId('variable-row')).toHaveCount(26);
+		const panelBox = (await panel.boundingBox())!;
+		expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(500);
+		const scroller = panel.locator('.ui-scrollarea');
+		expect(await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+		const last = group.locator('[data-name="renamed.row23"]');
+		await last.scrollIntoViewIfNeeded();
+		await expect(last).toBeInViewport();
+		expect(await scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
 	} finally {
 		await restorePanelType(page);

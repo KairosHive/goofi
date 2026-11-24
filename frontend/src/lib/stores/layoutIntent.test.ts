@@ -70,7 +70,7 @@ describe('layout write intent', () => {
 		ws.close('panel-2'); // the last panel cannot be closed
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(history().length, 'a refusal is not a step, and the manager never dirtied').toBe(0);
+		expect(fc.undoStack, 'a refusal is not a step, and the manager never dirtied').toHaveLength(0);
 	});
 
 	it('makes a panel-state write authoring by default — a viewer kind, a slot pick', async () => {

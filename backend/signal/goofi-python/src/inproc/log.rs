@@ -2,7 +2,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use pyo3::prelude::*;
-use goofi_core::log::{self, Level};
+use goofi_supervisor::log::{self, Level};
 
 thread_local! {
     static LINES: RefCell<[String; 2]> = const { RefCell::new([String::new(), String::new()]) };

@@ -77,12 +77,12 @@ class BioElements(goofi.Node):
             "scope": goofi.StringParam(
                 "pooled", ["pooled", "each"], doc="One answer for the whole frame, or one per channel."
             ),
-            "keep": goofi.IntParam(8, 1, 40, doc="How many elements to answer with, best first."),
-            "budget": goofi.FloatParam(5.0, 0.5, 9.0, doc="Seconds a frame may spend matching before it refuses."),
-            "depth": goofi.IntParam(40, 1, 200, doc="Spectral lines per element the match considers."),
-            "tolerance": goofi.FloatParam(50.0, 1.0, 200.0, doc="lines: how far from a line a peak may sit, in cents."),
-            "bandLow": goofi.FloatParam(3000.0, 20.0, 20000.0, doc="lines: bottom of the band the peaks fold into, in Hz."),
-            "bandHigh": goofi.FloatParam(7000.0, 40.0, 40000.0, doc="lines: top of that band, in Hz."),
+            "keep": goofi.NumParam(8, 1, 40, int=True, doc="How many elements to answer with, best first."),
+            "budget": goofi.NumParam(5.0, 0.5, 9.0, doc="Seconds a frame may spend matching before it refuses."),
+            "depth": goofi.NumParam(40, 1, 200, int=True, doc="Spectral lines per element the match considers."),
+            "tolerance": goofi.NumParam(50.0, 1.0, 200.0, doc="lines: how far from a line a peak may sit, in cents."),
+            "bandLow": goofi.NumParam(3000.0, 20.0, 20000.0, doc="lines: bottom of the band the peaks fold into, in Hz."),
+            "bandHigh": goofi.NumParam(7000.0, 40.0, 40000.0, doc="lines: top of that band, in Hz."),
         }
     }
 

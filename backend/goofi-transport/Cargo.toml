@@ -5,21 +5,21 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-goofi-node = { path = "../goofi-node" }
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
+goofi-node = { path = "../goofi-node" }
 
-# The cross-engine plane, at the version the Python child links — the two open the same services
-# over the shared 0.9.3 ABI, and `Cargo.lock` is what actually holds them together (this is a
-# caret requirement, as in the other crates that already depend on it).
-iceoryx2 = "0.9.3"
-
-# `atexit`, on every platform: the session's release when nothing else ran it.
+# A `Wire` payload: one buffer, shared by every reader and forwarded to a socket uncopied.
+bytes = "1"
+# A slot's cell: the newest payload, swapped in by its one writer and read by any number of
+# subscribers with no lock on either side, so a producer is never held by a reader.
+arc-swap = "1"
+# The exchange's shared memory and its doorbell socket's readiness.
 libc = "0.2"
 
-# Taking a refused node's DACL back so its owner can unlink it — see `grant_owner`.
 [target.'cfg(windows)'.dependencies]
+# Pagefile-backed sections for the exchange's mailboxes.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Security_Authorization",
+    "Win32_System_Memory",
 ] }

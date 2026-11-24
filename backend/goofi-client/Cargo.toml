@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
 serde_json = "1"
 # An ARRAY snapshot travels as base64 NPY; the client's render rule decodes it onto stdout.

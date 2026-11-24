@@ -1,7 +1,7 @@
 //! A Butterworth filter with forward-backward or continuous causal processing.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// One second-order section, normalized so `a0 == 1`.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -251,7 +251,8 @@ static PARAMS: &[ParamDecl] = &[
              everything except between the two.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -268,43 +269,48 @@ static PARAMS: &[ParamDecl] = &[
              grows towards the band edges.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
         name: "low",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
         name: "high",
-        spec: ParamSpec::Float { default: 40.0, min: 0.0, max: 10_000.0 },
+        spec: ParamSpec::Num { default: &[40.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
         name: "order",
-        spec: ParamSpec::Int { default: 4, min: 2, max: 16, options: &[2, 4, 6, 8] },
+        spec: ParamSpec::Num { default: &[4.0], min: 2.0, max: 16.0, int: true, options: &[2, 4, 6, 8], face: Face::Plain },
         expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "filter",
@@ -313,7 +319,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -35,13 +35,13 @@ describe('node lifecycle stage', () => {
 
 		fc.emit({
 			event: 'state_update',
-			payload: { node: 'n1', params: {}, stage: 'setup' }
+			payload: { node: 'n1', options: {}, stage: 'setup' }
 		});
 		expect(g.nodeById('n1')?.stage).toBe('setup');
 
 		fc.emit({
 			event: 'state_update',
-			payload: { node: 'n1', params: {}, stage: 'ready' }
+			payload: { node: 'n1', options: {}, stage: 'ready' }
 		});
 		expect(g.nodeById('n1')?.stage).toBe('ready');
 	});
@@ -60,6 +60,7 @@ describe('node lifecycle stage', () => {
 				save_path: null,
 				unsaved_changes: false,
 				instance_id: 'sess1',
+				doc_version: 0,
 				viewpoint: null
 			} as never as GraphSnapshot
 		});
@@ -76,7 +77,7 @@ describe('node lifecycle stage', () => {
 		expect(g.nodeById('n1')?.runtime).toBe('subprocess');
 
 		// …and a state_update, which carries no runtime at all, must not blank it either.
-		fc.emit({ event: 'state_update', payload: { node: 'n1', params: {}, stage: 'error', error: 'GIL' } });
+		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'error', error: 'GIL' } });
 		expect(g.nodeById('n1')?.stage).toBe('error');
 		expect(g.nodeById('n1')?.runtime).toBe('subprocess');
 
@@ -89,6 +90,7 @@ describe('node lifecycle stage', () => {
 				save_path: null,
 				unsaved_changes: false,
 				instance_id: 'sess1',
+				doc_version: 0,
 				viewpoint: null
 			} as never as GraphSnapshot
 		});
@@ -149,7 +151,7 @@ describe('node lifecycle stage', () => {
 			event: 'state_update',
 			payload: {
 				node: 'n1',
-				params: {},
+				options: {},
 				stage: 'setup',
 				error: 'RuntimeError: setup boom'
 			}
@@ -159,7 +161,7 @@ describe('node lifecycle stage', () => {
 		// a healthy respawn's state push carries error=null -> the chip clears
 		fc.emit({
 			event: 'state_update',
-			payload: { node: 'n1', params: {}, stage: 'ready', error: null }
+			payload: { node: 'n1', options: {}, stage: 'ready', error: null }
 		});
 		expect(g.nodeById('n1')?.error).toBe(null);
 	});

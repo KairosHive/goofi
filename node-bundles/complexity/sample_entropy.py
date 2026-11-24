@@ -17,7 +17,7 @@ class SampleEntropy(goofi.Node):
     OUTPUTS = {"entropy": goofi.DataType.ARRAY}
     PARAMS = {
         "sample": {
-            "order": goofi.IntParam(2, 1, 10, doc="How many samples make one pattern."),
+            "order": goofi.NumParam(2, 1, 10, int=True, doc="How many samples make one pattern."),
             "metric": goofi.StringParam(
                 "chebyshev", ["chebyshev", "euclidean"], doc="How far apart two patterns may be to match."
             ),

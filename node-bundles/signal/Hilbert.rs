@@ -2,7 +2,7 @@
 //! how fast that is turning. Per frame, so it follows a Buffer.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Hilbert {
@@ -87,11 +87,12 @@ impl Node for Hilbert {
 static PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "hilbert",
     name: "axis",
-    spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+    spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
     expression: None,
     doc: Some("Which axis holds the samples. -1 is time."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

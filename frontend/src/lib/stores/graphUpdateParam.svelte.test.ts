@@ -4,8 +4,8 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
-import { docParams, setParamValue } from '$lib/crdt/graphDoc';
-import type { NodeInstanceInfo, NodeTypeInfo } from '$lib/api/control';
+import { nodesMap } from '$lib/crdt/graphDoc';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 
 /** Seed a node — a param leaf-write targets the replica's node, so it no-ops unless it is there. */
@@ -24,20 +24,22 @@ function catalog(): NodeTypeInfo[] {
 			params: {
 				common: {
 					frequency: {
-						type: 'float',
+						type: 'num',
 						value: 1,
 						default: 1,
 						vmin: 0,
 						vmax: 1000,
+						int: false,
+						options: [],
+						face: 'plain',
 						doc: null,
 						refreshable: false,
 						expression: null,
 						mode: 'constant',
-						reference: null,
-						triggers: false,
 						error: null,
 						section: 0,
-						show: null
+						show: [],
+						role: null
 					}
 				},
 				count: {
@@ -49,11 +51,10 @@ function catalog(): NodeTypeInfo[] {
 						refreshable: false,
 						expression: null,
 						mode: 'constant',
-						reference: null,
-						triggers: false,
 						error: null,
 						section: 0,
-						show: null
+						show: [],
+						role: null
 					}
 				}
 			}
@@ -62,23 +63,6 @@ function catalog(): NodeTypeInfo[] {
 }
 
 
-function nodeWithParam(uid: string, value: unknown): NodeInstanceInfo {
-	return {
-		uid,
-		name: 'osc0',
-		type: 'Oscillator',
-		doc: '',
-		input_slots: { in: 'ARRAY' },
-		output_slots: { out: 'ARRAY' },
-		// One param group with a single param carrying `value`.
-		params: { common: { frequency: { value } } } as unknown as NodeInstanceInfo['params'],
-		pos: [0, 0],
-		viewers: {},
-		scope: '__root__',
-		error: null
-	};
-}
-
 describe('GraphStore.updateParam — guards a non-existent param', () => {
 	beforeEach(() => history().reset());
 
@@ -86,7 +70,7 @@ describe('GraphStore.updateParam — guards a non-existent param', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
+		docAddNode(d, 'uidA');
 
 		// A missing group/name (agent typo, or a pre-hydration race) must not record a
 		// poisoned undo entry whose inverse would send value:undefined → backend KeyError.
@@ -101,7 +85,7 @@ describe('GraphStore.updateParam — guards a non-existent param', () => {
 		const d = seed(fc);
 		g.nodeTypes = catalog(); // catalog present → node identity + params come from the doc
 		d.node('uidA', 'Oscillator', 'osc0', [0, 0]);
-		setParamValue(g.doc, 'uidA', 'common', 'frequency', 0); // the current value the guard must treat as present
+		d.patch({ nodes: { uidA: { params: { common: { frequency: { value: 0 } } } } } }); // the current value the guard must treat as present
 
 		// The guard keys on the param's EXISTENCE, not the truthiness of its value, so editing a
 		// param whose current value is 0/false/'' still issues the command (a missing param throws).
@@ -119,14 +103,13 @@ describe('GraphStore.setSource — guards a non-existent param', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 		docAddNode(d, 'uidA'); // the node exists in the doc; the PARAM does not
 
 		// A missing group/name (agent typo, or a call racing hydration) must not leaf-write an
 		// `expr` onto a phantom param entry — the graph rejects it and the re-mirror never prunes it.
 		await expect(g.setSource('uidA', 'nope', 'missing', { expression: "nd('x')" })).rejects.toThrow();
 		expect(history().canUndo).toBe(false);
-		expect(docParams(g.doc, 'uidA').nope?.missing?.source).toBeUndefined();
+		expect(nodesMap(g.doc).uidA?.params).toBeUndefined();
 	});
 });
 
@@ -167,7 +150,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
 
@@ -181,7 +163,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['audio', 'device']]
 			}
 		});
@@ -192,7 +174,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		await g.refreshParam('uidA', 'audio', 'device');
 		await g.refreshParam('uidA', 'lsl', 'source_name');
@@ -202,7 +183,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['lsl', 'source_name']]
 			}
 		});
@@ -214,7 +195,7 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 			event: 'state_update',
 			payload: {
 				node: 'uidA',
-				params: {},
+				options: {},
 				refreshed_params: [['audio', 'device']]
 			}
 		});
@@ -225,7 +206,6 @@ describe('GraphStore refresh spinner — the entry stays disabled until fresh op
 		fc.failNext('node param request');
 		const g = new GraphStore(fc);
 		const d = seed(fc);
-		fc.emit({ event: 'node_added', payload: nodeWithParam('uidA', 0) });
 
 		await expect(g.refreshParam('uidA', 'audio', 'device')).rejects.toThrow();
 		expect(g.isRefreshing('uidA', 'audio', 'device')).toBe(false);
@@ -268,7 +248,7 @@ describe('GraphStore doc sync — a reader re-runs for the leaves it read', () =
 		flushSync();
 		expect([list, names, frequency, reset]).toEqual([1, 1, 1, 1]);
 
-		d.variable('patch.gain', { value: 1, type: 'float' });
+		d.variable('patch.gain', { value: 1 });
 		d.patch({ variable_groups: { patch: { lock: { config: true, value: false } } } });
 		flushSync();
 		expect(g.variables.map((v) => v.name)).toContain('patch.gain');
@@ -284,6 +264,10 @@ describe('GraphStore doc sync — a reader re-runs for the leaves it read', () =
 		flushSync();
 		expect(node.name).toBe('osc1');
 		expect([list, names, frequency, reset]).toEqual([1, 2, 2, 1]);
+		d.patch({ nodes: { uidA: { pos: [20, 30], scope: 'sub' } } });
+		flushSync();
+		expect([node.pos, node.scope]).toEqual([[20, 30], 'sub']);
+		expect([list, names, frequency, reset], 'position and scope leave name and param readers asleep').toEqual([1, 2, 2, 1]);
 		d.node('uidB', 'Oscillator', 'osc2');
 		flushSync();
 		expect([list, names, frequency, reset], 'membership wakes the list alone').toEqual([2, 2, 2, 1]);

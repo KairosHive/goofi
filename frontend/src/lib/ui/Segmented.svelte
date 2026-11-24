@@ -1,6 +1,5 @@
-<!-- Segmented — one chrome-height strip of exclusive segments: the source switch a param row
-     and a control widget wear. One segment alone is a toggle, and an ARRAY value lights each
-     segment on its own — the same strip with checkbox behaviour. -->
+<!-- Segmented — one chrome-height strip of exclusive segments. One segment alone is a toggle;
+     an ARRAY value lights each segment on its own, with checkbox behaviour. -->
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { Icon } from 'panelty';
@@ -47,7 +46,7 @@
 		<button
 			type="button"
 			{disabled}
-			class="seg"
+			class="seg pill-type"
 			class:on={lit(s.id)}
 			class:bad={lit(s.id) && bad}
 			aria-pressed={lit(s.id)}
@@ -93,12 +92,6 @@
 		border: none;
 		background: transparent;
 		color: var(--text-muted);
-		font-family: var(--font-sans);
-		font-size: var(--fs-micro);
-		font-weight: 600;
-		line-height: 1;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
 		cursor: pointer;
 		transition:
 			background var(--dur-fast) var(--ease),
@@ -130,7 +123,6 @@
 		color: var(--danger);
 	}
 	.seg:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: -1px;
 	}
 	/* Chrome-height by design; the finger floor is taken back here, as `density="chrome"` controls take theirs. */

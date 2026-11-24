@@ -4,13 +4,13 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use goofi_supervisor::sync::{Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
-use goofi_node::{
-    EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
-    ParamKey, ParamSpec, Params, SlotDecl, Status, Touched, Uid,
+use goofi_node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
+    ParamKey, ParamSpec, Params, SlotDecl, Status, Uid,
 };
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 
@@ -50,6 +50,7 @@ pub fn register(g: &mut Graph) {
     add(g, manifest("_TestMute", "a refreshable list with no hook behind it", &[], &[], PICKER_PARAMS, false), || Box::new(MutePicker));
     add(g, manifest("_TestConst", "constant float32 array source (value+length) — hidden test/bench scaffolding.", &[], OUT_ARRAY, CONST_PARAMS, true), || Box::new(TestConst));
     add(g, manifest("_TestRamp", "a [C, T] ramp frame at `sfreq`: channel c rises from c to c + 1", &[], OUT_ARRAY, RAMP_PARAMS, true), || Box::new(Ramp));
+    add(g, manifest("_TestTake", "an array, a text and a table that change every run, for a recording to take", &[], OUT_TAKE, NO_PARAMS, true), || Box::new(Take::default()));
     add(g, manifest("_TestImage", "a 4x4 gradient image, gray and bipolar on request", &[], OUT_ARRAY, IMAGE_PARAMS, true), || Box::new(Image));
 }
 
@@ -82,6 +83,11 @@ static IN_PAIR: &[SlotDecl] = &[
 static OUT_ARRAY: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 static OUT_STRING: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::String }];
 static NO_PARAMS: &[ParamDecl] = &[];
+static OUT_TAKE: &[OutputDecl] = &[
+    OutputDecl { name: "array", kind: SlotType::Array },
+    OutputDecl { name: "text", kind: SlotType::String },
+    OutputDecl { name: "table", kind: SlotType::Table },
+];
 
 /// An engine that is nothing but a library: it advertises the names it was built with, and runs
 /// them nowhere. What a test registers to put a second engine behind a name a shipped one offers.
@@ -91,6 +97,8 @@ pub struct LibraryEngine {
     types: Vec<LibraryEntry>,
     pending: Vec<(Uid, Status)>,
     shown: Arc<Mutex<HashSet<Uid>>>,
+    /// Every uid ever inserted, in order — what a test reads to count the births a batch cost.
+    born: Arc<Mutex<Vec<Uid>>>,
 }
 
 impl LibraryEngine {
@@ -103,7 +111,12 @@ impl LibraryEngine {
                 LibraryEntry { manifest: Box::leak(Box::new(m)), isolation: &goofi_node::NATIVE }
             })
             .collect();
-        LibraryEngine { id, types, pending: Vec::new(), shown: Arc::default() }
+        LibraryEngine { id, types, pending: Vec::new(), shown: Arc::default(), born: Arc::default() }
+    }
+
+    /// A handle on the birth log, held past `register_engine`.
+    pub fn births(&self) -> Arc<Mutex<Vec<Uid>>> {
+        self.born.clone()
     }
 }
 
@@ -112,9 +125,6 @@ impl Engine for LibraryEngine {
         self.id
     }
 
-    fn doorbell_driven(&self) -> bool {
-        false
-    }
 
     fn dirty(&self) -> bool {
         false
@@ -125,16 +135,17 @@ impl Engine for LibraryEngine {
     }
 
     fn insert(&mut self, uid: Uid, _type_name: &str, _generation: u64, _params: &ParamGroups) -> Option<String> {
+        self.born.lock().push(uid);
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         None
     }
 
     fn remove(&mut self, uid: Uid) {
         self.pending.retain(|(u, _)| *u != uid);
-        self.shown.lock().unwrap().remove(&uid);
+        self.shown.lock().remove(&uid);
     }
 
-    fn settle(&mut self, _view: &GraphView<'_>, _touched: &[Touched]) {}
+    fn settle(&mut self, _view: &GraphView<'_>, _changed: &[Uid]) {}
 
     fn has_editor(&self, type_name: &str) -> bool {
         self.types.iter().any(|t| t.manifest.type_name == type_name)
@@ -143,7 +154,7 @@ impl Engine for LibraryEngine {
     fn editor(&mut self, uid: Uid, show: bool) -> Result<EditorAction, String> {
         let shown = self.shown.clone();
         Ok(Box::new(move || {
-            let mut shown = shown.lock().unwrap();
+            let mut shown = shown.lock();
             Ok(if show { shown.insert(uid) } else { shown.remove(&uid) })
         }))
     }
@@ -200,10 +211,10 @@ struct Gate {
 
 impl Gate {
     fn pass(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock();
         state.1 += 1;
         while !state.0 {
-            state = self.wake.wait(state).unwrap_or_else(|e| e.into_inner());
+            state = self.wake.wait(state);
         }
         state.1 -= 1;
     }
@@ -211,13 +222,13 @@ impl Gate {
 
 impl Latch {
     pub fn open(&self) {
-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).0 = true;
+        self.0.state.lock().0 = true;
         self.0.wake.notify_all();
     }
 
     /// How many wait at it now.
     pub fn inside(&self) -> usize {
-        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).1
+        self.0.state.lock().1
     }
 
     /// Register `type_name`, a producer whose every run waits here.
@@ -255,11 +266,12 @@ impl Node for Busy {
 static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
     group: "control",
     name: "value",
-    spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+    spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
     expression: None,
     doc: None,
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 
 struct Sink;
@@ -286,7 +298,8 @@ static IMAGE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Emit one bipolar channel instead of three colour ones."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 
 /// What an image viewer is handed: a 4x4 frame whose texels span the whole range, so a
@@ -361,8 +374,8 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Float { default: 5.0, min: 1.0, max: 100.0 }, expression: None, doc: None, section: 0, show: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 }, expression: None, doc: None, section: 0, show: None },
+    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
+    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
 ];
 
 static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
@@ -372,7 +385,8 @@ static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Start the count over."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 
 /// The same count, with a pulse behind it: the request a rising edge and the op both make.
@@ -464,7 +478,8 @@ static PICKER_PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: None,
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 
 struct Picker;
@@ -490,6 +505,33 @@ impl Node for MutePicker {
 }
 
 /// `_TestConst` — a constant float32 array source.
+/// `_TestTake` — each run, an array whose shape moves, with labelled channels and a key of its
+/// own; a text with a newline, a comma and quotes; and a table of a number, such a text and an
+/// empty cell. What a recording that is played back and recorded again must keep.
+#[derive(Default)]
+struct Take {
+    run: u32,
+}
+
+impl Node for Take {
+    fn process(&mut self, _inp: &Inputs<'_>, out: &mut Outputs<'_>, _ctx: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
+        use goofi_core::{Axes, Axis, Coord, MetaValue};
+        let k = self.run;
+        self.run += 1;
+        let width = 1 + k as usize % 3;
+        let buf: Vec<u8> = (0..2 * width).flat_map(|i| (k as f32 + i as f32 / 7.0).to_le_bytes()).collect();
+        let mut meta = Meta::new().with_sfreq(Some(250.0)).with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("a".into()), Coord::Str("b".into())])));
+        meta.set("take", MetaValue::Int(k as i64 / 2));
+        out.set("array", Data::array_f32(vec![2, width], buf, meta).map_err(|e| e.to_string())?);
+        let text = format!("run {k}, said \"twice\"\nand again");
+        out.set("text", Data::string(text.clone(), Meta::new()));
+        let half = Data::array_f32(vec![1], (k as f32 * 0.5).to_le_bytes().to_vec(), Meta::new()).map_err(|e| e.to_string())?;
+        let cells = [("half", half), ("text", Data::string(text, Meta::new())), ("blank", Data::string("", Meta::new()))];
+        out.set("table", Data::table(cells.into_iter().map(|(k, v)| (k.to_string(), v)).collect(), Meta::new()));
+        Ok(())
+    }
+}
+
 struct TestConst;
 
 impl Node for TestConst {
@@ -509,20 +551,22 @@ static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "constant",
         name: "value",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The value every element of the emitted array carries."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "constant",
         name: "length",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many elements the emitted array has."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "constant",
@@ -531,24 +575,36 @@ static CONST_PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Emit NaN in place of the value."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 
 /// `_TestRamp` — one `[C, T]` frame per run, channel `c` rising from `c` to `c + 1` over
 /// `length` samples at `sfreq`: ordered samples with a rate, which is what a crossing resamples.
+/// `named` labels the channels with 10-20 electrodes, which is what a topomap places.
 struct Ramp;
+
+const ELECTRODES: &[&str] = &["Cz", "C3", "C4", "Fz", "Pz", "F3", "F4", "P3", "P4", "O1", "O2", "Fp1", "Fp2", "T7", "T8"];
 
 impl Node for Ramp {
     fn process(&mut self, _inp: &Inputs<'_>, out: &mut Outputs<'_>, _ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
         let sfreq = p.f64("ramp", "sfreq").unwrap_or(256.0);
         let length = p.i64("ramp", "length").unwrap_or(512).max(1) as usize;
         let channels = p.i64("ramp", "channels").unwrap_or(1).max(1) as usize;
+        let scale = p.f64("ramp", "scale").unwrap_or(1.0) as f32;
         let buf: Vec<u8> = (0..channels)
-            .flat_map(|c| (0..length).flat_map(move |i| (c as f32 + i as f32 / length as f32).to_le_bytes()))
+            .flat_map(|c| (0..length).flat_map(move |i| ((c as f32 + i as f32 / length as f32) * scale).to_le_bytes()))
             .collect();
-        let data = Data::array_f32(vec![channels, length], buf, Meta::new().with_sfreq(Some(sfreq)))
-            .map_err(|e| e.to_string())?;
+        let mut meta = Meta::new().with_sfreq(Some(sfreq));
+        if p.bool("ramp", "named").unwrap_or(false) {
+            use goofi_core::{Axes, Axis, Coord};
+            let names: Vec<Coord> = (0..channels)
+                .map(|c| Coord::Str(ELECTRODES.get(c).map_or_else(|| format!("ch{c}"), |n| (*n).to_string()).into()))
+                .collect();
+            meta.set_channels(Axes::new().with(0, Axis::coords(names)));
+        }
+        let data = Data::array_f32(vec![channels, length], buf, meta).map_err(|e| e.to_string())?;
         out.set("out", data);
         Ok(())
     }
@@ -557,30 +613,53 @@ impl Node for Ramp {
 static RAMP_PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "ramp",
-        name: "sfreq",
-        spec: ParamSpec::Float { default: 256.0, min: 1.0, max: 100_000.0 },
+        name: "named",
+        spec: ParamSpec::Bool { default: false },
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
+    },
+    ParamDecl {
+        group: "ramp",
+        name: "sfreq",
+        spec: ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: None,
+        section: 0,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "ramp",
         name: "length",
-        spec: ParamSpec::Int { default: 512, min: 1, max: 1_000_000, options: &[] },
+        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "ramp",
         name: "channels",
-        spec: ParamSpec::Int { default: 1, min: 1, max: 64, options: &[] },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
+    },
+    ParamDecl {
+        group: "ramp",
+        name: "scale",
+        spec: ParamSpec::Num { default: &[1.0], min: 1e-12, max: 1e12, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: None,
+        section: 0,
+        show: &[],
+        role: None,
     },
 ];
 
@@ -592,6 +671,11 @@ pub fn plugin_package(home: &std::path::Path) {
 /// The shipped virtual-cables plugin, from `plugins/` at the repository root, into `home`.
 pub fn virtual_cables(home: &std::path::Path) {
     install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/virtual-cables"), home, "virtual-cables");
+}
+
+/// The shipped latency plugin, from `plugins/` at the repository root, into `home`.
+pub fn latency(home: &std::path::Path) {
+    install_plugin(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/latency"), home, "latency");
 }
 
 fn install_plugin(from: &std::path::Path, home: &std::path::Path, id: &str) {

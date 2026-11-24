@@ -11,9 +11,13 @@ goofi-init = { path = "../goofi-init" }
 # The node pipeline, run here over the shipped folders so the artifacts ship inside the binary.
 goofi-build = { path = "../goofi-build" }
 goofi-node = { path = "../goofi-node" }
+# Where the pipeline's output goes: the same runtime a goofi from this build reads.
+goofi-supervisor = { path = "../goofi-supervisor" }
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-audio = { path = "../audio/goofi-audio" }
+goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }
@@ -23,29 +27,31 @@ goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../signal/goofi-signal" }
 goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }
 goofi-transport = { path = "../goofi-transport" }
+# The harness plane the agent ops and `/term` are doors onto.
+goofi-agent = { path = "../goofi-agent" }
 # The same pipeline at run time: where the artifacts live, and a build before the lock.
 goofi-build = { path = "../goofi-build" }
+# The uv a plugin's backend environment is synced with.
+goofi-init = { path = "../goofi-init" }
 goofi-view = { path = "../goofi-view" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 futures-util = "0.3"
 # The mount nonce only has to be unguessable-enough to keep two concurrent goofis apart.
-getrandom = "0.4"
 notify = "8"
 serde = { version = "1", features = ["derive"] }
 # A palette row lists its pages in the manifest's declared order, so the map keeps insertion order.
 serde_json = { version = "1", features = ["preserve_order"] }
 # `node snapshot` answers an ARRAY frame as base64 NPY.
 base64 = "0.22"
+# The MIDI devices the manager grabs onto the variable bus.
+midir = "0.11"
 # The command-line split the phrase layer parses with: the same quoting bash gives argv, which is
 # the contract — every transport that speaks lines gets bash's own word rules.
 shell-words = "1"
+# The ANSI styles the human layout paints its roles in — values, no global state; the CLI asks
+# for them on a terminal, and nothing else does.
+anstyle = "1"
 toml = "0.8"
-# The PTY the agent harness runs on (wezterm's crate).
-portable-pty = "0.9"
-# SIGTERM then SIGKILL, to the process GROUP: `portable_pty::ChildKiller` offers neither the
-# graceful phase nor any reach past the harness into what it spawned. Windows has no equivalent and
-# reaches for `taskkill` instead, so this is the one dependency that is genuinely one platform's —
-# see `src/proc.rs`, the only `cfg` in this crate.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }
+schemars = { version = "1", features = ["indexmap2"] }

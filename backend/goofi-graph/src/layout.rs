@@ -1,16 +1,14 @@
 //! The editor's panel arrangement, held as a TREE: an ordered strip of tabs, each holding one root
 //! node, each split holding its children in order.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 /// A stable tab/split/panel id. Minted here, never by a client.
 pub type Id = String;
 
-/// What one entry HOLDS, addressed by id — the unit a CONTENTS command lands and inverts. It says
-/// nothing about where the entry sits, which makes an inverse safe against an arrangement a peer
-/// has moved under it.
+/// What one entry HOLDS, addressed by id — the unit a contents write lands. It says nothing about
+/// where the entry sits.
 pub type Write = (Id, Contents);
 
 /// See [`Write`].
@@ -42,24 +40,11 @@ fn fraction(ratio: f64) -> Result<f64, String> {
 
 /// A split's axis. `Row` = children left→right, `Column` = top→bottom — the CSS `flex-direction`
 /// spelling the renderer maps straight through.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     Row,
     Column,
-}
-
-/// One spelling, not two: the wire is `name`/`parse`, which the op argument already reads through.
-impl Serialize for Axis {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.name())
-    }
-}
-
-impl<'de> Deserialize<'de> for Axis {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Axis, D::Error> {
-        let s = String::deserialize(d)?;
-        Axis::parse(&s).ok_or_else(|| serde::de::Error::custom("an axis is `row` or `column`"))
-    }
 }
 
 impl Axis {
@@ -67,13 +52,6 @@ impl Axis {
         match self {
             Axis::Row => "row",
             Axis::Column => "column",
-        }
-    }
-    pub fn parse(s: &str) -> Option<Axis> {
-        match s {
-            "row" => Some(Axis::Row),
-            "column" => Some(Axis::Column),
-            _ => None,
         }
     }
 }
@@ -132,7 +110,7 @@ pub enum Node {
         #[serde(default = "whole")]
         size: f64,
         panel_type: String,
-        #[serde(with = "json_string", default)]
+        #[serde(default)]
         state: Value,
     },
 }
@@ -140,24 +118,6 @@ pub enum Node {
 /// A root's share of a tab it fills. Also what a hand-written entry that omits one means.
 fn whole() -> f64 {
     1.0
-}
-
-/// A panel's `state` rides the wire as a JSON STRING, and it must stay one: a panel clears a key
-/// with an explicit `null`, and a null LEAF would make the merge-patch delta ambiguous.
-mod json_string {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde_json::Value;
-
-    pub fn serialize<S: Serializer>(v: &Value, s: S) -> Result<S::Ok, S::Error> {
-        v.to_string().serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
-        // A `state` written any other way — the natural shape of a hand edit — is REFUSED rather
-        // than read as absent, which would load the panel with its binding silently wiped.
-        let s = String::deserialize(d)?;
-        serde_json::from_str(&s).map_err(serde::de::Error::custom)
-    }
 }
 
 impl Node {
@@ -195,41 +155,6 @@ impl Node {
             out.extend(c.walk());
         }
         out
-    }
-}
-
-/// What a close carried away, for its own inverse to put back. A tab is re-born by NAME into the
-/// strip; a subtree is re-homed beside a surviving sibling.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Dead {
-    Tab(Tab),
-    Node(Node),
-}
-
-/// Where a subtree sat before it moved — what [`Layout::re_home`] needs to plan a move BACK without
-/// restoring one slot of it. Recorded as IDS: an id either still stands or is gone.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Home {
-    /// Its old siblings, NEAREST FIRST — the landing is the first of them still standing.
-    siblings: Vec<Id>,
-    /// Every entry's share at capture time — what gives the arrangement its geometry back. A move
-    /// disturbs more slices than one level of siblings can name.
-    shares: BTreeMap<Id, f64>,
-    /// The old parent's id and axis. The id is handed back only to a wrapper that has to be minted
-    /// anyway, and only while it is free — restoring its SLOT would strand a peer's work.
-    parent: Id,
-    axis: Axis,
-    /// It sat before its nearest sibling, and held this share of its parent.
-    before: bool,
-    size: f64,
-    /// Its tab's name and strip index — the last resort, when the tab went with its last panel.
-    tab: (String, usize),
-}
-
-impl Home {
-    /// The share `id` held before the move, if this home remembers it.
-    fn share(&self, id: &str) -> Option<f64> {
-        self.shares.get(id).copied()
     }
 }
 
@@ -305,7 +230,7 @@ impl Layout {
     /// The first `Tab n` no tab is wearing. A LABEL is not unique — this only keeps a fresh tab
     /// from arriving under a name already on screen.
     fn free_name(&self) -> String {
-        (1..).map(|n| format!("Tab {n}")).find(|n| self.tab_named(n).is_none()).expect("unbounded")
+        goofi_core::fresh_name("Tab ", 1, |n| self.tab_named(n).is_some())
     }
 
     /// The FIRST tab wearing this label. Two may: a name is not addressing, and the uniqueness it
@@ -365,54 +290,23 @@ impl Layout {
 
     /// The node carrying `id`, or `None` — a tab is not one.
     pub fn node(&self, id: &str) -> Option<&Node> {
-        fn down<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
-            if n.id() == id {
-                return Some(n);
-            }
-            n.children().iter().find_map(|c| down(c, id))
-        }
-        self.tabs.iter().find_map(|t| down(&t.root, id))
+        self.path_of(id).map(|p| self.at(&p))
     }
 
-    /// The same, mutably.
     fn node_mut(&mut self, id: &str) -> Option<&mut Node> {
-        fn down<'a>(n: &'a mut Node, id: &str) -> Option<&'a mut Node> {
-            if n.id() == id {
-                return Some(n);
-            }
-            match n {
-                Node::Split { children, .. } => children.iter_mut().find_map(|c| down(c, id)),
-                Node::Panel { .. } => None,
-            }
-        }
-        self.tabs.iter_mut().find_map(|t| down(&mut t.root, id))
+        let p = self.path_of(id)?;
+        Some(self.at_mut(&p))
     }
 
     /// The tab `id` sits on — what a placement answers with, so a caller knows where its panel
     /// landed without walking the tree it was just handed.
     pub fn tab_of(&self, id: &str) -> Option<Id> {
-        fn holds(n: &Node, id: &str) -> bool {
-            n.id() == id || n.children().iter().any(|c| holds(c, id))
-        }
-        self.tabs.iter().find(|t| t.id == id || holds(&t.root, id)).map(|t| t.id.clone())
+        self.tab_index(id).or_else(|| self.path_of(id).map(|p| p.0)).map(|i| self.tabs[i].id.clone())
     }
 
     /// The id of a tab's root — what a caller gives content to after adding one.
     pub fn root_of(&self, tab: &str) -> Option<Id> {
         self.tabs.iter().find(|t| t.id == tab).map(|t| t.root.id().to_string())
-    }
-
-    /// What `id` holds right now — what a contents inverse captures before it lands.
-    pub fn contents(&self, id: &str) -> Option<Contents> {
-        if let Some(t) = self.tabs.iter().find(|t| t.id == id) {
-            return Some(Contents::Tab { name: t.name.clone() });
-        }
-        match self.node(id) {
-            Some(Node::Panel { panel_type, state, .. }) => {
-                Some(Contents::Panel { panel_type: panel_type.clone(), state: state.clone() })
-            }
-            _ => None,
-        }
     }
 
     /// A panel's opaque state bag, for the bind validation one layer up.
@@ -487,12 +381,6 @@ impl Layout {
         let parent = self.at_mut(&parent_path);
         let Node::Split { children, .. } = parent else { unreachable!("a path only descends splits") };
         let gone = children.remove(mine);
-        let total: f64 = children.iter().map(Node::size).sum();
-        let total = if total > 0.0 { total } else { 1.0 };
-        for c in children.iter_mut() {
-            let v = c.size();
-            c.set_size(v + gone.size() * v / total);
-        }
         Layout::normalize(parent);
         let lone = matches!(parent, Node::Split { children, .. } if children.len() == 1);
         if lone {
@@ -648,146 +536,6 @@ impl Layout {
         Ok(next)
     }
 
-    /// Where `root` sits now, in the terms [`Self::re_home`] needs to put it back. `None` for a tab,
-    /// which is reordered rather than moved.
-    pub fn home_of(&self, root: &str) -> Option<Home> {
-        let (tab, at) = self.path_of(root)?;
-        let Some((&mine, up)) = at.split_last() else {
-            // A tab's ROOT has no split above it, and its home is the tab. Without this branch a
-            // torn-off panel's undo captures no home at all and degrades to a no-op.
-            return Some(Home {
-                siblings: Vec::new(),
-                shares: self.shares(),
-                parent: self.tabs[tab].id.clone(),
-                axis: Axis::Row,
-                before: true,
-                size: self.tabs[tab].root.size(),
-                tab: (self.tabs[tab].name.clone(), tab),
-            });
-        };
-        let parent = self.at(&(tab, up.to_vec()));
-        let kids = parent.children();
-        // Nearest first: the neighbour that shared an edge with `root` is the one whose survival
-        // reconstructs the old pairing exactly.
-        let mut sibs: Vec<(usize, Id)> = kids
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != mine)
-            .map(|(j, n)| (j.abs_diff(mine), n.id().to_string()))
-            .collect();
-        sibs.sort();
-        Some(Home {
-            siblings: sibs.into_iter().map(|(_, k)| k).collect(),
-            shares: self.shares(),
-            parent: parent.id().to_string(),
-            axis: match parent {
-                Node::Split { axis, .. } => *axis,
-                _ => Axis::Row,
-            },
-            before: mine == 0,
-            size: self.at(&(tab, at.clone())).size(),
-            tab: (self.tabs[tab].name.clone(), tab),
-        })
-    }
-
-    /// Every node's share, by id — what a [`Home`] remembers so an undisturbed undo is exact.
-    fn shares(&self) -> BTreeMap<Id, f64> {
-        self.nodes().map(|n| (n.id().to_string(), n.size())).collect()
-    }
-
-    /// Plan a move of `root` back to `home`, against the arrangement AS IT STANDS — the inverse of
-    /// every layout op that moves something. What it never does is restore its old parent's slot,
-    /// which the move may have promoted away and a peer may have built over.
-    pub fn re_home(&self, root: &str, home: &Home) -> Result<Layout, String> {
-        let mut next = self.clone();
-        // Lifted FIRST, so the landing is chosen among what survives closing up behind it.
-        let e = next.take(root)?;
-        let inside = self.subtree(root);
-        let landing = home
-            .siblings
-            .iter()
-            .find(|s| next.node(s).is_some() && !inside.contains(s))
-            .cloned()
-            .or_else(|| next.tab_named(&home.tab.0).and_then(|t| next.root_of(&t)));
-        let Some(landing) = landing else {
-            // Even the tab went with it — re-born AROUND the subtree, through `add_tab`'s own adopt
-            // branch rather than a raw restore.
-            let (mut born, _) = self.add_tab(Some(&home.tab.0), Some(home.tab.1), Some(root))?;
-            born.give_back_shares(self, home);
-            return Ok(born);
-        };
-        let mut e = e;
-        e.set_size(home.size);
-        next.insert_at(e, &landing, home.axis, home.before, Some(&home.parent));
-        next.give_back_shares(self, home);
-        Ok(next)
-    }
-
-    /// Re-assert the shares `home` remembers wherever this plan disturbed them. SHARES only: where
-    /// an entry sits is still re-planned, so a peer's resize elsewhere survives.
-    fn give_back_shares(&mut self, before: &Layout, home: &Home) {
-        let kids_of = |l: &Layout, id: &str| -> Vec<Id> {
-            l.node(id).map(|n| n.children().iter().map(|c| c.id().to_string()).collect()).unwrap_or_default()
-        };
-        let disturbed: Vec<Id> = self
-            .nodes()
-            .filter(|n| matches!(n, Node::Split { .. }))
-            .map(|n| n.id().to_string())
-            .filter(|id| kids_of(self, id) != kids_of(before, id))
-            .collect();
-        for p in disturbed {
-            let Some(split) = self.node_mut(&p) else { continue };
-            let Node::Split { children, .. } = split else { continue };
-            for c in children.iter_mut() {
-                if let Some(s) = home.share(c.id()) {
-                    c.set_size(s);
-                }
-            }
-            Layout::normalize(split);
-        }
-    }
-
-    /// What a close carries into its own inverse. The ids are dead the moment the close lands and
-    /// nothing ever mints one again, so putting them back strands nobody.
-    pub fn dead_subtree(&self, root: &str) -> Option<Dead> {
-        if let Some(t) = self.tabs.iter().find(|t| t.id == root) {
-            return Some(Dead::Tab(t.clone()));
-        }
-        self.node(root).cloned().map(Dead::Node)
-    }
-
-    /// Plan the inverse of a close: put `dead` back, then RE-PLAN where it belongs. What it never
-    /// does is pin the root into the slot it held, which the close promoted away.
-    pub fn revive(&self, dead: &Dead, home: Option<&Home>) -> Result<Layout, String> {
-        let mut back = self.clone();
-        match dead {
-            // A tab hangs off nothing, so only its place in the strip needs re-planning — a peer's
-            // new tab has taken an index since, and restoring the old one collides with it.
-            Dead::Tab(t) => {
-                for n in t.root.walk() {
-                    back.spend(n.id());
-                }
-                back.spend(&t.id);
-                let at = home.map(|h| h.tab.1).unwrap_or(back.tabs.len()).min(back.tabs.len());
-                back.tabs.insert(at, t.clone());
-                Ok(back)
-            }
-            Dead::Node(n) => {
-                let Some(h) = home else {
-                    return Err(format!("`{}` is not something a close can give back", n.id()));
-                };
-                // Parked on the first tab's root so `re_home` can LIFT it back out — the same path
-                // every other landing takes, rather than a second way in.
-                for d in n.walk() {
-                    back.spend(d.id());
-                }
-                let anchor = back.tabs[0].root.id().to_string();
-                back.insert_at(n.clone(), &anchor, h.axis, h.before, None);
-                back.re_home(n.id(), h)
-            }
-        }
-    }
-
     /// Land `writes` as CONTENTS edits. WHERE each entry sits is never touched, and an id that has
     /// since gone is skipped, so a stale replay degrades instead of resurrecting it.
     pub fn set_contents(&mut self, writes: &[Write]) {
@@ -808,15 +556,6 @@ impl Layout {
                     }
                 }
             }
-        }
-    }
-
-    /// A split's children's shares, in child order — what a resize's inverse aims at, read at flip
-    /// time so a peer's own resize is what it puts back.
-    pub fn fractions(&self, split: &str) -> Option<Vec<f64>> {
-        match self.node(split) {
-            Some(n @ Node::Split { .. }) => Some(n.children().iter().map(Node::size).collect()),
-            _ => None,
         }
     }
 
@@ -918,20 +657,25 @@ impl Layout {
     /// Clear the node binding of every panel naming a uid in `gone`. A panel's `state` is opaque
     /// here save for this one key — a panel pointing at a deleted node is the one knowable wrong.
     pub fn unbind(&self, gone: &std::collections::HashSet<crate::Uid>) -> Vec<Write> {
-        let mut writes = Vec::new();
-        for n in self.nodes() {
-            let Node::Panel { id, panel_type, state, .. } = n else { continue };
-            let bound = state.get("node").and_then(|v| v.as_str());
-            if !bound.and_then(crate::Uid::from_hex).is_some_and(|u| gone.contains(&u)) {
-                continue;
-            }
-            let mut state = state.clone();
-            if let Some(o) = state.as_object_mut() {
-                o.insert("node".into(), Value::Null);
-            }
-            writes.push((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }));
-        }
-        writes
+        self.rewrite(|_, state| {
+            let bound = state.get("node").and_then(Value::as_str).and_then(crate::Uid::from_hex);
+            bound.is_some_and(|u| gone.contains(&u)) && state.insert("node".into(), Value::Null).is_some()
+        })
+    }
+
+    /// The contents of every panel whose state `edit` wrote, handed its type and its state: what
+    /// follows a thing a panel names — a node, a group, a machine, a track — into every such panel.
+    pub fn rewrite(&self, edit: impl Fn(&str, &mut serde_json::Map<String, Value>) -> bool) -> Vec<Write> {
+        self.nodes()
+            .filter_map(|n| match n {
+                Node::Panel { id, panel_type, state, .. } => {
+                    let mut state = state.clone();
+                    let wrote = state.as_object_mut().is_some_and(|o| edit(panel_type, o));
+                    wrote.then(|| (id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Every control panel and the group it names, in panel order.
@@ -946,22 +690,10 @@ impl Layout {
             .collect()
     }
 
-    /// Re-aim every control panel naming group `from` at `to`. A group's identity is its name, so
-    /// a panel holds it the way an expression does, and one rename moves both.
-    pub fn regroup(&self, from: &str, to: &str) -> Vec<Write> {
-        let mut writes = Vec::new();
-        for n in self.nodes() {
-            let Node::Panel { id, panel_type, state, .. } = n else { continue };
-            if panel_type != "control" || state.get("group").and_then(|v| v.as_str()) != Some(from) {
-                continue;
-            }
-            let mut state = state.clone();
-            if let Some(o) = state.as_object_mut() {
-                o.insert("group".into(), Value::String(to.to_string()));
-            }
-            writes.push((id.clone(), Contents::Panel { panel_type: panel_type.clone(), state }));
-        }
-        writes
+    /// Re-aim every `panel_type` panel whose state `key` names `from` at `to`: a renamed group,
+    /// which a panel holds by its name, or the machine left when the one a panel held is removed.
+    pub fn retarget(&self, panel_type: &str, key: &str, from: &str, to: &str) -> Vec<Write> {
+        self.rewrite(|t, state| t == panel_type && state.get(key).and_then(Value::as_str) == Some(from) && state.insert(key.into(), to.into()).is_some())
     }
 
     /// Set a panel's type and/or state. `panel_type` lands FIRST because changing it clears the old

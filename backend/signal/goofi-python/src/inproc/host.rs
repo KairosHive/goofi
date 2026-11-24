@@ -1,3 +1,4 @@
+use goofi_supervisor::layout;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -69,7 +70,7 @@ impl PyNode {
         }
         self.serialized = true;
         if self.tier.is_some_and(|t| t.set(Isolation::Subprocess)) {
-            goofi_core::log::record(goofi_core::log::source(), goofi_core::log::Level::Warning, None,
+            goofi_supervisor::log::record(goofi_supervisor::log::source(), goofi_supervisor::log::Level::Warning, None,
                 "This node re-enabled the GIL. Restart it to move it to a subprocess.");
         }
     }
@@ -104,17 +105,21 @@ fn watched<R>(f: impl FnOnce(Python<'_>) -> R) -> (R, bool) {
     })
 }
 
-/// Path to the free-threaded interpreter. `PYO3_PYTHON` comes first because, embedded,
-/// `sys.executable` is the host binary rather than a python.
+/// The free-threaded interpreter in the layout's runtime, the one this binary was linked against.
+/// Never `sys.executable`: embedded, that is the host binary rather than a python.
 pub fn interpreter_path() -> Option<String> {
-    if let Some(p) = option_env!("PYO3_PYTHON") {
-        if !p.is_empty() {
-            return Some(p.to_string());
+    layout::venv_python(&layout::runtime().python_ft()).map(|p| p.display().to_string())
+}
+
+/// Hand the EMBEDDED interpreter its venv's base, before any use of it: pyo3 links `libpython` from
+/// that venv's BASE install, which is told by `PYTHONHOME`. An existing value is the documented
+/// override. The venv's own site-packages joins the path on the first attach, through `site`.
+pub fn configure_embedded() {
+    if std::env::var_os("PYTHONHOME").is_none() {
+        if let Some(home) = layout::venv_prefix(&layout::runtime().python_ft()) {
+            std::env::set_var("PYTHONHOME", home);
         }
     }
-    attach(|py| {
-        PyModule::import(py, "sys").ok()?.getattr("executable").ok()?.extract::<String>().ok()
-    })
 }
 
 impl Drop for PyNode {
@@ -125,8 +130,8 @@ impl Drop for PyNode {
 }
 
 impl Node for PyNode {
-    fn setup(&mut self, _ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
-        let (done, flipped) = watched(|py| goofi_pymod::exec::run_setup(py, self.instance.bind(py), p.groups()));
+    fn setup(&mut self, ctx: &mut NodeCtx, p: &Params<'_>) -> NodeResult {
+        let (done, flipped) = watched(|py| goofi_pymod::exec::run_setup(py, self.instance.bind(py), p.groups(), ctx.now));
         self.saw(flipped);
         done.map_err(|e| NodeError(e.to_string()))
     }
@@ -161,7 +166,7 @@ impl Node for PyNode {
             .collect();
 
         let (outs, flipped) = watched(|py| {
-            goofi_pymod::exec::run_process(py, self.instance.bind(py), p.groups(), &inputs, &self.out_slots, &mut self.cast_warned)
+            goofi_pymod::exec::run_process(py, self.instance.bind(py), p.groups(), &inputs, &self.out_slots, &mut self.cast_warned, ctx.now)
         });
         self.saw(flipped);
         let outs = outs.map_err(|e| e.to_string())?;

@@ -1,31 +1,28 @@
 /** Central reactive graph state, backed by the control WS. The store owns the only writes, so a
  * component just reads its `$state` fields. */
-import type { VideoQuality } from '$lib/api/types';
+import type { ParamDescriptor, VideoQuality } from '$lib/api/types';
 import {
 	getControl,
 	type Control,
 	type ControlEvent,
 	type DemoExample,
-	type Recovery,
-	type DirListing,
-	type FsSort,
 	type GraphSnapshot,
 	type LinkInfo,
 	type NodeInstanceInfo,
 	type NodeTypeInfo,
 	type RecordStatus,
-	type ScanDiff
+	type Step
 } from '$lib/api/control';
+import type { OpName } from '$lib/api/ops';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
-import { wantedDtype } from '$lib/inspector/expr/refs';
 import { bareName } from '$lib/editor/typeId';
 import { consoleStore } from './console.svelte';
 import { selection } from './selection.svelte';
 import { workspace } from 'panelty';
 import type { SlotView } from '$lib/viewers/inlineView';
-import { history, type Action } from './history.svelte';
-import { captureNavContext } from '$lib/stores/navContext';
+import { history } from './history.svelte';
 import { SyncClient } from '$lib/crdt/syncClient.svelte';
+import type { Op } from '$lib/crdt/ops';
 import {
 	linkViews,
 	nodesMap,
@@ -33,38 +30,24 @@ import {
 	recordedSlots,
 	variableViews,
 	variableGroupLocks,
+	controlGroups,
+	ownedGroups,
+	machineViews,
 	arrangementTabs,
 	type Doc,
 	type VariableView,
 	type ControlView,
-	type VariableType,
 	type LockView
 } from '$lib/crdt/graphDoc';
-
-/** A grid cell, in the control panel's units. */
-export interface Cell {
-	x: number;
-	y: number;
-	w: number;
-	h: number;
-}
-
-/** What `control edit` takes: any subset, and `name` is the element's new name. */
-export interface ControlPatch extends Partial<Cell> {
-	name?: string;
-	kind?: ControlView['kind'];
-	min?: number;
-	max?: number;
-	step?: number;
-	options?: string[];
-}
+import type { Literal, Machine, Track } from '$lib/api/generated';
+import type { Cell } from '$lib/panels/controlLayout';
 import { liveNode, type RuntimeOverlay, type ViewSources } from '$lib/crdt/liveNode.svelte';
 import { ParamLive, type LiveSource } from '$lib/api/paramLive';
 import type { SourcePatch } from '$lib/api/types';
 import type { GraphFragment } from '$lib/editor/clipboard';
 
-/** Safety net: lift a ⟳ spinner after this long when a node never reports the refresh done.
- * Generous — an LSL resolve blocks the node's ctrl thread ~4s. */
+/** Lift a ⟳ spinner after this long when a node never reports the refresh done. Generous: an
+ * LSL resolve blocks the node's ctrl thread ~4s. */
 const REFRESH_SPINNER_TIMEOUT_MS = 15000;
 
 /** Stable key for an in-flight param refresh; U+001F cannot occur in a uid/group/name. */
@@ -100,20 +83,21 @@ const IDLE_RECORD: RecordStatus = {
 	error: null
 };
 
+/** The `machine` phrase's ops, every one the machine panel may speak. */
+export type MachineOp = Extract<OpName, `machine ${string}`>;
+
 export class GraphStore {
 	nodeTypes = $state.raw<NodeTypeInfo[] | null>(null);
 
-	/** One live view per node the document holds, in the document's order; each is the one object
-	 * its uid ever answers with, and its fields are reads of the document, the catalog and the
-	 * runtime overlay. The list itself follows the document's membership alone. */
+	/** One live view per node the document holds, in document order. Each is the one object its
+	 * uid answers with; its fields read the document, the catalog and the runtime overlay. */
 	nodes: NodeInstanceInfo[] = $derived(Object.keys(nodesMap(this.doc)).flatMap((uid) => this._views.get(uid) ?? []));
 	/** The live views, by uid — made as a node enters the document, dropped as it leaves. */
 	private _views = new Map<string, NodeInstanceInfo>();
 	/** What the runtime planes reported per node the document holds. */
 	private _rt = $state<Record<string, RuntimeOverlay>>({});
-	/** The same, for a node the runtime planes named before the document materialized it: the
-	 * stage and error planes ride their own channel in no defined order against the doc, so a
-	 * report outrunning the doc is routine. Taken by the node's view when it is made. */
+	/** The same, for a node the runtime planes named before the doc held it (their channels have
+	 * no order against the doc). The node's view takes it when it is made. */
 	private _stash: Record<string, RuntimeOverlay> = {};
 	private _byType = $derived(new Map((this.nodeTypes ?? []).map((t) => [t.type, t])));
 	private _faces = $derived(facadeFaces(this.doc));
@@ -126,21 +110,15 @@ export class GraphStore {
 	links: LinkInfo[] = $derived(linkViews(this.doc));
 	savePath = $state<string | null>(null);
 	unsavedChanges = $state(false);
-	/** What a goofi that did not shut down cleanly left behind, as the manager last listed it. */
-	recoveries = $state<Recovery[]>([]);
-	/** What the server said it is. Every affordance a demo withholds reads THIS, never a list of
-	 * its own. */
+	/** What the server said it is. Every affordance a demo withholds reads this. */
 	demo = $state(false);
 	/** The public set this instance belongs to, empty everywhere else. */
 	examples = $state<DemoExample[]>([]);
 	connected = $state(false);
 	/** Latches on the first connect and never clears — see {@link disconnected}. */
 	private _everConnected = $state(false);
-	hadHello = $state(false);
-	/** The startup hook: counts the SERVER sessions this page has connected to, bumped on the
-	 * first hello from a manager it has not seen. Startup UI keys on this — an offer made "at the
-	 * start" is made at the start of a session, which a page that outlived the last server sees
-	 * without a reload. Never on page load, and never on a transient reconnect. */
+	/** The startup hook: counts the server sessions this page saw, bumped on the first hello from
+	 * a new manager. Never on page load or on a transient reconnect; 0 until the first hello. */
 	sessionEpoch = $state(0);
 
 	/** Every armed output slot, doc-authoritative: the document is the one owner of what is armed. */
@@ -148,6 +126,11 @@ export class GraphStore {
 
 	/** The recording SESSION, as the backend last reported it. Pushed, never derived here. */
 	record = $state<RecordStatus>(IDLE_RECORD);
+	/** The recording's elapsed time as `mm:ss`. */
+	recordClock = $derived.by(() => {
+		const t = Math.max(0, Math.floor(this.record.elapsed ?? 0));
+		return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+	});
 
 	/** The streams whose drop count MOVED on the last report, keyed `node/slot`. */
 	dropping = $state.raw<ReadonlySet<string>>(new Set());
@@ -157,11 +140,31 @@ export class GraphStore {
 
 	/** Patch variables (system + user), doc-authoritative, in system-first/creation order. */
 	variables: VariableView[] = $derived(variableViews(this.doc));
+	/** The variables a control panel draws, by name: what a card's expressions are tested against.
+	 * Through the joined names, so an edit that leaves the set as it was wakes no card. */
+	private _controlledKey = $derived(this.variables.filter((v) => v.control).map((v) => v.name).join('\n'));
+	controlled: ReadonlySet<string> = $derived(new Set(this._controlledKey.split('\n').filter(Boolean)));
 	/** Every variable group that carries a lock, by name. */
 	variableGroups: Record<string, LockView> = $derived(variableGroupLocks(this.doc));
+	/** The groups a control panel may draw, in document order. */
+	controlGroups: string[] = $derived(controlGroups(this.doc));
+	/** Every group that reads a MIDI device, by name. */
+	midiGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'midi'));
+	machineGroups: Record<string, string> = $derived(ownedGroups(this.doc, 'machine'));
+	/** Every state machine, by id, doc-authoritative. */
+	machines: Record<string, Machine> = $derived(machineViews(this.doc));
+	/** Every track of the timeline, by id, in the order a panel draws them: the manager's. */
+	timeline = $derived((this.doc.timeline ?? {}) as Record<string, Track>);
 
 	/** Bumps on every WHOLESALE graph load, never on an incremental add/remove; editors re-fit on it. */
 	loadEpoch = $state(0);
+	/** The document version the last wholesale load reached. */
+	private _loadVersion = $state(0);
+	/** Whether the replica holds the loaded document yet: the snapshot and the doc delta cross in
+	 * no fixed order, so a fit armed by the epoch waits for this. */
+	get loadSettled(): boolean {
+		return this._sync.version >= this._loadVersion;
+	}
 
 	/** Params with a ⟳ refresh in flight → its safety-timeout handle. Cleared when the node reports
 	 * the param done (`refreshed_params`), never on the fire-and-forget RPC ack. */
@@ -170,10 +173,8 @@ export class GraphStore {
 	/** instance_id of the manager we last hydrated from; a change is a fresh session, not a reconnect. */
 	private _lastInstanceId: string | null = null;
 
-	/** The control client (injectable for tests; defaults to the live WS one). */
 	private ctl: Control;
-
-	/** The document driver — the browser replica of the manager's control-plane document. */
+	/** The browser replica of the manager's control-plane document. */
 	private _sync: SyncClient;
 
 	/** The connection was ESTABLISHED and is now gone. Not `!connected`: at boot that would alarm
@@ -189,12 +190,9 @@ export class GraphStore {
 			if (c) this._everConnected = true;
 		});
 		ctl.on((ev) => this._handle(ev));
-		this._sync = new SyncClient(ctl);
-		this._sync.onDocChange((patch) => this._syncFromDoc(patch));
-		this._sync.start();
+		this._sync = new SyncClient(ctl, (ops) => this._syncFromDoc(ops));
 	}
 
-	/** The control-plane document — the one projection a client reads. */
 	get doc(): Doc {
 		return this._sync.doc;
 	}
@@ -206,10 +204,10 @@ export class GraphStore {
 
 	/** Follow the document's membership: a view per node that entered, none for one that left.
 	 * Everything else a view shows is read live, so nothing here re-derives it. */
-	private _syncFromDoc(patch: Record<string, unknown> | null): void {
+	private _syncFromDoc(ops: Op[] | null): void {
 		const doc = this._sync.doc;
 		// The workspace store rebuilds its tree from this; the client holds no second copy.
-		if (!patch || 'arrangement' in patch) workspace().syncFromDoc(arrangementTabs(doc));
+		if (!ops || ops.some((o) => o.path[0] === 'arrangement')) workspace().syncFromDoc(arrangementTabs(doc));
 		const held = nodesMap(doc);
 		for (const uid of this._views.keys()) {
 			if (!(uid in held)) {
@@ -241,18 +239,29 @@ export class GraphStore {
 		// A `hello` always carries the palette; `graph_replaced` never does — the `node_types` event
 		// is what re-announces it there.
 		if (snap.node_types?.length) this.nodeTypes = snap.node_types;
-		// The snapshot and the doc delta ride separate channels in no defined order, so the runtime
-		// overlay lands on the node's own entry, or on the stash its view will take. A NEW session's
-		// nodes are all still to come — its document follows this hello, and the reset between
-		// drops every view — so its whole overlay is stashed. The stash is this snapshot's alone.
+		// Snapshot and doc delta cross in no order: the overlay lands on the node's own entry or on
+		// the stash. A new session's nodes are all still to come, so its whole overlay is stashed.
 		const freshSession = snap.instance_id !== this._lastInstanceId;
 		this._stash = {};
+		const target = (uid: string) => (!freshSession && this._views.has(uid) ? (this._rt[uid] ??= {}) : (this._stash[uid] ??= {}));
 		for (const [uid, rt] of Object.entries(snap.runtime ?? {})) {
-			const own = !freshSession && this._views.has(uid) ? (this._rt[uid] ??= {}) : (this._stash[uid] ??= {});
+			const own = target(uid);
 			own.stage = rt.stage;
 			own.error = rt.error ?? null;
 			own.runtime = rt.runtime;
 		}
+		// The readings come whole: a node they leave out holds none now.
+		if (!freshSession)
+			for (const [uid, rt] of Object.entries(this._rt)) {
+				if (!snap.param_values?.[uid] && (rt.values || rt.errors)) rt.values = rt.errors = undefined;
+				if (!snap.node_stats?.[uid] && rt.stats) rt.stats = undefined;
+			}
+		for (const [uid, live] of Object.entries(snap.param_values ?? {})) {
+			const t = target(uid);
+			t.values = follow(t.values ?? {}, live.values);
+			t.errors = follow(t.errors ?? {}, live.errors);
+		}
+		for (const [uid, stats] of Object.entries(snap.node_stats ?? {})) target(uid).stats = stats;
 		this._setRecord(snap.record);
 		this.savePath = snap.save_path;
 		this.unsavedChanges = snap.unsaved_changes;
@@ -277,8 +286,9 @@ export class GraphStore {
 		workspace().syncFromDoc([]);
 	}
 
-	private _onWholesaleLoad(): void {
+	private _onWholesaleLoad(docVersion: number): void {
 		this.loadEpoch += 1;
+		this._loadVersion = docVersion;
 		// A wholesale load mints new uids and clears the manager's history, so a kept client entry
 		// would pop against a command that is not there. A same-session reconnect never comes here.
 		history().reset();
@@ -292,7 +302,6 @@ export class GraphStore {
 		if (!node?.output_slots[slot]) return;
 		void this.ctl
 			.call('node edit', { node: uid, viewer: [{ slot, ...view }] })
-			.then(() => this._recordGraphCmd(`Set ${slot} view`))
 			.catch(() => {
 				/* soft view state — the next edit re-sends it */
 			});
@@ -302,33 +311,28 @@ export class GraphStore {
 		switch (ev.event) {
 			case 'hello': {
 				// Not wholesale: a `hello` is also what a transient reconnect delivers.
-				const fresh = this._replaceSnapshot(ev.payload);
-				this.hadHello = true;
-				if (fresh) {
-					// A NEW session mints uids from 1 again, so the stale replica must fall NOW,
-					// synchronously, before this connection answers the server's binary hello SV.
-					// Projections first: `_resetProjection` reads `this.nodes`.
+				if (this._replaceSnapshot(ev.payload)) {
+					// A new session mints uids from 1 again, so the stale replica falls now, before
+					// this connection answers the server's binary hello SV. Projections first.
 					this._resetProjection();
 					this._sync.reset();
-					this._onWholesaleLoad();
+					this._onWholesaleLoad(ev.payload.doc_version);
 					this.sessionEpoch += 1;
 				}
+				// After the reset: a reloaded tab keeps its actor, and the manager still holds its steps.
+				if (ev.payload.history) history().adopt(ev.payload.history);
 				break;
 			}
 			case 'graph_replaced':
 				this._replaceSnapshot(ev.payload);
-				this._onWholesaleLoad();
+				this._onWholesaleLoad(ev.payload.doc_version);
 				break;
 			case 'state_update': {
 				const t = this._runtimeOf(ev.payload.node);
-				// Params are doc-owned: only the refreshed options are the runtime's. NOT the error:
-				// an echo is taken before the node has re-evaluated the source the op just moved,
-				// so it would carry the PREVIOUS source's failure. The live plane owns that field.
-				for (const [group, names] of Object.entries(ev.payload.params ?? {})) {
-					for (const [name, desc] of Object.entries(names)) {
-						const d = desc as { options?: string[] | null };
-						if (d.options !== undefined) ((t.options ??= {})[group] ??= {})[name] = d.options ?? null;
-					}
+				// Only the refreshed options are the runtime's. Not the param error: an echo predates
+				// the re-evaluation, so it carries the previous source's failure.
+				for (const [group, names] of Object.entries(ev.payload.options ?? {})) {
+					for (const [name, options] of Object.entries(names)) ((t.options ??= {})[group] ??= {})[name] = options;
 				}
 				if (ev.payload.stage) t.stage = ev.payload.stage;
 				// The state plane re-pushes the current error, so backend truth wins here even
@@ -378,54 +382,12 @@ export class GraphStore {
 				this.savePath = ev.payload.save_path;
 				break;
 			case 'node_types':
-				this._applyNodeTypes(ev.payload.types);
+				this.nodeTypes = ev.payload.types;
+				break;
+			case 'history':
+				history().adopt(ev.payload);
 				break;
 		}
-	}
-
-	/** Adopt a palette catalog; the views read their descriptors off it. */
-	private _applyNodeTypes(types: NodeTypeInfo[]): void {
-		this.nodeTypes = types;
-	}
-
-	/** Re-derive the node registry from disk and report what changed; explicit, since there is no
-	 * watcher. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async rescanNodes(): Promise<ScanDiff> {
-		return this.ctl.call<ScanDiff>('library refresh', {});
-	}
-
-	/** Move one of the patch's own node files into the private library, where every later patch
-	 * finds it. The fresh catalog arrives as a `node_types` event in every open tab. */
-	async saveNodeToLibrary(type: string, overwrite: boolean, name?: string): Promise<{ type: string; path: string }> {
-		return this.ctl.call<{ type: string; path: string }>('library save', { type, overwrite, ...(name ? { name } : {}) });
-	}
-
-	/** The private library's own file for this type, hidden behind the patch's — what a save to the
-	 * library would replace, and null where it would land on nothing. */
-	async libraryFileBehind(type: string): Promise<string | null> {
-		const r = await this.ctl.call<{ provenance?: string; path?: string; shadowed?: { provenance: string; path: string }[] }>(
-			'library get',
-			{ type }
-		);
-		if (r.provenance === 'custom') return r.path ?? null;
-		return r.shadowed?.find((s) => s.provenance === 'custom')?.path ?? null;
-	}
-
-	/** Where this patch's workspace files live — a per-run temp directory under a random name. It
-	 * rides `session status` beside the save path, because both answer "where does this patch live". */
-	async openWorkspace(): Promise<string> {
-		const r = await this.ctl.call<{ workspace: string }>('session status', {});
-		return r.workspace;
-	}
-
-	/** Push an action onto the history (unless a replay is in progress). */
-	private _record(action: Action): void {
-		if (!history().isSuspended) history().record(action);
-	}
-
-	/** Record ONE graph command. The manager owns the exact inverse, so this only marks the step. */
-	private _recordGraphCmd(label: string): void {
-		this._record({ kind: 'graph_cmd', domain: 'graph', label, context: captureNavContext() });
 	}
 
 	/** Adopt a recording report. Which streams are DROPPING is the counts that moved since the
@@ -440,31 +402,23 @@ export class GraphStore {
 			if (s.dropped > (before[key] ?? s.dropped)) moved.add(key);
 		}
 		this._droppedCounts = now;
-		this.dropping = moved;
+		// A recording re-announces itself each beat; a set that did not move wakes no reader.
+		if (moved.size !== this.dropping.size || [...moved].some((k) => !this.dropping.has(k))) this.dropping = moved;
 		this.record = status;
 	}
 
 	/** Arm one output slot, as `node/slot`. It works while a recording runs. The manager records
 	 * no command when the slot is already armed, so neither does the history. */
-	async armSlot(node: string, slot: string): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record arm', {
-			output: `${node}/${slot}`
-		});
-		if (r?.changed) this._recordGraphCmd(`Arm ${slot}`);
+	async armSlot(node: string, slot: string, step?: Step): Promise<void> {
+		await this.ctl.call('record arm', { output: `${node}/${slot}` }, step);
 	}
 
 	async setRecordQuality(node: string, slot: string, quality: VideoQuality): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record quality', {
-			output: `${node}/${slot}`, quality
-		});
-		if (r?.changed) this._recordGraphCmd(`Set ${slot} recording quality`);
+		await this.ctl.call('record quality', { output: `${node}/${slot}`, quality });
 	}
 
 	async disarmSlot(node: string, slot: string): Promise<void> {
-		const r = await this.ctl.call<{ changed?: boolean }>('record disarm', {
-			output: `${node}/${slot}`
-		});
-		if (r?.changed) this._recordGraphCmd(`Disarm ${slot}`);
+		await this.ctl.call('record disarm', { output: `${node}/${slot}` });
 	}
 
 	/** Start a recording. Both fields fall back to the `record.*` variables in the backend. */
@@ -478,22 +432,14 @@ export class GraphStore {
 		return r?.folder ?? '';
 	}
 
-	async addNode(type: string, pos: [number, number], instId?: string): Promise<string> {
-		const born = await this.ctl.call<{ uid: string }>('node add', {
-			type,
-			pos,
-			inst_id: instId
-		});
-		const uid = born?.uid ?? '';
-		if (uid) this._recordGraphCmd(`Add ${bareName(type)}`);
-		return uid;
+	/** No `pos`: the manager packs the node onto the grid after the scope's others. */
+	async addNode(type: string, pos: [number, number] | undefined, instId?: string, step?: Step): Promise<string> {
+		const born = await this.ctl.call<{ uid: string }>('node add', { type, pos, inst_id: instId }, step);
+		return born?.uid ?? '';
 	}
 
-	async removeNode(uid: string): Promise<void> {
-		// The label reads the node's name before it vanishes.
-		const label = `Delete ${this.nodeById(uid)?.name ?? uid}`;
-		await this.ctl.call('node remove', { node: uid });
-		this._recordGraphCmd(label);
+	async removeNode(uid: string, step?: Step): Promise<void> {
+		await this.ctl.call('node remove', { node: uid }, step);
 	}
 
 	/** Respawn a node in place, keeping its uid, name, params, position, scope and links. A
@@ -502,157 +448,229 @@ export class GraphStore {
 		await this.ctl.call('node restart', { node: uid });
 	}
 
-	/** Open a node's own editor window. It appears on the machine the SERVER runs on, so this is a
-	 * request the page sends, never something it draws. */
-	async showNodeEditor(uid: string): Promise<void> {
-		await this.ctl.call('node editor', { node: uid });
+	async addLink(link: LinkInfo, step?: Step): Promise<void> {
+		await this.ctl.call('link add', linkEndpoints(link), step);
 	}
 
-	async addLink(link: LinkInfo): Promise<void> {
-		await this.ctl.call('link add', linkEndpoints(link));
-		this._recordGraphCmd('Connect');
+	async removeLink(link: LinkInfo, step?: Step): Promise<void> {
+		await this.ctl.call('link remove', linkEndpoints(link), step);
 	}
 
-	async removeLink(link: LinkInfo): Promise<void> {
-		await this.ctl.call('link remove', linkEndpoints(link));
-		this._recordGraphCmd('Disconnect');
+	/** One step of a drag on a param: the value moves everywhere, the history keeps nothing yet. */
+	previewParam(node: string, group: string, name: string, value: unknown): void {
+		this.ctl.preview(`param ${node} ${group}/${name}`, 'node param edit', { node, param: `${group}/${name}`, value });
+	}
+
+	/** Send a param op on `group/name`; a guarded call refuses a param the node does not hold. */
+	private _paramCall(op: OpName, node: string, group: string, name: string, extra: Record<string, unknown>, guard = true): Promise<unknown> {
+		// `name[i]` addresses one element of a vector param; the param it belongs to must exist.
+		if (guard && !this.nodeById(node)?.params?.[group]?.[name.replace(/\[\d+\]$/, '')])
+			return Promise.reject(new Error(`${op}: no param ${group}.${name} on node ${node}`));
+		return this.ctl.call(op, { node, param: `${group}/${name}`, ...extra });
 	}
 
 	async updateParam(node: string, group: string, name: string, value: unknown): Promise<void> {
-		// Guard on EXISTENCE, not truthiness — a real param may hold 0, false or ''.
-		const param = this.nodeById(node)?.params?.[group]?.[name];
-		if (!param) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, value });
-		this._recordGraphCmd(`Set ${name}`);
+		await this._paramCall('node param edit', node, group, name, { value });
+	}
+
+	/** The slots of a list section as they are stored: each member's whole source, by base and slot. */
+	private _listSlots(node: string, group: string, section: string): { count: string; bases: Map<string, ParamDescriptor[]> } | null {
+		const params = this.nodeById(node)?.params?.[group];
+		if (!params) return null;
+		let count: string | null = null;
+		const bases = new Map<string, ParamDescriptor[]>();
+		for (const [name, d] of Object.entries(params)) {
+			const role = d.role;
+			if (role?.as === 'count' && role.section === section) count = name;
+			if (role?.as === 'member' && role.section === section && role.slot != null) {
+				const held = bases.get(role.base) ?? [];
+				held[role.slot] = d;
+				bases.set(role.base, held);
+			}
+		}
+		return count ? { count, bases } : null;
+	}
+
+	/** Re-store a list so slot `k` holds what slot `order[k]` held, as ONE undo step; `count` sets
+	 * how many are open. A slot past the order keeps what it has. */
+	private async _restoreSlots(node: string, group: string, section: string, order: number[], count?: number): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		if (!list) throw new Error(`no list ${group}/${section} on node ${node}`);
+		const ops: { op: string; payload: Record<string, unknown> }[] = [];
+		for (const [base, slots] of list.bases) {
+			order.forEach((from, to) => {
+				const d = slots[from];
+				if (from === to || !d) return;
+				ops.push({
+					op: 'node param edit',
+					payload: {
+						node,
+						param: `${group}/${base}_${to}`,
+						value: d.value,
+						expression: d.expression ?? '',
+						mode: d.mode ?? 'constant'
+					}
+				});
+			});
+		}
+		if (count !== undefined) ops.push({ op: 'node param edit', payload: { node, param: `${group}/${list.count}`, value: count } });
+		if (ops.length === 0) return;
+		await this.ctl.call('compound', { ops });
+	}
+
+	/** Store a list whole, as ONE undo step: slot `k` takes `slots[k]`'s value for every base it
+	 * names, and the count becomes how many there are. A value a slot already holds is not resent. */
+	async writeListSlots(node: string, group: string, section: string, slots: object[]): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		if (!list) throw new Error(`no list ${group}/${section} on node ${node}`);
+		const params = this.nodeById(node)?.params?.[group] ?? {};
+		const ops: { op: string; payload: Record<string, unknown> }[] = [];
+		slots.forEach((slot, k) => {
+			for (const [base, value] of Object.entries(slot)) {
+				if (JSON.stringify(params[`${base}_${k}`]?.value) === JSON.stringify(value)) continue;
+				ops.push({ op: 'node param edit', payload: { node, param: `${group}/${base}_${k}`, value } });
+			}
+		});
+		if (params[list.count]?.value !== slots.length) {
+			ops.push({ op: 'node param edit', payload: { node, param: `${group}/${list.count}`, value: slots.length } });
+		}
+		if (ops.length === 0) return;
+		await this.ctl.call('compound', { ops });
+	}
+
+	/** Move the slot at `from` so it sits at `to`, the slots between shifting one step. */
+	async moveListSlot(node: string, group: string, section: string, from: number, to: number): Promise<void> {
+		if (from === to) return;
+		const n = Math.max(from, to) + 1;
+		const order = Array.from({ length: n }, (_, i) => i);
+		order.splice(to, 0, ...order.splice(from, 1));
+		await this._restoreSlots(node, group, section, order);
+	}
+
+	/** Close the slot at `index`: the slots after it move up one, and the list is one shorter. */
+	async removeListSlot(node: string, group: string, section: string, index: number): Promise<void> {
+		const list = this._listSlots(node, group, section);
+		const held = list && this.nodeById(node)?.params?.[group]?.[list.count];
+		const count = held && typeof held.value === 'number' ? held.value : 0;
+		if (!list || index >= count) return;
+		const order = Array.from({ length: count }, (_, i) => (i < index ? i : i + 1));
+		await this._restoreSlots(node, group, section, order, count - 1);
 	}
 
 	/** Add a NEW user variable; the server refuses a name the patch already holds. A `control` makes
 	 * it a control-panel element. */
-	async addVariable(
-		name: string,
-		value: number | string | boolean,
-		type: VariableType,
-		control?: ControlView
-	): Promise<void> {
+	async addVariable(name: string, value: Literal, control?: ControlView): Promise<void> {
 		if (this.variables.some((g) => g.name === name)) throw new Error(`variable ${name} already exists`);
-		await this.ctl.call('variable entry add', control ? { name, value, type, control } : { name, value, type });
-		this._recordGraphCmd(`Add variable ${name}`);
+		await this.ctl.call('variable entry add', control ? { name, value, control } : { name, value });
 	}
 
-	/** Edit an existing variable's value, keeping its type. */
-	async setVariableValue(name: string, value: number | string | boolean): Promise<void> {
+	previewVariableValue(name: string, value: Literal): void {
+		this.ctl.preview(`variable ${name}`, 'variable entry edit', { name, value });
+	}
+
+	async setVariableValue(name: string, value: Literal): Promise<void> {
 		if (!this.variables.some((g) => g.name === name)) throw new Error(`no variable ${name}`);
 		await this.ctl.call('variable entry edit', { name, value });
-		this._recordGraphCmd(`Set variable ${name}`);
-	}
-
-	async setVariableType(name: string, type: VariableType): Promise<void> {
-		await this.ctl.call('variable entry edit', { name, type });
-		this._recordGraphCmd(`Change variable ${name} type`);
 	}
 
 	async addVariableEntry(group: string): Promise<string> {
 		const result = await this.ctl.call('variable entry add', { group }) as { name: string };
-		this._recordGraphCmd(`Add variable ${result.name}`);
 		return result.name;
 	}
 
-	async addVariableGroup(): Promise<string> {
-		const result = await this.ctl.call('variable group add', {}) as { group: string };
-		this._recordGraphCmd(`Add variable group ${result.group}`);
+	async addVariableGroup(group?: string, step?: Step): Promise<string> {
+		const result = await this.ctl.call('variable group add', group ? { group } : {}, step) as { group: string };
 		return result.group;
 	}
 
-	/** Remove a user variable (a system variable is refused by the server). */
+	/** Delete a group with every variable in it, as one step — or part of `step`. */
+	async removeVariableGroup(group: string, step?: Step): Promise<void> {
+		await this.ctl.call('variable group remove', { group }, step);
+	}
+
 	async removeVariable(name: string): Promise<void> {
 		await this.ctl.call('variable entry remove', { name });
-		this._recordGraphCmd(`Remove variable ${name}`);
 	}
 
 	/** Rename a user variable; every expression that reads it is rewritten by the manager. */
 	async renameVariable(oldName: string, newName: string): Promise<void> {
 		if (!this.variables.some((g) => g.name === oldName)) throw new Error(`no variable ${oldName}`);
 		await this.ctl.call('variable entry rename', { name: oldName, to: newName });
-		this._recordGraphCmd(`Rename variable ${oldName} → ${newName}`);
 	}
 
-	/** Set a control element's widget, its range or its place. */
-	async setVariableControl(name: string, control: ControlView): Promise<void> {
-		await this.ctl.call('variable entry edit', { name, control });
-		this._recordGraphCmd(`Edit control ${name}`);
-	}
-
-	/** Rename a group, moving every member with it. */
 	async renameVariableGroup(from: string, to: string): Promise<void> {
 		await this.ctl.call('variable group rename', { from, to });
-		this._recordGraphCmd(`Rename variable group ${from} → ${to}`);
 	}
 
-	/** Make a variable follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
-	async setVariableSource(name: string, reference: string, index?: number): Promise<void> {
-		await this.ctl.call('variable entry source', index === undefined ? { name, reference } : { name, reference, index });
-		this._recordGraphCmd(`Source variable ${name}`);
+	/** Start or end a MIDI learn: every port the host lists opens as a group for `seconds`, and
+	 * the ones nothing reads close again when it ends. */
+	learnMidi(on: boolean): Promise<{ groups: { group: string; port: string }[]; seconds: number }> {
+		return this.ctl.call('midi learn', { on });
 	}
 
 	/** Bear a widget in a control panel's group through the `control` door, which lifts the
 	 * group's lock for the one command: the manager mints the name and the cell when none is given. */
 	async addControl(group: string, kind: ControlView['kind'], cell?: Cell): Promise<string> {
 		const r = await this.ctl.call('control add', { group, kind, ...(cell ?? {}) });
-		this._recordGraphCmd(`Add ${kind} to ${group}`);
 		return String((r as { name?: unknown }).name ?? '');
 	}
 
 	/** Change a widget's name, kind, range, options or place, through the `control` door. */
-	async editControl(group: string, element: string, patch: ControlPatch): Promise<void> {
+	async editControl(group: string, element: string, patch: Partial<ControlView> & { name?: string }): Promise<void> {
 		await this.ctl.call('control edit', { group, element, ...patch });
-		this._recordGraphCmd(`Edit ${group}.${element}`);
 	}
 
-	/** Make a widget follow `node.slot` (and `index` into a wide frame); an empty reference clears. */
-	async sourceControl(group: string, element: string, reference: string, index?: number): Promise<void> {
-		await this.ctl.call('control source', index === undefined ? { group, element, reference } : { group, element, reference, index });
-		this._recordGraphCmd(`Source ${group}.${element}`);
+	/** Append drawing ops, in their text form, to a `paint` widget: one undoable edit. */
+	async paintControl(group: string, element: string, ops: string): Promise<void> {
+		await this.ctl.call('control paint', { group, element, ops });
 	}
 
-	/** The first output of node `uid` that can feed the variable named `name`, as `node.slot`. */
-	feedFor(name: string, uid: string): string | null {
-		const gv = this.variables.find((v) => v.name === name);
-		return gv ? this.referenceFor(uid, gv.type) : null;
+	/** Compute a widget by `expression`; an empty text hands it back to the hand. */
+	async computeControl(group: string, element: string, expression: string): Promise<void> {
+		await this.ctl.call('control edit', { group, element, expression });
 	}
 
-	/** The `node.slot` a param or a variable of `type` may follow on node `uid`, or null for none. A
-	 * facade keys its slots by port uid and a reference names the port, so the LABEL is the half. */
-	referenceFor(uid: string, type: string): string | null {
+	/** The bare read of node `uid` a param or a variable of `type` may take — a string reads a STRING
+	 * output, everything else an ARRAY one — or null where no output fits. With `slot`, only that
+	 * slot may answer. */
+	readFor(uid: string, type: string, slot?: string): string | null {
+		return this.readOptions(uid, type).find((o) => slot === undefined || o.slot === slot)?.expression ?? null;
+	}
+
+	/** Every output of node `uid` a param of `type` may read, each with the expression that reads it. */
+	readOptions(uid: string, type: string): { slot: string; label: string; expression: string }[] {
 		const node = this.nodeById(uid);
-		if (!node) return null;
-		const want = wantedDtype(type);
-		const key = Object.entries(node.output_slots).find(([, d]) => feeds(d as SlotDtype, want as SlotDtype))?.[0];
-		return key ? `${node.name}.${node.slot_labels?.[key] ?? key}` : null;
-	}
-
-	/** Make the widget named `name` follow the first output of node `uid` that can feed it. */
-	async linkControl(name: string, uid: string): Promise<string | null> {
-		const gv = this.variables.find((v) => v.name === name);
-		const reference = this.feedFor(name, uid);
-		if (gv && reference) await this.sourceControl(gv.group, gv.element, reference);
-		return reference;
+		if (!node) return [];
+		const want: SlotDtype = type === 'string' ? 'STRING' : 'ARRAY';
+		return Object.entries(node.output_slots)
+			.filter(([, d]) => feeds(d as SlotDtype, want))
+			.map(([slot]) => ({ slot, label: node.slot_labels?.[slot] ?? slot, expression: readExpression(node, slot) }));
 	}
 
 	async removeControl(group: string, element: string): Promise<void> {
 		await this.ctl.call('control remove', { group, element });
-		this._recordGraphCmd(`Remove ${group}.${element}`);
 	}
 
-	/** Lock or unlock one variable on its own account; an axis not named keeps what it has. */
-	async lockVariable(name: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('variable entry lock', { name, ...lock });
-		this._recordGraphCmd(`Lock variable ${name}`);
+	/** One op, as a panel speaks them: the op vocabulary is the interface, so the panel names the
+	 * op and the manager answers. */
+	op<T = Record<string, unknown>>(op: OpName, payload: Record<string, unknown>, step?: Step): Promise<T> {
+		return this.ctl.call(op, payload, step) as Promise<T>;
 	}
 
-	/** Lock or unlock a whole group; an axis not named keeps what it has. */
-	async lockVariableGroup(group: string, lock: Partial<LockView>): Promise<void> {
-		await this.ctl.call('variable group lock', { group, ...lock });
-		this._recordGraphCmd(`Lock variable group ${group}`);
+	/** Write into a panel's state as an edit — with `step`, as part of a grouped one. */
+	async setPanelState(panel: string, state: Record<string, unknown>, step?: Step): Promise<void> {
+		await this.ctl.call('layout panel edit', { panel, state }, step);
+	}
+
+	/** A card drag or a widget turn in flight: the state's place or values, previewed under the
+	 * machine's key. */
+	previewState(machine: string, name: string, patch: { pos?: [number, number]; values?: Record<string, Literal>; envelopes?: Record<string, number[]>; interval?: number; noop?: number; weights?: Record<string, number> }): void {
+		this.ctl.preview(`machine ${machine}`, 'machine state edit', { machine, name, ...patch });
+	}
+
+	/** A note or a keyframe drag in flight: the track's notes or keyframes, previewed under its key. */
+	previewTrack(track: string, patch: Record<string, unknown>): void {
+		this.ctl.preview(`track ${track}`, 'timeline track edit', { track, ...patch });
 	}
 
 	/** Ask a live node to re-evaluate a param's options. Options only, never the value, so it is
@@ -661,7 +679,7 @@ export class GraphStore {
 		const key = refreshKey(node, group, name);
 		this._beginRefresh(key);
 		try {
-			await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'refresh' });
+			await this._paramCall('node param request', node, group, name, { request: 'refresh' }, false);
 		} catch (e) {
 			// A failed dispatch means the node never re-scans, so do not wait out the safety timeout.
 			this._endRefresh(key);
@@ -669,22 +687,11 @@ export class GraphStore {
 		}
 	}
 
-	/** Take every param's default from what the node holds now — the zero point the non-default
-	 * filter reads. It edits no param, so an expression or a reference keeps driving; it IS
-	 * undoable, since the zero point is document state a later reader depends on. */
-	async clearNonDefault(node: string): Promise<void> {
-		await this.ctl.call('node baseline', { node });
-		this._recordGraphCmd(`Clear non-default on ${this.nodeById(node)?.name ?? node}`);
-	}
-
 	/** Fire a pulse param: a request the node acts on, with no value and so no inverse to undo. */
 	async pulse(node: string, group: string, name: string): Promise<void> {
-		const param = this.nodeById(node)?.params?.[group]?.[name];
-		if (!param) throw new Error(`node param request: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param request', { node, param: `${group}/${name}`, request: 'pulse' });
+		await this._paramCall('node param request', node, group, name, { request: 'pulse' });
 	}
 
-	/** Whether a ⟳ refresh is in flight for this param. */
 	isRefreshing(node: string, group: string, name: string): boolean {
 		return refreshKey(node, group, name) in this._refreshing;
 	}
@@ -703,19 +710,24 @@ export class GraphStore {
 		this._refreshing = rest;
 	}
 
-	/** Edit a param's source record: any subset of mode, expression, reference and triggers. A text
+	/** Edit a param's source record: any subset of mode and expression. A text
 	 * given implies its mode; an empty text clears it. The manager's rules are the op's. */
 	async setSource(node: string, group: string, name: string, source: SourcePatch): Promise<void> {
-		const d = this.nodeById(node)?.params?.[group]?.[name];
-		if (!d) throw new Error(`node param edit: no param ${group}.${name} on node ${node}`);
-		await this.ctl.call('node param edit', { node, param: `${group}/${name}`, ...source });
-		this._recordGraphCmd(`Set ${name} source`);
+		await this._paramCall('node param edit', node, group, name, { ...source });
+	}
+
+	/** One command puts a param back on its zero point: source and value together. */
+	async resetParam(node: string, group: string, name: string, zero: NonNullable<NodeInstanceInfo['baseline']>[string]): Promise<void> {
+		await this._paramCall('node param edit', node, group, name, {
+			mode: zero.mode ?? 'constant',
+			value: zero.value,
+			expression: zero.expression ?? ''
+		});
 	}
 
 	async setNodePos(uid: string, pos: [number, number]): Promise<void> {
 		// Committed on drag-stop only; a live drag stays local to Svelte Flow.
 		await this.ctl.call('node edit', { node: uid, pos });
-		this._recordGraphCmd(`Move ${this.nodeById(uid)?.name ?? uid}`);
 	}
 
 	/** Move several nodes as ONE command — one op, one resync, one undo step. */
@@ -724,15 +736,12 @@ export class GraphStore {
 		if (moves.length === 1) return this.setNodePos(...moves[0]);
 		const ops = moves.map(([node, pos]) => ({ op: 'node edit', payload: { node, pos } }));
 		await this.ctl.call('compound', { ops });
-		this._recordGraphCmd(`Move ${moves.length} nodes`);
 	}
 
-	/** Set a node's mutable display name (uid identity is unchanged). */
 	async renameNode(uid: string, name: string): Promise<void> {
 		const oldName = this.nodeById(uid)?.name ?? '';
 		if (oldName === name) return;
 		await this.ctl.call('node edit', { node: uid, name });
-		this._recordGraphCmd(`Rename ${oldName} → ${name}`);
 	}
 
 	/** Store where THIS client is looking. Persisted in the `.gfi`, but never converged and never
@@ -752,57 +761,24 @@ export class GraphStore {
 		return this.ctl.call<{ path: string }>('session save', { path, overwrite });
 	}
 
-	/** Ask the manager what earlier sessions left unsaved; the list is disk truth, read on ask. */
-	async refreshRecoveries(): Promise<void> {
-		const r = await this.ctl.call<{ recoveries: Recovery[] }>('session recoverable', {});
-		this.recoveries = r.recoveries;
-	}
-
-	/** Open a crash's autosave in place of the open patch: unsaved work, with its old home. */
-	async recover(workspace: string): Promise<void> {
-		await this.ctl.call('session recover', { workspace });
-		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
-	}
-
-	/** Remove a crash's autosave without opening it. */
-	async discardRecovery(workspace: string): Promise<void> {
-		await this.ctl.call('session discard', { workspace });
-		this.recoveries = this.recoveries.filter((r) => r.workspace !== workspace);
-	}
-
 	/** Reset to an empty, unnamed patch. Nothing is written here: a New emits no
 	 * `save_path_changed`, so the `graph_replaced` snapshot is the sole carrier of the null path. */
 	async newPatch(): Promise<void> {
 		await this.ctl.call('session new', {});
 	}
 
-	/** Group the named nodes into a sub-patch. Returns its instance id. */
+	/** The manager lays a scope out by dataflow; absent = root. */
+	async arrange(instId?: string): Promise<void> {
+		await this.ctl.call('nodes arrange', { inst_id: instId });
+	}
+
 	async groupNodes(members: string[], pos?: [number, number]): Promise<string> {
 		const r = await this.ctl.call<{ inst_id: string }>('nodes group', { nodes: members, pos });
-		if (r?.inst_id) this._recordGraphCmd('Group nodes');
 		return r.inst_id;
 	}
 
-	/** Dissolve a sub-patch instance back into its member nodes. */
 	async expandInstance(instId: string): Promise<void> {
 		await this.ctl.call('nodes ungroup', { subpatch: instId });
-		this._recordGraphCmd('Ungroup');
-	}
-
-	async statPath(path: string): Promise<{ path: string; kind: 'file' | 'dir' | 'missing' }> {
-		return this.ctl.call('dir stat', { path });
-	}
-
-	/** List one directory level on the BACKEND filesystem (full FS, no jail). No path opens the
-	 * folder of the last patch loaded or saved. */
-	async listDir(path: string | undefined, sort: FsSort, reverse: boolean): Promise<DirListing> {
-		return this.ctl.call<DirListing>('dir list', { path, sort, reverse });
-	}
-
-	/** Load a patch from a BACKEND filesystem path; destructive, and it resets the session, so
-	 * there is no history entry. A `.gfi` is a zip, so a path is the only door the client has. */
-	async load(path: string): Promise<void> {
-		await this.ctl.call('session load', { path });
 	}
 
 	/** Resolve a node by uid — the ONE accessor, and every kind of node record answers it. Read
@@ -811,15 +787,8 @@ export class GraphStore {
 		return nodesMap(this.doc)[id] === undefined ? null : (this._views.get(id) ?? null);
 	}
 
-	/** Every node a panel can bind or a picker can list. ROOT is the canvas, and it is not one. */
-	get bindable(): { uid: string; name: string }[] {
-		return this.nodes.map((n) => ({ uid: n.uid, name: n.name }));
-	}
-
-	/** One node's live source state, both maps WHOLE: a driven param neither names has no live value
-	 * and shows its literal again, and no standing error. Written leaf by leaf, so a param whose
-	 * value did not move wakes nobody; the one door the control plane's own event and the faster
-	 * `/params` socket both come through. */
+	/** One node's live source state, both maps whole: a driven param neither names shows its
+	 * literal again. Leaf by leaf, so an unmoved value wakes nobody. */
 	applyLiveSource(node: string, live: LiveSource): void {
 		const t = this._rt[node];
 		if (!t) return;
@@ -839,43 +808,46 @@ export class GraphStore {
 	async pasteNodes(
 		doc: GraphFragment,
 		offset: [number, number] = [0, 0],
-		instId?: string
+		instId?: string,
+		step?: Step
 	): Promise<Record<string, string>> {
-		const r = await this.ctl.call<{ rename: Record<string, string> }>('nodes paste', {
-			doc,
-			pos: offset,
-			inst_id: instId ?? null
-		});
-		this._recordGraphCmd('Paste nodes');
+		const r = await this.ctl.call<{ rename: Record<string, string> }>(
+			'nodes paste',
+			{ doc, pos: offset, inst_id: instId ?? null },
+			step
+		);
 		return r.rename ?? {};
 	}
 
-	/** Duplicate `uids` in place — a copy and a paste, which is what a duplicate IS, so a sub-patch
-	 * and a leaf go through the one door. `instId` is where the selection came FROM: a fragment
-	 * names a scope only when that scope is in it, so a member copied alone names none. */
+	/** Duplicate `uids` in place as a copy and a paste. `instId` is where the selection came from:
+	 * a fragment names a scope only when that scope is in it. */
 	async cloneNodes(
 		uids: string[],
 		offset: [number, number] = [40, 40],
-		instId?: string
+		instId?: string,
+		step?: Step
 	): Promise<Record<string, string>> {
 		if (uids.length === 0) return {};
-		return this.pasteNodes(await this.copyNodes(uids), offset, instId);
+		return this.pasteNodes(await this.copyNodes(uids), offset, instId, step);
 	}
 
-
-
-	/** Delete several nodes as ONE undoable step. */
-	async removeNodes(uids: Iterable<string>): Promise<void> {
+	async removeNodes(uids: Iterable<string>, within?: Step): Promise<void> {
 		const uidList = [...uids];
 		if (uidList.length === 0) return;
 		const label = `Delete ${uidList.length} node${uidList.length > 1 ? 's' : ''}`;
 		// Each removeNode captures its OWN subtree, and a link rides with whichever endpoint owns
 		// it, so delete order is immaterial.
-		await history().transaction(label, async () => {
-			for (const uid of uidList) await this.removeNode(uid);
-		});
+		await history().transaction(label, async (step) => {
+			for (const uid of uidList) await this.removeNode(uid, step);
+		}, within);
 	}
+}
 
+/** The expression that reads `slot` of `node`: bare on a node with one output, the spelling its
+ * completion offers, else `.out.<label>` — a facade keys slots by port uid, so the label names it. */
+export function readExpression(node: NodeInstanceInfo, slot: string): string {
+	if (Object.keys(node.output_slots).length === 1) return `nd('${node.name}')`;
+	return `nd('${node.name}').out.${node.slot_labels?.[slot] ?? slot}`;
 }
 
 let _live: ParamLive | null = null;

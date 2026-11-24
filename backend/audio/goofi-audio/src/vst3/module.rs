@@ -6,18 +6,24 @@ use std::ffi::c_void;
 #[cfg(unix)]
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use goofi_supervisor::sync::Mutex;
 
 use vst3::Steinberg::*;
 use vst3::{ComPtr, Interface};
 
 use super::host::cstr;
 
+/// Every module this process entered, by its binary's path.
+fn entered() -> &'static Mutex<HashMap<PathBuf, &'static libloading::Library>> {
+    static ENTERED: OnceLock<Mutex<HashMap<PathBuf, &'static libloading::Library>>> = OnceLock::new();
+    ENTERED.get_or_init(Default::default)
+}
+
 /// The factory of the binary at `path`, loading and entering it the first time. Never unloaded:
 /// a bundle REPLACED in place keeps running its old code until goofi restarts (see the roadmap).
 pub fn factory(path: &Path) -> Result<Factory, String> {
-    static ENTERED: OnceLock<Mutex<HashMap<PathBuf, &'static libloading::Library>>> = OnceLock::new();
-    let mut entered = ENTERED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut entered = entered().lock();
     let library = match entered.get(path) {
         Some(library) => library,
         None => {
@@ -55,6 +61,27 @@ fn enter(library: &'static libloading::Library, _path: &Path) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+/// The platform's exit hook, the entry hook's pair.
+#[cfg(target_os = "macos")]
+const EXIT: &std::ffi::CStr = c"bundleExit";
+#[cfg(all(unix, not(target_os = "macos")))]
+const EXIT: &std::ffi::CStr = c"ModuleExit";
+#[cfg(windows)]
+const EXIT: &std::ffi::CStr = c"ExitDll";
+
+/// Exit every entered module once no object of it lives, so a plugin tears its globals down here
+/// and not in the process's exit handlers. A later use enters the module again.
+pub fn exit_all() {
+    for (path, library) in entered().lock().drain() {
+        // SAFETY: the exit hook's signature is the VST3 SDK's, with no argument on any platform.
+        if let Ok(exit) = unsafe { goofi_build::symbol::<unsafe extern "system" fn() -> bool>(library, EXIT) } {
+            if !unsafe { exit() } {
+                eprintln!("{}: `{}` refused", path.display(), EXIT.to_string_lossy());
+            }
+        }
+    }
 }
 
 /// macOS enters through the BUNDLE, and the ref is what makes it count: the SDK's `bundleEntry`

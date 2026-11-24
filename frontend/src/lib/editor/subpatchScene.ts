@@ -9,9 +9,8 @@ export function childrenOfScope(scope: string, index: Map<string, string>): stri
 	return [...index].filter(([, parent]) => parent === scope).map(([uid]) => uid);
 }
 
-/** Resolve a link endpoint to what is actually DRAWN in `scope`: climb the scope chain, and each
- * level up the entity becomes its parent facade with the entity ITSELF as the handle, because a
- * port IS the facade's slot. Null when the endpoint lies outside the entered subtree. */
+/** Resolve a link endpoint to what is DRAWN in `scope`: each level up, it becomes its parent facade
+ * with itself as the handle, as a port IS the facade's slot. Null outside the entered subtree. */
 export function drawEndpoint(
 	uid: string,
 	slot: string,

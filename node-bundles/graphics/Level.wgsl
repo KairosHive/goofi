@@ -3,9 +3,9 @@
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
-    {"group": "level", "name": "gain", "kind": "float", "default": 1.0, "min": 0.0, "max": 4.0},
-    {"group": "level", "name": "offset", "kind": "float", "default": 0.0, "min": -1.0, "max": 1.0},
-    {"group": "level", "name": "gamma", "kind": "float", "default": 1.0, "min": 0.1, "max": 4.0},
+    {"group": "level", "name": "gain", "kind": "num", "default": 1.0, "min": 0.0, "max": 4.0},
+    {"group": "level", "name": "offset", "kind": "num", "default": 0.0, "min": -1.0, "max": 1.0},
+    {"group": "level", "name": "gamma", "kind": "num", "default": 1.0, "min": 0.1, "max": 4.0},
     {"group": "level", "name": "invert", "kind": "bool", "default": false} ] }
 */
 fn shade(uv: vec2f) -> vec4f {

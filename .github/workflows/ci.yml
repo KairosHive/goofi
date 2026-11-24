@@ -22,14 +22,38 @@ env:
   CARGO_PROFILE_DEV_INCREMENTAL: 'false'
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: 'true'
-  # Where the bridge's build script puts the shipped nodes, so the harness and the fleet share it.
-  GOOFI_BUILD_DIR: ${{ github.workspace }}/target/goofi-build
+  # goofi's runtime, under the workspace so its build caches can be kept across runs.
+  GOOFI_RUNTIME: ${{ github.workspace }}/target/goofi-runtime
 
+# Every job is one setup, ONE cargo build, then its gate. A job runs under ten minutes, or it is
+# cut. The situations and the browser suite each have a runner of their own: the gate is the
+# code, and a test that only fails beside another suite's load tells nobody what broke.
 jobs:
-  # One job, one build: every gate in the order a fresh clone meets them.
-  linux:
+  rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - id: setup
+        uses: ./.github/actions/setup
+      - name: Zero warnings (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Every situation of the one test binary at four threads, the runner's cores, and the
+      # situations that set process-wide state in binaries of their own. `--test-threads` as a
+      # flag, not `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
+      # After a lint too: one run answers both gates.
+      - name: Situations
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: >
+          cargo test --workspace --no-fail-fast
+          --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire
+          -- --test-threads=4 2>&1 | tee situations.log
+      - if: failure()
+        uses: ./.github/actions/report
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -37,47 +61,14 @@ jobs:
         working-directory: frontend
       - run: npm run test
         working-directory: frontend
-      - name: Zero warnings (rustc + clippy)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # Cargo's own warnings are not clippy's; the test profile is what the tests below link.
-      - name: No cargo warnings
-        run: |
-          cargo test --workspace --no-run 2>&1 | tee build.log
-          ! grep -n '^warning' build.log
-      # One boot fills the node build dir with the Python probes every test binary would otherwise take.
-      - run: cargo run -p goofi-cli -- --headless --list-nodes
-      # One invocation over the whole workspace, so the package set and its unified features match
-      # the builds above and nothing is compiled a second time.
-      - name: The situations with a binary of their own
-        run: cargo test --workspace --no-fail-fast --test agent --test audio --test cli --test probe --test shipped
-      # One situation FILE per process, four threads each: a file's situations share the runner
-      # alone, so lavapipe's shader compiles and the Python children are not starved by the rest,
-      # and an hour-long process is not what the last file inherits. The flag, not
-      # `RUST_TEST_THREADS`, which the helper children a situation spawns would inherit.
-      # The files whose situations all need `embed` run in the Python-tier step below, not here.
-      - name: Situations
-        run: |
-          status=0
-          for file in backend/goofi-tests/tests/all/*.rs; do
-            situation=$(basename "$file" .rs)
-            case $situation in main|codec_golden|filter_golden|param_modulation|python_init_order) continue;; esac
-            echo "::group::$situation"
-            cargo test -p goofi-tests --test all -- "$situation::" --test-threads=4 || status=1
-            echo "::endgroup::"
-          done
-          exit $status
-      # The other Python tier links libpython: only the situations that run Python, and of the
-      # graphics ones the three that put Python on the GPU's side.
-      - name: Tests (in-process Python tier)
-        run: >
-          cargo test -p goofi-tests --test all --
-          python:: plugins:: nodes:: inspect:: codec_golden:: filter_golden::
-          param_modulation:: python_init_order::
-          graphics::python_texture graphics::host_pixels --test-threads=4
-      - run: cargo test -p goofi-tests --test python_gil_tripwire
+      - run: npm run build
+        working-directory: frontend
+      - uses: actions/cache@v4
+        with:
+          path: tests/e2e/node_modules
+          key: e2e-npm-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
       - run: npm install
         working-directory: tests/e2e
-      # Keyed on the Playwright that installed, which the unpinned package.json does not name.
       - id: playwright
         run: echo "version=$(npx playwright --version)" >> "$GITHUB_OUTPUT"
         working-directory: tests/e2e
@@ -85,15 +76,28 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      - run: npx playwright install --with-deps chromium
+      # Without `--with-deps`: the runner holds Chromium's libraries already, and that flag's own
+      # apt transaction added nine font packages the suite asserts nothing on, at the mirror's pace.
+      - run: npx playwright install chromium
         working-directory: tests/e2e
-      # One backend: two graphics patches rendering on lavapipe at once starve each other's frames.
-      - run: npm run e2e
+      # The suite against the binary and the frontend built above: one worker per core, each with
+      # a backend of its own.
+      - name: Browser suite
+        run: npm run check && npx playwright test && npx playwright test --config playwright.plugins.config.ts
         working-directory: tests/e2e
         env:
-          GOOFI_E2E_WORKERS: 1
-      - run: npm run e2e:plugins
-        working-directory: tests/e2e
+          GOOFI_E2E_WORKERS: 4
+      # Where a browser test stopped: Playwright's error context for each failed test, in the log
+      # and in the job summary. The `github` reporter has already annotated the run with each.
+      - if: failure()
+        run: |
+          for context in tests/e2e/test-results/*/error-context.md; do
+            [ -f "$context" ] || continue
+            echo "::group::$context"
+            cat "$context"
+            echo "::endgroup::"
+            { echo "### \`$(basename "$(dirname "$context")")\`"; echo; cat "$context"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          done
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -101,11 +105,6 @@ jobs:
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
 
   # Only what a platform can answer differently: processes, paths, dynamic libraries, PTYs, audio
   # hosts. The rest was proven on Linux above.
@@ -115,23 +114,33 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup
-      - run: cargo run -p goofi-cli -- --headless --list-nodes
-      # Windows only boots: iceoryx2 cannot create a listener under the session's root there yet,
-      # and every situation opens one. Drop both conditions once it can.
+      # Windows only boots, so its build carries no debug info: the PDB is most of an MSVC link.
+      # Set here and nowhere else: a profile value set in the environment, even to what Cargo.toml
+      # says, is a profile of its own to sccache, and every crate misses.
+      - if: runner.os == 'Windows'
+        run: echo 'CARGO_PROFILE_DEV_DEBUG=0' >> "$GITHUB_ENV"
+      # Windows only boots: the situations are not yet proven there (roadmap/windows-cleanup.md),
+      # so it builds the binaries alone. Drop both once a watched run passes.
+      - id: setup
+        uses: ./.github/actions/setup
+        with:
+          targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --example plugin_host --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire' }}
+      # The situations a platform can answer differently: processes and PTYs (children, agent),
+      # paths (io, session), dynamic libraries (nodes, plugins, shipped), the Python child
+      # (python), the exchange (transport) and the audio host (audio). A filter after `--`
+      # reaches every test binary of the command, so the one binary's situations and the
+      # binaries of their own run as two commands of one target selection.
       - name: Situations
         if: runner.os != 'Windows'
         run: >
-          cargo test -p goofi-tests --test all --
-          audio_priority:: children:: engines:: headless:: inspect:: io:: logging:: nodes::
-          plugins:: python:: session:: transport::
-      - if: runner.os != 'Windows'
-        run: cargo test -p goofi-tests --no-fail-fast --test agent --test audio --test cli --test probe --test shipped
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: target/goofi-build
-          key: goofi-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
+          cargo test --workspace --no-fail-fast --test all -- --test-threads=4
+          children:: io:: nodes:: plugins:: python:: session:: transport:: 2>&1 | tee situations.log
+      # After a failure above too: it does not hide what these binaries would say.
+      - name: Situations in binaries of their own
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Windows' }}
+        run: cargo test --workspace --no-fail-fast --test agent --test audio --test shipped 2>&1 | tee -a situations.log
+      - if: failure()
+        uses: ./.github/actions/report

@@ -2,7 +2,7 @@
 //! A stacked axis takes the sender names, which is the only place a builtin may name an entry.
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Join;
@@ -97,16 +97,18 @@ static PARAMS: &[ParamDecl] = &[
              puts them side by side on a new axis, named after the nodes they came from.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "join",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

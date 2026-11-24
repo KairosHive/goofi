@@ -77,13 +77,13 @@ class Connectivity(goofi.Node):
     PARAMS = {
         "connectivity": {
             "method": goofi.StringParam("wpli", options=METHODS, doc="What counts as a relation between two channels."),
-            "low": goofi.FloatParam(8.0, 0.0, 200.0, doc="Band low edge in Hz. The phase measures need one."),
-            "high": goofi.FloatParam(13.0, 0.0, 200.0, doc="Band high edge in Hz; at or below `low` the band is off."),
-            "bins": goofi.IntParam(16, 4, 64, doc="Histogram bins for `mutual_info`; the others ignore it."),
+            "low": goofi.NumParam(8.0, 0.0, 200.0, doc="Band low edge in Hz. The phase measures need one."),
+            "high": goofi.NumParam(13.0, 0.0, 200.0, doc="Band high edge in Hz; at or below `low` the band is off."),
+            "bins": goofi.NumParam(16, 4, 64, int=True, doc="Histogram bins for `mutual_info`; the others ignore it."),
         },
         "adjacency": {
             "binarize": goofi.BoolParam(False, doc="Keep only the edges above `threshold`, as 1 and 0."),
-            "threshold": goofi.FloatParam(0.5, 0.0, 1.0, doc="Where that cut falls, on the absolute value."),
+            "threshold": goofi.NumParam(0.5, 0.0, 1.0, doc="Where that cut falls, on the absolute value."),
             "absolute": goofi.BoolParam(False, doc="Report the magnitude, so an anticorrelation is a strong edge."),
         },
     }

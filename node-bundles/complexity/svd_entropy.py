@@ -17,8 +17,8 @@ class SvdEntropy(goofi.Node):
     OUTPUTS = {"entropy": goofi.DataType.ARRAY}
     PARAMS = {
         "svd": {
-            "order": goofi.IntParam(3, 2, 20, doc="Dimension of the delay embedding."),
-            "delay": goofi.IntParam(1, 1, 100, doc="Samples between embedding coordinates."),
+            "order": goofi.NumParam(3, 2, 20, int=True, doc="Dimension of the delay embedding."),
+            "delay": goofi.NumParam(1, 1, 100, int=True, doc="Samples between embedding coordinates."),
             "normalize": goofi.BoolParam(True, doc="Scale to 0..1 against an even spread."),
         }
     }

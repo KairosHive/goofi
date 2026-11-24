@@ -1,101 +1,113 @@
 import { test, expect, type Page } from '@playwright/test';
-import fs from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { waitForApp } from '../lib/app';
 import { rawCall, backendDoc } from '../lib/raw';
-import { addNode, frameSummary, selectNode, updateParam, nodeParams } from '../lib/goofi';
+import { addNode, frameSummary, selectNode, nodeParams } from '../lib/goofi';
+import { REPO_ROOT, WAIT } from '../playwright.config';
 
-/** Wait until a learn holds a whole frame of `slot` as its baseline, so the next change is learned. */
-async function baseline(page: Page, node: string, slot: string): Promise<void> {
-	await expect
-		.poll(async () => {
-			const frame = await frameSummary(page, node, slot);
-			return frame !== null && frame.reducedLength === undefined;
-		}, { message: `the learn saw a whole ${slot} frame` })
-		.toBe(true);
+const KEYS = path.join(REPO_ROOT, 'target', 'debug', `midikeys${process.platform === 'win32' ? '.exe' : ''}`);
+
+/** A controller plugged in for the test: a virtual port named `name`, played one message a line.
+ * The port leaves with the process, which is how a device is pulled. */
+class Keys {
+	private child: ChildProcess;
+	private readiness: Promise<boolean>;
+	constructor(name: string) {
+		this.child = spawn(KEYS, [name], { stdio: ['pipe', 'pipe', 'inherit'] });
+		// Watched from the spawn: a helper with no sequencer exits within milliseconds, long
+		// before the page is up, and an exit nobody was listening for is a wait with no end.
+		this.readiness = new Promise((resolve) => {
+			this.child.stdout!.once('data', () => resolve(true));
+			this.child.once('exit', () => resolve(false));
+			this.child.once('error', () => resolve(false));
+		});
+	}
+	/** Whether the host listed the port; a machine with no sequencer has none to make. */
+	ready(): Promise<boolean> {
+		return this.readiness;
+	}
+	play(bytes: number[]): void {
+		this.child.stdin!.write(bytes.map((b) => b.toString(16)).join(' ') + '\n');
+	}
+	unplug(): void {
+		this.child.stdin!.end();
+		this.child.kill();
+	}
 }
 
-test('MIDI learn selects a node and maps the first changed channel to a parameter or widget', async ({ page }) => {
+/** The first frame of a bus entry the tab holds: what learn measures a change against. */
+async function baseline(page: Page, name: string): Promise<void> {
+	await expect.poll(async () => {
+		const frame = await frameSummary(page, 'variables', name);
+		return frame !== null && frame.reducedLength === undefined;
+	}, { timeout: WAIT }).toBe(true);
+}
+
+/** The device groups the backend holds open now. */
+async function openGroups(page: Page): Promise<string[]> {
+	const groups = (await backendDoc(page)).variable_groups as Record<string, { owner?: { midi?: unknown } }>;
+	return Object.keys(groups).filter((g) => groups[g].owner?.midi);
+}
+
+test('MIDI learn opens every device, maps the first moved element, and keeps only the devices read', async ({ page }) => {
+	const keys = new Keys('Test Keys');
+	const pads = new Keys('Pads');
 	await page.goto('/');
 	await waitForApp(page);
 	try {
+		test.skip(!(await keys.ready()), 'no sequencer to make a virtual port on');
 		const consumer = await addNode(page, 'LFO');
 		await selectNode(page, consumer);
 		await page.getByTestId('param-search').fill('max_frequency');
 		const field = page.getByTestId('param-field-max_frequency');
 		await field.getByRole('button', { name: 'max_frequency', exact: true }).click();
 		const learn = field.getByTestId('param-learn');
-		await learn.click();
-		await expect(page.getByTestId('toast')).toContainText('Add a MIDI node');
-		const status = (await rawCall(page, 'session status')).result;
-		const source = path.join(status.workspace, 'nodes_signal', 'learn_midi.py');
-		fs.mkdirSync(path.dirname(source), { recursive: true });
-		fs.writeFileSync(source, `import goofi
-import numpy as np
-class LearnMidi(goofi.Node):
-    TAGS = ["midi"]
-    PRODUCER = True
-    OUTPUTS = {"cc": goofi.DataType.ARRAY, "notes": goofi.DataType.ARRAY}
-    PARAMS = {"test": {"cc": goofi.FloatParam(0.0, 0.0, 1.0), "note": goofi.FloatParam(0.0, 0.0, 1.0)}}
-    def process(self):
-        cc = np.zeros(128, dtype=np.float32)
-        notes = np.zeros(128, dtype=np.float32)
-        cc[74] = self.params.test.cc
-        notes[60] = self.params.test.note
-        return {"cc": cc, "notes": notes}
-`);
-		await rawCall(page, 'library refresh');
-		const midi = await addNode(page, 'LearnMidi', [350, 0]);
-		await rawCall(page, 'node edit', { node: midi, name: 'keys' });
-		await selectNode(page, consumer);
-		await page.getByTestId('param-search').fill('max_frequency');
-		if (!(await learn.isVisible())) await field.getByRole('button', { name: 'max_frequency', exact: true }).click();
+		// A learn opens the port the test plugged in, as a group named after it, locked whole.
 		await learn.click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
 		await expect(learn.locator('.spinner')).toBeVisible();
 		await expect(learn).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-		await baseline(page, midi, 'notes');
-		await updateParam(page, midi, 'test', 'note', 0.75);
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toContain('midikeys_test_keys');
+		await baseline(page, 'midikeys_test_keys.notes');
+		keys.play([0x90, 60, 127]);
 		await expect(learn).toHaveAttribute('aria-pressed', 'false');
-		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.reference).toBe('keys.notes[60]');
-		await expect(field.getByTestId('param-number')).toHaveValue('0.75');
+		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('vars.midikeys_test_keys.notes[60]');
+		await expect(field.getByTestId('param-number')).toHaveValue('1');
 		await expect(learn.locator('svg')).toBeVisible();
+		// In the variables panel the device's group is locked whole: tagged, no rename, no add.
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[0].panelId, 'variables');
+		});
+		const grp = page.locator('[data-testid="variable-group"][data-group="midikeys_test_keys"]');
+		await expect(grp).toHaveAttribute('data-lock-config', 'true');
+		await expect(grp).toHaveAttribute('data-lock-value', 'true');
+		await expect(grp.getByRole('img', { name: 'MIDI device' })).toBeVisible();
+		await expect(grp.getByTestId('variable-group-edit')).toHaveCount(0);
+		await page.evaluate(() => {
+			const g = (window as any).goofi;
+			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');
+		});
 
-		const slider = field.getByTestId('param-slider');
-		const track = slider.locator('input');
-		const bounds = await slider.locator('.ui-slider-bound').allTextContents();
-		const descriptor = (await nodeParams(page, consumer)).common.max_frequency;
-		const step = await track.getAttribute('step');
-		for (const value of [descriptor.vmin - 1, descriptor.vmax + 1, 0.75]) {
-			await updateParam(page, midi, 'test', 'note', value);
-			await expect.poll(async () => Number(await field.getByTestId('param-number').inputValue())).toBe(value);
-			await expect(slider.locator('.ui-slider-bound')).toHaveText(bounds);
-			await expect(track).toHaveAttribute('min', String(descriptor.vmin));
-			await expect(track).toHaveAttribute('max', String(descriptor.vmax));
-			await expect(track).toHaveAttribute('step', step!);
-		}
-
-
-		const second = await addNode(page, 'LearnMidi', [350, 300]);
-		await rawCall(page, 'node edit', { node: second, name: 'pads' });
+		// A second device: the next learn listens to both, and the one no longer read is let go.
+		expect(await pads.ready()).toBe(true);
 		await selectNode(page, consumer);
 		await page.getByTestId('param-search').fill('max_frequency');
 		if (!(await learn.isVisible())) await field.getByRole('button', { name: 'max_frequency', exact: true }).click();
 		await learn.click();
-		await expect(page.getByRole('menuitem', { name: 'keys', exact: true })).toBeVisible();
-		await page.getByRole('menuitem', { name: 'pads', exact: true }).click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
-		await baseline(page, second, 'cc');
-		await updateParam(page, midi, 'test', 'note', 0.875);
-		await expect(learn).toHaveAttribute('aria-pressed', 'true');
-		await updateParam(page, second, 'test', 'cc', 0.5);
-		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.reference).toBe('pads.cc[74]');
-		await expect(field.getByTestId('param-number')).toHaveValue('0.5');
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toContain('midikeys_pads');
+		await baseline(page, 'midikeys_pads.cc');
+		pads.play([0xb0, 74, 127]);
+		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.expression).toBe('vars.midikeys_pads.cc[74]');
+		await expect(field.getByTestId('param-number')).toHaveValue('1');
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toEqual(['midikeys_pads']);
 
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.25, 'float', { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
-			await g.commands.addVariable('desk.text', '', 'string', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.level', 0.25, { kind: 'knob', x: 0, y: 0, w: 3, h: 3 });
+			await g.commands.addVariable('desk.text', '', { kind: 'text', x: 3, y: 0, w: 3, h: 3 });
 			const panel = g.query.panels()[0];
 			g.commands.setPanelType(panel.panelId, 'control');
 			g.commands.setPanelState(panel.panelId, { group: 'desk' });
@@ -104,45 +116,45 @@ class LearnMidi(goofi.Node):
 		await expect(page.getByTestId('control-desk-text').getByTestId('control-learn')).toHaveCount(0);
 		const widget = page.getByTestId('control-desk-level').getByTestId('control-learn');
 		await widget.click();
-		await page.getByRole('menuitem', { name: 'keys', exact: true }).click();
 		await expect(widget.locator('.spinner')).toBeVisible();
-		await baseline(page, midi, 'cc');
-		await updateParam(page, midi, 'test', 'cc', 0.625);
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toContain('midikeys_test_keys');
+		await baseline(page, 'midikeys_test_keys.cc');
+		keys.play([0xb0, 74, 127]);
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
-		await expect.poll(async () => {
-			const doc = await backendDoc(page);
-			return doc.variables?.['desk.level']?.source;
-		}).toEqual({ reference: 'keys.cc', index: 74 });
-		// Relearn always selects a MIDI node, even when a source already exists.
+		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
+			.toBe('vars.midikeys_test_keys.cc[74]');
+		// A click on a listening learn cancels it.
 		await widget.click();
-		await page.getByRole('menuitem', { name: 'pads', exact: true }).click();
 		await expect(widget).toHaveAttribute('aria-pressed', 'true');
 		await widget.click();
 		await expect(widget).toHaveAttribute('aria-pressed', 'false');
-		await rawCall(page, 'node remove', { node: second });
+		// A note on channel 2 is the note's slot a channel over.
 		await widget.click();
-		await expect(widget).toHaveAttribute('aria-pressed', 'true');
-		await expect(page.getByRole('menu')).toHaveCount(0);
-		await baseline(page, midi, 'notes');
-		await updateParam(page, midi, 'test', 'note', 0.375);
-		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.source)
-			.toEqual({ reference: 'keys.notes', index: 60 });
-		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'variables.desk.level' });
+		await baseline(page, 'midikeys_test_keys.notes');
+		keys.play([0x91, 61, 100]);
+		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
+			.toBe(`vars.midikeys_test_keys.notes[${128 + 61}]`);
+		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'vars.desk.level' });
 		await page.evaluate(() => {
 			const g = (window as any).goofi;
 			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');
 		});
 		await selectNode(page, consumer);
 		await page.getByTestId('param-search').fill('max_frequency');
-		await expect(field.getByTestId('param-number')).toHaveValue('0.375');
+		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.value).toBeCloseTo(100 / 127, 5);
+		// Nothing reads the pads now: they are let go. The keys, pulled, take their group with them,
+		// and a learn listening to nothing but gone devices stops.
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toEqual(['midikeys_test_keys']);
 		if (!(await learn.isVisible())) await field.getByRole('button', { name: 'max_frequency', exact: true }).click();
 		await learn.click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
-		await rawCall(page, 'node remove', { node: midi });
-		await expect(learn).toHaveAttribute('aria-pressed', 'false');
-		await learn.click();
-		await expect(page.getByTestId('toast')).toContainText('Add a MIDI node');
+		keys.unplug();
+		pads.unplug();
+		await expect(learn).toHaveAttribute('aria-pressed', 'false', { timeout: WAIT });
+		await expect.poll(() => openGroups(page), { timeout: WAIT }).toEqual([]);
 	} finally {
+		keys.unplug();
+		pads.unplug();
 		await rawCall(page, 'session new');
 	}
 });

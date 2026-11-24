@@ -29,6 +29,7 @@ function snapshot(): GraphSnapshot {
 		save_path: null,
 		unsaved_changes: false,
 		instance_id: 'sess1',
+		doc_version: 0,
 		viewpoint: null
 	} as never;
 }
@@ -41,8 +42,8 @@ function withInstance(): { fc: FakeControl; g: GraphStore; d: DocSeed } {
 	// Seed as the manager sends it — the scope forest's single source.
 	const d = seed(fc).patch({
 		nodes: {
-			m1: { type: 'Buffer', name: 'buffer0', pos: { x: 0, y: 0 }, scope: 'sub' },
-			sub: { type: SCOPE_TYPE, name: 'subpatch0', pos: { x: 0, y: 0 } }
+			m1: { type: 'Buffer', name: 'buffer0', pos: [0, 0], scope: 'sub' },
+			sub: { type: SCOPE_TYPE, name: 'subpatch0', pos: [0, 0] }
 		}
 	});
 	return { fc, g, d };
@@ -52,12 +53,12 @@ describe('a wholesale load resets the client history (lockstep with the manager)
 	beforeEach(() => history().reset());
 	const ctx = { activeWorkspaceId: 'w', activePanelId: null, enteredPath: {}, selection: {} };
 
-	it('graph_replaced (in-session load) drops pre-load undo steps', () => {
+	it('graph_replaced (in-session load) drops pre-load undo steps', async () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		// Establish the session, then record a pre-load graph step.
 		fc.emit({ event: 'hello', payload: snapshot() });
-		history().record({ kind: 'graph_cmd', domain: 'graph', label: 'Add X', context: ctx });
+		await g.removeNode('x');
 		expect(history().canUndo).toBe(true);
 
 		// A load replaces the graph in the SAME backend session — the manager cleared its command
@@ -78,7 +79,7 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 
 	it('deletes the instance via remove_node and records one undoable step', async () => {
 		const { fc, g } = withInstance();
-		history().configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
+		history().configure(() => fc, () => g);
 
 		await g.removeNode('sub');
 
@@ -87,15 +88,14 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 		expect(fc.recordedCalls().some((c) => c.op === 'node remove' && c.payload.node === 'sub')).toBe(
 			true
 		);
-		// One undoable entry, labelled for the instance.
-		expect(history().length).toBe(1);
-		expect(history().undoLabel).toBe('Delete subpatch0');
+		// One undoable entry, on the manager.
+		expect(fc.undoStack).toHaveLength(1);
 		expect(history().canUndo).toBe(true);
 	});
 
 	it('undo DELEGATES to the manager (no client-side checkpoint / add_node replay)', async () => {
 		const { fc, g } = withInstance();
-		history().configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
+		history().configure(() => fc, () => g);
 
 		await g.removeNode('sub');
 		const before = fc.recordedCalls().length;
@@ -115,7 +115,7 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 		// `sub` (holding member `m1`) plus a top-level node `n1`.
 		const { fc, g, d } = withInstance();
 		d.node('n1', 'Buffer', 'buffer1');
-		history().configureDeps(() => ({ control: fc, graph: g, workspace: workspace() }));
+		history().configure(() => fc, () => g);
 
 		await g.removeNodes(['n1', 'sub']);
 
@@ -126,23 +126,21 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 			.map((c) => c.payload.node);
 		expect(removed).toContain('n1');
 		expect(removed).toContain('sub');
-		// ONE undoable entry (a transaction folded to a compound of two graph_cmd children).
-		expect(history().length).toBe(1);
+		// ONE undoable entry: both deletes carried the transaction's group token.
+		expect(fc.undoStack).toHaveLength(1);
 		expect(history().undoLabel).toBe('Delete 2 nodes');
 
-		// Undo runs the compound: one manager `undo` per child (two), no client-side reload.
+		// Undo is ONE manager `undo`, no client-side reload.
 		const before = fc.recordedCalls().length;
 		await history().undo();
 		const undoCalls = fc.recordedCalls().slice(before);
-		expect(undoCalls.filter((c) => c.op === 'undo')).toHaveLength(2);
+		expect(undoCalls.filter((c) => c.op === 'undo')).toHaveLength(1);
 		expect(undoCalls.some((c) => c.op === 'session load')).toBe(false);
 		expect(history().canRedo).toBe(true);
 
-		// Redo runs the compound FORWARD: one manager `redo` per child (two), re-deleting both.
 		const beforeRedo = fc.recordedCalls().length;
 		await history().redo();
-		const redoCalls = fc.recordedCalls().slice(beforeRedo);
-		expect(redoCalls.filter((c) => c.op === 'redo')).toHaveLength(2);
+		expect(fc.recordedCalls().slice(beforeRedo).filter((c) => c.op === 'redo')).toHaveLength(1);
 		expect(history().canRedo).toBe(false);
 		expect(history().canUndo).toBe(true);
 	});

@@ -1,33 +1,36 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Lanes, Tag, BLOCK};
+
+const SECONDS: Show = Show { param: "unit", any_of: &["seconds"] };
+const BEATS: Show = Show { param: "unit", any_of: &["beats"] };
+const DIVISION: Show = Show { param: "unit", any_of: &["division"] };
+const TEMPO: Show = Show { param: "unit", any_of: &["beats", "division"] };
 
 goofi_audio_sdk::params! {
-    TIME = ParamDecl {
-        group: "delay",
-        name: "time",
-        spec: ParamSpec::Float { default: 0.25, min: 0.0, max: 5.0 },
-        expression: None,
-        doc: Some("seconds behind the input; move it while it sounds and the echoes bend with it"),
-        section: 0,
-        show: None,
-    },
+    UNIT = timing::unit("delay", "unit"),
+    TIME = timing::in_seconds("delay", "time", &SECONDS, &[0.25], 5.0, "seconds behind the input; move it while it sounds and the echoes bend with it"),
+    BEATS = timing::in_beats("delay", "beats", &BEATS, &[1.0], 16.0),
+    DIVISION = timing::in_division("delay", "division", &DIVISION, "1/4"),
+    TEMPO = timing::tempo("delay", &TEMPO),
     FEEDBACK = ParamDecl {
         group: "delay",
         name: "feedback",
-        spec: ParamSpec::Float { default: 0.3, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how much of each echo goes back in; at 1 it repeats without fading"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     MIX = ParamDecl {
         group: "delay",
         name: "mix",
-        spec: ParamSpec::Float { default: 0.5, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how much of what leaves is the echo rather than the input"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 
@@ -37,7 +40,8 @@ static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }
 
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Transform],
-    doc: "An echo, one line per channel, at a delay that may move while it sounds.",
+    doc: "An echo, one line per channel, at a delay that may move while it sounds.\n\
+          The delay is seconds, beats of the tempo or a note division, and is five seconds at the most.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,
@@ -75,6 +79,8 @@ impl AudioNode for Delay {
     fn process(&mut self, b: &mut Block<'_>) {
         let (input, time, feedback, mix) =
             (&b.ins[0], &b.params[P::TIME], &b.params[P::FEEDBACK], &b.params[P::MIX]);
+        let (unit, division) = (b.params[P::UNIT].chan(0)[0], b.params[P::DIVISION].chan(0)[0]);
+        let (beats, tempo) = (&b.params[P::BEATS], &b.params[P::TEMPO]);
         let out = &mut b.outs[0];
         let width = out.channels() as usize;
         let (len, lines) = (self.len, self.lines.fit(width));
@@ -86,10 +92,12 @@ impl AudioNode for Delay {
         let mut write = start;
         for (c, line) in lines.iter_mut().enumerate() {
             let (x, t, fb, wet) = (input.chan(c), time.chan(c), feedback.chan(c), mix.chan(c));
+            let (beat, bpm) = (beats.chan(c), tempo.chan(c));
             let y = out.chan_mut(c);
             write = start;
             for i in 0..BLOCK {
-                let echo = tap(line, write, t[i].clamp(0.0, MAX_SECONDS) * self.rate);
+                let behind = timing::seconds(unit, t[i], beat[i], division, bpm[i]);
+                let echo = tap(line, write, behind.clamp(0.0, MAX_SECONDS) * self.rate);
                 line[write] = x[i] + echo * fb[i].clamp(0.0, 1.0);
                 y[i] = x[i] * (1.0 - wet[i]) + echo * wet[i];
                 write = (write + 1) % line.len();

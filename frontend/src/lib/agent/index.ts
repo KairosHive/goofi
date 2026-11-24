@@ -2,9 +2,6 @@
 import { commands, type Commands } from './commands';
 import { query, type Query } from './query';
 
-export { commands, query };
-export type { Commands, Query };
-
 declare global {
 	interface Window {
 		goofi?: { commands: Commands; query: Query };

@@ -94,12 +94,7 @@ const ALLOW_VALUE: { file?: string; prop?: RegExp; value: RegExp; why: string }[
 
 /** Rules two components are allowed to state identically, each with the reason it is not one
  *  affordance written twice. */
-const ALLOW_DUPLICATE: { sel: string; why: string }[] = [
-	{
-		sel: '.container',
-		why: 'TrajectoryViewer and TableViewer each size their OWN body to fill its slot with a sane minimum — a private box, not a shared affordance. The agreement is what "fill your slot" means, not a vocabulary either of them could look up; hoisting a viewer-internal frame into the CENTRAL stylesheet is the opposite of what that module is for'
-	}
-];
+const ALLOW_DUPLICATE: { sel: string; why: string }[] = [];
 
 /** Geometric invariants that are not spacing at all: nothing (in both spellings — a `var()`
  *  fallback inside `calc()` must carry a unit), a hairline, full, a pill, a half. */
@@ -629,7 +624,10 @@ describe('style vocabulary', () => {
 		expect(found.length, 'the ring is still declared somewhere').toBeGreaterThan(0);
 		// Either spelling of the pair: the app's own tokens, or the panel system's contract, which
 		// `app.css` maps onto exactly those two.
+		// A ring switched OFF names no width or ink, so it cannot disagree with anything: the add
+		// menu's search field holds the focus for the menu's whole life, and the menu is its frame.
 		const offenders = found
+			.filter((o) => o.value !== 'none')
 			.filter(
 				(o) =>
 					!/var\(--(panelty-)?focus-width[,)]/.test(o.value) ||
@@ -680,9 +678,13 @@ describe('style vocabulary', () => {
 
 	// F stripped every gradient: the surface ladder carries elevation now, and a gradient reads as
 	// a different material sitting on the flat palette. Nothing but this stops one coming back.
+	// The colour pickers are the one exception: the panel's square and strips ARE the colour
+	// space, and the colormap field's bar IS the map, drawn as gradients because that is what a
+	// hand reads a colour off; the checkerboard under them shows an alpha. None is a surface.
 	it('paints surfaces flat — no gradients anywhere (C4)', () => {
+		const colour = ['ui/ColorPanel.svelte', 'ui/ColorPicker.svelte', 'inspector/ColormapField.svelte'];
 		const offenders = sources()
-			.filter((s) => /gradient\(/.test(s.css))
+			.filter((s) => !colour.includes(s.rel) && /gradient\(/.test(s.css))
 			.map((s) => s.rel);
 		expect(offenders).toEqual([]);
 	});
@@ -751,7 +753,12 @@ const HOVER_ONLY_OK: { file: string; target: string; why: string }[] = [
 		why: 'its coarse door is a PROXIMITY reveal, not a resting form: `.conn.in.cable-near` (editor/slotProximity.ts, pinned by touch-slot-name.spec) names the inputs a cable in flight is closing on, for both modalities — the always-open coarse rule it replaced was the only way a finger could read an input name and therefore hung a name tag on every input on the canvas at all times'
 	},
 	{
-		file: 'panels/NodeEditorPanel.svelte',
+		file: 'machine/StateCard.svelte',
+		target: 'facts',
+		why: 'the facts are a reading, not a control, and the SELECTED box shows them on every pointer: a tap selects a box, so a finger reads them by the same door it reads the inspector by; resting them on every box at all times would put four lines of chrome on every card of the canvas'
+	},
+	{
+		file: 'panels/SidePane.svelte',
 		target: 'inspector-toggle',
 		why: 'it RESTS at opacity .5 — visible and tappable with no hover; the hover only brightens an affordance that is already there, and R-Task 8 removes it outright while the pane it opens is up'
 	}
@@ -878,10 +885,11 @@ describe('coarse-pointer doors', () => {
 	});
 
 	/* PanelHeader's split/join menu is the tree's only right-click, and R-Task 7 gave it a long
-	   press. This keeps that a rule rather than a coincidence. */
+	   press. This keeps that a rule rather than a coincidence. A draggable handed an `onHold` is
+	   that long press, built once in drag/draggable.ts. */
 	it('never leaves a right-click as the only door (§5.2)', () => {
 		const offenders = components()
-			.filter((c) => bindsRightClick(c.src) && !/createLongPress/.test(c.src))
+			.filter((c) => bindsRightClick(c.src) && !/createLongPress|onHold:/.test(c.src))
 			.map((c) => c.rel);
 		expect(offenders).toEqual([]);
 	});

@@ -3,14 +3,14 @@
 //! its readback into.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use goofi_core::SlotType;
 use goofi_node::{GraphView, ParamDecl, Uid};
 
-use crate::gpu::Want;
-use crate::half::{Tap, Upload};
+use crate::gpu::{Gpu, Want};
+use crate::half::Cells;
 use crate::scan::Built;
 use crate::Instance;
 
@@ -33,9 +33,14 @@ fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
     })
 }
 
-/// What a chain that can follow nothing falls back to. It is what the two default-size variables
-/// start at, so the floor and the patch's own default cannot drift apart.
-pub const GENERATOR: u32 = goofi_core::variables::DEFAULT_SIZE;
+/// What a chain that can follow nothing falls back to: the patch's two default-size variables.
+pub fn generator(view: &GraphView<'_>) -> (u32, u32) {
+    let axis = |name: &str| match view.variables.get(name) {
+        Some(d) => (goofi_core::control::number_of(d) as i64).clamp(1, MAX_SIZE as i64) as u32,
+        None => goofi_core::variables::DEFAULT_SIZE,
+    };
+    (axis("graphics.default_width"), axis("graphics.default_height"))
+}
 /// The widest a node may ask for on either axis.
 pub const MAX_SIZE: u32 = goofi_core::texture::MAX_SIZE;
 
@@ -57,14 +62,6 @@ pub enum Input {
     None,
 }
 
-/// A stage's armed recording, from SETTLED state: the names the recorder files it under. Whether
-/// a recording actually runs is the recorder's own, and is asked of it once per tick.
-pub struct Record {
-    pub node: String,
-    pub slot: String,
-    pub quality: goofi_core::record::VideoQuality,
-}
-
 pub enum Pass {
     Shader(Built),
     Host { source: crate::producer::Source, program: Option<(Arc<str>, Built)> },
@@ -79,19 +76,19 @@ pub struct Stage {
     pub size: (u32, u32),
     pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
-    pub params: Arc<[AtomicU64]>,
-    pub uploads: Vec<Arc<Mutex<Option<Upload>>>>,
-    /// Whether anyone drinks from this output right now — the half writes it each tick.
-    pub readers: Arc<AtomicBool>,
-    /// The window on the machine's own screen this stage draws into, once one is open.
+    pub cells: Arc<Cells>,
+    /// The window on the machine's own screen this stage draws into, once one is open, and the
+    /// surface the GPU presents into it; without one the frame is read back for the window thread.
     pub window: Option<goofi_window::Id>,
-    /// The box this stage's readers asked its readback to fit in, LIVE: a viewer appearing,
-    /// resizing or leaving writes this cell and never a plan.
-    pub tap_box: Arc<AtomicU64>,
-    /// Where the tick leaves the frame it read back, for the half to publish.
-    pub tap: Arc<Mutex<Tap>>,
-    /// This output slot's arming, as the last settle left it.
-    pub record: Option<Record>,
+    pub surface: Option<Arc<wgpu::Surface<'static>>>,
+    /// Whether this stage's texture output is armed, as the last settle left it; the recorder
+    /// names and files the stream, and whether a recording runs is its word too.
+    pub record: bool,
+    /// The layouts the tick binds the inputs and the state buffers through, resolved here once so
+    /// the tick asks the device's cache — a lock the compiler shares — for nothing.
+    pub layouts: (Arc<wgpu::BindGroupLayout>, Arc<wgpu::BindGroupLayout>),
+    /// The pass's pipeline, kept once the tick has read it off its `Ready`: read once, bound every tick.
+    pub pipeline: Option<Arc<wgpu::RenderPipeline>>,
 }
 
 impl Stage {
@@ -100,24 +97,24 @@ impl Stage {
     /// and a subscriber on its data service. A screen is always the frame's own size.
     pub fn wants(&self, recording: bool) -> [Option<(u32, u32)>; 4] {
         let mut wants = [None; 4];
-        wants[Want::Screen as usize] = self.window.map(|_| self.size);
-        let asked = unpack(self.tap_box.load(Ordering::Relaxed));
+        wants[Want::Screen as usize] = self.window.filter(|_| self.surface.is_none()).map(|_| self.size);
+        let asked = unpack(self.cells.tap_box.load(Ordering::Relaxed));
         let tap = asked.map_or(self.size, |w| goofi_view::fit(self.size, w.size));
         // The two taps are one reader in two formats, so at most one of them is ever wanted.
         let which = match asked.map(|w| w.depth) {
             Some(goofi_view::Depth::U8) => Want::TapU8,
             _ => Want::Tap,
         };
-        wants[which as usize] = self.readers.load(Ordering::Relaxed).then_some(tap);
+        wants[which as usize] = self.cells.readers.load(Ordering::Relaxed).then_some(tap);
         // A recorder takes the frame at its own size: a recording is the evidence, and evidence
         // is never fitted to a box somebody's screen happened to have.
-        wants[Want::Record as usize] = (recording && self.record.is_some()).then_some(self.size);
+        wants[Want::Record as usize] = (recording && self.record).then_some(self.size);
         wants
     }
 
     /// Whether anything reads this stage's output at all.
     pub fn read(&self, recording: bool) -> bool {
-        self.wants(recording).iter().any(|w| w.is_some())
+        self.surface.is_some() || self.wants(recording).iter().any(|w| w.is_some())
     }
 }
 
@@ -153,7 +150,8 @@ impl Plan {
 pub fn compile(
     view: &GraphView<'_>,
     live: &HashMap<Uid, Instance>,
-    windows: &HashMap<Uid, goofi_window::Id>,
+    windows: &HashMap<Uid, crate::Opened>,
+    gpu: &Gpu,
 ) -> (Plan, Vec<(Uid, String)>) {
     let wires = texture_wires(view, live);
     let feeds = |consumer: Uid| -> Vec<Uid> {
@@ -173,11 +171,7 @@ pub fn compile(
         .iter()
         .map(|(uid, i)| (*uid, if i.class.feedback && !mine.contains(uid) { Vec::new() } else { feeds(*uid) }))
         .collect();
-    let (order, stuck) = kahn(live, &inbound, &mine);
-    // A node Kahn could not place is IN a loop when it reaches itself; the rest are only fed by one.
-    let members: HashSet<Uid> = stuck.iter().copied().filter(|u| reaches_itself(*u, &inbound, &stuck)).collect();
-    let dropped: HashSet<Uid> = members.union(&mine).copied().collect();
-    let order = if members.is_empty() { order } else { kahn(live, &inbound, &dropped).0 };
+    let (order, members) = goofi_runtime::schedule(&inbound, &mine, |u| live[&u].class.feedback);
     let mut faults: Vec<(Uid, String)> = members
         .iter()
         .map(|u| (*u, "in a loop with no feedback node, so it does not render".to_string()))
@@ -190,28 +184,20 @@ pub fn compile(
     for uid in &order {
         let inst = &live[uid];
         if let crate::scan::Kind::Shader(built) = &inst.class.kind {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("shader: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("shader: {why}"))); }
         }
         if let Some((_, built)) = &inst.program {
-            if let Some(Err(why)) = built.get() { faults.push((*uid, format!("texture program: {why}"))); }
+            if let Some(why) = built.error() { faults.push((*uid, format!("texture program: {why}"))); }
         }
-        let mut upload = 0;
-        let inputs = inst
-            .class
-            .manifest
+        let manifest = inst.class.manifest;
+        let inputs = manifest
             .inputs
             .iter()
             .map(|s| match s.kind {
                 SlotType::Texture => wires.get(&(*uid, s.name)).and_then(|p| at.get(p)).map_or(Input::None, |i| Input::Stage(*i)),
-                _ => {
-                    let k = upload;
-                    upload += 1;
-                    // From the settled view: an unwired ARRAY input is transparent black.
-                    match view.wires_into(*uid, s.name).next() {
-                        Some(_) => Input::Upload(k),
-                        None => Input::None,
-                    }
-                }
+                // From the settled view: an unwired ARRAY input is transparent black.
+                _ if view.wires_into(*uid, s.name).next().is_none() => Input::None,
+                _ => Input::Upload(crate::shader::array_inputs(manifest).position(|n| n == s.name).expect("an array input")),
             })
             .collect();
         stages.push(Stage {
@@ -225,30 +211,24 @@ pub fn compile(
             size: sizes[uid],
             natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
-            params: inst.params.clone(),
-            uploads: inst.uploads.clone(),
-            readers: inst.readers.clone(),
-            tap: inst.tap.clone(),
-            window: windows.get(uid).copied(),
-            tap_box: inst.tap_box.clone(),
+            cells: inst.cells.clone(),
+            window: windows.get(uid).map(|o| o.id),
+            surface: windows.get(uid).and_then(|o| o.surface.clone()),
             record: recorded(view, *uid, inst),
+            // The inputs, then one head layout per ARRAY input, as the prelude binds them.
+            layouts: (gpu.textures(manifest.inputs.len() + crate::shader::array_inputs(manifest).count()), gpu.textures(inst.class.state.len())),
+            pipeline: None,
         });
     }
     (Plan { stages }, faults)
 }
 
-/// The armed TEXTURE output of a node, from the settled view. A slot the node does not have, or
-/// one that carries no texture, is nothing to record.
-fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> Option<Record> {
-    let nv = view.nodes.get(&uid)?;
-    let slot = inst
-        .class
-        .manifest
-        .outputs
-        .iter()
-        .find(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r.slot == o.name))?;
-    Some(Record { node: nv.name.to_string(), slot: slot.name.to_string(),
-        quality: nv.recorded.iter().find(|r| r.slot == slot.name)?.quality })
+/// Whether a node's TEXTURE output is armed, from the settled view. A slot the node does not
+/// have, or one that carries no texture, is nothing to record.
+fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> bool {
+    view.nodes.get(&uid).is_some_and(|nv| {
+        inst.class.manifest.outputs.iter().any(|o| o.kind == SlotType::Texture && nv.recorded.iter().any(|r| r.slot == o.name))
+    })
 }
 
 /// Every wire between two live nodes, by the input it lands on.
@@ -266,9 +246,10 @@ fn texture_wires<'v>(view: &GraphView<'v>, live: &HashMap<Uid, Instance>) -> Has
 /// window, and the plan to size a target.
 pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid, (u32, u32)> {
     let wires = texture_wires(view, live);
+    let fallback = generator(view);
     let mut sizes = HashMap::new();
     for uid in live.keys() {
-        size_of(*uid, live, &wires, &mut sizes, &mut Vec::new());
+        size_of(*uid, live, &wires, fallback, &mut sizes, &mut Vec::new());
     }
     sizes
 }
@@ -276,11 +257,12 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
 /// first wired texture input's size on that axis — or, with no texture behind it, the frame its
 /// host made or its first array input uploaded. A chain that follows itself, or one that follows
-/// nothing, is a generator.
+/// nothing, takes the patch's default.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
     wires: &HashMap<(Uid, &str), Uid>,
+    fallback: (u32, u32),
     sizes: &mut HashMap<Uid, (u32, u32)>,
     visiting: &mut Vec<Uid>,
 ) -> (u32, u32) {
@@ -291,7 +273,7 @@ fn size_of(
     let mut answer = (w, h);
     // A chain that follows ITSELF cannot answer; what it asked for on either axis still stands.
     if visiting.contains(&uid) {
-        return (if w == 0 { GENERATOR } else { w }, if h == 0 { GENERATOR } else { h });
+        return (if w == 0 { fallback.0 } else { w }, if h == 0 { fallback.1 } else { h });
     }
     visiting.push(uid);
     if w == 0 || h == 0 {
@@ -304,66 +286,15 @@ fn size_of(
                 .find_map(|s| wires.get(&(uid, s.name)).copied())
         });
         let (fw, fh) = match behind {
-            Some(p) => size_of(p, live, wires, sizes, visiting),
+            Some(p) => size_of(p, live, wires, fallback, sizes, visiting),
             None => live.get(&uid).and_then(|i| {
-                i.source.as_ref().and_then(|s| s.lock().unwrap().as_ref().map(|f| f.size))
-                    .or_else(|| crate::half::unpack(i.uploaded.load(Ordering::Relaxed)))
-            }).unwrap_or((GENERATOR, GENERATOR)),
+                i.produced.as_ref().map(|f| f.size)
+                    .or_else(|| crate::half::unpack(i.cells.uploaded.load(Ordering::Relaxed)))
+            }).unwrap_or(fallback),
         };
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }
     visiting.pop();
     sizes.insert(uid, answer);
     answer
-}
-
-/// The order Kahn finds — feedback nodes first, then by uid — and what it could not place.
-fn kahn(
-    live: &HashMap<Uid, Instance>,
-    inbound: &HashMap<Uid, Vec<Uid>>,
-    dropped: &HashSet<Uid>,
-) -> (Vec<Uid>, Vec<Uid>) {
-    let mut indegree: HashMap<Uid, usize> = HashMap::new();
-    let mut successors: HashMap<Uid, Vec<Uid>> = HashMap::new();
-    for (uid, from) in inbound {
-        if dropped.contains(uid) {
-            continue;
-        }
-        let from: Vec<Uid> = from.iter().copied().filter(|p| !dropped.contains(p)).collect();
-        indegree.insert(*uid, from.len());
-        for p in from {
-            successors.entry(p).or_default().push(*uid);
-        }
-    }
-    let mut order: Vec<Uid> = Vec::with_capacity(live.len());
-    let mut ready: Vec<Uid> = indegree.iter().filter(|(_, d)| **d == 0).map(|(u, _)| *u).collect();
-    while !ready.is_empty() {
-        ready.sort_by_key(|u| std::cmp::Reverse((!live[u].class.feedback, u.0)));
-        let u = ready.pop().expect("not empty");
-        order.push(u);
-        for s in successors.get(&u).into_iter().flatten() {
-            let d = indegree.get_mut(s).expect("a successor is in the graph");
-            *d -= 1;
-            if *d == 0 {
-                ready.push(*s);
-            }
-        }
-    }
-    let stuck: Vec<Uid> = indegree.keys().filter(|u| !order.contains(u)).copied().collect();
-    (order, stuck)
-}
-
-fn reaches_itself(start: Uid, inbound: &HashMap<Uid, Vec<Uid>>, within: &[Uid]) -> bool {
-    let mut seen: HashSet<Uid> = HashSet::new();
-    let mut stack: Vec<Uid> =
-        inbound.get(&start).into_iter().flatten().copied().filter(|p| within.contains(p)).collect();
-    while let Some(u) = stack.pop() {
-        if u == start {
-            return true;
-        }
-        if seen.insert(u) {
-            stack.extend(inbound.get(&u).into_iter().flatten().copied().filter(|p| within.contains(p)));
-        }
-    }
-    false
 }

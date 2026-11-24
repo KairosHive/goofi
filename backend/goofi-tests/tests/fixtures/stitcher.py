@@ -15,7 +15,7 @@ class Stitcher(goofi.Node):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {
         "stitcher": {
-            "history": goofi.IntParam(16, 0, 10000, doc="Steps of the past to stitch against."),
+            "history": goofi.NumParam(16, 0, 10000, int=True, doc="Steps of the past to stitch against."),
             "reset": goofi.PulseParam(doc="Forget the past."),
         }
     }

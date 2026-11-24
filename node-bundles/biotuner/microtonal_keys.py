@@ -1,6 +1,6 @@
 """MicrotonalKeys — a keyboard plays a tuning, one voice per key, at the tuning's own step count.
 
-Takes a TUNING (ratios inside an octave) and the `notes` frame from `signal:MidiIn`, and answers
+Takes a TUNING (ratios inside an octave) and a MIDI device's `notes` variable, and answers
 what each held key should SOUND as under that tuning — as pitch, gate and velocity per voice,
 ready to reference from a plugin's `voice` params.
 
@@ -34,7 +34,7 @@ class MicrotonalKeys(goofi.Node):
 
     Inputs:
       input  a tuning: ratios inside an octave, as `Tuning` emits them
-      notes  `signal:MidiIn`'s `notes` — 128 slots, the note number is the INDEX and the velocity the value
+      notes  a grabbed device's `vars.<device>.notes` — 128 slots, the note number is the INDEX and the velocity the value
 
     Outputs:
       voices     the whole keyboard in one wire: pitches then velocities, the layout a plugin's
@@ -59,10 +59,10 @@ class MicrotonalKeys(goofi.Node):
     }
     PARAMS = {
         "keys": {
-            "voices": goofi.IntParam(8, 1, 8, doc="How many keys may sound at once. Eight is what the bundled `voices` wire holds."),
-            "base_note": goofi.IntParam(12, 0, 127, doc="The key that plays the first ratio. 12 is C0."),
-            "base_freq": goofi.FloatParam(16.35, 1.0, 2000.0, doc="What that key sounds at, in Hz. 16.35 is C0."),
-            "octave": goofi.FloatParam(2.0, 1.1, 8.0, doc="The interval the scale repeats at; 2 is the octave."),
+            "voices": goofi.NumParam(8, 1, 8, int=True, doc="How many keys may sound at once. Eight is what the bundled `voices` wire holds."),
+            "base_note": goofi.NumParam(12, 0, 127, int=True, doc="The key that plays the first ratio. 12 is C0."),
+            "base_freq": goofi.NumParam(16.35, 1.0, 2000.0, doc="What that key sounds at, in Hz. 16.35 is C0."),
+            "octave": goofi.NumParam(2.0, 1.1, 8.0, doc="The interval the scale repeats at; 2 is the octave."),
         }
     }
 

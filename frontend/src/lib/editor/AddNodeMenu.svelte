@@ -6,18 +6,17 @@
 	import { bareName, familyColor } from './typeId';
 	import { nodeTypeTitle } from './nodeTypeTitle';
 	import { nodeTypeSource } from './nodeTypeSource';
-	import type { NodeTypeInfo } from '$lib/api/control';
+	import { getControl, type NodeTypeInfo, type ScanDiff } from '$lib/api/control';
 	import { boundaryType } from '$lib/api/vocab';
 	import { ui, type SlotClickSeed } from '$lib/stores/ui.svelte';
 	import { seedSlot } from './seedSlot';
 	import { onMount, tick, untrack } from 'svelte';
-	import { EmptyState, Icon, IconButton, MODE_ATTRS, Tabs } from '$lib/ui';
+	import { EmptyState, Icon, IconButton, MODE_ATTRS, Tabs, reveal, stepWrapped } from '$lib/ui';
 
 	type Props = {
 		onPick: (type: NodeTypeInfo) => void;
 		onClose: () => void;
 		seed?: SlotClickSeed | null;
-		/** Synthetic types prepended to the list: the In/Out boundaries, inside a sub-patch only. */
 		/** Offer the sub-patch boundary types — they are a port OF a sub-patch, so they exist only
 		 * inside one. */
 		boundary?: boolean;
@@ -33,7 +32,6 @@
 			openingTab(seed ? (g.nodeById(seed.node)?.type ?? null) : null, uiStore.paletteTab)
 		)
 	);
-	let listEl = $state<HTMLDivElement | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 	let highlighted = $state(0);
 
@@ -76,7 +74,7 @@
 	async function rescan(): Promise<void> {
 		rescanning = true;
 		try {
-			const d = await g.rescanNodes();
+			const d = await getControl().call<ScanDiff>('library refresh', {});
 			const parts = [
 				d.added.length && `${d.added.length} added`,
 				d.changed.length && `${d.changed.length} reloaded`,
@@ -113,12 +111,9 @@
 			e.preventDefault();
 			const t = filtered[highlighted];
 			if (t) pick(t);
-		} else if (e.key === 'ArrowDown') {
+		} else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
-			highlighted = Math.min(filtered.length - 1, highlighted + 1);
-		} else if (e.key === 'ArrowUp') {
-			e.preventDefault();
-			highlighted = Math.max(0, highlighted - 1);
+			highlighted = stepWrapped(highlighted, e.key === 'ArrowDown' ? 1 : -1, filtered.length);
 		} else if (e.key === 'Tab') {
 			// The field keeps the focus throughout — Escape is the way out, never Tab.
 			e.preventDefault();
@@ -188,15 +183,16 @@
 		</div>
 	{/if}
 
-	<div class="list" bind:this={listEl} data-testid="add-menu-list">
+	<div class="list thin-scrollbar" data-testid="add-menu-list">
 		{#each filtered as t, idx (t.type)}
 			<button
 				type="button"
 				class="item"
 				class:hl={idx === highlighted}
+				use:reveal={idx === highlighted}
 				class:unavailable={!t.available}
 				title={nodeTypeTitle(t)}
-				onmouseenter={() => (highlighted = idx)}
+				onpointermove={() => (highlighted = idx)}
 				onclick={() => pick(t)}
 			>
 				<span class="engine-dot" style="--engine: {familyColor(tabOf(t))};"></span>
@@ -236,6 +232,11 @@
 		padding: var(--space-5) var(--space-6);
 		border-radius: 0;
 		font-size: var(--fs-body);
+	}
+	/* The field holds the focus for as long as the menu is open, so the menu's own frame is its
+	   focus ring; a second ring inside it would only shout. */
+	input:focus-visible {
+		outline: none;
 	}
 	.list {
 		/* Viewport-relative as well as fixed: the soft keyboard is rising as this menu lands. */

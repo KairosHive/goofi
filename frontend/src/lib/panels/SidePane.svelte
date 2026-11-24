@@ -1,42 +1,59 @@
-<!-- SidePane — a drag-resizable pane anchored to the host panel's edge: the right edge, or the
-     bottom when the host is portrait. It stays MOUNTED and parked when closed, so open and close
-     are the same visible slide; `onClosed` fires when the closing slide has finished. -->
-<script lang="ts">
-	import type { Snippet } from 'svelte';
+<!-- An inspector on a drag-resizable pane at the host's right or (portrait) bottom edge: the node
+     editor's and the state machine's, each filling it with its own content. It sits IN the host's
+     flow, so the canvas beside it shrinks rather than being covered. It stays mounted and parked at
+     zero size when closed, so open and close are the same visible slide; while parked, the ◧ over
+     the canvas is the switch that brings it back. -->
+<script lang="ts" generics="T">
 	import { beginDrag } from 'panelty';
-	import { onDestroy } from 'svelte';
-	import { PANE_AXES, coordOf, paneSizeAt, type PaneAxis, type PaneDrag } from './paneDrag';
+	import { onDestroy, type Snippet } from 'svelte';
+	import { Icon, IconButton } from '$lib/ui';
 
 	let {
-		open,
-		onClosed,
-		testid = 'side-pane',
+		subject,
+		enabled,
+		onClose,
+		onToggle,
 		children
 	}: {
-		open: boolean;
-		onClosed?: () => void;
-		testid?: string;
-		children?: Snippet;
+		/** What the pane shows; null parks it. */
+		subject: T | null;
+		enabled: boolean;
+		/** The ✕: dismiss this pane until the selection changes. */
+		onClose: () => void;
+		/** The ◧: flip the standing preference. */
+		onToggle: () => void;
+		children: Snippet<[T]>;
 	} = $props();
+
+	/** Closing is a real outro, so the last subject stays rendered until the slide finishes. */
+	let rendered = $state<T | null>(null);
+	const open = $derived(enabled && subject !== null);
+	$effect(() => {
+		if (open) rendered = subject;
+	});
+
+	type PaneAxis = 'x' | 'y';
+	/** localStorage key, one per axis, so the two anchors cannot overwrite each other's. */
+	const keyOf = (axis: PaneAxis): string => (axis === 'x' ? 'goofi.panelWidth' : 'goofi.panelHeight');
 
 	/** A persisted pane size, or `null` — the resting size is then the stylesheet's own `clamp()`. */
 	function storedSize(axis: PaneAxis): number | null {
 		try {
-			const n = parseInt(localStorage.getItem(PANE_AXES[axis].key) ?? '', 10);
+			const n = parseInt(localStorage.getItem(keyOf(axis)) ?? '', 10);
 			return Number.isFinite(n) ? n : null;
 		} catch {
 			return null; // private mode; persistence is best-effort
 		}
 	}
 
-	/** Keyed exactly as `PANE_AXES` is, so a drag's axis selects the state it writes. */
+	/** Keyed by axis, so a drag's axis selects the state it writes. */
 	let paneSize = $state({ x: storedSize('x'), y: storedSize('y') });
 	let resizing = $state(false);
 	let paneEl = $state<HTMLElement | null>(null);
 
 	function finishTransition(e: TransitionEvent): void {
-		if (e.target !== e.currentTarget || e.propertyName !== 'transform' || open) return;
-		onClosed?.();
+		if (e.target !== e.currentTarget || !['width', 'height'].includes(e.propertyName) || open) return;
+		rendered = null;
 	}
 
 	/** The in-flight resize's teardown; non-null only between pointerdown and its resolution. */
@@ -49,29 +66,29 @@
 		// Read back off the pane rather than re-derived: the axis is the container query's answer.
 		const axis: PaneAxis =
 			getComputedStyle(el).getPropertyValue('--pane-axis').trim() === 'y' ? 'y' : 'x';
-		const dim = PANE_AXES[axis];
+		const size = (r: DOMRect): number => (axis === 'x' ? r.width : r.height);
+		const at = (p: PointerEvent): number => (axis === 'x' ? p.clientX : p.clientY);
 		// The RENDERED size, not the stored one: the bounds live in CSS, so a value restored from a
 		// wider screen is not what is on screen.
-		const drag: PaneDrag = {
-			startSize: dim.sizeOf(el.getBoundingClientRect()),
-			startPos: coordOf(axis, e)
-		};
+		const startSize = size(el.getBoundingClientRect());
+		const startPos = at(e);
 		resizing = true;
 		// The RENDERED size is what is persisted, so the store can never drift outside CSS's bounds.
 		const finish = (): void => {
 			resizing = false;
 			teardownResize = null;
-			const size = dim.sizeOf(el.getBoundingClientRect());
-			paneSize[axis] = size;
+			const now = size(el.getBoundingClientRect());
+			paneSize[axis] = now;
 			try {
-				localStorage.setItem(dim.key, String(Math.round(size)));
+				localStorage.setItem(keyOf(axis), String(Math.round(now)));
 			} catch {
 				/* private mode; persistence is best-effort */
 			}
 		};
 		teardownResize = beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
+			// Unclamped: both bounds are the stylesheet's `clamp()`.
 			move: (m) => {
-				paneSize[axis] = paneSizeAt(drag, coordOf(axis, m));
+				paneSize[axis] = startSize - (at(m) - startPos);
 			},
 			// One resolution for both: the size is applied live, so commit and cancel agree.
 			commit: finish,
@@ -90,7 +107,7 @@
 	ontransitionend={finishTransition}
 	style:--pane-w={paneSize.x === null ? null : `${paneSize.x}px`}
 	style:--pane-h={paneSize.y === null ? null : `${paneSize.y}px`}
-	data-testid={testid}
+	data-testid="auto-side-panel"
 >
 	<!-- The size arrives as CUSTOM PROPERTIES: which axis it feeds is the container query's
 	     decision below, and an inline `width` cannot be beaten by any query. -->
@@ -101,20 +118,37 @@
 		onpointerdown={startResize}
 		data-testid="panel-resize-handle"
 	></div>
-	{@render children?.()}
+	{#if rendered !== null}
+		{@render children(rendered)}
+	{/if}
 </aside>
+
+<!-- Absent exactly while the pane is open: the pane covers this corner at every width, and a
+     mounted control under it is invisible but still tabbable. -->
+{#if !open}
+	<IconButton
+		class="inspector-toggle"
+		label="Toggle inspector"
+		title={enabled ? 'Hide the inspector' : 'Show the inspector'}
+		aria-pressed={enabled}
+		data-testid="inspector-toggle"
+		onclick={onToggle}
+	>
+		<Icon name="panel-right" />
+	</IconButton>
+{/if}
 
 <style>
 	.side-panel {
-		position: absolute;
-		right: 0;
-		top: 0;
-		bottom: 0;
+		position: relative;
+		flex: 0 0 auto;
+		order: 1;
 		/* Which axis the grip drags; the container query below decides it and JS reads it back. */
 		--pane-axis: x;
 		/* Floor, resting size and ceiling in ONE declaration, so the bounds cannot cross. They are
 		   HOST-relative, never `vw`/`vh`: the pane answers to its panel, not to the screen. */
-		width: clamp(10%, var(--pane-w, min(40%, 30rem)), 90%);
+		--pane-size: clamp(10%, var(--pane-w, min(40%, 30rem)), 90%);
+		width: var(--pane-size);
 		/* `inline-size`, never `size`: an (orientation:) query needs the block axis uncontained, or
 		   the portrait branch below would answer against the pane instead of `.panel-body`. */
 		container-type: inline-size;
@@ -123,24 +157,25 @@
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		transform: translateX(100%);
 		transition:
-			transform var(--dur-slow) var(--ease),
+			width var(--dur-slow) var(--ease),
+			height var(--dur-slow) var(--ease),
 			visibility 0s;
 		box-shadow: var(--shadow-side);
 		z-index: var(--z-side-panel);
 	}
-	.side-panel.open {
-		transform: translateX(0);
-	}
-	/* A host rotation swaps the park transform from X to Y, so an unpainted park is what stops a
-	   ghost flying diagonally across it. */
+	/* Parked: no width, so the canvas has the whole host; the border goes with it, and the content
+	   is clipped as the pane slides shut rather than spilling over the canvas. */
 	.side-panel:not(.open) {
+		width: 0;
+		border-width: 0;
+		overflow: hidden;
 		visibility: hidden;
 		pointer-events: none;
-		/* Hold visibility through the outgoing transform, then hide on its final frame. */
+		/* Hold visibility through the outgoing slide, then hide on its final frame. */
 		transition:
-			transform var(--dur-slow) var(--ease),
+			width var(--dur-slow) var(--ease),
+			height var(--dur-slow) var(--ease),
 			visibility var(--dur-slow) step-end;
 	}
 	.side-panel.resizing {
@@ -148,6 +183,20 @@
 	}
 	.side-panel.resizing * {
 		user-select: none;
+	}
+	/* The pane's sibling, named so: the primitive's own `position: relative` loads after this
+	   stylesheet, and one class alone would lose to it. */
+	.side-panel + :global(.inspector-toggle) {
+		position: absolute;
+		top: 10px;
+		right: 10px;
+		z-index: 5;
+		/* Not `--disabled-opacity`: a ghosted affordance over the canvas, not a disabled control. */
+		opacity: 0.5;
+	}
+	:global(.inspector-toggle:hover),
+	:global(.inspector-toggle[aria-pressed='true']) {
+		opacity: 1;
 	}
 	.resize-handle {
 		position: absolute;
@@ -176,9 +225,8 @@
 	.side-panel.resizing .resize-handle::after {
 		background: var(--accent);
 	}
-	/* Touch: an 8px seam is under a fifth of --hit, so a `::before` widens the HIT area alone. It
-	   leans OUTWARD, over the host: inward is the pane's first column, which carries its leading
-	   control, and a band over a control is a control no finger can reach. */
+	/* Touch: a `::before` widens the 8px seam's HIT area to --hit. It leans OUTWARD, over the host,
+	   because inward it would cover the pane's leading control. */
 	@media (hover: none) and (pointer: coarse) {
 		.resize-handle::before {
 			content: '';
@@ -200,20 +248,20 @@
 		@container (orientation: portrait) {
 			.side-panel {
 				--pane-axis: y;
-				top: auto;
-				left: 0;
-				/* `--kb-inset` is the soft keyboard's overlap, which CSS cannot see. */
-				bottom: var(--kb-inset, 0px);
+				--pane-size: clamp(10%, var(--pane-h, 60%), 90%);
 				width: auto;
-				height: clamp(10%, var(--pane-h, 60%), 90%);
+				height: var(--pane-size);
+				/* `--kb-inset` is the soft keyboard's overlap, which CSS cannot see. */
+				margin-bottom: var(--kb-inset, 0px);
 				padding-bottom: var(--safe-bottom);
 				border-left: none;
 				border-top: 1px solid var(--border);
 				box-shadow: var(--shadow-sheet);
-				transform: translateY(100%);
 			}
-			.side-panel.open {
-				transform: translateY(0);
+			.side-panel:not(.open) {
+				width: auto;
+				height: 0;
+				padding-bottom: 0;
 			}
 			.resize-handle {
 				left: 0;

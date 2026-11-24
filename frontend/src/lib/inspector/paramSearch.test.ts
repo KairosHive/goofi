@@ -4,20 +4,22 @@ import type { ParamDescriptor } from '$lib/api/types';
 
 function param(doc: string | null = null): ParamDescriptor {
 	return {
-		type: 'float',
+		type: 'num',
 		value: 0,
 		default: 0,
 		vmin: 0,
 		vmax: 1,
+		int: false,
+		options: [],
+		face: 'plain',
 		doc,
 		refreshable: false,
 		mode: 'constant',
 		expression: null,
-		reference: null,
-		triggers: false,
 		error: null,
 		section: 0,
-		show: null
+		show: [],
+		role: null
 	};
 }
 

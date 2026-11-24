@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { ParamDescriptor } from '$lib/api/types';
 import {
 	admits,
-	filteredRows,
+	shown,
 	isModified,
 	narrowing,
-	onlyAdmitted,
 	settleNonDefault,
 	SHOW_ALL,
 	toggleSource,
@@ -19,19 +18,15 @@ const base = {
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	reference: null,
-	triggers: false,
 	error: null
 } as const;
 
 const float = (value: number, dflt: number): ParamDescriptor =>
-	({ ...base, type: 'float', value, default: dflt, vmin: 0, vmax: 1 }) as ParamDescriptor;
+	({ ...base, type: 'num', value, default: dflt, vmin: 0, vmax: 1, int: false, options: [], face: 'plain', section: 0, show: [], role: null }) as ParamDescriptor;
 
 const expr = (text: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
 	({ ...float(value, dflt), mode: 'expression', expression: text }) as ParamDescriptor;
 
-const ref = (target: string, value = 0.5, dflt = 0.5): ParamDescriptor =>
-	({ ...float(value, dflt), mode: 'reference', reference: target }) as ParamDescriptor;
 
 const F = (f: Partial<Filters>): Filters => ({ ...SHOW_ALL, ...f });
 
@@ -65,28 +60,28 @@ describe('isModified', () => {
 
 	// The whole point of Clear: a preset moved these, and after clearing they are the new zero.
 	it('is false once a baseline records the value it now holds', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '' } };
 		expect(isModified(float(0.7, 0.5), b, 'common', 'frequency')).toBe(false);
 	});
 
 	it('is true again once the value moves off the recorded baseline', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.7, mode: 'constant', expression: '' } };
 		expect(isModified(float(0.9, 0.5), b, 'common', 'frequency')).toBe(true);
 	});
 
 	// A mapping survives Clear as a MAPPING — it keeps driving, and keeps answering the source
 	// strip — but it stops counting as changed, which is what makes the list quiet again.
 	it('is false for an expression the baseline already recorded', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't' } };
 		expect(isModified(expr('t'), b, 'common', 'frequency')).toBe(false);
 	});
 
 	it('is true when the expression text itself changes after a clear', () => {
-		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't', reference: '' } };
+		const b: Baseline = { 'common/frequency': { value: 0.5, mode: 'expression', expression: 't' } };
 		expect(isModified(expr('t * 2'), b, 'common', 'frequency')).toBe(true);
 	});
 
-	// The other two texts are RETAINED across a mode switch, so only the ACTIVE one is compared.
+	// The text is RETAINED across a mode switch, so only the ACTIVE source is compared.
 	it('ignores an expression left behind by a param now back on a constant', () => {
 		const retained = { ...float(0.5, 0.5), mode: 'constant', expression: 'old' } as ParamDescriptor;
 		expect(isModified(retained)).toBe(false);
@@ -98,20 +93,18 @@ describe('the source set', () => {
 		expect(narrowing(SHOW_ALL)).toBe(false);
 		expect(admits(SHOW_ALL, float(0.5, 0.5), NONE)).toBe(true);
 		expect(admits(SHOW_ALL, expr('t'), NONE)).toBe(true);
-		expect(admits(SHOW_ALL, ref('lfo.out'), NONE)).toBe(true);
 	});
 
 	it('flips one mode at a time, and says so', () => {
 		const off = toggleSource(SHOW_ALL, 'constant');
-		expect(off.sources).toEqual(['expression', 'reference']);
+		expect(off.sources).toEqual(['expression']);
 		expect(narrowing(off)).toBe(true);
 		expect(toggleSource(off, 'constant').sources.sort()).toEqual(SHOW_ALL.sources.slice().sort());
 	});
 
 	it('admits only the modes still ticked', () => {
-		const mapped = F({ sources: ['expression', 'reference'] });
+		const mapped = F({ sources: ['expression'] });
 		expect(admits(mapped, expr('t'), NONE)).toBe(true);
-		expect(admits(mapped, ref('lfo.out'), NONE)).toBe(true);
 		expect(admits(mapped, float(0.5, 0.5), NONE)).toBe(false);
 	});
 
@@ -138,42 +131,35 @@ describe('admits', () => {
 	});
 });
 
-describe('filteredRows', () => {
-	const groups = {
+describe('admits over a row list', () => {
+	const groups: Record<string, Record<string, ParamDescriptor>> = {
 		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
-		shape: { curve: expr('t'), target: ref('lfo.out') }
+		shape: { curve: expr('t'), target: expr("nd('lfo')") }
 	};
+	const rowsOf = (f: Filters, names = Object.keys(groups)) =>
+		names.flatMap((g) => Object.entries(groups[g]).filter(([n, d]) => admits(f, d, NONE, g, n)).map(([n]) => n));
 
 	// The tabs stay up under a filter, so the caller names the ONE group it is showing.
 	it('answers only the groups it is given', () => {
-		expect(filteredRows(groups, SHOW_ALL, NONE, ['shape']).map((r) => r.name)).toEqual([
-			'curve',
-			'target'
-		]);
+		expect(rowsOf(SHOW_ALL, ['shape'])).toEqual(['curve', 'target']);
 	});
 
 	it('narrows one group to the sources still ticked', () => {
 		const mapped = F({ sources: ['expression'] });
-		expect(filteredRows(groups, mapped, NONE, ['shape']).map((r) => r.name)).toEqual(['curve']);
-		expect(filteredRows(groups, mapped, NONE, ['common'])).toEqual([]);
+		expect(rowsOf(mapped, ['shape'])).toEqual(['curve', 'target']);
+		expect(rowsOf(mapped, ['common'])).toEqual([]);
 	});
 
-	it('spans every group when given none, which is what a search hands back', () => {
-		expect(filteredRows(groups, SHOW_ALL, NONE).length).toBe(4);
-	});
-
-	it('narrows rows already gathered by a search', () => {
-		const rows = filteredRows(groups, SHOW_ALL, NONE);
-		expect(onlyAdmitted(rows, F({ sources: ['expression'] }), NONE).map((r) => r.name)).toEqual([
-			'curve'
-		]);
+	it('spans every group, which is what a search hands back, and narrows it to the sources ticked', () => {
+		expect(rowsOf(SHOW_ALL).length).toBe(4);
+		expect(rowsOf(F({ sources: ['expression'] }))).toEqual(['curve', 'target']);
 	});
 });
 
 describe('settleNonDefault', () => {
 	const groups = {
 		common: { frequency: float(0.7, 0.5), amplitude: float(0.5, 0.5) },
-		shape: { curve: expr('t'), target: ref('lfo.out') }
+		shape: { curve: expr('t'), target: expr("nd('lfo')") }
 	};
 
 	// The list is the NODE's, because the clear beside it is: it says what pressing that would take
@@ -210,10 +196,10 @@ describe('settleNonDefault', () => {
 		const list = listOf(groups);
 		expect(list.size).toBe(3);
 		const b: Baseline = {
-			'common/frequency': { value: 0.7, mode: 'constant', expression: '', reference: '' },
-			'common/amplitude': { value: 0.5, mode: 'constant', expression: '', reference: '' },
-			'shape/curve': { value: 0.5, mode: 'expression', expression: 't', reference: '' },
-			'shape/target': { value: 0.5, mode: 'reference', reference: 'lfo.out', expression: '' }
+			'common/frequency': { value: 0.7, mode: 'constant', expression: '' },
+			'common/amplitude': { value: 0.5, mode: 'constant', expression: '' },
+			'shape/curve': { value: 0.5, mode: 'expression', expression: 't' },
+			'shape/target': { value: 0.5, mode: 'expression', expression: "nd('lfo')" }
 		};
 		const cleared = settleNonDefault(list, groups, b);
 		expect(cleared.size).toBe(0);
@@ -229,5 +215,43 @@ describe('settleNonDefault', () => {
 		const list = listOf(groups);
 		const ticked = { ...groups, common: { ...groups.common, frequency: float(0.72, 0.5) } };
 		expect([...settleNonDefault(list, ticked).keys()].sort()).toEqual([...list.keys()].sort());
+	});
+});
+
+describe('shown', () => {
+	const count = (value: number): ParamDescriptor =>
+		({ ...base, type: 'num', value, default: 2, vmin: 1, vmax: 4, int: true, options: [], face: 'plain', section: 0, show: [], role: { as: 'count', section: 'stops', widget: null } }) as ParamDescriptor;
+	const slot = (n: number): ParamDescriptor =>
+		({ ...float(0, 0), section: 0, show: [], role: { as: 'member', section: 'stops', base: 'at', slot: n } }) as ParamDescriptor;
+	const groups = { ramp: { stops: count(2), at_0: slot(0), at_1: slot(1), at_2: slot(2) } };
+
+	it('shows the slots the count has opened and hides the rest', () => {
+		expect(shown(groups, 'ramp', 'stops')).toBe(true);
+		expect(shown(groups, 'ramp', 'at_1')).toBe(true);
+		expect(shown(groups, 'ramp', 'at_2')).toBe(false);
+		expect(shown({ ramp: { ...groups.ramp, stops: count(3) } }, 'ramp', 'at_2')).toBe(true);
+	});
+
+	// A normalizer: `elementwise` exists outside instant mode, and `axes` goes while it is on. In
+	// instant mode `elementwise` is absent, so its rule about `axes` cannot hide it.
+	const str = (value: string): ParamDescriptor =>
+		({ ...base, type: 'string', value, default: value, options: [], refresh: false, section: 0, show: [], role: null }) as ParamDescriptor;
+	const rule = (name: string, ...any_of: string[]) => ({ group: 'window', name, any_of });
+	const norm = (mode: string, elementwise: boolean) => ({
+		window: {
+			mode: str(mode),
+			elementwise: { ...str(String(elementwise)), type: 'bool', value: elementwise, show: [rule('mode', 'buffered', 'buffer')] } as ParamDescriptor,
+			axes: { ...str(''), show: [rule('elementwise', 'false')] },
+			both: { ...str(''), show: [rule('mode', 'buffer'), rule('elementwise', 'false')] }
+		}
+	});
+
+	it('needs every rule, and lets a hidden controller through', () => {
+		expect(shown(norm('buffered', true), 'window', 'axes')).toBe(false);
+		expect(shown(norm('buffered', false), 'window', 'axes')).toBe(true);
+		expect(shown(norm('instant', true), 'window', 'elementwise')).toBe(false);
+		expect(shown(norm('instant', true), 'window', 'axes'), 'the hidden toggle cannot hide it').toBe(true);
+		expect(shown(norm('buffered', false), 'window', 'both'), 'one failing rule hides').toBe(false);
+		expect(shown(norm('buffer', false), 'window', 'both')).toBe(true);
 	});
 });

@@ -4,7 +4,6 @@ import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
-import type { ParamDescriptor } from '$lib/api/types';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { typeInfo } from '$lib/test/typeInfo';
 
@@ -16,6 +15,7 @@ function helloSnap(node_types?: NodeTypeInfo[], runtime: GraphSnapshot['runtime'
 		save_path: null,
 		unsaved_changes: false,
 		instance_id: 'sess1',
+		doc_version: 0,
 		viewpoint: null
 	} as unknown as GraphSnapshot;
 }
@@ -31,20 +31,22 @@ function catalog(): NodeTypeInfo[] {
 			params: {
 				common: {
 					max_frequency: {
-						type: 'float',
+						type: 'num',
 						value: 30,
 						default: 30,
 						vmin: 0,
 						vmax: 1000,
+						int: false,
+						options: [],
+						face: 'plain',
 						doc: null,
 						refreshable: false,
 						expression: null,
 						mode: 'constant',
-						reference: null,
-						triggers: false,
 						error: null,
 						section: 0,
-						show: null
+						show: [],
+						role: null
 					}
 				}
 			}
@@ -67,7 +69,7 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		// Descriptors come from the catalog by type.
 		expect(n!.doc).toBe('A generator');
 		expect(n!.output_slots).toEqual({ out: 'ARRAY' });
-		expect(n!.params.common.max_frequency.type).toBe('float');
+		expect(n!.params.common.max_frequency.type).toBe('num');
 		// No doc value written → the catalog default.
 		expect(n!.params.common.max_frequency.value).toBe(30);
 	});
@@ -117,22 +119,9 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
 		d.patch({ nodes: { n1: { params: { common: { max_frequency: { value: 55 } } } } } });
 
-		// A state_update carrying a STALE value (999) + an error + stage: the value must stay the
-		// doc's 55 (params are doc-owned), and the ERROR must not land at all. An op's echo is taken
-		// before the node has re-evaluated the source that op just moved, so its error is the
-		// PREVIOUS source's — which is how a corrected expression kept showing the typo's NameError.
-		fc.emit({
-			event: 'state_update',
-			payload: {
-				node: 'n1',
-				params: { common: { max_frequency: { value: 999, error: 'compile error' } } } as unknown as Record<
-					string,
-					Record<string, ParamDescriptor>
-				>,
-				stage: 'ready',
-				error: null
-			}
-		});
+		// A state_update carries options and stage, never a value or a param error: params are
+		// doc-owned, and an op's echo predates the re-evaluation of the source it moved.
+		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'ready', error: null } });
 		const n = g.nodeById('n1')!;
 		expect(n.params.common.max_frequency.value).toBe(55); // doc value preserved
 		expect(n.params.common.max_frequency.error, 'the echo is one evaluation behind').toBeNull();
@@ -182,7 +171,7 @@ describe('expression live value survives a doc rebuild', () => {
 				n1: {
 					params: {
 						common: {
-							max_frequency: { value: 99, mode: 'expression', expr: "nd('lfo')" }
+							max_frequency: { value: 99, mode: 'expression', expression: "nd('lfo')" }
 						}
 					}
 				}
@@ -217,7 +206,7 @@ describe('node runtime survives a doc rebuild', () => {
 		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
 
 		// The three node-level fields the doc never holds, each from its own event.
-		fc.emit({ event: 'state_update', payload: { node: 'n1', params: {}, stage: 'ready', error: 'boom' } });
+		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'ready', error: 'boom' } });
 		fc.emit({ event: 'node_stats', payload: { stats: { n1: { updates_per_second: 12.4 } } } });
 		expect([g.nodeById('n1')!.stage, g.nodeById('n1')!.error]).toEqual(['ready', 'boom']);
 
@@ -284,11 +273,26 @@ describe('catalog-in-hello — the palette rides on the snapshot, no async list_
 		expect(n.stage, 'the overlay applies in the delta-first order too').toBe('error');
 		expect(n.error).toBe('ImportError: no scipy');
 	});
+
+	it('a load is settled only once the replica reaches the version the snapshot names', () => {
+		// The snapshot-first order: a fit armed on the epoch would frame the OUTGOING nodes.
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		fc.emit({ event: 'hello', payload: helloSnap(catalog()) });
+		const d = seed(fc).node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
+		expect(g.loadSettled).toBe(true);
+
+		const snap = { ...helloSnap(), doc_version: d.version + 1 };
+		fc.emit({ event: 'graph_replaced', payload: snap });
+		expect(g.loadSettled, 'the epoch moved, the document has not').toBe(false);
+		d.node('n2', 'signal:Oscillator', 'osc1', [10, 10]);
+		expect(g.loadSettled).toBe(true);
+	});
 });
 
 describe('inline viewer state — the document is the one holder, so it follows the document', () => {
 	/** The blob as the projection writes it: a JSON STRING leaf under the node. */
-	const blob = (v: Record<string, unknown>) => ({ viewers: JSON.stringify(v) });
+	const blob = (v: Record<string, unknown>) => ({ viewers: v });
 
 	it('a peer’s collapse and kind land in this tab too', () => {
 		const fc = new FakeControl();
@@ -319,7 +323,7 @@ describe('inline viewer state — the document is the one holder, so it follows 
 		// A patch is loaded INTO the running session: same backend (so no generation reset), and it
 		// restores the uids it was saved with — so `n1` is a SURVIVOR carrying a different node.
 		fc.emit({ event: 'graph_replaced', payload: helloSnap() });
-		d.push({ nodes: { n1: { type: 'signal:Buffer', name: 'buf0', pos: { x: 0, y: 0 } } }, links: [], instances: {}, variables: {}, arrangement: {} });
+		d.push({ nodes: { n1: { type: 'signal:Buffer', name: 'buf0', pos: [0, 0] } }, links: {}, instances: {}, variables: {}, arrangement: {} });
 
 		expect(g.nodeById('n1')!.type, 'precondition: the uid now carries the loaded node').toBe('signal:Buffer');
 		expect(isSlotExpanded(g.nodeById('n1'), 'out'), 'the outgoing collapse did not stick').toBe(true);

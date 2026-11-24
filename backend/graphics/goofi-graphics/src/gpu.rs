@@ -2,7 +2,8 @@
 //! layouts every pipeline shares, and the 1x1 transparent texture an unwired input samples.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use goofi_supervisor::sync::Mutex;
 
 /// Every texture in the engine.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -98,9 +99,10 @@ fn boxed(at: vec2f) -> vec4f {
     return clamp(boxed(at.xy), vec4f(0.0), vec4f(1.0));
 }
 @fragment fn screen(@builtin(position) at: vec4f) -> @location(0) vec4f {
-    // A screen is OPAQUE: two platforms of three drop the fourth byte and the third composites
-    // it, so a shader's own alpha would show through on one of them.
-    return vec4f(boxed(at.xy).rgb, 1.0);
+    // A screen is OPAQUE, and a shader's alpha is composited over black here: two platforms of
+    // three would drop the fourth byte and the third would let the desktop show through it.
+    let c = boxed(at.xy);
+    return vec4f(c.rgb * clamp(c.a, 0.0, 1.0), 1.0);
 }
 ";
 
@@ -108,20 +110,28 @@ fn boxed(at: vec2f) -> vec4f {
 const TAP_MAX: u32 = 16;
 
 pub struct Gpu {
-    pub adapter: String,
+    pub adapter_name: String,
     pub backend: String,
     pub sampler: wgpu::Sampler,
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
     blits: [wgpu::RenderPipeline; 5],
+    /// The `screen` pass per surface format a window turned out to want, made at its first frame.
+    screens: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
+    blit_module: wgpu::ShaderModule,
+    blit_layout: wgpu::PipelineLayout,
     blit_group: wgpu::BindGroupLayout,
     group0: [wgpu::BindGroupLayout; 2],
     textures: Mutex<HashMap<usize, Arc<wgpu::BindGroupLayout>>>,
     layouts: Mutex<HashMap<(bool, usize, usize), Arc<wgpu::PipelineLayout>>>,
     pub queue: wgpu::Queue,
+    /// Kept for the surfaces a window is presented through: a surface is made on the instance
+    /// and configured against the adapter.
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     /// The device's entry in the resource index; before the device, so it leaves first.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
     /// LAST, here and in every struct that holds one: fields drop in declaration order, and a
     /// resource outliving its device is a driver crash rather than an error.
     pub device: wgpu::Device,
@@ -131,19 +141,6 @@ pub struct Gpu {
 pub fn shared() -> Result<Arc<Gpu>, String> {
     static ONE: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
     ONE.get_or_init(|| Gpu::open().map(Arc::new)).clone()
-}
-
-/// Held for EVERY operation on that device: a compile, a tick, a birth, a teardown. Lock order is
-/// the runtime mutex, then this.
-pub fn gate() -> std::sync::MutexGuard<'static, ()> {
-    static GATE: Mutex<()> = Mutex::new(());
-    GATE.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Give a value that owns GPU objects back, behind the gate.
-pub fn give_back<T>(x: T) {
-    let _gate = gate();
-    drop(x);
 }
 
 impl Gpu {
@@ -177,7 +174,7 @@ impl Gpu {
             trace: wgpu::Trace::Off,
         }))
         .map_err(|e| format!("`{}` refused a device: {e}", info.name))?;
-        device.on_uncaptured_error(Arc::new(|e| goofi_core::log::record(goofi_core::log::Source::component("graphics"), goofi_core::log::Level::Error, None, format!("graphics: {e}"))));
+        device.on_uncaptured_error(Arc::new(|e| goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("graphics: {e}"))));
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("goofi-sampler"),
@@ -225,9 +222,21 @@ impl Gpu {
         let layout = |entries: &[wgpu::BindGroupLayoutEntry]| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries })
         };
+        // The params are a read-only STORAGE buffer: a list is an array of scalars, which a
+        // uniform cannot hold without a 16-byte stride.
+        let params = wgpu::BindGroupLayoutEntry {
+            binding: 3,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let group0 = [
             layout(&[uniform(0), uniform(1), sampler_entry, uniform(4)]),
-            layout(&[uniform(0), uniform(1), sampler_entry, uniform(3), uniform(4)]),
+            layout(&[uniform(0), uniform(1), sampler_entry, params, uniform(4)]),
         ];
         let blit_group = layout(&[
             wgpu::BindGroupLayoutEntry {
@@ -252,33 +261,7 @@ impl Gpu {
             bind_group_layouts: &[Some(&blit_group)],
             immediate_size: 0,
         });
-        let blit = |entry: &str, format: wgpu::TextureFormat| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("blit"),
-                layout: Some(&blit_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("vs"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let blit = |entry: &str, format| pipeline(&device, Some("blit"), &module, &blit_layout, entry, &[format]);
         let blits = [
             blit("screen", Want::Screen.format()),
             blit("tap", Want::Tap.format()),
@@ -287,17 +270,22 @@ impl Gpu {
             blit("tap", FORMAT),
         ];
         Ok(Gpu {
-            _lease: goofi_core::registry::lease(
-                goofi_core::registry::Kind::Device,
+            _lease: goofi_supervisor::scope::lease(
+                goofi_supervisor::scope::Kind::Device,
                 format!("gpu {} ({})", info.name, info.backend),
             ),
             device,
             queue,
-            adapter: info.name.clone(),
+            instance,
+            adapter,
+            adapter_name: info.name.clone(),
             backend: info.backend.to_string(),
             sampler,
             blank,
             blits,
+            screens: Mutex::new(HashMap::new()),
+            blit_module: module,
+            blit_layout,
             blit_group,
             group0,
             textures: Mutex::new(HashMap::new()),
@@ -325,6 +313,32 @@ impl Gpu {
 
     fn blit_index(&self, encoder: &mut wgpu::CommandEncoder, index: usize, src: &wgpu::TextureView,
                   into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
+        self.blit_with(encoder, &self.blits[index], src, into, out_size);
+    }
+
+    /// A surface onto a window, from the handles its screen answered. Made where the handles
+    /// are valid — the window thread — and used from the render thread.
+    pub fn surface(&self, handles: goofi_window::Handles) -> Result<wgpu::Surface<'static>, String> {
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: Some(handles.display),
+            raw_window_handle: handles.window,
+        };
+        // SAFETY: the handles are the window's own, and the surface drops before the window does
+        // or the window's loss is answered as `Lost` at the next acquire.
+        unsafe { self.instance.create_surface_unsafe(target) }.map_err(|e| e.to_string())
+    }
+
+    /// The `screen` pass into a surface of `format`: linear colour composited over black.
+    pub fn screen_blit(&self, format: wgpu::TextureFormat) -> Arc<wgpu::RenderPipeline> {
+        self.screens
+            .lock()
+            .entry(format)
+            .or_insert_with(|| Arc::new(pipeline(&self.device, Some("screen"), &self.blit_module, &self.blit_layout, "screen", &[format])))
+            .clone()
+    }
+
+    pub fn blit_with(&self, encoder: &mut wgpu::CommandEncoder, with: &wgpu::RenderPipeline, src: &wgpu::TextureView,
+                     into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.blit_group,
@@ -333,20 +347,8 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 1, resource: out_size.as_entire_binding() },
             ],
         });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: into,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.blits[index]);
+        let mut pass = clear_pass(encoder, std::slice::from_ref(into));
+        pass.set_pipeline(with);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -362,7 +364,6 @@ impl Gpu {
     pub fn textures(&self, count: usize) -> Arc<wgpu::BindGroupLayout> {
         self.textures
             .lock()
-            .unwrap()
             .entry(count)
             .or_insert_with(|| {
                 let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..count as u32)
@@ -385,22 +386,19 @@ impl Gpu {
             .clone()
     }
 
-    /// One group of sampled textures, bound: a stage's inputs, or the state its last tick left.
-    pub fn texture_group(&self, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
+    /// One group of sampled textures, bound through `layout`: a stage's inputs, or the state its
+    /// last tick left. The layout is the stage's own, so this touches no cache.
+    pub fn bind_textures(&self, layout: &wgpu::BindGroupLayout, views: &[wgpu::TextureView]) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry> = views
             .iter()
             .enumerate()
             .map(|(i, v)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(v) })
             .collect();
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.textures(views.len()),
-            entries: &entries,
-        })
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries })
     }
 
     pub fn layout(&self, params: bool, inputs: usize, state: usize) -> Arc<wgpu::PipelineLayout> {
-        if let Some(held) = self.layouts.lock().unwrap().get(&(params, inputs, state)) {
+        if let Some(held) = self.layouts.lock().get(&(params, inputs, state)) {
             return held.clone();
         }
         let (group1, group2) = (self.textures(inputs), self.textures(state));
@@ -409,33 +407,56 @@ impl Gpu {
             bind_group_layouts: &[Some(self.group0(params)), Some(&group1), Some(&group2)],
             immediate_size: 0,
         }));
-        self.layouts.lock().unwrap().insert((params, inputs, state), made.clone());
+        self.layouts.lock().insert((params, inputs, state), made.clone());
         made
     }
 }
 
-fn one_texel() -> wgpu::Extent3d {
-    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }
+/// A full-screen pass's pipeline: `vs`, then `fs` into one unblended target per format.
+pub fn pipeline(
+    device: &wgpu::Device,
+    label: Option<&str>,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    fs: &str,
+    formats: &[wgpu::TextureFormat],
+) -> wgpu::RenderPipeline {
+    let targets: Vec<Option<wgpu::ColorTargetState>> = formats
+        .iter()
+        .map(|&format| Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL }))
+        .collect();
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label,
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState { module, entry_point: Some(fs), targets: &targets, compilation_options: Default::default() }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
-/// A texture the engine renders into and reads back from.
-pub fn target(
-    gpu: &Gpu,
-    label: &str,
-    (w, h): (u32, u32),
-    format: wgpu::TextureFormat,
-    usage: wgpu::TextureUsages,
-) -> wgpu::Texture {
-    gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage,
-        view_formats: &[],
+/// A pass that clears each view to transparent and stores what it draws.
+pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView]) -> wgpu::RenderPass<'e> {
+    let ops = wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store };
+    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
+        .iter()
+        .map(|view| Some(wgpu::RenderPassColorAttachment { view, resolve_target: None, depth_slice: None, ops }))
+        .collect();
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &attachments,
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
     })
+}
+
+fn one_texel() -> wgpu::Extent3d {
+    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }
 }
 
 /// A `copy_texture_to_buffer` row pitch: the GPU pads every row to 256 bytes.

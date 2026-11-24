@@ -2,7 +2,7 @@
 //! what turns `Reservoir` from a decoration into a predictor, and the error is itself a signal.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 fn floats(d: &Data) -> Result<(Vec<usize>, Vec<f64>), String> {
     let a = d.as_array()?;
@@ -138,16 +138,18 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Keep training. Turn it off to freeze what it learned and watch the prediction run on alone."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "readout",
         name: "regularization",
-        spec: ParamSpec::Float { default: 1.0, min: 1.0e-6, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 1.0e-6, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "readout",
@@ -156,7 +158,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the weights and start training again."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 

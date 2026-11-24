@@ -1,6 +1,7 @@
 //! The test harness — one live goofi, driven through [`Goofi::call`], the entry `/control` and
 //! `/mcp` are transports over. Observation is [`Goofi::call`], [`Events`] and [`OutputProbe`].
 
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,11 @@ mod probe;
 pub use probe::OutputProbe;
 pub use serde_json::json as j;
 
+/// The number the variable `name` holds now, NaN where it holds none.
+pub fn number(g: &Goofi, name: &str) -> f64 {
+    g.variable(name).as_f64().unwrap_or(f64::NAN)
+}
+
 /// How long [`Goofi::until`] waits before it calls a condition unmet. Only a FAILING assertion
 /// pays it, so the number clears the slowest machine that runs the suite: a four-core CI runner
 /// compiling a shader on lavapipe beside three other situations.
@@ -26,8 +32,8 @@ const SETTLE: Duration = Duration::from_millis(250);
 const STUCK: Duration = Duration::from_secs(600);
 
 /// Every live owner by a token of its own, the test thread that booted it and its last wait.
-fn running() -> &'static std::sync::Mutex<Vec<(u64, String, Instant)>> {
-    static RUNNING: std::sync::Mutex<Vec<(u64, String, Instant)>> = std::sync::Mutex::new(Vec::new());
+fn running() -> &'static goofi_supervisor::sync::Mutex<Vec<(u64, String, Instant)>> {
+    static RUNNING: goofi_supervisor::sync::Mutex<Vec<(u64, String, Instant)>> = goofi_supervisor::sync::Mutex::new(Vec::new());
     &RUNNING
 }
 
@@ -40,13 +46,11 @@ fn watchdog() {
                 std::thread::sleep(Duration::from_secs(10));
                 let live: Vec<String> = running()
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
                     .iter()
                     .map(|(_, name, since)| format!("{name} ({}s)", since.elapsed().as_secs()))
                     .collect();
                 let stuck = running()
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
                     .iter()
                     .any(|(_, _, since)| since.elapsed() > STUCK);
                 if stuck {
@@ -64,7 +68,7 @@ fn watchdog() {
 /// A sign of life from this thread: a situation that keeps entering bounded waits is not stuck.
 fn progressed() {
     let me = thread_name();
-    for entry in running().lock().unwrap_or_else(|e| e.into_inner()).iter_mut().filter(|e| e.1 == me) {
+    for entry in running().lock().iter_mut().filter(|e| e.1 == me) {
         entry.2 = Instant::now();
     }
 }
@@ -73,6 +77,46 @@ fn progressed() {
 fn timed<F: std::future::Future>(bound: Duration, f: F) -> tokio::time::Timeout<F> {
     progressed();
     tokio::time::timeout(bound, f)
+}
+
+/// How many test threads may hold a live instance at once.
+const LIVE: usize = 8;
+
+struct Gate {
+    holders: goofi_supervisor::sync::Mutex<Vec<(std::thread::ThreadId, usize)>>,
+    freed: goofi_supervisor::sync::Condvar,
+}
+
+impl Gate {
+    fn enter(&self) {
+        let me = std::thread::current().id();
+        let mut holders = self.holders.lock();
+        if let Some(h) = holders.iter_mut().find(|(t, _)| *t == me) {
+            h.1 += 1;
+            return;
+        }
+        while holders.len() >= LIVE {
+            holders = self.freed.wait(holders);
+        }
+        holders.push((me, 1));
+    }
+
+    fn leave(&self) {
+        let me = std::thread::current().id();
+        let mut holders = self.holders.lock();
+        if let Some(i) = holders.iter().position(|(t, _)| *t == me) {
+            holders[i].1 -= 1;
+            if holders[i].1 == 0 {
+                holders.swap_remove(i);
+                self.freed.notify_all();
+            }
+        }
+    }
+}
+
+fn gate() -> &'static Gate {
+    static GATE: Gate = Gate { holders: goofi_supervisor::sync::Mutex::new(Vec::new()), freed: goofi_supervisor::sync::Condvar::new() };
+    &GATE
 }
 
 fn thread_name() -> String {
@@ -84,8 +128,8 @@ pub struct Goofi {
     pub state: AppState,
     actor: String,
     patience: Duration,
-    /// The handle that minted the mount, and the only one whose drop is the session's end.
-    owner: bool,
+    /// The booted manager, held by the one handle whose drop is the instance's end.
+    manager: Option<goofi_bridge::Manager>,
     /// The window thread, with no screen: what the binary's main thread is where a display answers.
     windows: Option<(goofi_window::Ui, std::thread::JoinHandle<()>)>,
     /// This owner's entry in the watchdog's roll; a borrower carries none.
@@ -96,9 +140,10 @@ pub struct Goofi {
 /// the engine alive under libtest's `exit`.
 impl Drop for Goofi {
     fn drop(&mut self) {
-        if self.owner {
-            running().lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _, _)| *t != self.token);
-            self.state.shutdown();
+        if let Some(manager) = self.manager.take() {
+            running().lock().retain(|(t, _, _)| *t != self.token);
+            drop(manager);
+            gate().leave();
             // Last: every plugin was unmade on it by the shutdown above.
             if let Some((ui, thread)) = self.windows.take() {
                 ui.stop();
@@ -109,7 +154,8 @@ impl Drop for Goofi {
 }
 
 /// Wall this test process off from the real `~/.goofi` and the shell's own cargo target: a
-/// developer's config, session records or build dir must not reach an assertion. Once per process.
+/// developer's config or session records must not reach an assertion. The runtime is shared, as
+/// the binary shares it: its caches are keyed by content. Once per process.
 pub fn walled_home() {
     static HOME: std::sync::Once = std::sync::Once::new();
     HOME.call_once(|| {
@@ -121,13 +167,10 @@ pub fn walled_home() {
         // The suite spawns agents under one known POSIX shell, so a loud profile cannot fail a test.
         #[cfg(unix)]
         std::env::set_var("SHELL", "/bin/sh");
-        // Both under THIS binary's target dir, which goofi's own build pre-warmed.
+        #[cfg(feature = "embed")]
+        goofi_python::inproc::configure_embedded();
+        // Under THIS binary's target dir.
         let target = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(3).map(Path::to_path_buf));
-        if std::env::var_os("GOOFI_BUILD_DIR").is_none() {
-            if let Some(target) = &target {
-                std::env::set_var("GOOFI_BUILD_DIR", target.join("goofi-build"));
-            }
-        }
         let nested = target.unwrap_or_else(std::env::temp_dir).join("goofi-test-cargo-target");
         std::env::set_var("CARGO_TARGET_DIR", nested);
     });
@@ -136,8 +179,29 @@ pub fn walled_home() {
 /// Held by a situation that holds or counts SESSIONS of its own — a second record on the
 /// machine, a killed child's — so two of them never see each other's records.
 pub fn sole_session() -> std::sync::MutexGuard<'static, ()> {
-    static SOLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    SOLE.lock().unwrap_or_else(|e| e.into_inner())
+    static SOLE: goofi_supervisor::sync::Mutex<()> = goofi_supervisor::sync::Mutex::new(());
+    SOLE.lock()
+}
+
+/// The one session this test process holds, and the hub every slot and door is found through.
+/// A test binary that exits leaves its record for the next boot's sweep.
+pub fn session() -> &'static (goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Hub>) {
+    static HELD: std::sync::OnceLock<(goofi_supervisor::sync::Mutex<goofi_supervisor::session::Session>, Arc<goofi_transport::Hub>)> = std::sync::OnceLock::new();
+    HELD.get_or_init(|| {
+        let session = goofi_supervisor::session::Session::hold().expect("the test process holds a session");
+        let hub = Arc::new(goofi_transport::Hub::new(session.id()));
+        (goofi_supervisor::sync::Mutex::new(session), hub)
+    })
+}
+
+/// The hub every slot a test opens is found through.
+pub fn hub() -> Arc<goofi_transport::Hub> {
+    session().1.clone()
+}
+
+/// The id of the session this test process holds.
+pub fn session_id() -> String {
+    session().0.lock().id().to_string()
 }
 
 impl Default for Goofi {
@@ -154,65 +218,59 @@ impl Goofi {
 
     /// Boot a HEADLESS one — the layout rows are not registered.
     pub fn headless() -> Goofi {
-        Goofi::with_mode(goofi_bridge::Mode { headless: true, demo: false })
+        Goofi::with_mode(goofi_bridge::Mode { headless: true, ..Default::default() })
     }
 
     /// Boot a PUBLIC one — no host-facing ops, and no audio engine behind the catalog.
     pub fn demo() -> Goofi {
-        Goofi::with_mode(goofi_bridge::Mode { headless: false, demo: true })
+        Goofi::with_mode(goofi_bridge::Mode { demo: true, ..Default::default() })
+    }
+
+    /// Boot one that serves `/mcp`, as `--mcp` does; the default serves none.
+    pub fn mcp() -> Goofi {
+        Goofi::with_mode(goofi_bridge::Mode { mcp: true, ..Default::default() })
     }
 
     /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to
     /// drive by hand, and nothing to mistake a driven frame for.
     pub fn timed() -> Goofi {
-        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::RenderClock::Timer)
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::Internal, None)
     }
 
     fn with_mode(mode: goofi_bridge::Mode) -> Goofi {
-        Goofi::boot(mode, goofi_bridge::RenderClock::External)
+        Goofi::boot(mode, goofi_bridge::Clock::External, None)
     }
 
-    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::RenderClock) -> Goofi {
+    /// Boot one with the plugins under `home`, as the binary loads its own home's.
+    pub fn with_plugins(home: &std::path::Path) -> Goofi {
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, Some(home.to_path_buf()))
+    }
+
+    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock, plugins: Option<PathBuf>) -> Goofi {
         walled_home();
-        let state = AppState::new(mode, goofi_bridge::Clock::External, render);
-        let windows = (!mode.demo).then(window_thread);
-        {
-            let mut g = state.graph.lock().unwrap();
-            fixtures::register(&mut g);
-            // The child the audio engine scans a bundle in — the suite's own stand-in for the
-            // binary — and no platform folder, so an installed plugin never reaches a test. A demo
-            // registers no audio engine at all, so there is nothing to hand it.
-            if !mode.demo {
-                let audio = goofi_bridge::audio_engine(&mut g);
-                audio.set_vst3(scanner(), Vec::new());
-                audio.set_ui(windows.as_ref().map(|(ui, _)| ui.clone()));
-            }
-            // The same stand-in hosts a node built after boot.
-            goofi_bridge::signal_engine(&mut g).set_host(scanner());
-            // The graphics engine gets the same screenless host, so a `Window` node opens a window
-            // the loop knows about and no test reaches a desktop.
-            if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-                graphics.set_ui(windows.as_ref().map(|(ui, _)| ui.clone()));
-            }
-            // The engine's Python door, as the CLI hands it at boot; a machine with none scans a
-            // `.py` file as unavailable, which is what a test that needs one then reports.
-            if let Some(subproc) = find_python() {
-                goofi_bridge::signal_engine(&mut g).set_python(goofi_signal::Python::new(subproc.clone()));
-                if let Some(graphics) = goofi_bridge::try_graphics_engine(&mut g) {
-                    graphics.set_python(goofi_signal::Python::new(subproc));
-                }
-            }
-            // The shipped tree is a root like any other: scanned at boot, as the CLI scans it.
-            let patch = state.mount();
-            goofi_bridge::rescan(&state, &mut g, &patch);
-            g.boot_done();
-        }
-        goofi_bridge::spawn_workers(&state);
+        // The window thread has no screen: a `Window` node and a plugin editor open on a loop the
+        // suite owns, and no test reaches a desktop.
+        let windows = Some(window_thread());
+        let mut config = goofi_bridge::Config::new(hub(), mode, goofi_bridge::Clock::External, render);
+        // The suite's own stand-in for the binary scans a bundle and hosts a node built after
+        // boot; no platform folder, so an installed plugin never reaches a test.
+        config.host = Some(scanner());
+        config.ui = windows.as_ref().map(|(ui, _)| ui.clone());
+        // A machine with no Python scans a `.py` file as unavailable, which is what a test that
+        // needs one then reports.
+        config.python = find_python();
+        config.plugins = plugins;
+        config.register = Some(Box::new(fixtures::register));
+        // At most LIVE threads with a live instance at once; a thread booting a second one never
+        // waits on itself.
+        gate().enter();
+        let manager = goofi_bridge::boot(config).expect("the state boots");
+        let state = manager.state.clone();
         watchdog();
         static TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let token = TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        running().lock().unwrap_or_else(|e| e.into_inner()).push((token, thread_name(), Instant::now()));
-        Goofi { state, actor: "test".into(), patience: WAIT, owner: true, windows, token }
+        running().lock().push((token, thread_name(), Instant::now()));
+        Goofi { state, actor: "test".into(), patience: WAIT, manager: Some(manager), windows, token }
     }
 
     /// Boot one whose `/data` sockets probe on a short clock. Through [`Goofi::with_mode`], so
@@ -236,7 +294,7 @@ impl Goofi {
 
     /// A second client of the SAME instance, with its own undo stack — what two browser tabs are.
     pub fn client(&self, actor: &str) -> Goofi {
-        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, owner: false, windows: None, token: 0 }
+        Goofi { state: self.state.clone(), actor: actor.into(), patience: self.patience, manager: None, windows: None, token: 0 }
     }
 
     /// Run an op and unwrap it; an unexpected refusal is a failure here.
@@ -248,6 +306,13 @@ impl Goofi {
 
     pub fn try_call(&self, op: &str, payload: Value) -> Result<Value, String> {
         self.state.call(op, payload, &self.actor)
+    }
+
+    /// Run an op as a PREVIEW — one step of a drag — and unwrap it.
+    #[track_caller]
+    pub fn preview(&self, op: &str, payload: Value) -> Value {
+        self.state.preview(op, payload.clone(), &self.actor)
+            .unwrap_or_else(|e| panic!("preview {op} {payload} was refused: {e}"))
     }
 
     /// Run an op that must be refused, and answer why.
@@ -267,16 +332,21 @@ impl Goofi {
         Uid::from_hex(hex).unwrap_or_else(|| panic!("add_node answered a malformed uid {hex}"))
     }
 
-    /// Set one param's literal value, answering `{value, error}` — the value as STORED, coerced
-    /// to the param's declared type.
-    #[track_caller]
+    /// The graph under its lock, for a situation's own look at the runtime.
+    pub fn graph(&self) -> std::sync::MutexGuard<'_, goofi_graph::Graph> {
+        self.state.graph()
+    }
+
     /// A node's display NAME, from a uid or from a name — how every op addresses it.
     pub fn name(&self, node: &str) -> String {
-        let g = self.state.graph.lock().unwrap();
+        let g = self.state.graph();
         let uid = g.resolve_ref(node).unwrap_or_else(|| panic!("`{node}` names no node"));
         g.name(uid).unwrap_or_default().to_string()
     }
 
+    /// Set one param's literal value, answering `{value, error}` — the value as STORED, coerced
+    /// to the param's declared type.
+    #[track_caller]
     pub fn set_param(&self, uid: Uid, group: &str, name: &str, value: impl Into<Value>) -> Value {
         self.call(
             "node param edit",
@@ -293,6 +363,24 @@ impl Goofi {
     /// The replicated projection every client mirrors.
     pub fn doc(&self) -> Value {
         self.call("session state", json!({}))
+    }
+
+    /// A variable's value as the store holds it now — a value is a frame, not a document field.
+    pub fn variable(&self, name: &str) -> Value {
+        let listed = self.call("variable list", json!({}));
+        listed["variables"].as_array().into_iter().flatten().find(|e| e["name"] == name).map(|e| e["value"].clone()).unwrap_or(Value::Null)
+    }
+
+    /// The array a stream holds, read whole through `node snapshot --raw` once its feed delivers:
+    /// `variables/<name>` for a variable, `node/slot` for a slot.
+    pub fn snapshot_array(&self, address: &str) -> goofi_core::Data {
+        self.until(&format!("a raw snapshot of `{address}`"), |g| {
+            use base64::Engine;
+            let got = g.call("node snapshot", json!({ "output": address, "raw": true }));
+            let bytes = base64::engine::general_purpose::STANDARD.decode(got["npy_b64"].as_str()?).ok()?;
+            let (shape, samples) = goofi_core::replay::read_npy(&bytes).ok()?;
+            goofi_core::Data::array_f32(shape, samples, goofi_core::Meta::default()).ok()
+        })
     }
 
     /// Bind a real server on a free port and answer its `ws://host:port` base.
@@ -330,7 +418,7 @@ impl Goofi {
         factory: goofi_signal_sdk::NodeFactory,
         tier: &'static goofi_node::IsolationCell,
     ) {
-        goofi_bridge::register_dyn_type(&mut self.state.graph.lock().unwrap(), manifest, factory, tier);
+        goofi_bridge::register_dyn_type(&mut self.state.graph(), manifest, factory, tier);
     }
 
     /// The LEAF node uids in the replicated projection, sorted. One map carries every entity, so
@@ -373,7 +461,7 @@ impl Goofi {
         // A port now wears a cable on BOTH sides, so which one is "inner" is its direction's
         // answer: an In port FEEDS the scope, an Out port drains it.
         let inward = doc["nodes"][port]["type"].as_str()?.starts_with("In");
-        doc["links"].as_array()?.iter().find_map(|l| {
+        doc["links"].as_object()?.values().find_map(|l| {
             let (a, b) = (l["node_out"].as_str()?, l["node_in"].as_str()?);
             match inward {
                 true if a == port => Some((b.to_string(), l["slot_in"].as_str()?.to_string())),
@@ -401,7 +489,7 @@ impl Goofi {
     /// Open a subscriber on one output slot — the same door `/data` opens.
     #[track_caller]
     pub fn probe(&self, node: Uid, slot: &str) -> OutputProbe {
-        OutputProbe::open(&self.state.graph.lock().unwrap(), node, slot)
+        OutputProbe::open(&self.state.hub, &self.state.graph(), node, slot)
     }
 
     /// Poll `f` until it answers `Some`, or fail naming `what`.
@@ -414,7 +502,7 @@ impl Goofi {
                 return v;
             }
             if Instant::now() >= deadline {
-                panic!("timed out waiting for {what}");
+                panic!("timed out waiting for {what}; {}", said());
             }
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -443,7 +531,7 @@ impl Goofi {
                 "error" => panic!("{node} failed instead of reporting ready: {}",
                                   self.error(node).unwrap_or_default()),
                 stage if Instant::now() >= deadline => {
-                    panic!("timed out waiting for {node} to report ready (stage: {stage})")
+                    panic!("timed out waiting for {node} to report ready (stage: {stage}); {}", said())
                 }
                 _ => std::thread::sleep(Duration::from_millis(2)),
             }
@@ -452,14 +540,14 @@ impl Goofi {
 
     /// A node's runtime stage, as the status-drain worker filed it.
     pub fn stage(&self, node: Uid) -> String {
-        let mut g = self.state.graph.lock().unwrap();
+        let mut g = self.state.graph();
         g.drain_status();
         g.node_stage(node).to_string()
     }
 
     /// A node's standing error, if it has one.
     pub fn error(&self, node: Uid) -> Option<String> {
-        let mut g = self.state.graph.lock().unwrap();
+        let mut g = self.state.graph();
         g.drain_status();
         g.last_error(node).map(str::to_owned)
     }
@@ -474,17 +562,23 @@ impl Events {
     /// The next event named `name`, skipping the others.
     #[track_caller]
     pub fn next(&mut self, name: &str) -> Value {
+        self.next_of(&[name]).1
+    }
+
+    /// The next event named any of `names`, in broadcast order, with its name.
+    #[track_caller]
+    pub fn next_of(&mut self, names: &[&str]) -> (String, Value) {
         let deadline = Instant::now() + WAIT;
         loop {
             match self.rx.try_recv() {
                 Ok(raw) => {
                     let v: Value = serde_json::from_str(&raw).expect("an event is JSON");
-                    if v["event"] == name {
-                        return v["payload"].clone();
+                    if let Some(name) = v["event"].as_str().filter(|n| names.contains(n)) {
+                        return (name.to_string(), v["payload"].clone());
                     }
                 }
                 Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(2)),
-                Err(e) => panic!("no `{name}` event arrived: {e}"),
+                Err(e) => panic!("no {names:?} event arrived: {e}"),
             }
         }
     }
@@ -511,17 +605,34 @@ fn scanner() -> PathBuf {
     exe.ancestors().nth(2).expect("target/<profile>/deps/<test>").join(format!("vst3scan{}", std::env::consts::EXE_SUFFIX))
 }
 
+/// The last warnings and errors of the process log: what the engines said while a wait ran out,
+/// which is the diagnosis a bare timeout would bury.
+pub fn said() -> String {
+    let said: Vec<String> = goofi_supervisor::log::since(None).groups.into_iter()
+        .filter_map(|g| g.message)
+        .filter(|m| m.level != goofi_supervisor::log::Level::Info)
+        .map(|m| format!("[{} {}] {}", m.source.component, m.source.node.unwrap_or_default(), m.text))
+        .collect();
+    let tail = said.iter().rev().take(12).rev().cloned().collect::<Vec<_>>();
+    format!("the log said:\n  {}", tail.join("\n  "))
+}
+
 /// Render `frames` on the audio engine's external clock and hand back what the device would get,
 /// interleaved, with its channel count.
 pub fn drive(g: &Goofi, frames: usize) -> (Vec<f32>, u16) {
-    let mut graph = g.state.graph.lock().unwrap();
+    let mut graph = g.graph();
     goofi_bridge::audio_engine(&mut graph).drive(frames)
+}
+
+/// Put the external audio clock's next block at now in patch time, where a device's clock would be.
+pub fn align(g: &Goofi) {
+    goofi_bridge::audio_engine(&mut g.graph()).align();
 }
 
 /// Wait until every audio control half has taken what the patch last asked of it: one whole
 /// control tick each, acknowledged, so a param edit is in the next block `drive` renders.
 pub fn applied(g: &Goofi) {
-    let acks = goofi_bridge::audio_engine(&mut g.state.graph.lock().unwrap()).flush_recording();
+    let acks = goofi_bridge::audio_engine(&mut g.graph()).flush_recording();
     for ack in acks {
         let _ = ack.recv_timeout(WAIT).expect("a control half acknowledges its tick");
     }
@@ -530,7 +641,7 @@ pub fn applied(g: &Goofi) {
 /// Tick the graphics engine's external clock `frames` times, on this thread — what the binary's
 /// own timer clock does, at the caller's pace.
 pub fn render(g: &Goofi, frames: usize) {
-    let mut graph = g.state.graph.lock().unwrap();
+    let mut graph = g.graph();
     goofi_bridge::graphics_engine(&mut graph).render(frames);
 }
 
@@ -544,7 +655,7 @@ pub fn ep(uid: impl std::fmt::Display, slot: impl std::fmt::Display) -> String {
     format!("{uid}/{slot}")
 }
 
-pub use goofi_bridge::doc::{GraphDoc, Patch};
+pub use goofi_bridge::doc::{GraphDoc, Op, Receipt};
 pub use tokio_tungstenite::tungstenite::Message;
 
 pub type Ws = tokio_tungstenite::WebSocketStream<
@@ -557,6 +668,9 @@ pub struct Client {
     next_id: i64,
     actor: String,
     doc: GraphDoc,
+    /// The events a call read past on the way to its reply: an op's events and its reply cross
+    /// the socket in no promised order, so what a call skipped is what `event` reads first.
+    skipped: std::collections::VecDeque<Value>,
 }
 
 impl Client {
@@ -567,7 +681,7 @@ impl Client {
 
     pub async fn connect_as(base: &str, actor: &str) -> (Client, Value) {
         let (ws, _) = tokio_tungstenite::connect_async(format!("{base}/control")).await.unwrap();
-        let mut c = Client { ws, next_id: 1, actor: actor.into(), doc: GraphDoc::new() };
+        let mut c = Client { ws, next_id: 1, actor: actor.into(), doc: GraphDoc::new(), skipped: Default::default() };
         let hello = c.text().await;
         (c, hello["payload"].clone())
     }
@@ -596,9 +710,21 @@ impl Client {
     }
 
     pub async fn try_call(&mut self, op: &str, payload: Value) -> Result<Value, String> {
+        self.request(op, payload, None).await
+    }
+
+    /// One step of a drag over the socket: `key` is what a newer step of the same drag replaces.
+    pub async fn preview(&mut self, op: &str, payload: Value, key: &str) -> Value {
+        match self.request(op, payload.clone(), Some(key)).await {
+            Ok(r) => r,
+            Err(e) => panic!("preview {op} {payload} was refused: {e}"),
+        }
+    }
+
+    async fn request(&mut self, op: &str, payload: Value, preview: Option<&str>) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let req = json!({ "id": id, "op": op, "payload": payload, "actor": self.actor });
+        let req = json!({ "id": id, "op": op, "payload": payload, "actor": self.actor, "preview": preview });
         self.ws.send(Message::Text(req.to_string().into())).await.unwrap();
         loop {
             let m = self.text().await;
@@ -608,14 +734,23 @@ impl Client {
                     None => Ok(m["result"].clone()),
                 };
             }
+            if m.get("event").is_some() {
+                self.skipped.push_back(m);
+            }
         }
     }
 
-    /// The next event named `name`, skipping the others.
+    /// The next event named `name`, skipping the others: one a call already read past, else the
+    /// socket's next.
     pub async fn event(&mut self, name: &str) -> Value {
+        let named = |m: &Value| m.get("event").and_then(Value::as_str) == Some(name);
+        if let Some(at) = self.skipped.iter().position(named) {
+            return self.skipped.remove(at).expect("found")["payload"].clone();
+        }
+        self.skipped.clear();
         loop {
             let m = self.text().await;
-            if m.get("event").and_then(Value::as_str) == Some(name) {
+            if named(&m) {
                 return m["payload"].clone();
             }
         }
@@ -634,12 +769,13 @@ impl Client {
                 }
                 Some("doc_patch") => {
                     let p = &v["payload"];
+                    let ops: Vec<Op> = serde_json::from_value(p["ops"].clone()).expect("a delta is a list of ops");
                     let out = self.doc.apply_patch(
                         p["from"].as_u64().expect("a base version"),
                         p["v"].as_u64().expect("a version"),
-                        &p["patch"],
+                        &ops,
                     );
-                    if let Patch::Gap { from, at } = out {
+                    if let Receipt::Gap { from, at } = out {
                         panic!("a delta was lost: this replica is at v{at} and the next patch is from v{from}");
                     }
                 }
@@ -758,7 +894,7 @@ impl Viewer {
         }
     }
 
-    /// The next stamps frame's meta — how a held frame's `time`, `index` and `ufreq` keep moving.
+    /// The next stamps frame's meta — how a held frame's `procstart`, `index` and `ufreq` keep moving.
     pub async fn stamps(&mut self) -> goofi_core::Meta {
         let deadline = Instant::now() + WAIT;
         loop {
@@ -831,7 +967,7 @@ pub async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
     progressed();
     let deadline = Instant::now() + WAIT;
     while !f() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        assert!(Instant::now() < deadline, "timed out waiting for {what}; {}", said());
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
 }
@@ -842,7 +978,7 @@ pub fn until_faster_than(g: &Goofi, probe: &OutputProbe, secs: f64) {
     let mut last: Option<(u64, f64)> = None;
     g.until(&format!("two successive emits under {secs} s apart"), |_| {
         let d = probe.latest()?;
-        let now = (d.meta().index()?, d.meta().time()?);
+        let now = (d.meta().index()?, d.meta().procstart()?);
         let near = last.is_some_and(|(i, t)| now.0 == i + 1 && now.1 - t < secs);
         last = Some(now);
         near.then_some(())
@@ -948,7 +1084,7 @@ pub fn frame(values: &[f32]) -> goofi_core::Data {
 }
 
 /// Serializes a binary's Python-tier tests: every one of them spawns an interpreter.
-static TIER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TIER: goofi_supervisor::sync::Mutex<()> = goofi_supervisor::sync::Mutex::new(());
 
 /// The interpreter to spawn children with, plus the tier lock — held for the rest of the test.
 pub struct Tier {
@@ -961,15 +1097,15 @@ pub struct Tier {
 /// The venv location is goofi-init's — the one owner of the layout.
 pub fn require_python() -> Tier {
     // A panicking test poisons the mutex; recover rather than cascade onto every sibling.
-    let _lock = TIER.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = TIER.lock();
     if let Some(py) = find_python() {
         return Tier { py, _lock };
     }
     panic!(
-        "no python with goofi + numpy found (checked $GOOFI_SUBPROC_TEST_PYTHON, ./{}, python3, \
+        "no python with goofi + numpy found (checked $GOOFI_SUBPROC_TEST_PYTHON, {}, python3, \
          python). Run `cargo run -p goofi-init`, which creates the venvs and installs the goofi \
          wheel into them.",
-        goofi_init::GIL_VENV
+        goofi_supervisor::layout::runtime().python_gil().display()
     );
 }
 
@@ -979,10 +1115,10 @@ fn find_python() -> Option<String> {
     static FOUND: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     FOUND
         .get_or_init(|| {
-            let venv = goofi_init::repo_root().join(goofi_init::GIL_VENV);
+            let venv = goofi_supervisor::layout::runtime().python_gil();
             let cands = std::env::var("GOOFI_SUBPROC_TEST_PYTHON")
                 .into_iter()
-                .chain(goofi_init::venv_python(&venv).map(|p| p.to_string_lossy().into_owned()))
+                .chain(goofi_supervisor::layout::venv_python(&venv).map(|p| p.to_string_lossy().into_owned()))
                 .chain(["python3".to_string(), "python".to_string()]);
             cands.into_iter().find(|py| {
                 std::process::Command::new(py)
@@ -1020,7 +1156,7 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
         })
         .collect();
     g.call("library refresh", j!({}));
-    let graph = g.state.graph.lock().unwrap();
+    let graph = g.graph();
     for ((file, _), name) in files.iter().zip(&names) {
         if let Some((_, reason)) = graph.unavailable_types().find(|(n, _)| goofi_node::bare(n) == name) {
             panic!("{file} scanned as unavailable: {reason}");
@@ -1029,42 +1165,53 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
     names
 }
 
-/// The one-variable evaluator a modulation step needs: the freshest frame's first sample,
-/// coerced to the target's own type — no interpreter, so a scenario runs in the default suite.
-/// It counts its compiles, so a test can tell a refreshed binding from a rebuilt one.
+/// The one-variable evaluator a modulation step needs: its first variable's frame, whole, which
+/// the reader coerces as it does any frame — no interpreter, so a scenario runs in the default
+/// suite. It counts its compiles, so a test can tell a refreshed binding from a rebuilt one, and
+/// holds while `latch` is raised, so a test can see a stalled evaluation hold the value before it.
+/// A handle is live from its compile to its release, as the Python evaluator's is.
 #[derive(Default)]
 pub struct FirstVar {
     pub compiles: std::sync::atomic::AtomicUsize,
+    /// Evaluations begun, and evaluations answered: one more begun than answered is one stalled.
+    pub entered: std::sync::atomic::AtomicUsize,
+    pub evals: std::sync::atomic::AtomicUsize,
+    pub latch: std::sync::atomic::AtomicBool,
+    live: std::sync::Mutex<std::collections::HashSet<goofi_node::BindingId>>,
 }
 
 impl goofi_node::ExprEvaluator for FirstVar {
     fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
-        self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(goofi_node::Compiled { id: 1 })
+        let id = self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64 + 1;
+        self.live.lock().unwrap().insert(id);
+        Ok(goofi_node::Compiled { id, code: std::sync::Arc::from(&b""[..]) })
     }
-    fn eval(
-        &self,
-        _id: goofi_node::BindingId,
-        ctx: &goofi_node::EvalCtx<'_>,
-    ) -> Result<goofi_core::Param, goofi_node::ExprError> {
-        let value = ctx
-            .locals
-            .values()
-            .flatten()
-            .find_map(|local| match local {
-                goofi_node::Local::Frame(d) => f32s(d).first().map(|v| *v as f64),
-                goofi_node::Local::Value(p) => p.as_f64(),
-            })
-            .ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
-        match ctx.target {
-            goofi_core::Param::Float { vmin, vmax, .. } => {
-                Ok(goofi_core::Param::float(value, *vmin, *vmax))
-            }
-            goofi_core::Param::Bool { .. } | goofi_core::Param::Pulse => {
-                Ok(goofi_core::Param::boolean(goofi_node::mailbox::gate(value)))
-            }
-            other => Ok(other.clone()),
+    fn eval(&self, id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+        self.entered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !self.live.lock().unwrap().contains(&id) {
+            return Err(goofi_node::ExprError("expression not compiled".into()));
+        }
+        first_var(ctx)
     }
-    fn release(&self, _id: goofi_node::BindingId) {}
+    fn release(&self, id: goofi_node::BindingId) {
+        self.live.lock().unwrap().remove(&id);
+    }
+    fn run(&self, _code: &[u8], _ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+        Err(goofi_node::ExprError("the test evaluator runs no functional".into()))
+    }
+}
+
+/// The first variable's frame, whole — what every test evaluator answers with. A text with no
+/// number in it is an error, as a Python arithmetic over it would be.
+pub fn first_var(ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+    let (_, local) = ctx.locals.first().ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
+    let frame = goofi_node::mailbox::pick(local, None).map_err(goofi_node::ExprError)?;
+    if goofi_core::control::numbers(&frame).next().is_none() {
+        return Err(goofi_node::ExprError(format!("no number in {:?}", frame.value())));
+    }
+    Ok(frame)
 }

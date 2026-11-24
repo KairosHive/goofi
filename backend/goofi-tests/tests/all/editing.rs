@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use goofi_tests::{f32s, Goofi, ep, hex, j};
+use goofi_tests::{f32s, fixtures::LibraryEngine, Client, Goofi, ep, hex, j};
 
 /// The arrangement flattened to an id-keyed map with a `parent` on each node.
 fn entries(g: &Goofi) -> Map<String, Value> {
@@ -58,7 +58,7 @@ fn strip(g: &Goofi) -> Vec<String> {
 /// The manager's own loader, asked to open what the manager just saved.
 fn reload_warning(g: &Goofi) -> Value {
     let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
-    g.call("session load", j!({ "content": yaml }))["layout_warning"].clone()
+    g.call("session load", j!({ "content": yaml }))["warnings"][0].clone()
 }
 
 fn split(g: &Goofi, panel: &str) -> String {
@@ -83,25 +83,25 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // ONE step, whatever it carries: a rename, a move and a viewer in a single node edit.
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier", "pos": [40.0, 60.0],
                              "viewer": [{ "slot": "out", "kind": "line" }] }));
-    g.set_param(osc, "output", "sfreq", 128.0);
-    g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01", "type": "string" }));
+    g.set_param(osc, "lfo", "sfreq", 128.0);
+    g.call("variable entry add", j!({ "name": "patch.subj", "value": "P01" }));
     // Every variable is in a group, so a bare name names nothing and is refused.
-    let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0, "type": "float" }));
+    let why = g.refuse("variable entry add", j!({ "name": "loose", "value": 1.0 }));
     assert!(why.contains("group"), "an ungrouped variable names the rule: {why}");
     // A rename is a compound: set the new name, delete the old, ONE undo step.
     g.call("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.participant", "value": "P01", "type": "string" } },
+        { "op": "variable entry add", "payload": { "name": "patch.participant", "value": "P01" } },
         { "op": "variable entry remove", "payload": { "name": "patch.subj" } },
     ] }));
     // A rename of an element or of its group follows into every expression that reads it, and
     // each is ONE command with an exact inverse.
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-                                   "expression": "variables.patch.participant * 2" }));
-    let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expr"].clone();
+                                   "expression": "vars.patch.participant * 2" }));
+    let expr = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["expression"].clone();
     g.call("variable entry rename", j!({ "name": "patch.participant", "to": "patch.handle" }));
-    assert_eq!(expr(&g), j!("variables.patch.handle * 2"), "the element rename followed");
+    assert_eq!(expr(&g), j!("vars.patch.handle * 2"), "the element rename followed");
     g.call("variable group rename", j!({ "from": "patch", "to": "desk" }));
-    assert_eq!(expr(&g), j!("variables.desk.handle * 2"), "the group rename followed");
+    assert_eq!(expr(&g), j!("vars.desk.handle * 2"), "the group rename followed");
     assert!(g.doc()["variables"]["desk.handle"].is_object(), "the member moved with its group");
     let why = g.refuse("variable entry rename", j!({ "name": "desk.handle", "to": "loose" }));
     assert!(why.contains("group"), "a rename out of every group is refused: {why}");
@@ -109,11 +109,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A control panel names its group the way an expression does, so the ONE rename moves both.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control",
                                      "state": { "group": "desk" } }));
-    // A panel's state rides the document as a JSON string, so the reader parses it.
-    let group_of = |g: &Goofi| {
-        let raw = entries(g)[&first_panel(g)]["state"].as_str().unwrap_or("null").to_string();
-        serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null)["group"].clone()
-    };
+    let group_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["group"].clone();
     g.call("variable group rename", j!({ "from": "desk", "to": "board" }));
     assert_eq!(group_of(&g), j!("board"), "the panel followed its group");
     g.call("variable group rename", j!({ "from": "board", "to": "desk" }));
@@ -124,21 +120,19 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(group_of(&g), j!("duo"), "the memberless group renamed through its panel");
     let why = g.refuse("variable group rename", j!({ "from": "nobody", "to": "somebody" }));
     assert!(why.contains("no variable group"), "{why}");
-    // A variable can FOLLOW a producer: the manager writes it on every frame that changes it, and
-    // nobody else may set it until the source is cleared. The reference follows a node rename.
-    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0, "type": "float" }));
-    g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
-    g.until("the followed variable to take the LFO's value", |g| {
-        g.doc()["variables"]["desk.level"]["value"].as_f64().filter(|v| *v != 0.0)
-    });
+    // A variable can be COMPUTED by an expression: a bare one, the manager copies each frame as it
+    // comes, and nobody else may set it until the expression is cleared. It follows a node rename.
+    g.call("variable entry add", j!({ "name": "desk.level", "value": 0.0 }));
+    g.call("variable entry edit", j!({ "name": "desk.level", "expression": "nd('carrier')" }));
+    g.until("the computed variable to take the LFO's value", |g| g.variable("desk.level").as_f64().filter(|v| *v != 0.0));
     let why = g.refuse("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }));
-    assert!(why.contains("follows") && why.contains("carrier.out"), "{why}");
+    assert!(why.contains("computed") && why.contains("nd('carrier')"), "{why}");
     // An expression READING the followed variable is handed each pick through the expression it
     // compiled once: a moved value refreshes the binding, it does not rebuild it.
     let evaluator = std::sync::Arc::new(goofi_tests::FirstVar::default());
-    g.state.graph.lock().unwrap().set_evaluator(evaluator.clone());
+    g.graph().set_evaluator(evaluator.clone());
     let reader = g.add("LFO");
-    g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "variables.desk.level" }));
+    g.call("node param edit", j!({ "node": hex(reader), "param": "lfo/amplitude", "expression": "vars.desk.level" }));
     let mut ev = g.events();
     let mut amplitude = |_: &Goofi| {
         ev.next("param_values")["nodes"][hex(reader)]["values"]["lfo"]["amplitude"].as_f64()
@@ -150,29 +144,64 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
                "a moved value recompiled the reader's expression");
     g.call("node remove", j!({ "node": hex(reader) }));
     g.call("node edit", j!({ "node": hex(osc), "name": "lfo" }));
-    assert_eq!(g.doc()["variables"]["desk.level"]["source"]["reference"], j!("lfo.out"), "the source followed the rename");
+    assert_eq!(g.doc()["variables"]["desk.level"]["expression"], j!("nd('lfo')"), "the expression followed the rename");
     g.call("node edit", j!({ "node": hex(osc), "name": "carrier" }));
-    // A source naming what is not there is kept, and says so where the widget reads it.
-    for (reference, why) in [("nosuch.out", "no node named `nosuch`"), ("carrier.nope", "no output `nope`")] {
-        g.call("variable entry source", j!({ "name": "desk.level", "reference": reference }));
-        let error = g.doc()["variables"]["desk.level"]["source"]["error"].clone();
-        assert!(error.as_str().is_some_and(|e| e.contains(why)), "`{reference}` carries its error: {error}");
+    // An expression naming what is not there is kept, and says so where the widget reads it.
+    for (expression, why) in [("nd('nosuch')", "no node named `nosuch`"), ("nd('carrier').out.nope", "no output `nope`")] {
+        g.call("variable entry edit", j!({ "name": "desk.level", "expression": expression }));
+        let error = g.doc()["variables"]["desk.level"]["error"].clone();
+        assert!(error.as_str().is_some_and(|e| e.contains(why)), "`{expression}` carries its error: {error}");
     }
-    g.call("variable entry source", j!({ "name": "desk.level", "reference": "carrier.out" }));
-    assert!(g.doc()["variables"]["desk.level"]["source"].get("error").is_none(), "a resolved source carries none");
-    g.call("variable entry source", j!({ "name": "desk.level", "reference": "" }));
-    assert!(g.doc()["variables"]["desk.level"].get("source").is_none(), "an empty reference clears it");
+    g.call("variable entry edit", j!({ "name": "desk.level", "expression": "nd('carrier')" }));
+    assert!(g.doc()["variables"]["desk.level"].get("error").is_none(), "a resolved expression carries none");
+    g.call("variable entry edit", j!({ "name": "desk.level", "expression": "" }));
+    assert!(g.doc()["variables"]["desk.level"].get("expression").is_none(), "an empty expression clears it");
     assert_eq!(g.call("variable entry edit", j!({ "name": "desk.level", "value": 0.5 }))["value"], 0.5);
     // …and it STAYS: the producer still runs, and neither a pick in flight nor one it makes after
     // the clear lands on what the author typed. A probe opened now sees only frames newer than it.
     let after = g.probe(osc, "out");
     g.until("the carrier to emit after the clear", |_| after.latest());
-    assert!(g.stays(|g| g.doc()["variables"]["desk.level"]["value"] == j!(0.5)), "the cleared source writes no more");
+    assert!(g.stays(|g| g.variable("desk.level") == j!(0.5)), "the cleared source writes no more");
 
     // A panel made a control panel with no group of its own is born naming a fresh one.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
     assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
+    assert!(g.doc()["variable_groups"]["control0"].is_object(), "and recorded, so it outlives a switch away");
+    // The birth is ONE step: undone, neither the panel's type nor the group remains; redone, both do.
+    g.call("undo", j!({}));
+    assert!(g.doc()["variable_groups"].get("control0").is_none(), "the birth's group went with the birth");
+    assert_eq!(entries(&g)[&first_panel(&g)]["panel_type"], j!("viewer"));
+    g.call("redo", j!({}));
+    assert_eq!(group_of(&g), j!("control0"));
+    assert!(g.doc()["variable_groups"]["control0"].is_object());
+    // A machine panel is born over a machine the same way: the first the patch has, else a fresh
+    // one born in the step. A removal re-aims the panels that showed the machine at the first left,
+    // in its own step, so a client never has to react — a reaction that edits would fight undo.
+    // The panel holds the machine's id; `machine_of` reads the name of the machine it shows.
+    let machine_of = |g: &Goofi| g.doc()["machines"][entries(g)[&first_panel(g)]["state"]["machine"].as_str().unwrap_or_default()]["name"].clone();
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
+    assert_eq!(machine_of(&g), j!("machine0"), "an empty patch is given a machine with the panel");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["machines"], j!({}), "the birth's machine went with the birth");
+    g.call("machine add", j!({ "name": "seq" }));
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "machine" }));
+    assert_eq!(machine_of(&g), j!("seq"), "a patch with a machine shows it, and mints none");
+    assert_eq!(g.doc()["machines"].as_object().unwrap().len(), 1);
+    let aux = g.call("machine add", j!({ "name": "aux" }))["id"].clone();
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "machine": aux } }));
+    assert_eq!(machine_of(&g), j!("aux"), "a panel holds a machine's id");
+    g.call("undo", j!({}));
+    g.call("machine remove", j!({ "machine": "seq" }));
+    assert_eq!(machine_of(&g), j!("aux"), "the panel moved to the machine left");
+    g.call("undo", j!({}));
+    assert_eq!(machine_of(&g), j!("seq"), "and back, with the machine");
+    // Three steps back — aux, the machine panel, seq — and the control panel stands as it was born.
+    for _ in 0..3 {
+        g.call("undo", j!({}));
+    }
+    assert!(g.doc()["machines"].as_object().unwrap().is_empty());
+    assert_eq!(group_of(&g), j!("control0"));
     // The `control` door is ONE undo step each; the manager mints the element and the cell where
     // none is given.
     let born = g.call("control add", j!({ "group": "control0", "kind": "knob" }));
@@ -182,9 +211,9 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
                "placed in the first free cell beside the knob: {born}");
     g.call("control edit", j!({ "group": "control0", "element": "slider0", "name": "level", "max": 10.0 }));
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["max"], 10.0);
-    g.call("control source", j!({ "group": "control0", "element": "level", "reference": "carrier.out" }));
+    g.call("control edit", j!({ "group": "control0", "element": "level", "expression": "nd('carrier')" }));
     let listed = g.call("control list", j!({}));
-    assert_eq!(listed["groups"]["control0"]["elements"][1]["source"]["reference"], "carrier.out", "{listed}");
+    assert_eq!(listed["groups"]["control0"]["elements"][1]["expression"], "nd('carrier')", "{listed}");
     assert_eq!(listed["panels"][0]["group"], "control0", "{listed}");
     // A widget that FOLLOWS a producer is still a widget: a move edits the record BESIDE the value
     // and never the value, so neither a source nor a value lock refuses the drag that made it.
@@ -192,19 +221,62 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.call("control edit", j!({ "group": "control0", "element": "level", "x": 0.0, "y": 3.0 }));
     assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the followed widget moved");
     g.call("variable entry lock", j!({ "name": "control0.level", "value": false }));
-    // A `paint` widget takes turtle steps from the CLI. The op PARSES — so a refusal names the line
-    // — and answers the strokes it made of them; the WIDGET paints those, by the code a hand
-    // reaches, so a script and a mouse are one painter and never two.
-    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad" }));
-    let drew = g.call("control paint", j!({ "group": "control0", "element": "pad",
-        "steps": "pen #f0a\nwidth 40\ngoto 100 100\ncurve 100 0 200 100 200 200\nclear" }));
-    assert_eq!(drew["steps"], j!(5), "{drew}");
-    assert!(drew["marks"].as_u64().is_some_and(|m| m > 5), "a curve is many strokes: {drew}");
+    // A group removed while a panel draws it is EMPTIED, its record kept under the panel; one step back
+    // brings its widgets back.
+    g.call("variable group remove", j!({ "group": "control0" }));
+    assert!(g.doc()["variables"].get("control0.level").is_none());
+    assert!(g.doc()["variable_groups"]["control0"].is_object(), "the drawn group keeps its record");
+    g.call("undo", j!({}));
+    assert_eq!(g.doc()["variables"]["control0.level"]["control"]["y"], 3.0, "the widgets are back as they were");
+    // A `paint` widget holds an `[h, w, 4]` RGBA sheet in 0..1. `control paint` draws a script of
+    // timed ops onto it as ONE undoable edit, and a raw snapshot of the variable reads the sheet.
+    g.call("control add", j!({ "group": "control0", "kind": "paint", "element": "pad", "resolution": 100 }));
+    let texel = |d: &goofi_core::Data, row: usize, col: usize| -> [f32; 4] {
+        let at = (row * 100 + col) * 4;
+        f32s(d)[at..at + 4].try_into().expect("four channels")
+    };
+    let blank = g.snapshot_array("variables/control0.pad");
+    assert_eq!(goofi_tests::shape(&blank), vec![100, 100, 4]);
+    assert!(f32s(&blank).iter().all(|v| *v == 0.0), "a pad is born clear");
+    let script = "stroke #ff0000 width 60 : M 100 100 L 900 100\n\
+                  stroke #0000ff width 60 soft 20 : M 100 300 L 100 900\n\
+                  fill #00ff00 : M 500 500 L 950 500 L 950 950 L 500 950 Z\n\
+                  stroke erase width 100 cap butt : M 500 700 L 950 700";
+    let drew = g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": script }));
+    assert_eq!((&drew["ops"], &drew["shape"]), (&j!(4), &j!([100, 100, 4])), "{drew}");
+    let frame = g.until("the drawn sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 10, 50)[3] > 0.0));
+    let close = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.02);
+    assert!(close(texel(&frame, 10, 50), [1.0, 0.0, 0.0, 1.0]), "{:?}", texel(&frame, 10, 50));
+    assert_eq!(texel(&frame, 40, 50)[3], 0.0, "the sheet is clear where nothing was drawn");
+    assert!(close(texel(&frame, 60, 80), [0.0, 1.0, 0.0, 1.0]), "{:?}", texel(&frame, 60, 80));
+    assert_eq!(texel(&frame, 70, 80)[3], 0.0, "the eraser cut through the fill");
+    let soft = texel(&frame, 60, 10);
+    assert!(soft[2] > 0.99 && soft[3] > 0.5, "the soft stroke's middle: {soft:?}");
+    let edge = texel(&frame, 60, 14);
+    assert!(edge[3] > 0.02 && edge[3] < 0.9, "the soft stroke fades at its edge: {edge:?}");
+    // A second call draws over the sheet, and undo takes back that one stroke only: the inverse
+    // holds the previous sheet and publishes it again.
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke #000 width 100 : M 0 0 L 1000 1000" }));
+    assert_eq!(texel(&frame, 25, 25)[3], 0.0, "clear before the diagonal");
+    g.until("the diagonal", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 25, 25)[3] > 0.0));
+    g.call("undo", j!({}));
+    g.until("the sheet before the stroke", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| f32s(d) == f32s(&frame)));
+    // A clear starts the sheet over.
+    g.call("control paint", j!({ "group": "control0", "element": "pad", "ops": "clear; stroke width 100 : M 0 0 L 100 100" }));
+    g.until("a cleared sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| texel(d, 10, 50)[3] == 0.0 && texel(d, 5, 5)[3] > 0.0));
     let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad",
-                                            "steps": "forward 10\nfrward 20" }));
-    assert!(why.contains("line 2") && why.contains("frward"), "a refusal names the line: {why}");
-    let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "steps": "forward 10" }));
-    assert!(why.contains("knob"), "only a `paint` widget takes steps: {why}");
+                                            "ops": "stroke : M 1 1\nstrok : M 2 2" }));
+    assert!(why.contains("line 2") && why.contains("strok"), "a refusal names the line: {why}");
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "pad", "ops": "stroke : L 1 1" }));
+    assert!(why.contains("starts with `M"), "{why}");
+    let why = g.refuse("control paint", j!({ "group": "control0", "element": "knob0", "ops": "clear" }));
+    assert!(why.contains("knob"), "only a `paint` widget holds a sheet: {why}");
+    // A re-sized pad starts clear at its new shape; a text is not a sheet.
+    g.call("control edit", j!({ "group": "control0", "element": "pad", "resolution": 8 }));
+    assert_eq!(goofi_tests::shape(&g.until("the re-sized sheet", |g| Some(g.snapshot_array("variables/control0.pad")).filter(|d| goofi_tests::shape(d)[0] == 8))), vec![8, 8, 4]);
+    let why = g.refuse("variable entry edit", j!({ "name": "control0.pad", "value": "!!" }));
+    assert!(why.contains("paint") && why.contains("string"), "{why}");
+    g.call("control remove", j!({ "group": "control0", "element": "pad" }));
 
     for kind in goofi_core::variables::ControlKind::ALL {
         let born = g.call("control add", j!({ "group": "kinds", "kind": kind.as_str() }));
@@ -222,7 +294,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     for (op, payload) in [
         ("control add", j!({ "group": "control0", "kind": "toggle" })),
         ("control edit", j!({ "group": "control0", "element": "level", "max": 4.0 })),
-        ("control source", j!({ "group": "control0", "element": "level", "reference": "" })),
+        ("control edit", j!({ "group": "control0", "element": "level", "expression": "" })),
         ("control remove", j!({ "group": "control0", "element": "level" })),
     ] {
         let why = g.refuse(op, payload);
@@ -235,7 +307,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // entry's `value` freezes its value — and each lock is ONE undoable command.
     g.call("variable group lock", j!({ "group": "desk", "config": true }));
     for (op, payload) in [
-        ("variable entry add", j!({ "name": "desk.more", "value": 1.0, "type": "float" })),
+        ("variable entry add", j!({ "name": "desk.more", "value": 1.0 })),
         ("variable entry rename", j!({ "name": "desk.handle", "to": "desk.grip" })),
         ("variable entry remove", j!({ "name": "desk.handle" })),
         ("variable group rename", j!({ "from": "desk", "to": "bench" })),
@@ -256,7 +328,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let why = g.refuse("variable group lock", j!({ "group": "system", "config": false }));
     assert!(why.contains("goofi's own"), "the system group's lock is nobody's to set: {why}");
     // A group can be EMPTY, minted at the first free `groupN`, and an entry born with no value
-    // is a float until retyped; each is ONE step, and a retype carries the value across.
+    // holds 0 until edited; each is ONE step, and an edit may change its form.
     assert_eq!(g.call("variable group add", j!({}))["group"], "group0");
     assert!(g.doc()["variable_groups"]["group0"].is_object());
     g.call("undo", j!({}));
@@ -269,33 +341,61 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.refuse("variable group add", j!({ "group": "bad name" }));
     assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry0");
     assert_eq!(g.call("variable entry add", j!({ "group": "bench" }))["name"], "bench.entry1");
-    g.call("variable entry edit", j!({ "name": "bench.entry0", "type": "string", "value": "hello" }));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "string");
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
+    // A value is an array or a string, and an edit may switch between the two forms: a number, a
+    // bool and a list are arrays, nested for a wider one; text is a string. Undo walks it back.
+    g.call("variable entry edit", j!({ "name": "bench.entry0", "value": "hello" }));
+    assert_eq!(g.variable("bench.entry0"), "hello");
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["type"], "float");
+    assert_eq!(g.variable("bench.entry0"), 0);
     g.call("redo", j!({}));
-    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "bool", "value": true }));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], true);
-    g.call("variable entry edit", j!({ "name": "bench.entry1", "type": "int" }));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["value"], 1, "a retype carries the value across");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": true }))["value"], 1,
+               "a bool is stored as the number it reads as");
+    assert_eq!(g.call("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3, 4.5]] }))["value"],
+               j!([[1, 2], [3, 4.5]]), "a nested list is an array of that shape, printed back as it was typed");
+    assert_eq!(g.variable("bench.entry1"), j!([[1, 2], [3, 4.5]]));
+    g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": [[1, 2], [3]] }));
+    g.refuse("variable entry edit", j!({ "name": "bench.entry1", "value": { "no": "object" } }));
     g.call("undo", j!({}));
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
-    g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "type": "string", "value": "no" }));
-    g.call("variable entry add", j!({ "name": "bench.knob", "type": "float", "value": 1.0,
+    // A group goes whole — its record and every entry — as ONE step, and undo brings the lot back.
+    g.call("variable group remove", j!({ "group": "bench" }));
+    assert!(g.doc()["variable_groups"].get("bench").is_none());
+    assert!(g.call("variable list", j!({}))["variables"].as_array().unwrap().iter().all(|e| e["name"] != "bench.entry0"));
+    g.call("undo", j!({}));
+    assert!(g.doc()["variable_groups"]["bench"].is_object());
+    assert_eq!(g.variable("bench.entry1"), 1);
+    let why = g.refuse("variable group remove", j!({ "group": "nobody" }));
+    assert!(why.contains("no variable group"), "{why}");
+    let why = g.refuse("variable group remove", j!({ "group": "system" }));
+    assert!(why.contains("system"), "{why}");
+    assert_eq!(g.variable("bench.entry1"), 1);
+    g.refuse("variable entry edit", j!({ "name": "signal.default_ufreq", "value": "no" }));
+    g.call("variable entry add", j!({ "name": "bench.knob", "value": 1.0,
         "control": { "kind": "knob", "x": 0, "y": 0, "w": 3, "h": 3 } }));
     let before = g.doc()["variables"]["bench.knob"].clone();
-    g.refuse("variable entry edit", j!({ "name": "bench.knob", "type": "string", "value": "no" }));
-    assert_eq!(g.doc()["variables"]["bench.knob"], before, "a widget's entry keeps its type");
+    let why = g.refuse("variable entry edit", j!({ "name": "bench.knob", "value": "no" }));
+    assert!(why.contains("knob") && why.contains("string"), "a widget draws what it can: {why}");
+    assert_eq!(g.doc()["variables"]["bench.knob"], before, "a widget's entry keeps its form");
 
     // …and a compound is a UNIT: a refused step takes back the one that landed, and records nothing,
     // which is what the step count below would catch.
     let why = g.refuse("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0, "type": "float" } },
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
         { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
     ] }));
     assert!(why.contains("step 1"), "the refusal names the step that failed: {why}");
     assert!(g.doc()["variables"]["patch.tmp"].is_null(), "the step that landed was taken back: {why}");
+    // …and a node added in a refused batch is never born: births happen at settle, from the state
+    // the whole batch left, so the add plus its rollback cost the engine nothing.
+    let twin = LibraryEngine::named("twin", &["Stillborn"]);
+    let births = twin.births();
+    g.graph().register_engine(Box::new(twin));
+    g.refuse("compound", j!({ "ops": [
+        { "op": "node add", "payload": { "type": "twin:Stillborn" } },
+        { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
+    ] }));
+    assert!(births.lock().is_empty(), "a rolled-back add reached the engine: {:?}", births.lock());
+    let kept = g.add("twin:Stillborn");
+    assert_eq!(*births.lock(), vec![kept], "a committed add is born once");
     // A READ rides a batch — its result in the bare list the batch answers — while an EFFECT is
     // refused: its consequences are not the history's to take back, so it runs alone.
     let ridden = g.call("compound", j!({ "ops": [
@@ -325,7 +425,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
         let n = f32s(&mprobe.latest()?)[0];
         (n >= base + 1.0).then(|| {
             assert_eq!(n, base + 1.0, "two edits in one batch settled as one write");
-            assert_eq!(g.doc()["nodes"][hex(meter)]["params"]["control"]["value"]["value"], j!(2.0));
+            assert_eq!(g.doc()["nodes"][hex(meter)]["params"]["control"]["value"]["value"], j!(2));
         })
     });
     let scope = g.call("nodes group", j!({ "nodes": [hex(osc), hex(buf)], "pos": [0.0, 0.0] }))["inst_id"]
@@ -333,7 +433,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 60 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 65 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;
@@ -347,24 +447,37 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
     let _ = scope;
 
-    // The history is per session: s1's undo takes back s1's newest step and leaves a peer's node
-    // standing, and a fresh command discards the redo run.
+    // One history for every session: the undo takes back the peer's newest step, and a fresh
+    // command discards the redo run.
     let two = g.client("s2");
     let peer = two.add("Buffer");
     assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert!(g.instances().is_empty() && g.nodes().contains(&hex(peer)), "s1's undo left s2's node standing");
+    assert!(!g.nodes().contains(&hex(peer)), "the undo took back s2's node, the last write");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert!(g.nodes().contains(&hex(peer)));
+    g.call("undo", j!({}));
+    let before = g.doc();
+    let labels = g.state.history_labels();
+    g.refuse("node add", j!({ "type": "MissingNodeType" }));
+    assert_eq!(g.state.history_labels(), labels, "a refused write keeps the redo run");
+    g.refuse("compound", j!({ "ops": [
+        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
+        { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
+    ] }));
+    assert_eq!(g.doc(), before, "the refused batch leaves the graph unchanged");
+    assert_eq!(g.state.history_labels(), labels, "the refused batch keeps the redo run");
     assert_eq!(g.call("redo", j!({}))["changed"], true);
     g.call("undo", j!({}));
     g.add("Buffer");
     let r = g.call("redo", j!({}));
     assert_eq!(r["changed"], false, "the redo run went with the new command");
-    assert_eq!(r["can_redo"], false);
-    // Empty groups and the retyped entries reach the file and come back.
+    assert!(r["redo"].is_null(), "{r}");
+    // Empty groups and the edited entries reach the file and come back.
     let saved = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     g.call("session load", j!({ "content": saved }));
     assert!(g.doc()["variable_groups"]["group0"].is_object() && g.doc()["variable_groups"]["group1"].is_object());
-    assert_eq!(g.doc()["variables"]["bench.entry0"]["value"], "hello");
-    assert_eq!(g.doc()["variables"]["bench.entry1"]["type"], "bool");
+    assert_eq!(g.variable("bench.entry0"), "hello");
+    assert_eq!(g.variable("bench.entry1"), 1);
 
     // The NAME is the arrangement's to mint: a caller that asks for none gets the first free
     // `Tab n`, so nobody has to reserve one against a strip they cannot see settle.
@@ -398,8 +511,129 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(strip(&g), ["Tab 1"], "back to the arrangement a fresh patch opens with");
 }
 
+/// A knob turn is many previews and one commit: the op each time, but the history keeps one entry
+/// whose way back is the state before the drag, the patch stays clean until the commit, a peer
+/// sees every step, and a socket cut mid-drag leaves the last committed value.
+#[tokio::test]
+async fn a_drag_previews_and_commits_as_one_step_and_a_cut_socket_takes_it_back() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "amplitude", 1.0);
+    let dir = tempfile::tempdir().unwrap();
+    g.call("session save", j!({ "path": dir.path().join("drag.gfi").to_string_lossy() }));
+    let amp = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
+    let dirty = |g: &Goofi| g.call("session status", j!({}))["dirty"] == true;
+    let edit = |v: f64| j!({ "node": hex(osc), "param": "lfo/amplitude", "value": v });
+    assert!(!dirty(&g));
+
+    for v in [0.2, 0.4, 0.6] {
+        g.preview("node param edit", edit(v));
+        assert_eq!(amp(&g), j!(v), "a preview moves the graph for real");
+    }
+    assert!(!dirty(&g), "a preview is not an edit of the patch");
+    g.call("node param edit", edit(0.7));
+    assert!(dirty(&g), "the commit is");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1), "ONE undo returns to before the drag, not to its last preview");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.7));
+
+    // An undo with a drag in flight takes the drag back first, then flips.
+    g.preview("node param edit", edit(0.3));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1));
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.7));
+
+    // Only an undoable write has a way back to keep; a read and a birth cannot be previewed.
+    for (op, payload) in [("session status", j!({})), ("node add", j!({ "type": "LFO" })),
+                          ("compound", j!({ "ops": [] }))] {
+        let why = g.state.preview(op, payload, "s1").expect_err(op);
+        assert!(why.contains("preview"), "{op}: {why}");
+    }
+
+    // Over the socket: a peer's replica follows each step, and the socket's close ends the drag.
+    let base = g.serve().await;
+    let (mut peer, _) = Client::connect_as(&base, "peer").await;
+    let (mut tab, _) = Client::connect_as(&base, "tab").await;
+    tab.preview("node param edit", edit(0.1), "lfo/amplitude").await;
+    peer.until_doc(|d| d.to_json()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"] == j!(0.1)).await;
+    drop(tab);
+    peer.until_doc(|d| d.to_json()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"] == j!(0.7)).await;
+    assert!(dirty(&g), "the commit before the drag is still an edit");
+}
+
+/// A drag is a layer over the committed state: a write another client lands meanwhile records the
+/// state without the drag, the drag's commit records the state that write left, and an undo walks
+/// them back in order — neither takes the other's work, and no step of the drag survives.
 #[test]
-fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
+fn a_write_landing_during_another_clients_drag_keeps_its_place_in_the_history() {
+    let g = Goofi::new();
+    let a = g.client("a");
+    let b = g.client("b");
+    let osc = g.add("LFO");
+    g.set_param(osc, "lfo", "amplitude", 1.0);
+    let other = g.add("LFO");
+    g.call("node edit", j!({ "node": hex(other), "pos": [10.0, 10.0] }));
+    let amp = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"]["value"].clone();
+    let pos = |g: &Goofi| g.doc()["nodes"][hex(other)]["pos"].clone();
+    let edit = |v: f64| j!({ "node": hex(osc), "param": "lfo/amplitude", "value": v });
+
+    a.preview("node param edit", edit(0.2));
+    a.preview("node param edit", edit(0.4));
+    b.call("node edit", j!({ "node": hex(other), "pos": [50.0, 50.0] }));
+    assert_eq!((amp(&g), pos(&g)), (j!(0.4), j!([50.0, 50.0])), "the write lands under the drag");
+    a.preview("node param edit", edit(0.6));
+    a.call("node param edit", edit(0.7));
+
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo keeps the move that landed during it");
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([10.0, 10.0])), "the move's undo takes back the move alone");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])));
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(0.7), j!([50.0, 50.0])));
+
+    // An undo by the other client while the drag runs takes the last step back under it; the
+    // drag's way back is then where that undo left the patch.
+    a.preview("node param edit", edit(0.2));
+    assert_eq!(b.call("undo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(1), "another client's undo takes the committed step back");
+    a.preview("node param edit", edit(0.3));
+    a.call("node param edit", edit(0.5));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    assert_eq!((amp(&g), pos(&g)), (j!(1), j!([50.0, 50.0])), "the drag's undo puts back what the undo under it left");
+    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    assert_eq!(amp(&g), j!(0.5));
+}
+
+/// A text that reads as no number is refused on a number param — never read as zero: the value,
+/// the source and the history stand as they were.
+#[test]
+fn a_text_on_a_number_param_is_refused_and_nothing_moves() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "expression": "0.5" }));
+    let entry = |g: &Goofi| g.doc()["nodes"][hex(osc)]["params"]["lfo"]["amplitude"].clone();
+    let held = entry(&g);
+    assert_eq!(held["mode"], "expression", "{held}");
+    let labels = g.state.history_labels();
+    let why = g.refuse("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "abc" }));
+    assert!(why.contains("`abc` is a string, and this param holds a number"), "{why}");
+    assert_eq!(entry(&g), held, "a refused value leaves the literal and the source");
+    assert_eq!(g.state.history_labels(), labels, "and records no step");
+    // A text that reads as numbers is those numbers, which is what a shell hands over.
+    g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude", "value": "0.25" }));
+    assert_eq!(entry(&g)["value"], j!(0.25));
+    assert_eq!(entry(&g)["mode"], "constant", "a literal switches a driven param to constant");
+}
+
+/// One history for every client: an undo takes back the last write whoever made it, the stack
+/// walks to empty and forward again from either side, and a refused write leaves the document and
+/// the history exactly as they were.
+#[test]
+fn one_history_walks_back_through_every_writer_and_a_refused_write_leaves_it_whole() {
     let one = Goofi::new();
     let two = one.client("s2");
     let osc = one.add("LFO");
@@ -407,47 +641,61 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     let link = j!({ "from": ep(hex(osc), "out"), "to": ep(hex(buf), "input") });
     one.call("link add", link.clone());
     one.call("link remove", link);
-    two.call("node remove", j!({ "node": hex(buf) })); // s1's newest toggle now names a dead uid
-
-    assert_eq!(one.call("undo", j!({}))["changed"], true);
+    two.call("node remove", j!({ "node": hex(buf) }));
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "the peer's removal is the last write");
+    assert!(one.nodes().contains(&hex(buf)), "…and the undo puts the buffer back");
     assert_eq!(one.call("redo", j!({}))["changed"], true);
-    for _ in 0..4 {
-        assert_eq!(one.call("undo", j!({}))["changed"], true, "the stack stays walkable to empty");
+    assert!(!one.nodes().contains(&hex(buf)));
+    for _ in 0..5 {
+        assert_eq!(one.call("undo", j!({}))["changed"], true, "the history walks to empty");
     }
+    assert_eq!(one.call("undo", j!({}))["changed"], false, "…and says so at the bottom");
+    assert!(one.nodes().is_empty());
+    for _ in 0..5 {
+        assert_eq!(two.call("redo", j!({}))["changed"], true, "…and forward again, from either client");
+    }
+    assert!(one.nodes().contains(&hex(osc)) && !one.nodes().contains(&hex(buf)));
 
-    // The same rule for a boundary port: a peer removed the port under s1's newest rename.
-    let osc = one.add("LFO");
+    // A port a peer removed under a rename: both are writes, and both walk back in order.
     let inst = one.call("nodes group", j!({ "nodes": [hex(osc)], "pos": [0.0, 0.0] }))["inst_id"]
         .as_str().unwrap().to_string();
     let port = one.call("node add", j!({ "type": "InArray", "inst_id": inst, "pos": [0.0, 0.0] }))
         ["uid"].as_str().expect("a port uid").to_string();
     one.call("node edit", j!({ "node": port, "name": "left" }));
     two.call("node remove", j!({ "node": port }));
-    assert_eq!(one.call("undo", j!({}))["changed"], true, "the stale port rename still flips");
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "the removal is taken back");
+    assert_eq!(one.name(&port), "left", "…with the name the rename gave");
+    assert_eq!(one.call("undo", j!({}))["changed"], true, "then the rename");
+    assert_ne!(one.name(&port), "left");
     assert_eq!(one.call("redo", j!({}))["changed"], true);
 
+    // A refused write leaves the document and the history as they were.
     let before = one.doc();
-    let bad_control = j!({ "kind": "toggle", "x": 0, "y": 0, "w": 2, "h": 2 });
-    one.refuse("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0, "control": bad_control }));
+    let labels = one.state.history_labels();
+    let bad_control = j!({ "kind": "text", "x": 0, "y": 0, "w": 2, "h": 2 });
+    one.refuse("variable entry add", j!({ "name": "audit.bad", "value": 1.0, "control": bad_control }));
     assert_eq!(one.doc(), before);
-    one.call("variable entry add", j!({ "name": "audit.bad", "type": "float", "value": 1.0 }));
+    assert_eq!(one.state.history_labels(), labels);
+    one.call("variable entry add", j!({ "name": "audit.bad", "value": 1.0 }));
     one.refuse("variable entry edit", j!({ "name": "audit.bad", "value": 2.0, "control": bad_control }));
-    one.call("variable entry add", j!({ "name": "audit.after", "type": "float", "value": 3.0 }));
-    assert_eq!(one.doc()["variables"]["audit.bad"]["value"], 1.0);
+    one.call("variable entry add", j!({ "name": "audit.after", "value": 3.0 }));
+    assert_eq!(one.variable("audit.bad"), 1.0);
     one.refuse("compound", j!({ "ops": [
         { "op": "variable entry edit", "payload": { "name": "audit.after", "value": 4.0 } },
         { "op": "variable entry edit", "payload": { "name": "audit.bad", "value": 5.0, "control": bad_control } }
     ] }));
-    assert_eq!(one.doc()["variables"]["audit.after"]["value"], 3.0);
+    assert_eq!(one.variable("audit.after"), 3.0, "a refused batch lands nothing");
     one.call("undo", j!({}));
     assert!(one.doc()["variables"].get("audit.after").is_none());
     two.call("variable entry remove", j!({ "name": "audit.bad" }));
     one.call("undo", j!({}));
+    assert_eq!(one.variable("audit.bad"), 1.0, "the peer's removal is taken back");
     one.call("redo", j!({}));
     assert!(one.doc()["variables"].get("audit.bad").is_none());
 
-    one.call("variable entry add", j!({ "name": "first.one", "type": "float", "value": 1.0 }));
-    two.call("variable entry add", j!({ "name": "second.two", "type": "float", "value": 2.0 }));
+    // Renames and locks walk back the same way, whoever wrote them.
+    one.call("variable entry add", j!({ "name": "first.one", "value": 1.0 }));
+    two.call("variable entry add", j!({ "name": "second.two", "value": 2.0 }));
     let before = one.doc();
     one.refuse("variable group rename", j!({ "from": "first", "to": "second" }));
     assert_eq!(one.doc(), before);
@@ -457,23 +705,31 @@ fn a_stale_toggle_converges_instead_of_wedging_the_stack() {
     one.refuse("variable group rename", j!({ "from": "first", "to": "panelonly" }));
     one.call("variable group rename", j!({ "from": "first", "to": "renamed" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["first.one"]["value"], 1.0);
+    assert_eq!(one.variable("first.one"), 1.0);
     one.call("redo", j!({}));
-    two.call("variable entry add", j!({ "name": "renamed.peer", "type": "float", "value": 2.0 }));
+    two.call("variable entry add", j!({ "name": "renamed.peer", "value": 2.0 }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["renamed.peer"]["value"], 2.0);
-    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 1.0);
-    assert!(one.doc()["variables"].get("first.peer").is_none());
+    assert!(one.doc()["variables"].get("renamed.peer").is_none(), "the peer's add is the last write");
+    assert_eq!(one.variable("renamed.one"), 1.0);
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("first.one"), 1.0, "then the rename goes");
+    one.call("redo", j!({}));
+    one.call("redo", j!({}));
+    assert_eq!(one.variable("renamed.peer"), 2.0);
 
     one.call("variable entry edit", j!({ "name": "renamed.one", "value": 4.0 }));
     two.call("variable entry lock", j!({ "name": "renamed.one", "value": true }));
-    one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["renamed.one"]["value"], 4.0);
     one.refuse("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("renamed.one"), 4.0, "the lock goes and the value stays");
+    one.call("variable entry edit", j!({ "name": "renamed.one", "value": 5.0 }));
+    assert_eq!(one.variable("renamed.one"), 5.0);
     one.call("variable entry rename", j!({ "name": "second.two", "to": "second.moved" }));
     two.call("variable entry rename", j!({ "name": "second.moved", "to": "second.peer" }));
     one.call("undo", j!({}));
-    assert_eq!(one.doc()["variables"]["second.peer"]["value"], 2.0);
+    assert_eq!(one.variable("second.moved"), 2.0, "the peer's rename is taken back first");
+    one.call("undo", j!({}));
+    assert_eq!(one.variable("second.two"), 2.0);
 }
 
 #[test]
@@ -497,30 +753,31 @@ fn a_deleted_sub_patch_comes_back_whole_with_the_panels_that_named_it() {
     g.call("layout panel edit", j!({ "panel": second, "type": "viewer",
                                      "state": { "node": port, "slot": "value" } }));
     g.call("node remove", j!({ "node": port }));
-    let unbound = |p: &str| entries(&g)[p]["state"].as_str().unwrap_or("").contains("\"node\":null");
+    let unbound = |p: &str| entries(&g)[p]["state"]["node"].is_null();
     assert!(unbound(&second), "the port took its panel binding: {}", entries(&g)[&second]["state"]);
     g.call("undo", j!({}));
-    assert!(entries(&g)[&second]["state"].as_str().is_some_and(|s| s.contains(&port)),
-            "and one undo gives the port and the binding back together");
+    assert_eq!(entries(&g)[&second]["state"]["node"], port,
+               "and one undo gives the port and the binding back together");
 
     g.call("node remove", j!({ "node": inst }));
     assert!(g.nodes().is_empty() && g.instances().is_empty(), "the subtree went with the scope");
-    assert_eq!(entries(&g)[&panel]["state"], "{\"node\":null}", "and the binding with it");
+    assert_eq!(entries(&g)[&panel]["state"], j!({ "node": null }), "and the binding with it");
     assert!(unbound(&second),
             "…including a panel that named one of its PORTS, which the subtree sweep must reach");
 
     g.call("undo", j!({}));
     assert_eq!(g.instances(), vec![inst], "the scope is back at the same uid");
     assert_eq!(g.nodes().len(), 2, "with both members");
-    assert_eq!(entries(&g)[&panel]["state"], format!("{{\"node\":\"{}\"}}", hex(a)),
+    assert_eq!(entries(&g)[&panel]["state"], j!({ "node": hex(a) }),
                "and the panel names its node again");
 }
 
-/// Two people undo layout: every SHAPE a layout write comes in, driven through the one
-/// interleaving that shows a raw-state restore, and the op list from the REGISTRY proves no op
-/// slipped past without one. Then a peer's panel through a foreign undo, and a drag as one step.
+/// One history undoes layout: every SHAPE a layout write comes in, each followed by a peer's
+/// writes and one undo, and the op list from the REGISTRY proves no op slipped past. The undo
+/// takes back the last write whoever made it, and what it leaves is an arrangement the manager
+/// can itself open. Then a drag as one step.
 #[test]
-fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is_one_step() {
+fn one_history_undoes_every_layout_shape_whoever_wrote_last_and_a_drag_is_one_step() {
     let ops: Vec<&str> = goofi_bridge::ops::registry().iter()
         .filter(|o| o.handler.is_write() && o.name.starts_with("layout "))
         .map(|o| o.name)
@@ -546,8 +803,7 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
     ];
     for op in &ops {
         assert!(SHAPES.iter().any(|(_, o)| o == op),
-                "`{op}` is a layout write op with no shape here — drive it through this guard, and \
-                 say why if its inverse may restore a slot");
+                "`{op}` is a layout write op with no shape here — drive it through this guard");
     }
 
     let mut stranded = Vec::new();
@@ -562,6 +818,7 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
         let far = entries(&one)[&e]["parent"].as_str().unwrap().to_string();
         let near = entries(&one)[&b]["parent"].as_str().unwrap().to_string();
         let two_id = tab_id(&one, "Tab 2");
+        let before = entries(&one);
 
         one.call(op, match *shape {
             "a fresh tab" => j!({}),
@@ -577,12 +834,15 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
             "a closed tab" => j!({ "entry": two_id }),
             new => panic!("`{new}` is a shape with no payload here"),
         });
-        // The peer builds exactly where a slot-restore inverse would want to write — both places,
-        // because a merged op's shapes do not all reach for the same one.
+        let after = entries(&one);
+        // The peer writes after; each undo takes back the last write, so three put the shape back.
         two.call("layout panel add", j!({}));
         two.call("layout panel add", j!({ "beside": a }));
         assert_eq!(one.call("undo", j!({}))["changed"], true, "{shape}: the undo flipped nothing");
-
+        assert_eq!(one.call("undo", j!({}))["changed"], true, "{shape}: the second undo flipped nothing");
+        assert_eq!(entries(&one), after, "{shape}: two undos took back the peer's two writes alone");
+        assert_eq!(two.call("undo", j!({}))["changed"], true, "{shape}: the third undo flipped nothing");
+        assert_eq!(entries(&one), before, "{shape}: the third undo took the shape back, from the peer's side");
         if reload_warning(&one) != Value::Null {
             stranded.push(*shape);
         }
@@ -590,37 +850,23 @@ fn two_people_undo_layout_and_no_slot_is_put_back_no_panel_is_lost_and_a_drag_is
     let empty: [&str; 0] = [];
     assert_eq!(stranded, empty, "an undo left an arrangement the manager cannot itself open");
 
-    // A peer's panel survives every shape of foreign undo and redo.
+    // One history: a redo, pressed by either client, puts back what the last undo took.
     let one = Goofi::new();
     let two = one.client("s2");
     let a = first_panel(&one);
-
     let mine = split(&one, &a);
     let theirs = split(&two, &mine);
     assert_eq!(one.call("undo", j!({}))["changed"], true);
-    let up = entries(&one)[&theirs]["parent"].as_str().unwrap().to_string();
-    assert!(entries(&one).contains_key(&up), "the peer's panel still hangs off something");
-
-    let peer2 = split(&two, &a);
-    assert_eq!(one.call("redo", j!({}))["changed"], true);
-    assert!(panels(&one).contains(&peer2), "the peer's panel survived a foreign redo");
-
-    one.call("layout panel add", j!({ "name": "Signals" }));
-    let over = panels(&one).into_iter()
-        .find(|p| ![&a, &mine, &theirs, &peer2].contains(&p)).expect("the new tab's panel");
-    let far = split(&one, &over);
-    let dest = entries(&one)[&far]["parent"].as_str().unwrap().to_string();
-    one.call("layout move", j!({ "entry": mine, "in": dest, "index": 0 }));
-    let peer3 = split(&two, &a);
-    assert_eq!(one.call("undo", j!({}))["changed"], true);
-    assert!(panels(&one).contains(&peer3), "the peer's panel survived a foreign undo");
+    assert!(!panels(&one).contains(&theirs), "the undo took back the peer's split, the last write");
+    assert_eq!(two.call("redo", j!({}))["changed"], true);
+    assert!(panels(&one).contains(&theirs), "the peer's redo put it back");
     assert_eq!(reload_warning(&one), Value::Null);
 
     // The drag feel is FROZEN UX; as primitive ops one drop would cost three to five commands.
     let mover = split(&one, &a);
     one.call("layout panel add", j!({ "name": "Drops", "index": 0 }));
     let target = panels(&one).into_iter()
-        .find(|p| ![&a, &mine, &theirs, &peer2, &peer3, &over, &far, &mover].contains(&p)).expect("its panel");
+        .find(|p| ![&a, &mine, &theirs, &mover].contains(&p)).expect("its panel");
     let before = entries(&one);
 
     one.call("layout move", j!({ "entry": mover, "beside": target,
@@ -741,20 +987,20 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
     let g = Goofi::new();
     let osc = g.add("LFO");
 
-    // A variable's TYPE is what every expression reading it depends on, so it is immutable: an
-    // edit coerces to the type held, and a value the type cannot read is refused by naming it.
-    let why = g.refuse("variable entry edit", j!({ "name": "system.default_ufreq", "value": "fast" }));
-    assert!(why.contains("float") && why.contains("fast"), "{why}");
-    let why = g.refuse("variable entry add", j!({ "name": "system.default_ufreq", "value": 9.0, "type": "float" }));
+    // A variable's FORM is what every expression reading it depends on, so under a config lock it
+    // is immutable: a string offered to a config-locked array is refused by naming both.
+    let why = g.refuse("variable entry edit", j!({ "name": "signal.default_ufreq", "value": "fast" }));
+    assert!(why.contains("array") && why.contains("fast"), "{why}");
+    let why = g.refuse("variable entry add", j!({ "name": "signal.default_ufreq", "value": 9.0 }));
     assert!(why.contains("already exists") && why.contains("variable entry edit"), "{why}");
-    assert_eq!(g.call("variable entry edit", j!({ "name": "system.default_ufreq", "value": 12.5 }))["value"], 12.5);
+    assert_eq!(g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 12.5 }))["value"], 12.5);
 
     // An EPHEMERAL variable is goofi's own: the value refuses the edit the way the name refuses the
     // remove, and what it holds is this machine's .goofi folder, not anything a patch said.
     let home = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().expect("goofi_home is seeded");
-    assert_eq!((&home["lock"]["value"], &home["type"]), (&j!(true), &j!("string")), "{home}");
-    assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_core::home::dir())));
+    assert_eq!(home["lock"]["value"], j!(true), "{home}");
+    assert_eq!(home["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));
     let why = g.refuse("variable entry edit", j!({ "name": "system.goofi_home", "value": "/tmp/elsewhere" }));
     assert!(why.contains("read-only"), "{why}");
     let why = g.refuse("variable entry remove", j!({ "name": "system.goofi_home" }));
@@ -775,7 +1021,7 @@ fn a_refusal_names_what_the_caller_could_try_instead() {
         g.refuse(op, payload);
     }
 
-    // An expression reads a name as an ATTRIBUTE — `variables.gain`, `nd('sub').out.slot` — so a name
+    // An expression reads a name as an ATTRIBUTE — `vars.gain`, `nd('sub').out.slot` — so a name
     // Python cannot parse as one is refused, whatever makes it unparseable. The refusal says the
     // rule rather than the one character it caught.
     for bad in ["a'b", "a\\b", "a\"b", "a b-2", "a_b", "nd()", "1st", "class", ""] {
@@ -801,7 +1047,7 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     let producer = g.add("LFO");
     // Block mode at a stated rate, so a frame carries several samples: the shape error below
     // needs one. There is no evaluator here, so the rate cap's binding cannot stand in for it.
-    g.set_param(producer, "output", "mode", "block");
+    g.set_param(producer, "lfo", "mode", "block");
     g.set_param(producer, "common", "max_frequency", 20.0);
     let consumer = g.add("LFO");
     g.call("node edit", j!({ "node": hex(producer), "name": "src" }));
@@ -816,41 +1062,35 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     assert!(set("")["error"].is_null(), "an empty expression clears the binding");
 
     let mut ev = g.events();
-    set("nd('src')");
-    // The record rides `state_update`; `error` is runtime-derived and rides the LIVE plane, never
-    // the doc and never an op's echo — an echo is taken before the node has re-evaluated the source
-    // the op just moved, so it would carry the error of the source that is gone.
-    let d = g.until("the descriptor echo", |_| {
-        let p = ev.next("state_update");
-        (p["node"] == hex(consumer)).then(|| p["params"]["common"]["max_frequency"].clone())
-    });
-    assert_eq!((&d["expression"], &d["mode"], &d["triggers"]),
-               (&j!("nd('src')"), &j!("expression"), &j!(false)));
-    assert!(d["error"].is_string(), "got {:?}", d["error"]);
+    // The record is the document's; `error` is runtime-derived and read back through `node state`.
+    let line = |g: &Goofi| {
+        let text = g.call("node state", j!({ "node": hex(consumer) }))["text"].as_str().unwrap().to_string();
+        text.lines().find(|l| l.contains("common.max_frequency")).unwrap_or("").to_string()
+    };
+    let field = |what: &str, want: &dyn Fn(&serde_json::Value) -> bool| {
+        g.until(what, |g| {
+            let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
+            want(&d).then_some(d)
+        })
+    };
+    set("nd('src') * 1");
+    let d = field("the record", &|d| d["expression"] == j!("nd('src') * 1"));
+    assert_eq!(d["mode"], j!("expression"), "{d}");
     assert!(d.get("expression_autoeval").is_none(), "auto-eval is always on, so it is not on the wire");
+    g.until("the shape error", |g| line(g).contains("[error").then_some(()));
 
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
-    let expr = g.until("the referrer's echo", |_| {
-        let p = ev.next("state_update");
-        (p["node"] == hex(consumer))
-            .then(|| p["params"]["common"]["max_frequency"]["expression"].clone())
-    });
-    assert_eq!(expr, "nd('signal')", "the referrer's nd() reference followed the rename");
+    field("the referrer's nd() term followed the rename", &|d| d["expression"] == j!("nd('signal') * 1"));
     // A term in a comment or a string is text: one scan decides what is text for every reader.
-    set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    set("nd('signal') + len(\"nd('signal') me\")  # me nd('signal') vars.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "src" }));
-    let expr = g.until("the referrer's echo", |_| {
-        let p = ev.next("state_update");
-        let d = &p["params"]["common"]["max_frequency"];
-        (p["node"] == hex(consumer) && d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")))
-            .then(|| d["expression"].clone())
-    });
-    assert_eq!(expr, "nd('src') + len(\"nd('signal') me\")  # me nd('signal') variables.a.b");
+    let d = field("the referrer's record", &|d| d["expression"].as_str().is_some_and(|e| e.starts_with("nd('src')")));
+    assert_eq!(d["expression"], "nd('src') + len(\"nd('signal') me\")  # me nd('signal') vars.a.b");
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
     set("nd('signal')");
 
-    // A REFERENCE is the same record with no Python: one producer slot, copied on arrival. The
-    // expression is RETAINED beside it, because a mode switch is never destructive.
+    // A BARE expression — one target, an optional index — never enters Python: the one frame is
+    // copied on arrival, in Rust. The text is RETAINED across a mode switch, which is never destructive.
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
     g.call("node param edit", j!({ "node": hex(level), "param": "control/value", "value": 0.25 }));
@@ -859,110 +1099,104 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
         payload.as_object_mut().unwrap().extend(spec.as_object().unwrap().clone());
         g.call("node param edit", payload)
     };
-    // An op's echo is a `state_update`; a RUNTIME error is read back through `node state`.
-    let line = |g: &Goofi| {
-        let text = g.call("node state", j!({ "node": hex(consumer) }))["text"].as_str().unwrap().to_string();
-        text.lines().find(|l| l.contains("common.max_frequency")).unwrap_or("").to_string()
-    };
-    let field = |ev: &mut goofi_tests::Events, what: &str, want: &dyn Fn(&serde_json::Value) -> bool| {
-        g.until(what, |_| {
-            let p = ev.next("state_update");
-            let d = &p["params"]["common"]["max_frequency"];
-            (p["node"] == hex(consumer) && want(d)).then(|| d.clone())
-        })
-    };
-    for bad in ["level", "nosuch.out", "level.nope", "a b.out"] {
-        let why = param(&g, j!({ "reference": bad }))["error"].clone();
+    for bad in ["nd('nosuch')", "nd('level').out.nope", "nd('level').nope", "nd('a b')"] {
+        let why = param(&g, j!({ "expression": bad }))["error"].clone();
         assert!(why.as_str().is_some_and(|e| !e.is_empty()), "`{bad}` is refused or unresolvable: {why}");
     }
-    let bound = param(&g, j!({ "reference": "level.out" }));
-    assert!(bound["error"].is_null(), "a reference to a running scalar producer binds: {bound}");
-    let d = field(&mut ev, "the descriptor shows the reference", &|d| d["reference"] == j!("level.out"));
-    assert_eq!((&d["mode"], &d["expression"], &d["error"]),
-               (&j!("reference"), &j!("nd('signal')"), &j!(null)), "{d}");
+    let bound = param(&g, j!({ "expression": "nd('level')" }));
+    assert!(bound["error"].is_null(), "a bare read of a running scalar producer binds: {bound}");
+    let d = field("the record shows the expression", &|d| d["expression"] == j!("nd('level')"));
+    assert_eq!(d["mode"], j!("expression"), "{d}");
+    g.until("the bare read carries no error", |g| {
+        let l = line(g);
+        (l.contains("expr: nd('level')") && !l.contains("[error")).then_some(())
+    });
     // The value lands with NO evaluator in this process: the runtime copied the frame's one element.
-    g.until("the referenced value lands", |_| {
+    g.until("the bare value lands", |_| {
         (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.25)).then_some(())
     });
-    // A rename follows into the reference, as it does into an expression.
+    // …on the live plane alone: a streamed value never enters the document.
+    assert_ne!(g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"]["value"], j!(0.25));
+    // A rename follows into the text.
     g.call("node edit", j!({ "node": hex(level), "name": "gain" }));
-    field(&mut ev, "the reference followed the rename", &|d| d["reference"] == j!("gain.out"));
+    field("the expression followed the rename", &|d| d["expression"] == j!("nd('gain')"));
     let wide = g.add("_TestConst");
     g.call("node edit", j!({ "node": hex(wide), "name": "wide" }));
     g.set_param(wide, "constant", "value", 0.75);
     g.set_param(wide, "constant", "length", 8);
-    param(&g, j!({ "reference": "wide.out[7]" }));
-    g.until("an indexed reference reads a wide frame without Python", |_| {
+    param(&g, j!({ "expression": "nd('wide')[7]" }));
+    g.until("an indexed bare read takes one element of a wide frame without Python", |_| {
         (ev.next("param_values")["nodes"][hex(consumer)]["values"]["common"]["max_frequency"] == j!(0.75)).then_some(())
     });
     g.call("node edit", j!({ "node": hex(wide), "name": "bank" }));
-    field(&mut ev, "the indexed reference follows a rename", &|d| d["reference"] == j!("bank.out[7]"));
-    param(&g, j!({ "reference": "bank.out[8]" }));
+    field("the indexed read follows a rename", &|d| d["expression"] == j!("nd('bank')[7]"));
+    param(&g, j!({ "expression": "nd('bank')[8]" }));
     g.until("an out-of-range index reports an error", |g| line(g).contains("outside frame").then_some(()));
-    for bad in ["bank.out[-1]", "bank.out[1.5]", "bank.out[1][0]"] {
-        assert!(param(&g, j!({ "reference": bad }))["error"].as_str().is_some());
+    // Anything else around the target is Python's, and there is no interpreter in this process.
+    for computed in ["nd('bank')[-1]", "nd('bank')[1.5]", "nd('bank')[1][0]", "nd('bank') + 1"] {
+        let why = param(&g, j!({ "expression": computed }))["error"].clone();
+        assert!(why.as_str().is_some_and(|e| e.contains("no expression evaluator")), "`{computed}`: {why}");
     }
-    // A frame with more than one element is a shape error on ARRIVAL, and the literal stands.
-    param(&g, j!({ "reference": "signal.out" }));
-    g.until("the shape error", |g| line(g).contains("one element").then_some(()));
-    // A literal on a driven param switches it to constant; both texts stay retained, and a mode
-    // alone brings the reference back.
-    // A value edit echoes no descriptor: the document carries the mode it switched.
+    // A frame with more than one element reads whole: its first element, no error.
+    param(&g, j!({ "expression": "nd('signal')" }));
+    g.until("the wide frame to read", |g| {
+        let l = line(g);
+        (l.contains("expr: nd('signal')") && !l.contains("[error")).then_some(())
+    });
+    // A literal on a driven param switches it to constant; the text stays retained, and a mode
+    // alone brings it back. A value edit echoes no descriptor: the document carries the mode.
     param(&g, j!({ "value": 7 }));
     let d = g.doc()["nodes"][hex(consumer)]["params"]["common"]["max_frequency"].clone();
-    assert_eq!((&d["value"], &d["mode"], &d["ref"], &d["expr"]),
-               (&j!(7.0), &j!("constant"), &j!("signal.out"), &j!("nd('signal')")), "{d}");
-    // A mode alone switches among what is retained: the reference is still `signal.out`, so its
-    // shape error comes back. An empty reference clears that text and nothing else. The echoes
-    // of the reference edits above are still queued, so the subscription is taken afresh.
-    ev = g.events();
-    param(&g, j!({ "mode": "reference" }));
-    let d = field(&mut ev, "the retained reference is live", &|d| d["mode"] == j!("reference"));
-    assert_eq!(d["reference"], j!("signal.out"), "{d}");
-    g.until("the shape error is back", |g| line(g).contains("one element").then_some(()));
-    param(&g, j!({ "reference": "" }));
-    let d = field(&mut ev, "an empty reference clears it", &|d| d["mode"] == j!("constant"));
-    assert_eq!((&d["reference"], &d["expression"]), (&j!(null), &j!("nd('signal')")), "{d}");
-    param(&g, j!({ "mode": "reference", "reference": "gain.out" }));
-    // The runtime clears the shape error on its own clock, so the echo is not the oracle.
-    g.until("the reference is live again", |g| {
+    assert_eq!((&d["value"], &d["mode"], &d["expression"]), (&j!(7), &j!("constant"), &j!("nd('signal')")), "{d}");
+    param(&g, j!({ "mode": "expression" }));
+    let d = field("the retained expression is live", &|d| d["mode"] == j!("expression"));
+    assert_eq!(d["expression"], j!("nd('signal')"), "{d}");
+    g.until("the expression reads again", |g| {
         let l = line(g);
-        (l.contains("ref: gain.out") && !l.contains("[error")).then_some(())
+        (l.contains("expr: nd('signal')") && !l.contains("[error")).then_some(())
+    });
+    param(&g, j!({ "expression": "" }));
+    let d = field("an empty expression clears it", &|d| d["mode"] != j!("expression"));
+    assert_eq!(d["expression"], j!(null), "{d}");
+    param(&g, j!({ "expression": "nd('gain')" }));
+    // The runtime clears the shape error on its own clock, so the echo is not the oracle.
+    g.until("the expression is live again", |g| {
+        let l = line(g);
+        (l.contains("expr: nd('gain')") && !l.contains("[error")).then_some(())
     });
     /* …and a client is TOLD, on the same plane that carries the value. Nothing was written for this
        clear — no op, no doc delta — so with the error riding op echoes alone a replica kept showing
        the previous source's failure under an expression that was working. */
     let mut live = g.events();
     let errors_of = |p: &serde_json::Value| p["errors"]["common"].get("max_frequency").cloned();
-    param(&g, j!({ "reference": "signal.out" }));
-    g.until("the shape error reaches the live plane", |_| {
+    param(&g, j!({ "expression": "nd('signal')[999]" }));
+    g.until("the index error reaches the live plane", |_| {
         let p = live.next("param_values")["nodes"][hex(consumer)].take();
-        errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("one element"))).then_some(())
+        errors_of(&p).is_some_and(|e| e.as_str().is_some_and(|m| m.contains("outside frame"))).then_some(())
     });
-    param(&g, j!({ "reference": "gain.out" }));
+    param(&g, j!({ "expression": "nd('gain')" }));
     g.until("…and the clear does too", |_| {
         let p = live.next("param_values")["nodes"][hex(consumer)].take();
         (!p.is_null() && errors_of(&p).is_none()).then_some(())
     });
-    // A deleted producer leaves the reference standing with its error; undo clears it.
+    // A deleted producer leaves the expression standing with its error; undo clears it.
     g.call("node remove", j!({ "node": hex(level) }));
     let l = g.until("the producer is gone", |g| Some(line(g)).filter(|l| l.contains("no node named `gain`")));
-    assert!(l.contains("ref: gain.out"), "the reference stands while its producer is gone: {l}");
+    assert!(l.contains("expr: nd('gain')"), "the expression stands while its producer is gone: {l}");
     let mut fresh = g.events();
     g.call("undo", j!({}));
     g.until("undo brought the producer back", |g| {
         let l = line(g);
-        (l.contains("ref: gain.out") && !l.contains("[error")).then_some(())
+        (l.contains("expr: nd('gain')") && !l.contains("[error")).then_some(())
     });
     let value_of = |p: &serde_json::Value| p["values"]["common"].get("max_frequency").cloned();
-    g.until("…and its value lands again", |_| {
-        (value_of(&fresh.next("param_values")["nodes"][hex(consumer)]) == Some(j!(0.25))).then_some(())
-    });
-    // Re-pointing a reference at a SILENT producer must not hand it the old producer's last frame:
+    // A beat sends only what moved: a removal and its undo inside one beat move nothing on the wire.
+    g.until("…and its value lands again", |g| line(g).contains("→ 0.25").then_some(()));
+    // Re-pointing a bare read at a SILENT producer must not hand it the old producer's last frame:
     // the mailbox starts empty, the literal stands, and the preview is withdrawn.
     let quiet = g.add("_TestEcho");
     g.call("node edit", j!({ "node": hex(quiet), "name": "quiet" }));
-    param(&g, j!({ "reference": "quiet.out" }));
+    param(&g, j!({ "expression": "nd('quiet')" }));
     g.until("the value is withdrawn", |_| {
         let p = fresh.next("param_values")["nodes"][hex(consumer)].take();
         (!p.is_null() && value_of(&p).is_none()).then_some(())
@@ -1004,7 +1238,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
                                          "viewer": [{ "slot": "out", "kind": "line" }] }));
     assert!(why.contains("no such node"), "{why}");
     let why = g.refuse("node edit", j!({ "node": hex(osc), "viewer": 7 }));
-    assert!(why.contains("list"), "an arg that is not a list says what one looks like: {why}");
+    assert!(why.contains("sequence"), "an arg that is not a list says what one looks like: {why}");
     let why = g.refuse("node edit", j!({ "node": hex(osc), "viewer": [{ "kind": "line" }] }));
     assert!(why.contains("slot"), "an entry without a slot is refused by naming it: {why}");
 
@@ -1015,7 +1249,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
     // Entries MERGE, slot by slot: naming one setting leaves the kind and the others where they were.
     g.call("node edit", j!({ "node": hex(osc),
                              "viewer": [{ "slot": "out", "settings": { "xScale": 3 } }] }));
-    let view = |g: &Goofi| g.doc()["nodes"][hex(osc)]["viewers"].as_str().unwrap_or("").to_string();
+    let view = |g: &Goofi| g.doc()["nodes"][hex(osc)]["viewers"].to_string();
     let merged = view(&g);
     for kept in ["\"kind\":\"line\"", "\"yScale\":2", "\"xScale\":3"] {
         assert!(merged.contains(kept), "the patch merged rather than replaced: {merged}");
@@ -1035,7 +1269,7 @@ fn a_viewer_bag_persists_and_refuses_a_word_outside_its_vocabulary() {
     g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "clear": true }] }));
     assert!(!view(&g).contains("yScale"), "the clear dropped the stored view: {}", view(&g));
 
-    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P01", "type": "string" }));
+    g.call("variable entry add", j!({ "name": "patch.subject", "value": "P01" }));
     // The doc carries a lock only where one is held: the system group's, the machine value's.
     assert_eq!(g.doc()["variable_groups"]["system"]["lock"]["config"], true);
     assert_eq!(g.doc()["variables"]["system.goofi_home"]["lock"]["value"], true);
@@ -1065,7 +1299,7 @@ fn eight_writers_all_land_and_none_deadlock() {
         let n = &doc["nodes"][hex(*u)];
         assert_eq!(n["params"]["common"]["max_frequency"]["value"].as_f64(), Some(ROUNDS as f64),
                    "a param write was lost on {u}");
-        assert_eq!(n["pos"]["x"].as_f64(), Some(ROUNDS as f64), "a drag was lost on {u}");
+        assert_eq!(n["pos"][0].as_f64(), Some(ROUNDS as f64), "a drag was lost on {u}");
     }
 }
 
@@ -1082,13 +1316,7 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     let osc = g.add("LFO");
 
     // Nothing cleared yet: no baseline key at all, so the zero is each type's declared default.
-    // The blob rides as a json STRING, as every merge-patch-safe blob does.
-    let baseline = |g: &Goofi| -> Value {
-        match g.doc()["nodes"][hex(osc)]["baseline"].as_str() {
-            Some(s) => serde_json::from_str(s).expect("the baseline is json"),
-            None => Value::Null,
-        }
-    };
+    let baseline = |g: &Goofi| -> Value { g.doc()["nodes"][hex(osc)]["baseline"].clone() };
     assert!(baseline(&g).is_null(), "a node nobody has cleared carries no baseline: {}", baseline(&g));
 
     // Move one param off its default and bind another — the two kinds of change the filter counts.
@@ -1109,7 +1337,7 @@ fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
 
     // Nothing was edited: the expression still drives, so the Expression filter still finds it.
     let params = g.doc()["nodes"][hex(osc)]["params"].clone();
-    assert_eq!(params["lfo"]["amplitude"]["expr"], j!("1 + 1"), "the binding survived the clear");
+    assert_eq!(params["lfo"]["amplitude"]["expression"], j!("1 + 1"), "the binding survived the clear");
     assert_eq!(params["lfo"]["frequency"]["value"], j!(3.5), "and the value is untouched");
 
     // Undoable like any other document edit.
@@ -1124,11 +1352,11 @@ fn a_deleted_node_hands_its_wires_through() {
     // A chain stays a chain: what fed the deleted node feeds whatever it fed, by the first wired
     // input whose kind fits, and one undo brings the node and its own wires back.
     let g = Goofi::new();
-    let (src, mid, sink) = (g.add("signal:Constant"), g.add("Smooth"), g.add("Smooth"));
+    let (src, mid, sink) = (g.add("signal:Constant"), g.add("Smoothing"), g.add("Smoothing"));
     g.link(src, "out", mid, "input");
     g.link(mid, "out", sink, "input");
     let wires = |g: &Goofi| -> Vec<(String, String)> {
-        let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+        let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
         links.iter().map(|l| (l["node_out"].as_str().unwrap().into(), l["node_in"].as_str().unwrap().into())).collect()
     };
     g.call("node remove", j!({ "node": hex(mid) }));
@@ -1155,4 +1383,93 @@ fn a_deleted_node_hands_its_wires_through() {
     g.link(json, "out", table, "input");
     g.call("node remove", j!({ "node": hex(json) }));
     assert_eq!(wires(&g), vec![(hex(mid), hex(sink))], "a String cannot feed a Table consumer, so nothing bridges");
+}
+
+/// Where the document has a node.
+fn pos_of(g: &Goofi, uid: &str) -> [f64; 2] {
+    let p = &g.doc()["nodes"][uid]["pos"];
+    [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()]
+}
+
+#[test]
+fn a_node_without_a_place_is_packed_clear_and_arrange_lays_a_scope_out_by_dataflow() {
+    let g = Goofi::new();
+    const GRID: f64 = goofi_graph::canvas::GRID;
+    let on_grid = |p: [f64; 2]| p[0] % GRID == 0.0 && p[1] % GRID == 0.0;
+
+    // No `pos`: the manager packs each node after the others, on the grid, never on top of one.
+    let src = g.call("node add", j!({ "type": "LFO" }))["uid"].as_str().unwrap().to_string();
+    let win = g.call("node add", j!({ "type": "Buffer" }))["uid"].as_str().unwrap().to_string();
+    let tap = g.call("node add", j!({ "type": "Buffer" }))["uid"].as_str().unwrap().to_string();
+    let (a, b, c) = (pos_of(&g, &src), pos_of(&g, &win), pos_of(&g, &tap));
+    assert!(on_grid(a) && on_grid(b) && on_grid(c), "packed onto the grid: {a:?} {b:?} {c:?}");
+    assert!(a != b && b != c && a != c, "each in its own cells: {a:?} {b:?} {c:?}");
+    assert!(b[0] > a[0] && c[0] > b[0], "each right of the one added before it: {a:?} {b:?} {c:?}");
+    assert!(a[1] == b[1] && b[1] == c[1], "…in its row: {a:?} {b:?} {c:?}");
+    // A named place is the caller's, grid or not — a hand may put a node anywhere.
+    let free = g.call("node add", j!({ "type": "LFO", "pos": [5.0, 7.0] }))["uid"].as_str().unwrap().to_string();
+    assert_eq!(pos_of(&g, &free), [5.0, 7.0]);
+    // One history entry for an add, with or without a place.
+    g.call("undo", j!({}));
+    assert!(g.doc()["nodes"][&free].is_null(), "the add is one step");
+    g.call("undo", j!({}));
+    assert!(g.doc()["nodes"][&tap].is_null(), "the packed add is one step too");
+    g.call("redo", j!({}));
+    assert_eq!(pos_of(&g, &tap), c, "redo puts it back where it was packed");
+    // The cell right of the last add is taken by hand: the next add stacks under it.
+    let hand = g.call("node add", j!({ "type": "LFO", "pos": [c[0] + 288.0, c[1]] }))["uid"].as_str().unwrap().to_string();
+    let next = g.call("node add", j!({ "type": "LFO" }))["uid"].as_str().unwrap().to_string();
+    let (h, n) = (pos_of(&g, &hand), pos_of(&g, &next));
+    assert!(n[0] > h[0] && n[1] == h[1], "right of the hand-placed one, which was added last: {h:?} {n:?}");
+    g.call("node remove", j!({ "node": &hand }));
+    g.call("node remove", j!({ "node": &next }));
+
+    // `arrange` lays the scope out by dataflow: a source left of what it feeds, on the grid.
+    g.call("link add", j!({ "from": ep(&src, "out"), "to": ep(&win, "input") }));
+    g.call("link add", j!({ "from": ep(&src, "out"), "to": ep(&tap, "input") }));
+    let moved = g.call("nodes arrange", j!({}))["moved"].as_u64().unwrap();
+    assert!(moved >= 1, "the shelf is not a flow");
+    let shelf = c;
+    let (a, b, c) = (pos_of(&g, &src), pos_of(&g, &win), pos_of(&g, &tap));
+    assert!(on_grid(a) && on_grid(b) && on_grid(c), "arranged onto the grid: {a:?} {b:?} {c:?}");
+    assert!(b[0] > a[0] && c[0] > a[0], "the source sits left of both sinks: {a:?} {b:?} {c:?}");
+    assert_eq!(b[0], c[0], "the two sinks share a column: {b:?} {c:?}");
+    assert_ne!(b[1], c[1], "…and not a row");
+    assert_eq!(g.call("nodes arrange", j!({}))["moved"], 0, "arrange is idempotent");
+    // One step, taken back whole.
+    g.call("undo", j!({}));
+    assert_eq!(pos_of(&g, &tap), shelf, "undo restores the shelf");
+
+    // A sub-patch is its own canvas: its members pack among themselves, from the origin.
+    let inst = g.call("nodes group", j!({ "nodes": [&win, &tap] }))["inst_id"].as_str().unwrap().to_string();
+    let inner = g.call("node add", j!({ "type": "Buffer", "inst_id": &inst }))["uid"].as_str().unwrap().to_string();
+    let members: Vec<[f64; 2]> = [&win, &tap, &inner].iter().map(|u| pos_of(&g, u)).collect();
+    assert!(members.iter().all(|p| on_grid(*p)) && members[2] != members[0] && members[2] != members[1], "{members:?}");
+    // Its ports are members too, so they are laid out with it; the root is untouched.
+    let moved = g.call("nodes arrange", j!({ "inst_id": &inst }))["moved"].as_u64().unwrap();
+    assert!(moved >= 1, "{moved}");
+    assert_eq!(pos_of(&g, &src), a, "the root is untouched by the sub-patch's arrange");
+    let inside: Vec<[f64; 2]> = [&win, &tap, &inner].iter().map(|u| pos_of(&g, u)).collect();
+    assert!(inside.iter().all(|p| on_grid(*p)), "{inside:?}");
+    assert!(inside[0][0] > 0.0 && inside[1][0] > 0.0, "the wired members sit right of the ports that feed them: {inside:?}");
+
+    // Each wired group is laid out on its own, one under the next, so two flows never share a
+    // column's rows. A param's expression is no wire: it does not join two groups.
+    let add = |ty: &str| g.call("node add", j!({ "type": ty }));
+    let fan = add("LFO");
+    let (fan, fan_name) = (fan["uid"].as_str().unwrap().to_string(), fan["name"].as_str().unwrap().to_string());
+    let (left, right) = (add("Buffer")["uid"].as_str().unwrap().to_string(), add("Buffer")["uid"].as_str().unwrap().to_string());
+    let (head, tail) = (add("LFO")["uid"].as_str().unwrap().to_string(), add("Buffer")["uid"].as_str().unwrap().to_string());
+    g.call("link add", j!({ "from": ep(&fan, "out"), "to": ep(&left, "input") }));
+    g.call("link add", j!({ "from": ep(&fan, "out"), "to": ep(&right, "input") }));
+    g.call("link add", j!({ "from": ep(&head, "out"), "to": ep(&tail, "input") }));
+    g.call("node param edit", j!({ "node": &tail, "param": "buffer/size", "expression": format!("nd('{fan_name}')") }));
+    g.call("nodes arrange", j!({}));
+    let ys = |uids: &[&String]| uids.iter().map(|u| pos_of(&g, u)[1]).collect::<Vec<f64>>();
+    let groups = [ys(&[&src, &inst]), ys(&[&fan, &left, &right]), ys(&[&head, &tail])];
+    for pair in groups.windows(2) {
+        let above = pair[0].iter().copied().fold(f64::MIN, f64::max);
+        assert!(pair[1].iter().all(|y| *y > above), "each group starts below the one before: {groups:?}");
+    }
+    assert!(pos_of(&g, &tail)[0] > pos_of(&g, &head)[0], "a group still runs left to right");
 }

@@ -6,7 +6,8 @@ import { SCOPE_TYPE, BOUNDARY_SLOT, boundaryType } from '$lib/api/vocab';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
-import { liveCatalogue } from '$lib/inspector/expr/catalogue';
+import { liveCatalogue, machineCatalogue } from '$lib/inspector/expr/catalogue';
+import { fragmentOf, stateOf } from '$lib/machine/model';
 import { typeInfo } from '$lib/test/typeInfo';
 
 /** Minimal catalog — its presence flips the store to doc-authoritative identity. */
@@ -25,7 +26,7 @@ function catalog(): NodeTypeInfo[] {
 const node = (type: string, name: string, scope?: string) => ({
 	type,
 	name,
-	pos: { x: 0, y: 0 },
+	pos: [0, 0],
 	...(scope ? { scope } : {})
 });
 
@@ -44,23 +45,23 @@ interface Port {
 function scope(
 	uid: string,
 	o: { name: string; parent?: string; pos?: [number, number]; ports?: Port[] }
-): { nodes: Record<string, unknown>; links: unknown[] } {
+): { nodes: Record<string, unknown>; links: Record<string, unknown> } {
 	const pos = o.pos ?? [0, 0];
 	const nodes: Record<string, unknown> = {
 		[uid]: node(SCOPE_TYPE, o.name, o.parent === ROOT_ID ? undefined : o.parent)
 	};
-	(nodes[uid] as Record<string, unknown>).pos = { x: pos[0], y: pos[1] };
-	const links: unknown[] = [];
+	(nodes[uid] as Record<string, unknown>).pos = [pos[0], pos[1]];
+	const links: Record<string, unknown> = {};
 	for (const p of o.ports ?? []) {
 		const pp = p.pos ?? [0, 0];
-		nodes[p.uid] = { type: p.type, name: p.name, pos: { x: pp[0], y: pp[1] }, scope: uid };
+		nodes[p.uid] = { type: p.type, name: p.name, pos: [pp[0], pp[1]], scope: uid };
 		if (!p.inner) continue;
 		const [n, s] = p.inner;
-		links.push(
+		const l =
 			boundaryType(p.type)!.dir === 'in'
 				? { node_out: p.uid, slot_out: BOUNDARY_SLOT, node_in: n, slot_in: s }
-				: { node_out: n, slot_out: s, node_in: p.uid, slot_in: BOUNDARY_SLOT }
-		);
+				: { node_out: n, slot_out: s, node_in: p.uid, slot_in: BOUNDARY_SLOT };
+		links[`${l.node_out}.${l.slot_out}>${l.node_in}.${l.slot_in}`] = l;
 	}
 	return { nodes, links };
 }
@@ -160,6 +161,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 				save_path: null,
 				unsaved_changes: false,
 				instance_id: 'sess1',
+				doc_version: 0,
 				viewpoint: null
 			} as unknown as GraphSnapshot
 		});
@@ -177,7 +179,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 
 		// …and the state it shows comes BACK through the doc, exactly as a leaf's does.
 		expect(slotView(g.nodeById('i9'), 'p9').kind, 'nothing until the manager answers').toBeUndefined();
-		d.patch({ nodes: { i9: { viewers: JSON.stringify({ p9: { kind: 'image', collapsed: true } }) } } });
+		d.patch({ nodes: { i9: { viewers: { p9: { kind: 'image', collapsed: true } } } } });
 		expect(slotView(g.nodeById('i9'), 'p9').kind).toBe('image');
 		expect(isSlotExpanded(g.nodeById('i9'), 'p9')).toBe(false);
 
@@ -187,7 +189,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 
 		// Ungroup: the facade and its port leave the doc, taking the blob with them. That uid can be
 		// re-minted by a later backend, and what comes back must start clean.
-		d.patch({ nodes: { i9: null, p9: null, m9: { scope: null } }, links: [] });
+		d.patch({ nodes: { i9: null, p9: null, m9: { scope: null } }, links: {} });
 		expect(g.nodeById('i9')).toBeNull();
 		d.patch(spec);
 		expect(slotView(g.nodeById('i9'), 'p9').kind, 'the re-minted scope inherits no kind').toBeUndefined();
@@ -224,5 +226,45 @@ describe('the expression catalogue — what nd() can name', () => {
 		// what is offered — a uid would complete to an expression the resolver refuses.
 		const facade = liveCatalogue(g).nodes.find((n) => n.name === 'subpatch0');
 		expect(facade?.slots.map((s) => s.name)).toEqual(['wave']);
+	});
+});
+
+describe('a machine — keyed by id in the document, spelled by name', () => {
+	it('offers names to sm() and me, finds a state by its name, and copies values by attribute name', () => {
+		const fc = new FakeControl();
+		const g = new GraphStore(fc);
+		const state = { pos: [0, 0], interval: 1, mode: 'random', noop: 0, weights: {}, expression: '' };
+		seed(fc).patch({
+			machines: {
+				'm-1': {
+					name: 'sweep',
+					attributes: { 'a-1': { name: 'gain', default: 0.5, kind: { type: 'num', vmin: 0, vmax: 1, int: false, face: 'plain' }, curve: 'linear' } },
+					states: { 's-1': { ...state, name: 'rest', values: { 'a-1': 0.2 }, envelopes: { 'a-1': [0, 0.1, 1, 0.3] } }, 's-2': { ...state, name: 'peak' } },
+					transitions: { t1: { from: 's-1', to: 's-2', duration: 0 } },
+					playheads: { 'p-1': { name: 'walker', color: '', start: 's-1' } }
+				}
+			},
+			variable_groups: { walker: { lock: { config: true, value: true }, owner: { machine: 'm-1' } } }
+		});
+		const m = g.machines['m-1'];
+		expect(m.name).toBe('sweep');
+
+		const own = machineCatalogue('m-1', g);
+		expect([own.states, own.playheads]).toEqual([['rest', 'peak'], ['walker']]);
+		expect(own.fields).toContain('gain');
+		expect(own.fields).not.toContain('a-1');
+		const [walker] = liveCatalogue(g).playheads;
+		expect([walker.name, walker.machine]).toEqual(['walker', 'sweep']);
+		expect(walker.fields).toContain('gain');
+		expect(walker.fields).not.toContain('a-1');
+
+		// Before its `state` variable has a frame, a playhead is in the state it starts in.
+		expect(stateOf(m, 'p-1')).toBe('s-1');
+
+		// A copy leaves the machine, where an attribute id means nothing: it carries names.
+		const copy = fragmentOf(m, ['s-1', 's-2']);
+		expect(copy.states['s-1'].values).toEqual({ gain: 0.2 });
+		expect(copy.states['s-1'].envelopes).toEqual({ gain: [0, 0.1, 1, 0.3] });
+		expect(copy.transitions).toEqual([{ from: 's-1', to: 's-2', duration: 0 }]);
 	});
 });

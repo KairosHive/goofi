@@ -1,38 +1,48 @@
 /** The in-house primitive library; import primitives from here, not by file. */
-export { Button } from 'panelty';
-export { IconButton } from 'panelty';
-export { Icon } from 'panelty';
-export { type ButtonVariant, type ButtonSize } from 'panelty';
+export { Button, IconButton, Icon, TabStrip as Tabs, type ButtonVariant, type ButtonSize, type TabItem } from 'panelty';
 export { ICONS, type IconName } from './icons';
 
 export { default as ScrollArea } from './ScrollArea.svelte';
 export { default as Bar } from './Bar.svelte';
 
 export { default as Field } from './Field.svelte';
+export { default as FieldGrid } from './FieldGrid.svelte';
 export { default as NumberInput } from './NumberInput.svelte';
 export { default as Slider } from './Slider.svelte';
 export { default as Knob } from './Knob.svelte';
 export { default as Select } from './Select.svelte';
 export { default as Combobox, type ComboOption } from './Combobox.svelte';
 export { default as TextInput } from './TextInput.svelte';
-export { default as TextArea } from './TextArea.svelte';
 export { MODE_ATTRS } from './inputMode';
 export { default as Toggle } from './Toggle.svelte';
 
-export { TabStrip as Tabs } from 'panelty';
-export { type TabItem } from 'panelty';
 export { default as Disclosure } from './Disclosure.svelte';
 
 export { default as Popover } from './Popover.svelte';
+export { default as ContextMenu } from './ContextMenu.svelte';
+export { default as QuickPick, type PickOption } from './QuickPick.svelte';
+export { default as SettingsMenu } from './SettingsMenu.svelte';
+export { under } from './under';
+export { clamp, fixed } from './math';
 export { default as Dialog } from './Dialog.svelte';
 export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 
 export { isTextEditingTarget } from './textEditing';
+export { reveal, stepWrapped } from './listNav';
 
 export { default as Badge, type BadgeTone } from './Badge.svelte';
 export { default as Chip } from './Chip.svelte';
 export { default as Segmented, type Segment } from './Segmented.svelte';
 export { default as StatusDot, type StatusTone, type StatusDotSize } from './StatusDot.svelte';
 export { default as EmptyState } from './EmptyState.svelte';
+export { default as Wave } from './Wave.svelte';
 export { default as ChoiceGrid, type Choice } from './ChoiceGrid.svelte';
 export { default as PaintPad } from './PaintPad.svelte';
+export { default as ColorPicker } from './ColorPicker.svelte';
+export { default as ColorPanel } from './ColorPanel.svelte';
+export { css as colorCss } from './color';
+export { default as EnvelopePicker } from './EnvelopePicker.svelte';
+export { default as EnvelopePanel } from './EnvelopePanel.svelte';
+export { ADSR, ADSR_SHORT, ENVELOPE_BORN } from './envelope';
+export { default as CurvePicker } from './CurvePicker.svelte';
+export { curvePath } from './curve';

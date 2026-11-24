@@ -3,10 +3,10 @@
 	import type { PanelProps } from 'panelty';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
-	import { linkedNodeName } from 'panelty';
+	import { linkedNodeName, workspace } from 'panelty';
 	import { Bar, StatusDot, EmptyState } from '$lib/ui';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
+	import { dropTarget, DropHint } from '$lib/drag';
 	import NodeSelect from './NodeSelect.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -24,15 +24,18 @@
 	} = $props();
 
 	const g = graph();
-	const uiStore = ui();
+	const ws = workspace();
 
 	const linkedName = $derived(linkedNodeName(linkState));
 	const node = $derived(linkedName ? g.nodeById(linkedName) : null);
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
 </script>
 
-<div class="linked" role="group" data-testid="node-linked-panel">
+<div
+	class="linked"
+	role="group"
+	data-testid="node-linked-panel"
+	use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}
+>
 	<!-- Tight, as the node header's controls sit: every px of this row is the strip's, and it has
 	     nothing at its end to keep apart. -->
 	<Bar class="nlp-bar" style="--bar-gap: var(--space-3)">
@@ -69,9 +72,7 @@
 		</div>
 	{/if}
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<DropHint id={panelId} />
 </div>
 
 <style>
@@ -97,9 +98,8 @@
 		padding: var(--ring);
 		scroll-padding: var(--ring);
 	}
-	/* Touch: the strip's cog and bar take a shorter floor than the 44px hit, following the rem
-	   up to a maximum, so a phone's viewer keeps its height for the data. `.nlp-bar` travels to
-	   `Bar` as a prop; `.linked` keeps the rule scoped. */
+	/* Touch: the strip's cog and bar take a floor below the 44px hit, so a phone's viewer keeps
+	   its height for the data. `.nlp-bar` goes to `Bar` as a prop; `.linked` scopes the rule. */
 	@media (hover: none) and (pointer: coarse) {
 		.linked {
 			--strip-control: min(32px, 2rem);
@@ -125,8 +125,5 @@
 		flex: 1;
 		display: grid;
 		place-items: center;
-		padding: var(--space-7);
-		text-align: center;
-		color: var(--text-muted);
 	}
 </style>

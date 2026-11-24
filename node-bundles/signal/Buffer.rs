@@ -2,7 +2,7 @@
 //! An axis past the rank is a new trailing one, and each frame is one entry along it.
 
 use goofi_core::{resolve_axis, Axis, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Buffer {
@@ -85,21 +85,23 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "buffer",
         name: "size",
-        spec: ParamSpec::Float { default: 2.0, min: 0.001, max: 60.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.001, max: 60.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How much recent data to keep, in the selected unit."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "buffer",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some(
             "Which axis to roll along, negative from the end. -1 is time, the default and the \
@@ -107,7 +109,8 @@ static PARAMS: &[ParamDecl] = &[
              new one, so a 1-D frame buffered along axis 1 becomes channels by time.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

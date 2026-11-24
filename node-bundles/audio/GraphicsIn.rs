@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -9,25 +9,28 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the texels themselves, or `min`..`max` mapped onto [-1, 1] or [0, 1]"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     MIN = ParamDecl {
         group: "graphics",
         name: "min",
-        spec: ParamSpec::Float { default: 0.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the value a mapped range starts at; a texture's own window is 0 to 1"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     MAX = ParamDecl {
         group: "graphics",
         name: "max",
-        spec: ParamSpec::Float { default: 1.0, min: -1.0e9, max: 1.0e9 },
+        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the value it ends at"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     CHANNELS = ParamDecl {
         group: "graphics",
@@ -36,7 +39,8 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the picture's brightness on one channel, or its colour channels each on their own"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 

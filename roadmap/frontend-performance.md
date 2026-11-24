@@ -1,26 +1,9 @@
-# Frontend performance: what the audit left open
+# Frontend performance: the owner's-display trace
 
 ## Remaining
 
-- Land the dev profile: `[profile.dev] opt-level = 1` and `[profile.dev.package."*"]
-  opt-level = 2` in `Cargo.toml`. It was reverted because two engine situations failed under it,
-  so they are speed-dependent races that most likely exist in `--release` today:
-  `graphics::shaders_render_on_the_gpu` flakes (`State::ensure_out` remakes the state buffers on
-  a size it should keep) and `audio::one_signal_speaks_through_another_band_by_band` read
-  BandFilter's params before the edit landed (its waits changed in 78262aee; re-check). Fix the
-  races, then land the profile with them.
-- The one measurement that settles the idle frame-rate drop, which did not reproduce headless:
-  on the owner's display, Chrome's Performance panel over 5 s on `thought-sphere` fitted to the
-  screen, once idle, once with the inspector open, once during a knob drag; read Commit /
-  ProduceCanvasResource, FunctionCall, Layout and long tasks, note the DPR and whether a native
-  graphics window was open. A GPU shared with the engine is the one cost the audit could not see.
-- `FitToGraph.svelte`: a wholesale reset can arm a fit against nodes about to be replaced.
-  Minor; it made two measurement runs incomparable.
-
-## Not to be done
-
-- Re-investigating "the reducer decodes every producer sample it drains": the subscriber is
-  one-deep with safe overflow, so it drains at most one sample per wake.
-- Re-investigating "per-frame `clientWidth` reads force layout after the same microtask's
-  writes": Svelte's batch runs render effects before user effects, and the read sites are not
-  reached by envelope or scalar frames.
+- On the owner's display, take a 5 s Chrome Performance trace of
+  `examples/harmonic-observatory.gfi`, fitted to the screen: idle, with the inspector open, and
+  during a param drag. Read Commit / ProduceCanvasResource, FunctionCall, Layout and long tasks;
+  note the DPR and whether a native graphics window is open. The headless trace shows no
+  frame-rate drop; a GPU that the engine also uses is the one cost it cannot see.

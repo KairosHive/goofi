@@ -3,7 +3,29 @@ import { workspace } from 'panelty';
 import { selection } from './selection.svelte';
 import { collectPanels, findPanel } from 'panelty';
 import { arrayToPath, asStateObject, pathToArray } from 'panelty';
-import type { NavContext } from './history.svelte';
+
+/** Where an action was performed, restored before its inverse/forward runs. */
+export interface NavContext {
+	activeWorkspaceId: string;
+	activePanelId: string | null;
+	/** per editor panel id: the sub-patch instance-id stack (root → deepest). */
+	enteredPath: Record<string, string[]>;
+	/** per panel id: selected node + edge ids at record time. */
+	selection: Record<string, { nodes: string[]; edges: string[] }>;
+}
+
+/** A context as the manager hands it back: the shape above, or nothing a client can restore. */
+export function asNavContext(v: unknown): NavContext | null {
+	if (typeof v !== 'object' || v === null) return null;
+	const o = v as Partial<NavContext>;
+	if (typeof o.activeWorkspaceId !== 'string') return null;
+	return {
+		activeWorkspaceId: o.activeWorkspaceId,
+		activePanelId: typeof o.activePanelId === 'string' ? o.activePanelId : null,
+		enteredPath: o.enteredPath ?? {},
+		selection: o.selection ?? {}
+	};
+}
 
 export function captureNavContext(): NavContext {
 	const ws = workspace();

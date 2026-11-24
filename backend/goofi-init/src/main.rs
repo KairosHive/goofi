@@ -1,16 +1,21 @@
 //! `cargo run -p goofi-init` — the one setup step a fresh clone needs. Idempotent.
+//! It draws on the screen goofi starts on, and ends on the banner and the outcome.
+
+use goofi_screen::{banner, say, Color, Screen};
 
 fn main() {
-    let root = goofi_init::repo_root();
-    println!("provisioning goofi's Python interpreters…");
-    match goofi_init::init(&root) {
-        Ok(()) => println!(
-            "ready — `cargo build`, `cargo test` and `cargo run` now work.\n  {}\n  {}",
-            goofi_init::FT_VENV,
-            goofi_init::GIL_VENV,
-        ),
+    let screen = Screen::begin();
+    match goofi_init::init(&goofi_init::repo_root()) {
+        Ok(()) => {
+            screen.close(true);
+            banner(Color::Green, "");
+            screen.ready("Welcome to goofi. Set up");
+            say("    `cargo run` starts goofi; `cargo build` and `cargo test` work too.");
+        }
         Err(e) => {
-            eprintln!("goofi-init: {e}");
+            screen.close(false);
+            banner(Color::Red, "");
+            screen.failed("goofi-init failed", &format!("{e}\nFix the cause and run `cargo run -p goofi-init` again."));
             std::process::exit(1);
         }
     }

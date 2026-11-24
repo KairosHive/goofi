@@ -1,65 +1,84 @@
 //! `GraphDoc` — goofi's control-plane document, and the deltas that keep a browser replica equal
-//! to it.
-//!
-//! A delta is an RFC 7386 merge patch, which is exact only while the document has no null leaf,
-//! because merge patch spends `null` on "delete this key".
+//! to it: path operations, each a `put` of one value at a path or a `del` of the path.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// The roots, in the order a fresh document declares them.
-const ROOTS: [&str; 4] = ["nodes", "links", "variables", "arrangement"];
+/// One step of a delta. A path descends the document's maps, `[root, key, …]`, to the value it
+/// moves: a `put` lands a value there, a `del` removes it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum Op {
+    Put { path: Vec<String>, value: Value },
+    Del { path: Vec<String> },
+}
 
-/// The RFC 7386 merge patch that turns `before` into `after`, or `None` when they are equal.
-pub fn merge_patch(before: &Value, after: &Value) -> Option<Value> {
-    match (before, after) {
-        (Value::Object(b), Value::Object(a)) => {
-            let mut patch = Map::new();
-            for (k, av) in a {
-                match b.get(k) {
-                    Some(bv) => {
-                        if let Some(sub) = merge_patch(bv, av) {
-                            patch.insert(k.clone(), sub);
-                        }
-                    }
-                    None => {
-                        patch.insert(k.clone(), av.clone());
-                    }
+/// The ops that take `before` to `after` under `path`, as deep as the maps go: a map whose kept keys
+/// stay in order is descended, so a moved literal rides alone; any other value is re-sent whole.
+fn diff_into(ops: &mut Vec<Op>, path: Vec<String>, before: &Value, after: &Value) {
+    let at = |key: &str| path.iter().cloned().chain([key.to_string()]).collect::<Vec<_>>();
+    match (before.as_object(), after.as_object()) {
+        // Per-key ops keep old keys in place and append new ones; any other order goes whole.
+        (Some(b), Some(a)) if keeps_order(b, a) => {
+            for (key, v) in a {
+                match b.get(key) {
+                    Some(bv) if bv == v => {}
+                    Some(bv) => diff_into(ops, at(key), bv, v),
+                    None => ops.push(Op::Put { path: at(key), value: v.clone() }),
                 }
             }
-            for k in b.keys() {
-                if !a.contains_key(k) {
-                    patch.insert(k.clone(), Value::Null);
-                }
+            for key in b.keys().filter(|k| !a.contains_key(*k)) {
+                ops.push(Op::Del { path: at(key) });
             }
-            (!patch.is_empty()).then_some(Value::Object(patch))
         }
-        _ => (before != after).then(|| after.clone()),
+        // Two maps whose keys moved are equal to `Map`, which holds no order: a reorder goes whole.
+        (Some(_), Some(_)) => ops.push(Op::Put { path, value: after.clone() }),
+        _ if before == after => {}
+        _ => ops.push(Op::Put { path, value: after.clone() }),
     }
 }
 
-/// Apply an RFC 7386 merge patch in place: `null` removes a key, an object merges into an object,
-/// anything else replaces.
-pub fn apply_merge(target: &mut Value, patch: &Value) {
-    let Value::Object(p) = patch else {
-        *target = patch.clone();
-        return;
-    };
-    if !target.is_object() {
-        *target = Value::Object(Map::new());
-    }
-    let Value::Object(t) = target else { unreachable!("just made it an object") };
-    for (k, pv) in p {
-        if pv.is_null() {
-            t.shift_remove(k);
-        } else {
-            apply_merge(t.entry(k.clone()).or_insert(Value::Null), pv);
+/// Whether per-key ops on `before` leave its keys in `after`'s order.
+fn keeps_order(before: &Map<String, Value>, after: &Map<String, Value>) -> bool {
+    let kept = before.keys().filter(|k| after.contains_key(*k));
+    let added = after.keys().filter(|k| !before.contains_key(*k));
+    kept.chain(added).eq(after.keys())
+}
+
+/// Apply ops in place. A `put` makes the maps on its way; a `del` of what is absent is nothing.
+pub fn apply_ops(target: &mut Value, ops: &[Op]) {
+    for op in ops {
+        match op {
+            Op::Put { path, value } => {
+                let mut cur = &mut *target;
+                for seg in path {
+                    if !cur.is_object() {
+                        *cur = Value::Object(Map::new());
+                    }
+                    cur = cur.as_object_mut().expect("just made it an object").entry(seg.clone()).or_insert(Value::Null);
+                }
+                *cur = value.clone();
+            }
+            Op::Del { path } => {
+                let Some((last, parents)) = path.split_last() else {
+                    *target = Value::Object(Map::new());
+                    continue;
+                };
+                let mut cur = Some(&mut *target);
+                for seg in parents {
+                    cur = cur.and_then(|c| c.get_mut(seg));
+                }
+                if let Some(m) = cur.and_then(Value::as_object_mut) {
+                    m.shift_remove(last);
+                }
+            }
         }
     }
 }
 
-/// What a replica did with a patch.
+/// What a replica did with a delta.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Patch {
+pub enum Receipt {
     Applied,
     Stale,
     /// This replica is missing everything between `at` and `from`, and can only be re-seeded.
@@ -73,46 +92,62 @@ pub struct GraphDoc {
 }
 
 impl GraphDoc {
-    /// An empty document: the five roots present and empty, at version 0.
+    /// Born with the `nodes` root alone: every other root arrives whole with the first
+    /// projection, and a node's record is put under this one by its uid.
     pub fn new() -> GraphDoc {
-        let mut state = Map::new();
-        for root in ROOTS {
-            state.insert(root.to_string(), if root == "links" { Value::Array(vec![]) } else { Value::Object(Map::new()) });
-        }
-        GraphDoc { state: Value::Object(state), version: 0 }
+        GraphDoc { state: serde_json::json!({ "nodes": {} }), version: 0 }
     }
 
-    /// The whole document as plain JSON.
     pub fn to_json(&self) -> Value {
         self.state.clone()
     }
 
-    /// The version this document is at.
     pub fn version(&self) -> u64 {
         self.version
     }
 
-    /// Take the document to `target`, answering the patch that gets a replica there, or `None`
-    /// when nothing changed; the version advances only on a real change.
-    pub fn reconcile_root(&mut self, target: Value) -> Option<Value> {
-        let patch = merge_patch(&self.state, &target)?;
-        self.state = target;
+    /// Take the document to what the graph projected since the last time, answering the ops that
+    /// get a replica there, or `None` when nothing changed; the version advances only on a real
+    /// change. A changed record is diffed against the one held, so a moved literal rides alone.
+    pub fn apply_projection(&mut self, projection: goofi_graph::Projection) -> Option<Vec<Op>> {
+        let mut ops = Vec::new();
+        for (hex, record) in &projection.nodes {
+            let path = vec!["nodes".to_string(), hex.clone()];
+            let held = self.state.get("nodes").and_then(|n| n.get(hex));
+            match (held, record) {
+                (Some(before), Some(after)) => diff_into(&mut ops, path, before, after),
+                (None, Some(after)) => ops.push(Op::Put { path, value: after.clone() }),
+                (Some(_), None) => ops.push(Op::Del { path }),
+                (None, None) => {}
+            }
+        }
+        for (root, after) in &projection.roots {
+            let path = vec![root.to_string()];
+            match self.state.get(*root) {
+                Some(before) => diff_into(&mut ops, path, before, after),
+                None => ops.push(Op::Put { path, value: after.clone() }),
+            }
+        }
+        if ops.is_empty() {
+            return None;
+        }
+        apply_ops(&mut self.state, &ops);
         self.version += 1;
-        Some(patch)
+        Some(ops)
     }
 
-    /// Apply a patch a peer produced. A result already held is stale and skipped; one reaching
+    /// Apply a delta a peer produced. A result already held is stale and skipped; one reaching
     /// forward of this replica is a gap and refused.
-    pub fn apply_patch(&mut self, from: u64, to: u64, patch: &Value) -> Patch {
+    pub fn apply_patch(&mut self, from: u64, to: u64, ops: &[Op]) -> Receipt {
         if to <= self.version {
-            return Patch::Stale;
+            return Receipt::Stale;
         }
         if from != self.version {
-            return Patch::Gap { from, at: self.version };
+            return Receipt::Gap { from, at: self.version };
         }
-        apply_merge(&mut self.state, patch);
+        apply_ops(&mut self.state, ops);
         self.version = to;
-        Patch::Applied
+        Receipt::Applied
     }
 
     /// Adopt a peer's whole document.
@@ -130,19 +165,9 @@ impl GraphDoc {
         Some(cur.clone())
     }
 
-    /// The keys of one root map.
-    fn root_keys(&self, root: &str) -> Vec<String> {
-        self.state
-            .get(root)
-            .and_then(Value::as_object)
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
     pub fn node_ids(&self) -> Vec<String> {
-        self.root_keys("nodes")
+        self.state["nodes"].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default()
     }
-
 }
 
 impl Default for GraphDoc {

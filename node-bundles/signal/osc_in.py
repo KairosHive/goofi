@@ -25,7 +25,7 @@ class OscIn(goofi.Node):
     PARAMS = {
         "osc": {
             "host": goofi.StringParam("0.0.0.0", doc="The address to listen on."),
-            "port": goofi.IntParam(9000, 1, 65535, doc="The port to listen on."),
+            "port": goofi.NumParam(9000, 1, 65535, int=True, doc="The port to listen on."),
             "clear": goofi.PulseParam(doc="Forget every address collected so far."),
         }
     }

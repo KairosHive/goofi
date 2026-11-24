@@ -36,11 +36,11 @@ test('console groups repeats, filters history and runs the shared op vocabulary'
 		await expect(rows.nth(1).getByTestId('console-count')).toHaveText('×2');
 		await filter.fill('');
 		const input = panel.getByRole('textbox', { name: 'Console command' });
-		await input.fill('variable entry add console.value --value 7 --type int');
+		await input.fill('variable entry add console.value --value 7');
 		await input.press('Enter');
 		await expect.poll(async () => (await rawCall(page, 'variable list')).result.variables?.some((e: any) => e.name === 'console.value')).toBe(true);
 		await input.press('ArrowUp');
-		await expect(input).toHaveValue('variable entry add console.value --value 7 --type int');
+		await expect(input).toHaveValue('variable entry add console.value --value 7');
 		await input.fill('invalid-command');
 		await expect(panel.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 		await input.press('Enter');

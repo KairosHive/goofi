@@ -26,12 +26,21 @@ mod platform;
 #[path = "mac.rs"]
 mod platform;
 
+pub use raw_window_handle as rwh;
+
 type Job = Box<dyn FnOnce(&mut Host) + Send>;
 type Handler = Box<dyn FnMut()>;
 type OnClose = Box<dyn FnMut(&mut Host)>;
 
 /// A window as the loop names it, whatever the screen calls it.
 pub type Id = u64;
+
+/// What a GPU surface onto a window is made from. Valid for as long as the window stands.
+#[derive(Clone, Copy)]
+pub struct Handles {
+    pub display: rwh::RawDisplayHandle,
+    pub window: rwh::RawWindowHandle,
+}
 
 /// The COM apartment a plugin needs, opened on THIS thread. A Windows plugin is COM code, and one
 /// that reaches an apartment nobody opened crashes rather than refusing — so every thread that
@@ -46,16 +55,42 @@ thread_local! {
     static RESIZES: RefCell<Vec<(Id, (u32, u32))>> = const { RefCell::new(Vec::new()) };
 }
 
+/// One of the machine's monitors: where it sits on the desktop and its size, in the units a
+/// window's size is given in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Monitor {
+    pub at: (i32, i32),
+    pub size: (u32, u32),
+}
+
+/// Where a window opens: centred on the monitor `screen` counts to, the primary first, or covering it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Place {
+    pub screen: usize,
+    pub fullscreen: bool,
+}
+
 /// What a screen does for the loop: the platform's windows, or none where the suite runs.
 trait Screen {
     fn waker(&self) -> Arc<dyn Wake>;
-    fn create(&mut self, title: &str, size: (u32, u32)) -> Result<(Id, *mut c_void), String>;
+    /// The machine's monitors, the primary first. A screen with no desktop has none.
+    fn monitors(&self) -> Vec<Monitor> {
+        Vec::new()
+    }
+    /// A window of `size` on `on`, or where the desktop puts it with no monitor; `cover` takes the
+    /// whole monitor, without a frame.
+    fn create(&mut self, title: &str, size: (u32, u32), on: Option<Monitor>, cover: bool) -> Result<(Id, *mut c_void), String>;
     fn resize(&mut self, id: Id, size: (u32, u32));
     /// The window's name on the desktop, replaced. A screen with no desktop has nothing to say.
     fn retitle(&mut self, _id: Id, _title: &str) {}
     fn destroy(&mut self, id: Id);
     /// Park until a window event, a wake, a readable plugin descriptor or `until`.
     fn pump(&mut self, until: Option<Instant>, fds: &[i32]) -> Pumped;
+    /// The window's native handles, for a GPU to present straight into it. None where the screen
+    /// has no desktop, and every frame then comes through `present`.
+    fn handles(&self, _id: Id) -> Option<Handles> {
+        None
+    }
     /// Draw one frame into the window, one texel to one pixel from the top-left. `texels` is
     /// `w * h * 4` bytes, row 0 the top, in the byte order THIS screen reads — BGRA on X11 and
     /// Win32, RGBA on macOS. Whoever renders the frame writes that order; nothing swizzles here.
@@ -109,7 +144,7 @@ pub struct Loop {
     jobs: mpsc::Receiver<Job>,
     host: Host,
     /// The loop's entry in the resource index, for as long as it runs.
-    _lease: goofi_core::registry::Lease,
+    _lease: goofi_supervisor::scope::Lease,
 }
 
 impl Loop {
@@ -139,7 +174,7 @@ impl Loop {
             dead: false,
             stopped: false,
         };
-        let lease = goofi_core::registry::lease(goofi_core::registry::Kind::Device, "window loop");
+        let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, "window loop");
         (Loop { jobs: rx, host, _lease: lease }, ui)
     }
 
@@ -165,7 +200,7 @@ impl Loop {
             }
             let (until, fds) = {
                 let rl = self.host.runloop.borrow();
-                (rl.timers.iter().map(|t| t.next).min(), rl.fds.iter().map(|f| f.fd).collect::<Vec<i32>>())
+                (rl.timers.iter().map(|t| t.pace.next()).min(), rl.fds.iter().map(|f| f.fd).collect::<Vec<i32>>())
             };
             let pumped = self.host.screen.pump(until, &fds);
             self.host.dead = pumped.dead;
@@ -177,12 +212,12 @@ impl Loop {
             for fd in pumped.ready {
                 self.host.fire(|rl| rl.fds.iter_mut().find(|f| f.fd == fd).map(|f| &mut f.handler));
             }
-            let now = Instant::now();
             let due: Vec<usize> =
-                self.host.runloop.borrow().timers.iter().filter(|t| t.next <= now).map(|t| t.key).collect();
+                self.host.runloop.borrow().timers.iter().filter(|t| t.pace.due()).map(|t| t.key).collect();
             for key in due {
                 if let Some(t) = self.host.runloop.borrow_mut().timers.iter_mut().find(|t| t.key == key) {
-                    t.next = now + t.every;
+                    // From now, not the tick just passed: a timer held off owes no burst.
+                    t.pace.reset();
                 }
                 self.host.fire(|rl| rl.timers.iter_mut().find(|t| t.key == key).map(|t| &mut t.handler));
             }
@@ -246,13 +281,24 @@ impl Window {
 }
 
 impl Host {
-    /// A top-level window of `size`; `on_close` runs when the user closes it, and is what tears
-    /// down whatever was inside.
-    pub fn open_window(&mut self, title: &str, size: (u32, u32), on_close: OnClose) -> Result<Window, String> {
+    /// The machine's monitors, the primary first; `Place::screen` counts into this list.
+    pub fn monitors(&self) -> Vec<Monitor> {
+        if self.dead { Vec::new() } else { self.screen.monitors() }
+    }
+
+    /// A top-level window of `size` at `place`; `on_close` runs when the user closes it, and is
+    /// what tears down whatever was inside. A screen the machine does not have is refused.
+    pub fn open_window(&mut self, title: &str, size: (u32, u32), place: Place, on_close: OnClose) -> Result<Window, String> {
         if self.dead {
             return Err("the display is gone".into());
         }
-        let (id, parent) = self.screen.create(title, size)?;
+        let monitors = self.screen.monitors();
+        let on = match monitors.get(place.screen) {
+            Some(m) => Some(*m),
+            None if place.screen == 0 => None,
+            None => return Err(format!("no screen {}: this machine has {}", place.screen, monitors.len())),
+        };
+        let (id, parent) = self.screen.create(title, size, on, place.fullscreen && on.is_some())?;
         self.on_close.insert(id, on_close);
         self.titles.insert(id, Title { name: title.to_string(), drawn: 0, since: Instant::now() });
         Ok(Window { id, parent })
@@ -277,15 +323,26 @@ impl Host {
             return;
         }
         self.screen.present(id, size, texels);
-        *self.presents.entry(id).or_default() += 1;
-        self.retitle(id);
+        self.presented(id, 1);
+    }
+
+    /// The window's handles, for a GPU that presents into it without this thread's help. Such a
+    /// GPU reports what it drew through `presented`.
+    pub fn handles(&self, id: Id) -> Option<Handles> {
+        (!self.dead).then(|| self.screen.handles(id)).flatten()
+    }
+
+    /// `frames` more frames reached the window, by whichever path.
+    pub fn presented(&mut self, id: Id, frames: u64) {
+        *self.presents.entry(id).or_default() += frames;
+        self.retitle(id, frames);
     }
 
     /// The window's own frame rate, in its title — what a viewer of the screen actually gets,
     /// counted where the frames are drawn rather than where they are asked for.
-    fn retitle(&mut self, id: Id) {
+    fn retitle(&mut self, id: Id, frames: u64) {
         let Some(title) = self.titles.get_mut(&id) else { return };
-        title.drawn += 1;
+        title.drawn += frames;
         let elapsed = title.since.elapsed();
         if elapsed < RETITLE {
             return;
@@ -312,11 +369,15 @@ impl Host {
     }
 
     /// Call one registered handler with the tables unborrowed, so it may register or unregister:
-    /// taken out for the call, and put back where its entry still stands.
+    /// taken out for the call, and put back where its entry still stands. One that panicked is
+    /// not put back — its entry stays empty rather than firing the same panic every period.
     fn fire(&mut self, find: impl Fn(&mut Runloop) -> Option<&mut Option<Handler>>) {
         let taken = find(&mut self.runloop.borrow_mut()).and_then(Option::take);
         if let Some(mut handler) = taken {
-            let _ = catch_unwind(AssertUnwindSafe(&mut handler));
+            if let Err(p) = catch_unwind(AssertUnwindSafe(&mut handler)) {
+                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("window"), goofi_supervisor::log::Level::Error, None, format!("a plugin's run-loop handler panicked and is retired: {}", panic_text(p)));
+                return;
+            }
             if let Some(slot) = find(&mut self.runloop.borrow_mut()) {
                 *slot = Some(handler);
             }
@@ -332,10 +393,16 @@ pub struct Runloop {
     fds: Vec<Fd>,
 }
 
+/// What a panic payload says, when it says anything.
+fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<&str>().map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".into())
+}
+
 struct Timer {
     key: usize,
-    every: Duration,
-    next: Instant,
+    pace: goofi_supervisor::timing::Pace,
     handler: Option<Handler>,
 }
 
@@ -347,7 +414,7 @@ struct Fd {
 
 impl Runloop {
     pub fn add_timer(&mut self, key: usize, every: Duration, handler: Handler) {
-        self.timers.push(Timer { key, every, next: Instant::now() + every, handler: Some(handler) });
+        self.timers.push(Timer { key, pace: goofi_supervisor::timing::Pace::new(every), handler: Some(handler) });
     }
 
     pub fn remove_timer(&mut self, key: usize) -> bool {

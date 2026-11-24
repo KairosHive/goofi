@@ -64,6 +64,10 @@ pub static PANEL_TYPES: &[PanelType] = &[
                 doc: "the patch variables, which any expression can read" },
     PanelType { id: "control", title: "Control", icon: "sliders-vertical", accepts_node: false,
                 doc: "knobs, sliders and text widgets over one group of variables" },
+    PanelType { id: "machine", title: "State machine", icon: "waypoints", accepts_node: false,
+                doc: "one state machine: its states, transitions and playheads on a canvas" },
+    PanelType { id: "timeline", title: "Timeline", icon: "chart-no-axes-gantt", accepts_node: false,
+                doc: "every track of notes and of keyframed curves on one time axis, and the clock they play on; `state.hidden` lists the track ids this panel hides, `state.sizes` is how large it draws a track by id" },
     PanelType { id: "agent", title: "Agent", icon: "bot", accepts_node: false,
                 doc: "a terminal on an agent harness, running in the patch workspace" },
     PanelType { id: "recorder", title: "Recorder", icon: "circle-dot", accepts_node: true,
@@ -77,24 +81,21 @@ pub static VIEWER_KINDS: &[ViewerKind] = &[
     ViewerKind { id: "image", draws: Draws::Array { draws: (2, 3), accepts: (2, 3) },
                  doc: "a bitmap: (H, W), or (H, W, C) for 1–4 channels" },
     ViewerKind { id: "brain", draws: Draws::Array { draws: (1, 2), accepts: (1, 2) },
-                 doc: "a scalp map of one scalar per channel (1-D), or the connectivity between channels (C, C) as a ring or in 3-D" },
+                 doc: "a scalp map of one scalar per channel (1-D), or the connectivity between named channels (2-D) as a ring or in 3-D" },
     ViewerKind { id: "string", draws: Draws::Pinned("STRING"), doc: "the text of a STRING slot" },
     ViewerKind { id: "table", draws: Draws::Pinned("TABLE"), doc: "the rows of a TABLE slot" },
 ];
 
-/// The row for `id`, if the panel type exists.
 pub fn panel_type(id: &str) -> Option<&'static PanelType> {
     PANEL_TYPES.iter().find(|p| p.id == id)
 }
 
-/// Every panel type's id — the JSON-Schema `enum` an agent's tool list carries.
 pub fn panel_type_ids() -> Vec<&'static str> {
     PANEL_TYPES.iter().map(|p| p.id).collect()
 }
 
-/// The viewer kind a slot of each dtype opens with: the first kind that serves that dtype, which
-/// for a pinned one is the pin. An engine-local kind serves none directly — it reaches a viewer
-/// through its engine's tap — so it names what draws what the tap makes.
+/// The viewer kind a slot of each dtype opens with: the first kind that serves that dtype. An
+/// engine-local kind reaches a viewer through its engine's tap, so it names what draws the tap's.
 pub fn default_kind(dtype: SlotType) -> &'static str {
     if dtype == SlotType::Texture {
         return "image";
@@ -102,7 +103,6 @@ pub fn default_kind(dtype: SlotType) -> &'static str {
     VIEWER_KINDS.iter().find(|k| k.dtype() == dtype.name()).map_or("line", |k| k.id)
 }
 
-/// Every viewer kind's id.
 pub fn viewer_kind_ids() -> Vec<&'static str> {
     VIEWER_KINDS.iter().map(|k| k.id).collect()
 }
@@ -129,6 +129,12 @@ pub fn typescript() -> String {
         .flat_map(|out| SlotType::ALL.iter().filter(|into| out.feeds(**into)).map(move |into| format!("'{}>{}'", out.name(), into.name())))
         .collect::<Vec<_>>()
         .join(", ");
+    let local = SlotType::ALL
+        .iter()
+        .filter(|t| t.engine_local().is_some())
+        .map(|t| format!("'{}'", t.name()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let defaults = SlotType::ALL
         .iter()
         .map(|t| format!("\t{}: '{}',\n", t.name(), default_kind(*t)))
@@ -139,8 +145,8 @@ pub fn typescript() -> String {
         .iter()
         .map(|p| {
             format!(
-                "\t{{ id: '{}', title: '{}', icon: '{}', acceptsNode: {}, doc: '{}' }},\n",
-                p.id, p.title, p.icon, p.accepts_node, p.doc
+                "\t{{ id: '{}', title: '{}', icon: '{}', doc: '{}' }},\n",
+                p.id, p.title, p.icon, p.doc
             )
         })
         .collect::<String>();
@@ -171,10 +177,60 @@ pub fn typescript() -> String {
         .iter()
         .map(|k| {
             let (w, h) = k.born_box();
-            format!("\t{{ id: '{}', type: '{}', w: {w}, h: {h} }},\n", k.as_str(), k.born_value().type_name())
+            format!("\t{{ id: '{}', draws: '{}', w: {w}, h: {h} }},\n", k.as_str(), k.draws())
         })
         .collect::<String>();
     let columns = goofi_core::variables::CONTROL_COLUMNS;
+    let quoted = |fields: &[&str]| fields.iter().map(|f| format!("'{f}'")).collect::<Vec<_>>().join(", ");
+    let state_fields = quoted(&goofi_graph::machine::STATE_FIELDS);
+    let me_fields = quoted(&goofi_graph::machine::ME_FIELDS);
+    let playhead_fields = quoted(&goofi_graph::machine::OWN);
+    let own_groups = quoted(&goofi_core::variables::OWN_GROUPS);
+    let note_names = quoted(goofi_core::scale::NOTES);
+    // Each named scale as the semitones above its root nearest its degrees: what a keyboard marks.
+    let scales: String = goofi_core::scale::PRESET_NAMES
+        .iter()
+        .map(|name| {
+            let mut degrees = [0.0; goofi_core::scale::MAX_DEGREES];
+            let n = goofi_core::scale::Recipe::preset(name).degrees(&mut degrees);
+            let mut semitones: Vec<u32> = degrees[..n].iter().map(|cents| (cents / 100.0).round() as u32 % 12).collect();
+            semitones.sort_unstable();
+            semitones.dedup();
+            format!("\t{name}: [{}],\n", semitones.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
+        })
+        .collect();
+    let expr_args = |args: &[goofi_node::expr::Arg]| {
+        args.iter()
+            .map(|a| {
+                format!(
+                    "\t\t{{ name: '{}', kind: '{}', default: {}, options: [{}], keyword: {}, doc: {} }},\n",
+                    a.name,
+                    a.kind,
+                    a.default.map_or("null".to_string(), |d| json!(d).to_string()),
+                    quoted(a.options),
+                    a.keyword,
+                    json!(a.doc)
+                )
+            })
+            .collect::<String>()
+    };
+    let builtins = goofi_node::expr::BUILTINS
+        .iter()
+        .map(|b| {
+            format!(
+                "\t{{ name: '{}', kind: '{}', scope: '{}', signature: {}, doc: {}, pick: {}, args: [\n{}\t] }},\n",
+                b.name,
+                b.kind,
+                b.scope,
+                json!(b.signature),
+                json!(b.doc),
+                b.pick.map_or("null".to_string(), |p| format!("'{p}'")),
+                expr_args(b.args)
+            )
+        })
+        .collect::<String>();
+    let math = quoted(goofi_node::expr::MATH);
+    let math_constants = quoted(goofi_node::expr::MATH_CONSTANTS);
     let boundaries = BOUNDARY_TYPES
         .iter()
         .map(|(name, dir, dtype)| {
@@ -186,7 +242,7 @@ pub fn typescript() -> String {
          // Panel types and viewer kinds are declared ONCE, in the manager: naming one that is not\n\
          // in the table is a type error here and a teachable refusal there. The BEHAVIOUR keyed off\n\
          // a word stays client-side — which component renders a panel type (`panels/register.ts`),\n\
-         // and whether a particular array draws (`viewers/kind.ts`). Regenerate by running\n\
+         // and whether a particular array draws (`viewers/registry.ts`). Regenerate by running\n\
          // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.\n\
          import type {{ IconName }} from '$lib/ui';\n\
          \n\
@@ -203,8 +259,6 @@ pub fn typescript() -> String {
          \treadonly id: PanelTypeId;\n\
          \treadonly title: string;\n\
          \treadonly icon: IconName;\n\
-         \t/** Whether a node dragged onto this panel binds to it (`state.node`). */\n\
-         \treadonly acceptsNode: boolean;\n\
          \treadonly doc: string;\n\
          }}\n\
          \n\
@@ -235,8 +289,8 @@ pub fn typescript() -> String {
          \n\
          export interface ControlKindInfo {{\n\
          \treadonly id: ControlKindId;\n\
-         \t/** The value type a widget of this kind draws, which is the variable's type at birth. */\n\
-         \treadonly type: 'float' | 'int' | 'bool' | 'string';\n\
+         \t/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, an envelope, or any frame's truth. */\n\
+         \treadonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'envelope' | 'any';\n\
          \t/** The box it is born in, in grid units. */\n\
          \treadonly w: number;\n\
          \treadonly h: number;\n\
@@ -247,6 +301,51 @@ pub fn typescript() -> String {
          \n\
          /** How many columns a control panel's grid is, whatever its pixel width. */\n\
          export const CONTROL_COLUMNS = {columns};\n\
+         \n\
+         /** What `sm('state')` answers a machine's expression: the residents, their names from the\n\
+          * longest resident to the newest, and the arrivals and departures of this instant. */\n\
+         export const STATE_FIELDS = [{state_fields}] as const;\n\
+         /** What `me` answers a machine's expression before the playhead's attributes. */\n\
+         export const ME_FIELDS = [{me_fields}] as const;\n\
+         /** What a playhead's group holds before its attributes: `sm('playhead').<x>` in a param's expression. */\n\
+         export const PLAYHEAD_FIELDS = [{playhead_fields}] as const;\n\
+         /** The variable groups goofi owns: each named for life, and no control panel draws one. */\n\
+         export const OWN_GROUPS = [{own_groups}] as const;\n\
+         /** The twelve notes by name, from C: what a root is one of. */\n\
+         export const NOTE_NAMES = [{note_names}] as const;\n\
+         /** The named scales, each as the semitones above its root nearest its degrees. */\n\
+         export const SCALES: Record<string, readonly number[]> = {{\n{scales}}};\n\
+         \n\
+         export interface ExprArgInfo {{\n\
+         \treadonly name: string;\n\
+         \t/** What it takes, in a word. */\n\
+         \treadonly kind: string;\n\
+         \t/** The default as the user would spell it; null is required. */\n\
+         \treadonly default: string | null;\n\
+         \t/** The closed set of strings it takes, where there is one. */\n\
+         \treadonly options: readonly string[];\n\
+         \t/** Keyword-only: spelled `name=value`. */\n\
+         \treadonly keyword: boolean;\n\
+         \treadonly doc: string;\n\
+         }}\n\
+         \n\
+         export interface ExprBuiltinInfo {{\n\
+         \treadonly name: string;\n\
+         \treadonly kind: 'function' | 'value' | 'namespace';\n\
+         \t/** Where it reads: every expression, a param's, or a machine's. */\n\
+         \treadonly scope: 'all' | 'node' | 'machine';\n\
+         \treadonly signature: string;\n\
+         \treadonly doc: string;\n\
+         \t/** What its one name argument picks from the live patch. */\n\
+         \treadonly pick: 'node' | 'machine' | null;\n\
+         \treadonly args: readonly ExprArgInfo[];\n\
+         }}\n\
+         \n\
+         /** Every name an expression may use beyond Python's own, numpy and math: what the editor completes and documents. */\n\
+         export const EXPR_BUILTINS: readonly ExprBuiltinInfo[] = [\n{builtins}];\n\
+         /** The names `from math import *` brings into every expression. */\n\
+         export const EXPR_MATH = [{math}] as const;\n\
+         export const EXPR_MATH_CONSTANTS = [{math_constants}] as const;\n\
          \n\
          /** The type a sub-patch facade wears in the document. It is not in the palette — grouping\n\
           * is what makes one. */\n\
@@ -271,6 +370,8 @@ pub fn typescript() -> String {
          /** Which output kind may feed which input kind — the manager's one link rule, projected. */\n\
          export const FEEDS: ReadonlySet<string> = new Set([{feeds}]);\n\
          export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${{out}}>${{into}}`);\n\
+         /** The kinds that live inside one engine: a node of that engine reads one as a plan edge. */\n\
+         export const ENGINE_LOCAL: ReadonlySet<SlotDtype> = new Set([{local}]);\n\
          \n\
          /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */\n\
          export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {{\n{defaults}}};\n",
@@ -291,7 +392,7 @@ pub fn boundary_catalog(d: crate::schemas::Detail) -> Vec<(String, String, Value
                 "type": name,
                 "doc": format!("Sub-patch {} ({})", dir.name(), dtype.name().to_lowercase()),
             });
-            if d.full() {
+            if d == crate::schemas::Detail::Full {
                 info["source"] = json!("builtin");
                 info["tags"] = json!([]);
                 info["available"] = json!(true);
@@ -309,39 +410,25 @@ pub fn boundary_catalog(d: crate::schemas::Detail) -> Vec<(String, String, Value
 /// A node's OUTPUT slots as `(key, label, dtype-name)`. The graph owns this — which slots a thing
 /// exposes is a fact about the graph, not a vocabulary — so this is the one read, widened.
 pub fn output_slots(g: &goofi_graph::Graph, uid: goofi_graph::Uid) -> Vec<(String, String, &'static str)> {
-    g.output_slots(uid).into_iter().map(|(k, l, d)| (k, l, d.name())).collect()
+    g.slots(uid, Dir::Out).into_iter().map(|(k, l, d)| (k, l, d.name())).collect()
 }
 
 /// Check one word against a vocabulary, refusing with the whole set.
-fn check(op: &str, field: &str, word: &str, valid: Vec<&'static str>) -> Result<(), String> {
+fn check(field: &str, word: &str, valid: Vec<&'static str>) -> Result<(), String> {
     match valid.contains(&word) {
         true => Ok(()),
-        false => Err(format!("{op}: no {field} `{word}` — this app has: {}", valid.join(", "))),
+        false => Err(format!("no {field} `{word}` — this app has: {}", valid.join(", "))),
     }
 }
 
 /// Resolve a slot word — key or display label — to the KEY, refusing by naming the real ones.
-pub fn resolve_slot(
-    g: &goofi_graph::Graph,
-    op: &str,
-    uid: goofi_graph::Uid,
-    slot: &str,
-) -> Result<String, String> {
+pub fn resolve_slot(g: &goofi_graph::Graph, uid: goofi_graph::Uid, slot: &str) -> Result<String, String> {
     let slots = output_slots(g, uid);
     if let Some((key, _, _)) = slots.iter().find(|(key, label, _)| key == slot || label == slot) {
         return Ok(key.clone());
     }
     let have: Vec<&str> = slots.iter().map(|(_, l, _)| l.as_str()).collect();
-    Err(format!("{op}: node `{}` has no output slot `{slot}` — it has: {}", crate::named(g, uid), have.join(", ")))
-}
-
-pub(crate) fn check_slot(
-    g: &goofi_graph::Graph,
-    op: &str,
-    uid: goofi_graph::Uid,
-    slot: &str,
-) -> Result<(), String> {
-    resolve_slot(g, op, uid, slot).map(|_| ())
+    Err(format!("node `{}` has no output slot `{slot}` — it has: {}", crate::named(g, uid), have.join(", ")))
 }
 
 /// Validate a `node edit` viewer patch — `--viewer` entries already folded to `{slot: view}`. A
@@ -351,14 +438,13 @@ pub fn check_viewers(
     uid: goofi_graph::Uid,
     viewers: &serde_json::Map<String, Value>,
 ) -> Result<(), String> {
-    const OP: &str = "node edit";
     if g.node_type(uid).is_none() {
         return Ok(());
     }
     for (slot, view) in viewers {
-        check_slot(g, OP, uid, slot)?;
+        resolve_slot(g, uid, slot)?;
         if let Some(kind) = view.get("kind").and_then(Value::as_str).filter(|k| !k.is_empty()) {
-            check(OP, "viewer kind", kind, viewer_kind_ids())?;
+            check("viewer kind", kind, viewer_kind_ids())?;
         }
     }
     Ok(())
@@ -373,23 +459,22 @@ pub fn check_panel(
     state: Option<&Value>,
     bound: Option<goofi_graph::Uid>,
 ) -> Result<(), String> {
-    const OP: &str = "layout panel edit";
     if let Some(t) = ty {
         if !plugins.admits_panel(t) {
-            check(OP, "panel type", t, panel_type_ids())?;
+            check("panel type", t, panel_type_ids())?;
         }
     }
     let key = |k: &str| state.and_then(|s| s.get(k)).and_then(Value::as_str).filter(|v| !v.is_empty());
     if let Some(kind) = key("kind") {
-        check(OP, "viewer kind", kind, viewer_kind_ids())?;
+        check("viewer kind", kind, viewer_kind_ids())?;
     }
     if let (Some(slot), Some(uid)) = (key("slot"), bound) {
-        check_slot(g, OP, uid, slot)?;
+        resolve_slot(g, uid, slot)?;
     }
     // Refused against the type this write LEAVES the panel with: a `{type, state}` pair is one act.
     if key("node").is_some() {
         if let Some(t) = ty.and_then(panel_type).filter(|t| !t.accepts_node) {
-            return Err(format!("{OP}: a `{}` panel does not bind a node", t.id));
+            return Err(format!("a `{}` panel does not bind a node", t.id));
         }
     }
     Ok(())

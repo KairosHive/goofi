@@ -1,22 +1,37 @@
-/** The control panel's geometry, kept out of the component so a test can drive it. A cell is in
- * GRID units, never pixels: the panel's width decides what a unit is worth. The drag LAW that turns
- * a widget lives with the widget, in `$lib/ui/knob`. */
+/** The control panel's geometry in GRID units, never pixels: the panel's width sets a unit.
+ * The drag law that turns a widget lives with the widget, in `$lib/ui/knob`. */
 
-import type { VariableType } from '$lib/crdt/graphDoc';
-import { CONTROL_COLUMNS, CONTROL_KINDS, type ControlKindId } from '$lib/api/vocab';
-
-export { turnedBy } from '$lib/ui/knob';
+import { CONTROL_KINDS, type ControlKindId, type ControlKindInfo } from '$lib/api/vocab';
+import type { Literal } from '$lib/api/generated';
+import type { Form } from '$lib/stores/variableValues.svelte';
+import { ENVELOPE_BORN } from '$lib/ui/envelope';
 
 export type Kind = ControlKindId;
-export const KINDS: Kind[] = CONTROL_KINDS.map((k) => k.id);
+/** Each widget kind's value type and the box it is born in, by id. */
+export const KIND = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k])) as Record<Kind, ControlKindInfo>;
 
-/** The value type each widget draws, so a widget asks for one thing, not two. */
-export const TYPE_OF: Record<Kind, VariableType> = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k.type])) as Record<Kind, VariableType>;
+/** Whether a widget of kind `k` can draw a value of `form`, as the manager's `Control::fits` says:
+ * a vector any list of numbers, a colour or an envelope a list of four. */
+export function kindFits(k: ControlKindInfo, form: Form, value: Literal | null): boolean {
+	if (k.draws === 'any') return true;
+	if (k.draws === 'vector' || k.draws === 'color' || k.draws === 'envelope') {
+		const numbers = form === 'list' && Array.isArray(value) && value.every((v) => typeof v === 'number');
+		return numbers && (k.draws === 'vector' || (value as Literal[]).length === 4);
+	}
+	return k.draws === form;
+}
 
-/** The box a widget is born in, in grid units. */
-export const BORN: Record<Kind, { w: number; h: number }> = Object.fromEntries(
-	CONTROL_KINDS.map((k) => [k.id, { w: k.w, h: k.h }])
-) as Record<Kind, { w: number; h: number }>;
+/** The value a widget of kind `k` starts with when a reader switches an attribute to it, as the
+ * manager's `Control::born_value` says. */
+export function bornValue(k: ControlKindInfo): Literal {
+	switch (k.draws) {
+		case 'text': return '';
+		case 'vector': return [0, 0, 0];
+		case 'color': return [0, 0, 0, 1];
+		case 'envelope': return ENVELOPE_BORN;
+		default: return 0;
+	}
+}
 
 export interface Cell {
 	x: number;
@@ -32,20 +47,13 @@ export interface Units {
 	y: number;
 }
 
-/** How many columns the board is, whatever its pixel width. */
-export const COLUMNS = CONTROL_COLUMNS;
-
-/** The smallest a widget may be, in grid units. */
-export const MIN_W = 1;
-export const MIN_H = 1;
-
-/** A cell on the grid, never narrower than the minimum and never off the left or top edge. */
+/** A cell on the grid, at least one unit each way and never off the left or top edge. */
 export function snap(cell: Cell): Cell {
 	return {
 		x: Math.max(0, Math.round(cell.x)),
 		y: Math.max(0, Math.round(cell.y)),
-		w: Math.max(MIN_W, Math.round(cell.w)),
-		h: Math.max(MIN_H, Math.round(cell.h))
+		w: Math.max(1, Math.round(cell.w)),
+		h: Math.max(1, Math.round(cell.h))
 	};
 }
 
@@ -57,10 +65,6 @@ function inside(cell: Cell, columns: number): Cell {
 
 export function sameCell(a: Cell, b: Cell): boolean {
 	return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
-}
-
-export function overlaps(a: Cell, b: Cell): boolean {
-	return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
 /** The cell a `w × h` widget lands on when dropped with its centre `px, py` pixels into the

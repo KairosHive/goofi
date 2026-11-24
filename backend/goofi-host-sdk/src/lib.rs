@@ -13,7 +13,7 @@ pub mod abi;
 pub mod host;
 
 pub use goofi_core;
-pub use goofi_node::{ExprDecl, ExprMode, OutputDecl, ParamDecl, ParamKey, ParamSpec, Params, Show, SlotDecl, Tag};
+pub use goofi_node::{ExprDecl, ExprMode, Face, OutputDecl, ParamDecl, ParamKey, ParamSpec, Params, Role, Show, SlotDecl, Tag};
 
 /// What a node file declares: a `NodeManifest` less the type name, which is the FILE's.
 pub struct Manifest {
@@ -83,6 +83,14 @@ impl<'a> Inputs<'a> {
     /// order; an empty slice on a single slot.
     pub fn get_multi(&self, name: &str) -> &[(String, Data)] {
         self.multis.and_then(|m| m.get(name)).map_or(&[], |v| v.as_slice())
+    }
+    /// The frame at `index` of a slot: a single slot holds one, at 0; a `multi` slot its present
+    /// frames in wire order.
+    pub fn at(&self, name: &str, index: usize) -> Option<&Data> {
+        match self.singles.get(name) {
+            Some(single) => single.as_ref().filter(|_| index == 0),
+            None => self.get_multi(name).get(index).map(|(_, d)| d),
+        }
     }
 }
 

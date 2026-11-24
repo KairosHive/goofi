@@ -1,6 +1,7 @@
 # Plugin system
 
-The package contract is `sdk/README.md`; `library.md` owns the installation unit and distribution.
+The plugin package contract is `sdk/README.md`. `library.md` owns node bundle installation and
+distribution; a node bundle does not require a plugin package.
 Not in this version: a generic state/event bus, panel-open API, task manager, resource provider,
 live replacement, a marketplace, dependency relations between plugins, and durable lifecycle
 subscriptions.

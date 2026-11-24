@@ -48,10 +48,10 @@ class Harmonicity(goofi.Node):
     }
     PARAMS = {
         "harmonicity": {
-            "n_harm": goofi.IntParam(3, 1, 10, doc="Harmonics compared when weighing subharmonic tension."),
-            "delta_lim": goofi.IntParam(250, 1, 300, doc="Widest subharmonic beat still counted, in ms."),
-            "min_notes": goofi.IntParam(2, 2, 10, doc="Peaks that must agree before a subharmonic counts."),
-            "cons_limit": goofi.FloatParam(0.1, 0.001, 1.0, doc="Smallest interval still called consonant."),
+            "n_harm": goofi.NumParam(3, 1, 10, int=True, doc="Harmonics compared when weighing subharmonic tension."),
+            "delta_lim": goofi.NumParam(250, 1, 300, int=True, doc="Widest subharmonic beat still counted, in ms."),
+            "min_notes": goofi.NumParam(2, 2, 10, int=True, doc="Peaks that must agree before a subharmonic counts."),
+            "cons_limit": goofi.NumParam(0.1, 0.001, 1.0, doc="Smallest interval still called consonant."),
         }
     }
 

@@ -6,9 +6,12 @@
 	import { isSlotExpanded } from '$lib/viewers/inlineView';
 	import { ui } from '$lib/stores/ui.svelte';
 	import { flash } from '$lib/stores/flash.svelte';
-	import { NODE, inputPorts, inputUnits } from './nodeMetrics';
+	import { inputPorts, inputUnits, outputTops } from './nodeMetrics';
+	import { createLongPress, type MenuItem } from 'panelty';
+	import { selection } from '$lib/stores/selection.svelte';
+	import { graph, readExpression } from '$lib/stores/graph.svelte';
 	import { nodeHealth } from './nodeHealth';
-	import { StatusDot } from '$lib/ui';
+	import { StatusDot, ContextMenu } from '$lib/ui';
 	import { formatUpdateRate } from './nodeStats';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { provideAnchor } from '$lib/viewers/plotHost';
@@ -41,12 +44,28 @@
 
 	function onInputClick(e: MouseEvent, slot: string, dtype: string): void {
 		e.stopPropagation();
-		uiStore.requestSlotClick({ node: node.uid, slot, dtype, side: 'target', clientX: e.clientX, clientY: e.clientY });
+		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'target', clientX: e.clientX, clientY: e.clientY };
 	}
+
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function slotMenu(x: number, y: number, slot: string): void {
+		menu = { x, y, items: selection().referenceItems({ node: node.uid, slot }, readExpression(node, slot)) };
+	}
+	// The touch door onto the right-click menu; the click its release fires is the menu's, not the add menu's.
+	let pressSlot = '';
+	let held = false;
+	const press = createLongPress((at) => {
+		held = true;
+		slotMenu(at.clientX, at.clientY, pressSlot);
+	});
 
 	function onOutputClick(e: MouseEvent, slot: string, dtype: string): void {
 		e.stopPropagation();
-		uiStore.requestSlotClick({ node: node.uid, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY });
+		if (held) {
+			held = false;
+			return;
+		}
+		uiStore.pendingSlotClick = { node: node.uid, slot, dtype, side: 'source', clientX: e.clientX, clientY: e.clientY };
 	}
 
 	const health = $derived(nodeHealth(node));
@@ -56,24 +75,27 @@
 	const rateLabel = $derived(formatUpdateRate(node?.stats));
 
 	const multiInputs = $derived(new Set(node?.input_multi ?? []));
-	const isMulti = (slot: string) => multiInputs.has(slot);
 	const inPorts = $derived(
-		inputPorts(inputs, isMulti).map((p) => ({
-			...p,
-			dtype: node.input_slots[p.slot],
-			multi: p.units === 2
-		}))
+		inputPorts(inputs).map((p) => ({ ...p, dtype: node.input_slots[p.slot], multi: multiInputs.has(p.slot) }))
 	);
-	const minBody = $derived(inputUnits(inputs, isMulti));
+	const minBody = $derived(inputUnits(inputs));
 
 	// The overlay is unclipped, so it walks the slot stack itself to place each output pill.
-	const outPorts = $derived.by(() => {
-		let y = NODE.border + NODE.header;
-		return outputs.map((slot) => {
-			const top = y + NODE.unit / 2;
-			y += isSlotExpanded(node, slot) ? NODE.unit + NODE.viewer : NODE.unit;
-			return { slot, dtype: node.output_slots[slot], top };
-		});
+	const outPorts = $derived(
+		outputTops(outputs, (slot) => isSlotExpanded(node, slot)).map((p) => ({ ...p, dtype: node.output_slots[p.slot] }))
+	);
+
+	// The control elements this node's params read: light and always shown, as a cable would be.
+	const g = graph();
+	const driving = $derived.by(() => {
+		const names = new Set<string>();
+		for (const group of Object.values(node?.params ?? {}))
+			for (const d of Object.values(group))
+				for (const m of (d.mode === 'expression' && d.expression?.matchAll(/vars\.(\w+\.\w+)|sm\('(\w+)'\)\.(\w+)/g)) || []) {
+					const name = m[1] ?? `${m[2]}.${m[3]}`;
+					if (g.controlled.has(name)) names.add(name);
+				}
+		return [...names];
 	});
 </script>
 
@@ -84,8 +106,9 @@
 	class:has-error={isError}
 	class:booting={isBooting}
 	class:undo-flash={flashing}
+	class:ghost={data.ghost}
 	style="min-height: calc(var(--node-header) + {minBody} * var(--node-u)); --engine: {engineColor(node?.type ?? '')};"
-	data-testid={node?.subpatch ? 'subpatch-node' : undefined}
+	data-testid={data.ghost ? 'placement-ghost' : node?.subpatch ? 'subpatch-node' : undefined}
 >
 	<!-- Clipped to the rounded node shape, so nothing inside it needs to round itself. -->
 	<div class="surface">
@@ -109,11 +132,17 @@
 		{#if outputs.length > 0}
 			<div class="viewers">
 				{#each outputs as slot (slot)}
-					<SlotViewer node={node.uid} {slot} dtype={node.output_slots[slot]} label={node.slot_labels?.[slot]} />
+					<SlotViewer {node} {slot} dtype={node.output_slots[slot]} label={node.slot_labels?.[slot]} />
 				{/each}
 			</div>
 		{/if}
 	</div>
+
+	{#if driving.length}
+		<div class="driving" data-testid="node-control-chips">
+			{#each driving as name (name)}<span class="chip" title="A param reads vars.{name}">{name}</span>{/each}
+		</div>
+	{/if}
 
 	<!-- Connector overlay: outside the clip, so the pills can overhang the edges. -->
 	<div class="ports">
@@ -123,9 +152,7 @@
 				class="conn in"
 				class:multi={port.multi}
 				class:cable-near={uiStore.isCableNear(node.uid, port.slot)}
-				style="top: {port.top}px; height: calc(var(--node-u) * {port.units}); --dtype: {dtypeColor(
-					port.dtype
-				)};"
+				style="top: {port.top}px; --dtype: {dtypeColor(port.dtype)};"
 				onclick={(e) => onInputClick(e, port.slot, port.dtype)}
 				role="button"
 				tabindex="0"
@@ -144,18 +171,55 @@
 				class="conn out"
 				style="top: {port.top}px; --dtype: {dtypeColor(port.dtype)};"
 				onclick={(e) => onOutputClick(e, port.slot, port.dtype)}
+				oncontextmenu={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					slotMenu(e.clientX, e.clientY, port.slot);
+				}}
+				onpointerdown={(e) => {
+					held = false;
+					if (e.pointerType === 'mouse') return;
+					pressSlot = port.slot;
+					press.start(e);
+				}}
+				onpointermove={press.move}
+				onpointerup={press.cancel}
+				onpointercancel={press.cancel}
 				role="button"
 				tabindex="0"
 				data-testid="slot-output-pin"
 				title={port.dtype.toLowerCase()}
 			>
+				<span class="out-label" data-testid="slot-output">{node.slot_labels?.[port.slot] ?? port.slot}</span>
 				<Handle id={port.slot} type="source" position={Position.Right} />
 			</div>
 		{/each}
 	</div>
 </div>
 
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+
 <style>
+	.driving {
+		position: absolute;
+		bottom: 100%;
+		left: 6px;
+		display: flex;
+		gap: 3px;
+		margin-bottom: 3px;
+		pointer-events: none;
+	}
+	.chip {
+		font-size: 9px;
+		line-height: 1;
+		padding: 2px 5px;
+		border-radius: 3px;
+		border: 1px dashed var(--border);
+		color: var(--text-muted);
+		background: var(--surface-1);
+	}
 	.goofi-node {
 		position: relative;
 		display: flex;
@@ -188,6 +252,24 @@
 	}
 	.goofi-node.has-error .surface {
 		border-color: var(--danger);
+	}
+	/* A placement's ghost: the same card, dashed and translucent until it is born. */
+	.goofi-node.ghost {
+		opacity: 0.9;
+	}
+	.goofi-node.ghost .surface {
+		border: 1.5px dashed var(--accent);
+		box-shadow: var(--shadow-1);
+	}
+	/* A finger has no cursor to say "not placed yet", so a coarse pointer states it in the drawing. */
+	@media (hover: none) and (pointer: coarse) {
+		.goofi-node.ghost {
+			opacity: 0.6;
+		}
+		.goofi-node.ghost .surface {
+			border-width: 2px;
+			box-shadow: none;
+		}
 	}
 	.goofi-node.booting .surface {
 		opacity: 0.75;
@@ -276,26 +358,102 @@
 		pointer-events: auto;
 		cursor: pointer;
 	}
+	/* The handle is a POINT on the node border at the slot's centre, drawn as the pill (::before)
+	   and taken through its hit area (::after). Svelte Flow draws the cable in flight to a handle's
+	   centre and the settled edge to its outer edge, and a point makes those the same place. The
+	   box itself takes no pointer, so the hit areas are exactly the pseudo-elements, one slot tall,
+	   and neighbours never overlap. */
+	.conn {
+		pointer-events: none;
+	}
+	.conn :global(.svelte-flow__handle) {
+		pointer-events: auto;
+		top: 50%;
+		width: 0;
+		height: 0;
+		min-width: 0;
+		min-height: 0;
+		transform: none;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+	}
+	.conn :global(.svelte-flow__handle)::after {
+		content: '';
+		position: absolute;
+		top: calc(var(--node-u) / -2);
+		height: var(--node-u);
+	}
+	/* The capsule: dtype-coloured, on the border, as tall as the slot it serves. A single input is
+	   filled; a multi-input is the outline alone. */
+	.conn :global(.svelte-flow__handle)::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		transform: translate(-50%, -50%);
+		width: 7px;
+		height: calc(var(--node-u) - 6px);
+		box-sizing: border-box;
+		border-radius: 999px;
+		background: var(--dtype, var(--border-strong));
+		box-shadow: 0 0 0 2px var(--surface-1);
+		transition:
+			width var(--dur-fast) var(--ease),
+			height var(--dur-fast) var(--ease),
+			box-shadow var(--dur-fast) var(--ease);
+	}
+	.conn :global(.svelte-flow__handle:hover)::before {
+		width: 9px;
+		height: calc(var(--node-u) - 4px);
+		box-shadow:
+			0 0 0 2px var(--surface-1),
+			0 0 8px var(--dtype, var(--accent));
+	}
+	/* The point sits on the border PIXEL, not its outer edge: half a pixel in, so a 7px pill
+	   covers three pixels either side of the 1px line. An input's hit area is the pill plus 4px
+	   each side, centred on the border. */
 	.conn.in {
 		left: 0;
 		width: 22px;
 		transform: translate(-50%, -50%);
 	}
+	.conn.in :global(.svelte-flow__handle) {
+		left: calc(50% + 0.5px);
+	}
+	.conn.in :global(.svelte-flow__handle)::after {
+		left: -11px;
+		width: 22px;
+	}
+	/* A list input is the outline alone; its hollow is the canvas, so the border passes behind it. */
+	.conn.in.multi :global(.svelte-flow__handle)::before {
+		background: var(--bg);
+		border: 2px solid var(--dtype, var(--border-strong));
+	}
+	/* An output's hit area runs from its label to 11px past the border. The box is padded so the
+	   pill's glow stays inside the clip that bounds the hit area at the box's edge, and its label
+	   ends where the slot header's spacer does: 12px in from the border. */
 	.conn.out {
-		right: 0;
-		width: 16px;
-		transform: translate(50%, -50%);
+		right: -16px;
+		height: calc(var(--node-u) + 16px);
+		padding: 0 28px 0 4px;
+		transform: translateY(-50%);
+		overflow: hidden;
+		font-family: var(--font-mono);
+		font-size: 10px;
 	}
-	/* Centre the handle in its box, so the cable anchor SvelteFlow measures lands on the edge. */
-	.conn.in :global(.svelte-flow__handle-left) {
-		left: 50%;
+	.conn.out :global(.svelte-flow__handle) {
+		right: 16.5px;
 	}
-	.conn.in.multi :global(.svelte-flow__handle-left) {
-		height: calc(var(--node-u) * 1.15);
-		border-radius: 3px;
+	.conn.out :global(.svelte-flow__handle)::after {
+		right: -11px;
+		width: 100vw;
 	}
-	.conn.out :global(.svelte-flow__handle-right) {
-		right: 50%;
+	/* Part of the hit area, never of the hover: the pill alone answers the pointer. */
+	.out-label {
+		color: var(--dtype, var(--text-dim));
+		padding: 0 2px;
+		pointer-events: none;
 	}
 	.conn-label {
 		position: absolute;

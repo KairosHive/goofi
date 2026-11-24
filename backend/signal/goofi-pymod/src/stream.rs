@@ -1,11 +1,10 @@
 //! `goofi.Stream` — the Python view of `goofi_core::Stream`.
 
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 
 use goofi_core::resolve_axis;
 
-use crate::data::array_to_f32;
+use crate::data::{array_to_f32, numpy_f32};
 
 /// Bounded input history. Each frame is appended in full.
 #[pyclass]
@@ -33,9 +32,7 @@ impl Stream {
         let (_src, shape, bytes) = array_to_f32(py, array)?;
         let dim = resolve_axis(axis, shape.len()).map_err(pyo3::exceptions::PyValueError::new_err)?;
         let (out_shape, out, offset) = self.inner.push(&shape, dim, &bytes, history);
-        let np = py.import("numpy")?;
-        let flat = np.getattr("frombuffer")?.call1((PyBytes::new(py, &out), "<f4"))?;
-        Ok((flat.call_method1("reshape", (out_shape,))?, offset))
+        Ok((numpy_f32(py, &out_shape, &out)?, offset))
     }
 
     /// Forget the past — what a `reset` pulse clears.

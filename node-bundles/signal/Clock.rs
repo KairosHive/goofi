@@ -7,7 +7,7 @@
 //! through `count`, which never skips one.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
 
 /// Seconds between ticks, or `None` when the settings name no rate at all.
 fn interval(rate: f64, unit: &str, division: f64) -> Option<f64> {
@@ -75,11 +75,12 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "clock",
         name: "rate",
-        spec: ParamSpec::Float { default: 120.0, min: 0.0, max: 1.0e6 },
+        spec: ParamSpec::Num { default: &[120.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How fast, read in whatever `unit` says."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -88,16 +89,18 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("What `rate` means: beats a minute, ticks a second, or seconds between ticks."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "clock",
         name: "division",
-        spec: ParamSpec::Float { default: 1.0, min: 0.001, max: 1000.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.001, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How many ticks to cut each one into. At 120 bpm, 4 is sixteenth notes."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -106,7 +109,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Off holds the place it had reached, so starting again resumes rather than restarts."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "clock",
@@ -115,21 +119,23 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Put the phase and the count back to zero."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and a clock
     // can tick no finer than the rate it is asked at.
     ParamDecl {
         group: "common",
         name: "max_frequency",
-        spec: ParamSpec::Float { default: 30.0, min: 0.0, max: 1000.0 },
-        expression: Some(ExprDecl { source: "variables.system.default_ufreq", mode: ExprMode::On, trigger: true }),
+        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
+        expression: Some(ExprDecl { source: "vars.signal.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[

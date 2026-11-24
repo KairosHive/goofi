@@ -12,7 +12,7 @@ use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 pub const MANIFEST: &str = "patch.yaml";
-const WORKSPACE: &str = "workspace";
+pub const WORKSPACE: &str = "workspace";
 
 /// The workspace's own list of what NOT to package. Not named `.ignore`: ripgrep and its kin read
 /// that as a SEARCH ignore, and the workspace is the cwd goofi spawns an agent harness into.

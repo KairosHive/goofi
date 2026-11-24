@@ -1,24 +1,26 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
         group: "mixdown",
         name: "channels",
-        spec: ParamSpec::Int { default: 2, min: 1, max: 256, options: &[] },
+        spec: ParamSpec::Num { default: &[2.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     SPREAD = ParamDecl {
         group: "mixdown",
         name: "spread",
-        spec: ParamSpec::Float { default: 1.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how far apart the voices sit; at 0 every one of them is in the middle"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 

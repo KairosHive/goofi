@@ -5,8 +5,9 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use goofi_agent::Launch;
 use goofi_bridge::ops::registry;
-use goofi_bridge::{term, AppState};
+use goofi_bridge::AppState;
 use goofi_tests::{host, http, Client, Goofi, WAIT};
 use serde_json::{json, Value};
 use tokio_tungstenite::connect_async;
@@ -21,7 +22,7 @@ type Ws = tokio_tungstenite::WebSocketStream<
 /// `sh -c` puts it in a child, and the group signal then kills the outer shell, which holds no
 /// trap, so the harness that must refuse to leave leaves at once. On Windows `cmd /C` cannot read
 /// the syntax at all, so an inner shell is the only way in — and the trap is unobservable there
-/// regardless, because a stop is `taskkill` and never a signal.
+/// regardless, because a stop closes the pseudoconsole and sends no signal.
 ///
 /// The loop matters on both: a bare `sleep` is a child of the same group and dies of the signal.
 #[cfg(unix)]
@@ -29,13 +30,20 @@ const DEAF: &str = "command = \"trap 'echo GOT-TERM' TERM; while :; do echo arme
 #[cfg(windows)]
 const DEAF: &str = "command = \"sh -c 'while :; do echo armed; sleep 0.2; done'\"\n\n";
 
-async fn start_server() -> (Goofi, String, AppState) {
-    let g = Goofi::new();
+/// The harness plane is the SESSION's, and every server in this binary shares one session: two
+/// situations at once would read each other's instances off one roster.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The guard comes FIRST so it drops last: the server's drop reaps what the situation spawned
+/// before the next one reads the roster.
+async fn start_server() -> (tokio::sync::MutexGuard<'static, ()>, Goofi, String, AppState) {
+    let serial = ONE_AT_A_TIME.lock().await;
+    let g = Goofi::mcp();
     // The `_`-test agents are CONFIG entries now, written once into the test-scoped home the
     // fixture minted — never advertised, exactly as a user's own test entry would be.
     static CONFIG: std::sync::Once = std::sync::Once::new();
     CONFIG.call_once(|| {
-        let at = goofi_core::home::config_file();
+        let at = goofi_supervisor::layout::config_file();
         let _ = std::fs::create_dir_all(at.parent().unwrap());
         let config = concat!(
             // An entry needing shell SYNTAX states `sh -c` itself, because the launcher shell is
@@ -52,7 +60,7 @@ async fn start_server() -> (Goofi, String, AppState) {
     });
     let addr = host(&g.serve().await).to_string();
     let state = g.state.clone();
-    (g, addr, state)
+    (serial, g, addr, state)
 }
 
 /// One JSON-RPC request to an MCP address.
@@ -96,7 +104,7 @@ async fn tools(addr: &str) -> Vec<Value> {
 
 #[tokio::test]
 async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
-    let (g, addr, _s) = start_server().await;
+    let (_serial, g, addr, _s) = start_server().await;
     let served = tools(&addr).await;
     assert_eq!(served.len(), 1, "ONE tool, whatever the registry holds: {served:?}");
     let t = &served[0];
@@ -113,8 +121,8 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
     assert_eq!(ops.len(), registry().len(), "every registry row is in the index");
     let add = ops.iter().find(|o| o["op"] == json!("node add")).unwrap();
     assert_eq!(add["kind"], json!("write"));
-    assert!(add["args"].as_str().is_some_and(|a| a.contains("type:string!")),
-            "the args schema rides the index: {add}");
+    assert!(add["args"].as_array().is_some_and(|a| a.iter().any(|d| d["name"] == "type" && d["type"] == "string" && d["required"] == true)),
+            "the args declarations ride the index: {add}");
 
     // One command executes directly: flags typed by the schema — a NEGATIVE float2 value, a
     // chosen name, and a `json` flag quoted as bash would quote it.
@@ -155,6 +163,11 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
     assert!(err && text.contains("twice"), "{text}");
     let (text, err) = exec(&addr, "/mcp", 14, &["node add --type"]).await;
     assert!(err && text.contains("needs a value"), "{text}");
+    // A group word alone is its `list`; a group without one is still refused with its children.
+    let guides: Value = serde_json::from_str(&ok_exec(&addr, 60, "guide").await).unwrap();
+    assert_eq!(guides["guides"][0]["name"], json!("orientation"), "`guide` is `guide list`: {guides}");
+    let (text, err) = exec(&addr, "/mcp", 61, &["session"]).await;
+    assert!(err && text.contains("under `session`") && text.contains("session status"), "{text}");
 
     // …and each spelling the schema promises parses: `--flag=value`, the bool's `--no-` form on
     // a declared bool only, `any` as JSON-or-bare-string, and a variadic positional list.
@@ -165,9 +178,9 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
     assert!(!bare.contains("params:"), "the bool's negative spelling gates the section: {bare}");
     let (text, err) = exec(&addr, "/mcp", 17, &["node add --type LFO --no-name x"]).await;
     assert!(err && text.contains("--no-name"), "`--no-` binds only to a declared bool: {text}");
-    ok_exec(&addr, 18, "variable entry add patch.gain --type float --value 2.5").await;
+    ok_exec(&addr, 18, "variable entry add patch.gain --value 2.5").await;
     let tag: Value =
-        serde_json::from_str(&ok_exec(&addr, 19, "variable entry add patch.tag --type string --value hello").await)
+        serde_json::from_str(&ok_exec(&addr, 19, "variable entry add patch.tag --value hello").await)
             .unwrap();
     assert_eq!(tag["value"], json!("hello"), "`any` falls back to the bare string");
     let second = ok_exec(&addr, 20, "node add --type Buffer").await;
@@ -184,7 +197,7 @@ async fn the_one_tool_speaks_the_whole_op_vocabulary_in_command_lines() {
 
 #[tokio::test]
 async fn several_commands_are_one_batch_and_a_refused_step_takes_the_whole_batch_back() {
-    let (g, addr, _s) = start_server().await;
+    let (_serial, g, addr, _s) = start_server().await;
     let nodes = |g: &Goofi| g.call("session state", json!({}))["nodes"]
         .as_object().map(|n| n.len()).unwrap_or(0);
 
@@ -200,7 +213,8 @@ async fn several_commands_are_one_batch_and_a_refused_step_takes_the_whole_batch
     let patch = tab.event("doc_patch").await;
     for step in results.as_array().unwrap() {
         let uid = step["uid"].as_str().expect("a birth reply");
-        assert!(patch["patch"]["nodes"].get(uid).is_some(),
+        let puts = patch["ops"].as_array().expect("a delta is a list of ops");
+        assert!(puts.iter().any(|op| op["path"] == json!(["nodes", uid])),
                 "the ONE settle patch carries {uid}: {patch}");
     }
 
@@ -227,7 +241,7 @@ async fn several_commands_are_one_batch_and_a_refused_step_takes_the_whole_batch
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_agents_drive_one_server_at_once_and_read_their_work_back_out_of_it() {
-    let (_g, addr, _s) = start_server().await;
+    let (_serial, _g, addr, _s) = start_server().await;
     let init = rpc(&addr, "/mcp", 1, "initialize", json!({
         "protocolVersion": "2025-06-18", "capabilities": {},
         "clientInfo": { "name": "test", "version": "0" } })).await;
@@ -298,15 +312,28 @@ async fn recv_text(ws: &mut Ws) -> Value {
 
 /// Send an RPC on `/control` and return its reply, skipping interleaved broadcast events.
 async fn call(ws: &mut Ws, id: i64, op: &str, payload: Value) -> Value {
+    call_with_events(ws, id, op, payload).await.0
+}
+
+/// As [`call`], with the broadcast events that arrived before the reply: an event the op causes
+/// may land on the socket ahead of its own reply, and a test that waits for it must not skip it.
+async fn call_with_events(ws: &mut Ws, id: i64, op: &str, payload: Value) -> (Value, Vec<Value>) {
     ws.send(Message::Text(json!({ "id": id, "op": op, "payload": payload }).to_string().into()))
         .await.unwrap();
+    let mut events = Vec::new();
     loop {
         let v = recv_text(ws).await;
         if v["id"] == json!(id) {
             assert!(v["error"].is_null(), "{op} failed: {v}");
-            return v["result"].clone();
+            return (v["result"].clone(), events);
         }
+        events.push(v);
     }
+}
+
+/// Whether `ev` is the `harness_changed` that reports the one instance exited.
+fn reports_exited(ev: &Value) -> bool {
+    ev["event"] == json!("harness_changed") && ev["payload"]["instances"][0]["state"] == json!("exited")
 }
 
 /// A control socket past its `hello`, and one spawned `_sh` harness with its PTY attached.
@@ -352,15 +379,12 @@ async fn read_until(ws: &mut Ws, want: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it_chose() {
-    let (g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
 
     // `6*7` is echoed input; only `42` can come from the child having run.
     term.send(Message::Binary(b"echo $((6*7))\n".to_vec().into())).await.unwrap();
     read_until(&mut term, "42").await;
-
-    // An edit under the shell's own actor, so the exit below can prove the stack dies with it.
-    g.client(&term::actor_of(&id)).call("node add", json!({ "type": "LFO" }));
 
     // `TAIL''MARK` is what the terminal echoes, so `TAILMARK` can only come from the child.
     term.send(Message::Binary(
@@ -380,31 +404,36 @@ async fn a_harness_spawns_carries_bytes_both_ways_and_is_reaped_with_the_code_it
     assert!(read_until(&mut late, "exit_code").await.contains("\"exit_code\":7"),
             "a late attach was told nothing");
 
-    // A shell that ends on its OWN loses its undo stack too — the reaper owns the drop, and its
-    // broadcast comes after it, so the exited event is the settled signal.
+    // A shell that ends on its OWN is reported, and its broadcast comes after the reaper, so the
+    // exited event is the settled signal.
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let ev = recv_text_by(&mut ctl, deadline).await;
-        if ev["event"] == json!("harness_changed")
-            && ev["payload"]["instances"][0]["state"] == json!("exited")
-        {
-            break;
-        }
-    }
-    assert_eq!(g.client(&term::actor_of(&id)).call("undo", json!({}))["changed"], json!(false),
-               "the self-exited shell's stack has something to undo");
+    while !reports_exited(&recv_text_by(&mut ctl, deadline).await) {}
 
     let roster = call(&mut ctl, 2, "agent list", json!({})).await;
     let inst = &roster["instances"][0];
     assert_eq!((&inst["id"], &inst["harness"], &inst["state"], &inst["exit_code"]),
                (&json!(id), &json!("_sh"), &json!("exited"), &json!(7)), "{roster}");
+
+    // A dismissal releases the instance whole, its terminal and its entry in the resource index
+    // included: ConPTY ends the stream the drain holds the instance by only when that terminal closes.
+    let held = format!("harness _sh (pid {})", inst["pid"]);
+    call(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    for probe in 10.. {
+        let status = call(&mut ctl, probe, "session status", json!({})).await;
+        if !status["resources"].to_string().contains(&held) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the dismissed harness is still held: {status}");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     state.release_mount();
 }
 
 #[tokio::test]
 async fn a_harness_runs_unwatched_and_its_roster_survives_a_reconnect() {
     // On Windows ConPTY blocks the child on a cursor query, so with no viewer goofi must answer it.
-    let (_g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, _) = connect_async(format!("ws://{addr}/control")).await.unwrap();
     let hello = recv_text(&mut ctl).await;
     assert_eq!(hello["payload"]["harnesses"]["instances"], json!([]), "a fresh backend: {hello}");
@@ -452,7 +481,7 @@ fn field<'a>(seen: &'a str, key: &str) -> &'a str {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overlaid() {
-    let (_g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
     let seen = report(&mut term).await;
 
@@ -473,9 +502,8 @@ async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overl
         ("LC_ALL".into(), "C".into()), ("LANG".into(), "C".into()),
         ("STATED_BY_THE_TEST".into(), "kept".into()),
         ("PYTHONHOME".into(), "/embedded".into()), ("PYTHONPATH".into(), "/embedded".into())];
-    let stated = state.harnesses
-        .spawn("_sh", &state.mount(), "http://127.0.0.1:1", &env, state.events.clone(),
-               state.history.clone())
+    let stated = state.agents
+        .spawn("_sh", Launch::default(), &state.mount(), &env)
         .expect("a spawn with a stated parent environment");
     let (mut term, _) = connect_async(format!("ws://{addr}/term/{stated}")).await.unwrap();
     let seen = report(&mut term).await;
@@ -490,37 +518,44 @@ async fn a_harness_runs_in_the_patchs_workspace_with_the_terminal_contract_overl
 
     // Reap both: a leaked PTY child outlives the suite and corrupts every later measurement.
     call(&mut ctl, 2, "agent stop", json!({ "instance": id })).await;
-    state.harnesses.stop(&stated).unwrap();
+    state.agents.stop(&stated).unwrap();
     state.release_mount();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stop_asks_before_it_insists_and_reaps_a_harness_that_will_not_go() {
     // Waiting for `armed` first matters: a signal delivered before the trap proves nothing.
-    let (_g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_deaf").await;
     read_until(&mut term, "armed").await;
     call(&mut ctl, 2, "agent stop", json!({ "instance": id })).await;
 
-    // Read BEFORE waiting on the trap: the ask is synchronous, and a slow echo can outlast
+    // On unix the harness traps the SIGTERM, so it is `stopping` for the whole grace and the kill
+    // ends it. Read BEFORE waiting on the trap: the ask is synchronous, and a slow echo can outlast
     // the grace — after which `stopping` has already moved on.
-    let roster = call(&mut ctl, 3, "agent list", json!({})).await;
-    assert_eq!(roster["instances"][0]["state"], json!("stopping"), "{roster}");
-
-    // The graceful ask is only OBSERVABLE where signals are; Windows refuses `taskkill` without `/F`.
     #[cfg(unix)]
-    read_until(&mut term, "GOT-TERM").await;
+    {
+        let roster = call(&mut ctl, 3, "agent list", json!({})).await;
+        assert_eq!(roster["instances"][0]["state"], json!("stopping"), "{roster}");
+        read_until(&mut term, "GOT-TERM").await;
+    }
 
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
+    let exited = loop {
         let ev = recv_text_by(&mut ctl, deadline).await;
         let inst = ev["payload"]["instances"][0].clone();
         if ev["event"] == json!("harness_changed") && inst["state"] == json!("exited") {
             assert_eq!(inst["id"], json!(id), "another instance exited: {ev}");
             assert!(inst["exit_code"].is_number(), "no exit code captured: {ev}");
-            break;
+            break inst;
         }
-    }
+    };
+    // On Windows the ask closes the pseudoconsole, which no console process outlives, so the
+    // harness leaves on the ask: its code is the close's `STATUS_CONTROL_C_EXIT`, not the kill's 1.
+    #[cfg(windows)]
+    assert_eq!(exited["exit_code"], json!(0xC000_013A_u32), "the ask never reached it: {exited}");
+    #[cfg(unix)]
+    let _ = exited;
 
     // A command that cannot launch fails ON its PTY — and the tail replays it to a socket
     // that arrives after the words, the race the panel always loses to a fast shell.
@@ -558,7 +593,7 @@ async fn recv_size(ws: &mut Ws) -> (u64, u64) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn several_views_of_one_terminal_agree_on_one_size() {
     // A PTY has one window: the last view to speak wins, and every view is told the answer.
-    let (_g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, id, mut a) = harness(&addr, "_sh").await;
     let url = format!("ws://{addr}/term/{id}");
     let (mut b, _) = connect_async(&url).await.unwrap();
@@ -595,16 +630,26 @@ async fn several_views_of_one_terminal_agree_on_one_size() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patch() {
-    let (g, addr, state) = start_server().await;
+    let (_serial, g, addr, state) = start_server().await;
     let (mut ctl, id, mut term) = harness(&addr, "_sh").await;
 
+    // The workspace note points at the orientation, which is an OP — the same text for an agent
+    // spawned here and for one outside goofi — listed first among the guides, the skills after it.
     let mount = state.mount();
-    let agents = std::fs::read_to_string(mount.join("AGENTS.md"))
-        .expect("the workspace was seeded with the orientation");
+    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("guide get orientation"));
+    let guides = g.call("guide list", json!({}));
+    assert_eq!(guides["guides"][0]["name"], json!("orientation"), "{guides}");
+    assert!(guides["guides"].as_array().unwrap().iter().any(|e|
+                e["name"] == "patching-biosignals" && e["doc"].as_str().is_some_and(|d| d.contains("EEG"))),
+            "a shipped skill is listed under its frontmatter description: {guides}");
+    let skill = g.call("guide get", json!({ "name": "patching-biosignals" }));
+    assert!(skill["text"].as_str().is_some_and(|t| t.starts_with("---\nname: patching-biosignals")), "{skill}");
+    let refused = g.try_call("guide get", json!({ "name": "nope" })).unwrap_err();
+    assert!(refused.contains("orientation, designing-biofeedback"), "a miss names the guides: {refused}");
+    let agents = g.call("guide get", json!({ "name": "orientation" }))["text"].as_str().unwrap().to_string();
     assert!(agents.contains("goofi is a live"), "the orientation is the real one: {agents}");
-    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
     // The orientation's own node example, written where the orientation says, is a node — so the
-    // seeded text can never name a folder the scan does not read or a shape the probe refuses.
+    // text can never name a folder the scan does not read or a shape the probe refuses.
     let example: String = agents
         .lines()
         .skip_while(|l| !l.contains("# nodes_signal/scale.py"))
@@ -621,12 +666,13 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     // server's id, its own undo actor, and a `goofi` that resolves — out of the directory the
     // running binary sits in, which goofi puts on PATH.
     term.send(Message::Binary(
-        b"stty -echo; printf 'S[%s]A[%s]G[%s]P[%s]EN''D\n' \
-          \"$GOOFI_SESSION\" \"$GOOFI_ACTOR\" \"$(command -v goofi)\" \"$PATH\"\n".to_vec().into()))
+        b"stty -echo; printf 'S[%s]G[%s]P[%s]EN''D\n' \
+          \"$GOOFI_SESSION\" \"$(command -v goofi)\" \"$PATH\"\n".to_vec().into()))
         .await.unwrap();
     let said = read_until(&mut term, "END").await;
-    assert!(said.contains(&format!("S[{}]", &*state.instance_id)), "{said}");
-    assert!(said.contains(&format!("A[{}]", term::actor_of(&id))), "{said}");
+    // The SESSION's id, which is what the harness plane is keyed by: the binary names its one
+    // instance after the session it holds, while this harness boots several into one session.
+    assert!(said.contains(&format!("S[{}]", goofi_tests::session_id())), "{said}");
     // The SEAT, not the resolution: here the running binary is this test, and no `goofi` sits
     // beside it to be found — that half is only true of the real binary. What the contract puts
     // in the child either way is the running binary's own directory, first.
@@ -640,33 +686,34 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     assert!(field(&said, "P[").contains(&format!("{before}/{last}")),
             "goofi's own directory is not on the agent's PATH: {said}");
 
-    // A stack's lifetime follows its actor: the stopped shell keeps its edits, loses its undo.
-    // The reaper drops the stack and THEN broadcasts, so the exited event is the settled signal.
-    let actor = term::actor_of(&id);
-    g.client(&actor).call("node add", json!({ "type": "LFO" }));
-    call(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
+    // The stopped shell's edits stay in the one history: the graph keeps what the agent built,
+    // and any client's undo takes it back.
+    g.call("node add", json!({ "type": "LFO" }));
+    // A shell that leaves on the ask is reaped before the reply is written, so the exited event
+    // may already have ridden the socket ahead of it.
+    let (_, before) = call_with_events(&mut ctl, 3, "agent stop", json!({ "instance": id })).await;
     let deadline = tokio::time::Instant::now() + WAIT;
-    loop {
-        let ev = recv_text_by(&mut ctl, deadline).await;
-        if ev["event"] == json!("harness_changed")
-            && ev["payload"]["instances"][0]["state"] == json!("exited")
-        {
-            break;
-        }
-    }
-    assert_eq!(g.client(&actor).call("undo", json!({}))["changed"], json!(false),
-               "the dropped stack has nothing to undo");
+    while !before.iter().any(reports_exited) && !reports_exited(&recv_text_by(&mut ctl, deadline).await) {}
     assert_eq!(g.call("session state", json!({}))["nodes"].as_object().map(|n| n.len()), Some(1),
-               "…and the graph keeps what the agent built");
+               "the graph keeps what the agent built");
+    assert_eq!(g.call("undo", json!({}))["changed"], json!(true), "…and the one history takes it back from any client");
+    assert_eq!(g.call("session state", json!({}))["nodes"].as_object().map(|n| n.len()), Some(0));
+    assert_eq!(g.call("redo", json!({}))["changed"], json!(true));
 
-    // Replacing the patch reaps the running agents, and the central /mcp stays open.
+    // Replacing the patch reaps the running agents, and the central /mcp stays open. One that
+    // will not leave is off the roster too, while its grace runs.
     let (mut ctl2, _, mut second) = harness(&addr, "_sh").await;
     attached(&mut second).await;
+    let (_ctl3, _, mut deaf) = harness(&addr, "_deaf").await;
+    read_until(&mut deaf, "armed").await;
     call(&mut ctl2, 4, "session new", json!({})).await;
     let roster = call(&mut ctl2, 5, "agent list", json!({})).await;
     assert_eq!(roster["instances"], json!([]), "the replaced patch's harnesses stayed: {roster}");
     // `read_until` itself is the pin: no exit frame within its deadline panics.
     read_until(&mut second, "exit_code").await;
+    // The deaf one went on the insist, not the ask, so its reap came after the grace: the exit
+    // frame is still the last thing its view gets, however the child went.
+    read_until(&mut deaf, "exit_code").await;
     let (ok, err) = exec(&addr, "/mcp", 6, &["node add --type Buffer"]).await;
     assert!(!err, "replacing the patch closed the central endpoint too: {ok}");
 
@@ -680,14 +727,14 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unwatched_harness_that_asks_for_its_cursor_is_answered_and_the_ask_leaves_the_stream() {
     // ConPTY asks on Windows; a child asking itself takes the same path on every platform.
-    let (_g, addr, state) = start_server().await;
+    let (_serial, _g, addr, state) = start_server().await;
     let (mut ctl, _) = connect_async(format!("ws://{addr}/control")).await.unwrap();
     recv_text(&mut ctl).await;
     let id = call(&mut ctl, 1, "agent start", json!({ "name": "_sh" })).await["instance_id"]
         .as_str().unwrap().to_string();
-    let inst = state.harnesses.get(&id).expect("the harness is on the roster");
-    // Raw and silent first, so the reply goofi types is read whole and never echoed.
-    inst.write(b"stty raw -echo; printf 'A\\033[6nB\\033[6nC'; dd bs=1 count=6 of=reply 2>/dev/null; stty sane; exit\n");
+    // Typed through a request, which is no view: the shell runs it UNWATCHED. Raw and silent
+    // first, so the reply goofi types is read whole and never echoed.
+    state.agents.send(&id, "stty raw -echo; printf 'A\\033[6nB\\033[6nC'; dd bs=1 count=6 of=reply 2>/dev/null; stty sane; exit").unwrap();
     let reply = state.mount().join("reply");
     let deadline = std::time::Instant::now() + WAIT;
     while std::fs::read(&reply).map_or(true, |r| r.len() < 6) {
@@ -695,7 +742,8 @@ async fn an_unwatched_harness_that_asks_for_its_cursor_is_answered_and_the_ask_l
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(std::fs::read(&reply).unwrap(), b"\x1b[1;1R");
-    let tail = String::from_utf8_lossy(&inst.attach().tail).into_owned();
-    assert!(tail.contains("ABC") && !tail.contains("\u{1b}[6n"), "every ask left the stream: {tail:?}");
+    let (mut late, _) = connect_async(format!("ws://{addr}/term/{id}")).await.unwrap();
+    let tail = read_until(&mut late, "ABC").await;
+    assert!(!tail.contains("\u{1b}[6n"), "every ask left the stream: {tail:?}");
     state.release_mount();
 }

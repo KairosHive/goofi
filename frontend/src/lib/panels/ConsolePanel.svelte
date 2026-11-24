@@ -4,28 +4,30 @@
 	import type { PanelProps } from 'panelty';
 	import { consoleStore, type ConsoleEntry, type LogLevel } from '$lib/stores/console.svelte';
 	import { selection } from '$lib/stores/selection.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
+	import { errorText } from '$lib/stores/notify.svelte';
 	import { linkedNodeName } from 'panelty';
 	import { copyText } from '$lib/clipboard';
 	import { estimateRowHeight } from './consoleRowHeight';
 	import NodeSelect from './NodeSelect.svelte';
-	import { Bar, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
-	import { onDestroy, tick } from 'svelte';
+	import { workspace } from 'panelty';
+	import { dropTarget, DropHint } from '$lib/drag';
+	import { Bar, Button, Chip, Badge, Icon, IconButton, EmptyState } from '$lib/ui';
+	import { onDestroy, tick, untrack } from 'svelte';
 
 	let { panelId, state: linkState }: PanelProps = $props();
 	const sel = selection();
-	const uiStore = ui();
+	const ws = workspace();
 	const cs = consoleStore();
 
 	const filterName = $derived(linkedNodeName(linkState)); // the bound node's uid (identity)
-	const nodeLabel = (uid: string): string => graph().nodeById(uid)?.name ?? uid;
 	const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-	const sourceLabel = (entry: ConsoleEntry): string => entry.node ? nodeLabel(entry.node) : entry.component;
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
+	const sourceLabel = (entry: ConsoleEntry): string =>
+		entry.node ? (graph().nodeById(entry.node)?.name ?? entry.node) : entry.component;
+	const log = (text: string, level?: LogLevel) => getControl().call('log write', { text, level, component: 'command' });
 
-	let levels = $state(new Set<LogLevel>(['info', 'warning', 'error']));
+	const LEVELS: LogLevel[] = ['info', 'warning', 'error'];
+	let levels = $state(new Set(LEVELS));
 	let query = $state('');
 	let command = $state('');
 	let busy = $state(false);
@@ -51,19 +53,17 @@
 		command = '';
 		completions = [];
 		try {
-			await getControl().call('log write', { text: `› ${line}`, component: 'command' });
+			await log(`› ${line}`);
 			const response = await fetch('/exec', {
 				method: 'POST', headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ commands: [line], actor: getControl().actor })
+				body: JSON.stringify({ commands: [line], actor: getControl().actor, style: 'human' })
 			});
 			const result = await response.json();
 			if (!response.ok || result.error) throw new Error(result.error ?? `Request failed (${response.status})`);
-			for (const entry of result.results) {
-				await getControl().call('log write', { text: entry.text, component: 'command' });
-			}
+			for (const entry of result.results) await log(entry.text);
 		} catch (error) {
-			const text = error instanceof Error ? error.message : String(error);
-			try { await getControl().call('log write', { text, level: 'error', component: 'command' }); }
+			const text = errorText(error);
+			try { await log(text, 'error'); }
 			catch { commandError = text; }
 		} finally { busy = false; }
 	}
@@ -145,8 +145,10 @@
 		return cs.view(filterName, levels, query);
 	});
 
+	// A measured height outlives its row only until the log evicts it; a row a filter hides keeps its.
 	$effect(() => {
-		const ids = new Set(Array.from({ length: view.total() }, (_, i) => view.get(i).uid));
+		cs.evicted;
+		const ids = untrack(() => new Set(cs.since(-1).map((e) => e.uid)));
 		const kept = new Map([...measured].filter(([id]) => ids.has(id)));
 		if (kept.size !== measured.size) measured = kept;
 	});
@@ -158,13 +160,10 @@
 
 	// Cumulative row offsets: cum[i] = total height of rows [0, i).
 	const layout = $derived.by<{ n: number; cum: Float64Array; height: number }>(() => {
-		cs.version;
-		measured;
-		const v = view;
-		const n = v ? v.total() : 0;
+		const n = view.total();
 		const cum = new Float64Array(n + 1);
 		const floor = contentFloor();
-		for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + heightOf(v!.get(i), floor);
+		for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + heightOf(view.get(i), floor);
 		return { n, cum, height: cum[n] };
 	});
 
@@ -184,10 +183,10 @@
 	const end = $derived(Math.min(layout.n, indexAt(layout.cum, scrollTop + viewportH) + OVERSCAN + 1));
 	const windowRows = $derived.by<ConsoleEntry[]>(() => {
 		const rows: ConsoleEntry[] = [];
-		for (let i = start; i < Math.min(end, view.total()); i++) rows.push(view.get(i));
+		for (let i = start; i < end; i++) rows.push(view.get(i));
 		return rows;
 	});
-	const topPad = $derived(layout.cum[Math.min(start, layout.n)]);
+	const topPad = $derived(layout.cum[start]);
 	const bottomPad = $derived(Math.max(0, layout.height - layout.cum[Math.min(end, layout.n)]));
 
 	function onScroll(): void {
@@ -211,18 +210,14 @@
 			});
 		}
 	});
-
-	function focus(name: string): void {
-		if (sel.activeEditorId) sel.selectNodes(sel.activeEditorId, [name]);
-	}
 </script>
 
-<div class="wrap" data-testid="console-panel">
+<div class="wrap" data-testid="console-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}>
 	<Bar>
 		{#snippet start()}
-			{#each ['info', 'warning', 'error'] as level}
-				<Chip density="chrome" tone={levels.has(level as LogLevel) ? 'accent' : 'neutral'}
-					aria-pressed={levels.has(level as LogLevel)} onclick={() => toggleLevel(level as LogLevel)}
+			{#each LEVELS as level}
+				<Chip density="chrome" tone={levels.has(level) ? 'accent' : 'neutral'}
+					aria-pressed={levels.has(level)} onclick={() => toggleLevel(level)}
 					title="Show {level} messages">{#if level === 'info'}<Icon name="info" />{/if}{level}</Chip>
 			{/each}
 		{/snippet}
@@ -231,6 +226,7 @@
 		{/snippet}
 	</Bar>
 
+	<!-- Native, not `TextInput`: it filters at each keystroke, where that one hands over a value on commit. -->
 	<input class="filter" aria-label="Filter messages" placeholder="Filter messages" bind:value={query} />
 
 	<div
@@ -263,7 +259,7 @@
 							aria-label={sourceLabel(row)}
 							onclick={(ev) => {
 								ev.stopPropagation();
-								if (row.node) focus(row.node);
+								if (row.node && sel.activeEditorId) sel.selectNodes(sel.activeEditorId, [row.node]);
 							}}>{Array.from(sourceLabel(row))[0]}</button
 						>
 					{/if}
@@ -281,7 +277,6 @@
 							size="sm"
 							density="chrome"
 							data-testid="console-copy"
-							title="Copy message"
 							label="Copy message"
 							onmousedown={(ev) => ev.stopPropagation()}
 							onclick={(ev) => {
@@ -300,9 +295,8 @@
 		<IconButton
 			class="to-bottom-fab"
 			data-testid="console-to-bottom"
-			title="Scroll to bottom"
 			label="Scroll to bottom"
-			onclick={scrollToBottom}>↓</IconButton
+			onclick={scrollToBottom}><Icon name="arrow-down" /></IconButton
 		>
 	{/if}
 
@@ -310,14 +304,13 @@
 	{#if commandError}<div class="command-error" role="alert">{commandError}</div>{/if}
 	<form class="prompt" onsubmit={(event) => { event.preventDefault(); void submit(); }}>
 		<span aria-hidden="true">›</span>
+		<!-- Native, not `TextInput`: Tab completes and the arrows walk the history, key by key. -->
 		<input aria-label="Console command" placeholder="Enter an op · Tab to complete" bind:value={command}
 			onkeydown={commandKey} autocomplete="off" spellcheck="false" />
-		<button type="submit" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</button>
+		<Button type="submit" variant="ghost" size="sm" disabled={busy || !command.trim()}>{busy ? 'Running…' : 'Run'}</Button>
 	</form>
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<DropHint id={panelId} />
 </div>
 
 <style>
@@ -331,8 +324,6 @@
 	}
 	.prompt { display: flex; gap: var(--space-5); border-top: 1px solid var(--border); }
 	.prompt input { flex: 1; min-width: 0; border: 0; background: transparent; color: inherit; font-family: var(--font-mono); }
-	.prompt button { color: var(--accent); background: transparent; border: 0; cursor: pointer; }
-	.prompt button:disabled { opacity: 0.5; }
 	.command-error { color: var(--danger); }
 	.command-error, .completions { padding: var(--space-5); overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
 	time { color: var(--text-muted); white-space: nowrap; font-size: var(--fs-micro); line-height: 16px; }

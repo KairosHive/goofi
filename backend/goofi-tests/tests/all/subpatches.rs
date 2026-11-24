@@ -8,22 +8,24 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use goofi_core::Param;
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 
-/// Compiles anything and hands the target value back. With one installed, a binding error in the
+/// Compiles anything and hands the first variable back. With one installed, a binding error in the
 /// reply is the GRAPH's own resolution talking rather than "no evaluator here".
 struct Always;
 
 impl ExprEvaluator for Always {
     fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
-        Ok(Compiled { id: 1 })
+        Ok(Compiled { id: 1, code: Arc::from(&b""[..]) })
     }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError> {
-        Ok(ctx.target.clone())
+    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
+        goofi_tests::first_var(ctx)
     }
     fn release(&self, _id: BindingId) {}
+    fn run(&self, _code: &[u8], _ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
+        Err(ExprError("no functional here".into()))
+    }
 }
 
 fn uid(hex: &str) -> goofi_graph::Uid {
@@ -99,7 +101,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // A crossing cable now STOPS at the port it crosses at, and the port carries it the rest of the
     // way: one wire each side of the wall, both ordinary links. Where the frames really go is the
     // graph's to resolve at plan time, not something the stored link has to spell out.
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let wire = |a: &str, b: &str| links.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert!(wire(&hex(osc), &inp), "the cable in stops at the port: {links:?}");
     assert!(wire(&inp, &hex(buf)), "…and the port carries it to the member: {links:?}");
@@ -111,7 +113,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     g.call("nodes ungroup", j!({ "subpatch": inst }));
     assert!(g.instances().is_empty(), "the instance dropped out of the forest");
     assert_eq!(g.nodes().len(), 3, "and every leaf came back to root");
-    let after = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let after = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(after.len(), 2, "each cable is whole again, spliced across the vanished ports: {after:?}");
     let whole = |a: &str, b: &str| after.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert!(whole(&hex(osc), &hex(buf)) && whole(&hex(buf), &hex(sink)),
@@ -121,7 +123,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // each cable is two halves again, and the join the wall's removal made is gone. A join left
     // behind is a cable running straight through a restored boundary that both ends face across.
     g.call("undo", j!({}));
-    let regrouped = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let regrouped = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let back = |a: &str, b: &str| regrouped.iter().any(|l| l["node_out"] == a && l["node_in"] == b);
     assert_eq!(g.ports(&inst).len(), 2, "both ports came back: {:?}", g.ports(&inst));
     assert!(back(&hex(osc), &inp) && back(&inp, &hex(buf)), "the cable in is two halves again: {regrouped:?}");
@@ -132,7 +134,7 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // joins may only go back once the wall is down again, which is what refuses if they are not.
     g.call("redo", j!({}));
     assert!(g.instances().is_empty(), "redo expands it again");
-    assert_eq!(g.doc()["links"].as_array().map(|l| l.len()), Some(2), "each cable whole once more");
+    assert_eq!(g.doc()["links"].as_object().map(|l| l.len()), Some(2), "each cable whole once more");
 
     // Widen the selection and the cable between the two stops crossing, so nothing is minted for it.
     let both = group(&g, &[hex(osc), hex(buf)]);
@@ -252,7 +254,7 @@ fn a_cable_onto_a_boundary_stops_at_the_port_and_the_stream_runs_through() {
     // Two cables, one per scope, and BOTH end at the port: the facade address the caller named is
     // folded onto its port, and the port carries it the rest of the way. What the frames really do
     // is the graph's to resolve, so no stored link has to spell the far end out.
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(links.len(), 2, "the external cable and the port's inner one: {links:?}");
     assert_eq!(g.inner(&bnd), Some((hex(buf), "input".into())), "the inner one, inside the scope");
     let outer = links.iter().find(|l| l["node_out"] == hex(osc)).expect("the external cable");
@@ -296,7 +298,7 @@ fn a_boundary_is_authored_wired_and_renamed_without_changing_its_id() {
     assert_eq!(port["scope"], inst, "…and the sub-patch it is a port of is its scope");
     assert_eq!(g.inner(&bnd), Some((hex(buf), "out".into())), "the inner wire is a link: {port}");
     assert_eq!(port["name"], "wave", "renamed, and the port's uid is unchanged");
-    assert_eq!(port["pos"], j!({ "x": 12.0, "y": 34.0 }));
+    assert_eq!(port["pos"], j!([12.0, 34.0]));
 
     assert_eq!(g.call("undo", j!({}))["changed"], true);
     let back = g.doc()["nodes"][&bnd].clone();
@@ -326,7 +328,7 @@ fn a_boundary_wires_to_a_nested_scopes_own_port() {
     g.call("node remove", j!({ "node": ib }));
     assert!(g.ports(&outer).contains(&ob), "the outer port stayed: {:?}", g.ports(&outer));
     assert_eq!(g.inner(&ob), None, "…and went unwired rather than naming a slot nothing has");
-    let links = g.doc()["links"].as_array().cloned().unwrap_or_default();
+    let links = g.doc()["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     assert!(links.iter().all(|l| l["node_in"] != ob && l["node_out"] != ob),
             "so no cable is drawn at it: {links:?}");
 
@@ -415,7 +417,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     // unlike a node's, that stream MOVES when somebody wires the sub-patch, so the binding has to
     // be re-resolved by the graph rather than re-written by the user.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(Always));
+    g.graph().set_evaluator(Arc::new(Always));
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
     let inst = group(&g, &[hex(buf)]);
@@ -549,7 +551,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     let path = dir.path().join("renamed.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     let back = Goofi::new();
-    back.state.graph.lock().unwrap().set_evaluator(Arc::new(Always));
+    back.graph().set_evaluator(Arc::new(Always));
     back.call("session load", j!({ "path": path.to_string_lossy() }));
     let loaded_buf = back.nodes().into_iter()
         .find(|u| back.doc()["nodes"][u]["name"] == "buffer0")
@@ -592,7 +594,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     // An IN port wears an output slot, so it takes a viewer exactly as a node does.
     g.call("node edit", j!({ "node": inp, "viewer": [{ "slot": "value", "kind": "line" }] }));
     let doc = g.doc();
-    let stored = doc["nodes"][&inp]["viewers"].as_str().expect("a viewer blob rides as a string");
+    let stored = doc["nodes"][&inp]["viewers"].to_string();
     assert!(stored.contains("line"), "the port kept the view state: {stored}");
 
     // …and it is refused on a slot the port does not have, rather than stored and never drawn.
@@ -602,7 +604,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     // `value` slot an IN port wears — a port is a pass-through, never a sink, whichever way it faces.
     let outp = boundary(&g, &inst, "out");
     g.call("node edit", j!({ "node": outp, "viewer": [{ "slot": "value", "kind": "line" }] }));
-    let drained = g.doc()["nodes"][&outp]["viewers"].as_str().unwrap_or("").to_string();
+    let drained = g.doc()["nodes"][&outp]["viewers"].to_string();
     assert!(drained.contains("line"), "the out port kept its view state: {drained}");
 
     // The raw read resolves a port exactly as a viewer does: with nothing behind it, the answer
@@ -624,7 +626,7 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
     assert!(g.call("node snapshot", j!({ "output": ep(&outp, "value"), "raw": true }))["npy_b64"].is_string(),
             "the port's own address answers the same stream");
     g.call("node edit", j!({ "node": inst, "viewer": [{ "slot": &outp, "kind": "line" }] }));
-    let facade = g.doc()["nodes"][&inst]["viewers"].as_str().expect("a blob, as a node's").to_string();
+    let facade = g.doc()["nodes"][&inst]["viewers"].to_string();
     assert!(facade.contains("line"), "the facade kept the view state: {facade}");
     g.refuse("node edit", j!({ "node": inst, "viewer": [{ "slot": "nope", "kind": "line" }] }));
 
@@ -661,14 +663,14 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     g.link(buf, "out", sink, "input");
 
     // An inner sub-patch around the Buffer, then an outer one around that: a copy has to recurse.
-    // The Buffer reads its neighbour by name — as an expression and as a reference — so the copy
-    // has both to get right. A third member is NAMED like a slot: a paste must rename the copied
+    // The Buffer reads its neighbour by name on two params, so the copy has both to get right.
+    // A third member is NAMED like a slot: a paste must rename the copied
     // node and never the slot label that happens to spell the same word.
     let lfo = g.add("LFO");
     g.call("node edit", j!({ "node": hex(lfo), "name": "lfo" }));
     g.call("node param edit", j!({ "node": hex(buf), "param": "common/max_frequency",
                                    "expression": "nd('lfo')" }));
-    g.call("node param edit", j!({ "node": hex(buf), "param": "buffer/size", "reference": "lfo.out" }));
+    g.call("node param edit", j!({ "node": hex(buf), "param": "buffer/size", "expression": "nd('lfo')" }));
     let decoy = g.add("LFO");
     g.call("node edit", j!({ "node": hex(decoy), "name": "out" }));
     let inner = group(&g, &[hex(buf), hex(lfo), hex(decoy)]);
@@ -680,7 +682,7 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     // A fragment is SELF-CONTAINED: it holds the whole subtree and no cable that reaches out of it.
     let held = fragment["nodes"].as_object().expect("a nodes map").len();
     assert_eq!(held, 9, "two facades, their four ports, and the three leaves inside: {fragment}");
-    assert!(fragment["links"].as_array().is_some_and(|l| !l.is_empty()), "…and its inner wiring: {fragment}");
+    assert!(fragment["links"].as_object().is_some_and(|l| !l.is_empty()), "…and its inner wiring: {fragment}");
 
     let rename = g.call("nodes paste", j!({ "doc": fragment, "pos": [400.0, 0.0] }))["rename"].clone();
     let copy = rename[&outer].as_str().expect("the copy's facade uid").to_string();
@@ -710,7 +712,7 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
 
     // Wiring INSIDE the copy is the original's; wiring to the patch AROUND it is not, because a copy
     // is a new node and a new node arrives unconnected.
-    let links = doc["links"].as_array().cloned().unwrap_or_default();
+    let links = doc["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let touches = |uid: &str| links.iter().filter(|l| l["node_out"] == uid || l["node_in"] == uid).count();
     assert_eq!(touches(&copy), 0, "the copied facade is not wired into the patch: {links:?}");
     assert!(touches(&leaf) > 0, "but its innards are wired to each other: {links:?}");
@@ -724,13 +726,10 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
         .expect("the copied oscillator");
     let copy_name = doc_now["nodes"][&inner_osc]["name"].as_str().unwrap().to_string();
     let bound = g.call("node state", j!({ "node": leaf }))["text"].as_str().unwrap().to_string();
-    assert!(bound.contains(&format!("nd('{copy_name}')")),
-            "the copy reads its OWN oscillator `{copy_name}`: {bound}");
-    assert!(bound.contains(&format!("ref: {copy_name}.out")),
-            "the reference follows the copy too, its slot label untouched: {bound}");
+    assert_eq!(bound.matches(&format!("nd('{copy_name}')")).count(), 2,
+               "both params read the copy's OWN oscillator `{copy_name}`, the slot label untouched: {bound}");
     assert!(!bound.contains("no node named"), "…and that name resolves: {bound}");
-    assert!(!bound.contains("nd('lfo')") && !bound.contains("ref: lfo."),
-            "…and nothing still reads the original's: {bound}");
+    assert!(!bound.contains("nd('lfo')"), "…and nothing still reads the original's: {bound}");
 
     // It is INDEPENDENT: editing the copy leaves the original alone.
     g.call("node param edit", j!({ "node": leaf, "param": "common/max_frequency", "value": 3.0 }));

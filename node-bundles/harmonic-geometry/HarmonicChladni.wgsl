@@ -6,14 +6,14 @@
   "params": [
     {"group": "field", "name": "output", "kind": "str", "default": "signed", "options": ["signed", "nodal", "antinodal"], "doc": "Signed displacement or Biotuner's exp(-w²/σ²) density. Use nodal for the cymatics notebook."},
     {"group": "field", "name": "density_symmetry", "kind": "str", "default": "d4_max", "options": ["none", "d4_max", "d4_sum"], "doc": "Union (max) or average of eight square density transforms. Applied after the Gaussian, never to the signed field. Non-square grids skip D4, as in Biotuner."},
-    {"group": "field", "name": "sigma", "kind": "float", "default": 0.05, "min": 0.001, "max": 0.4, "doc": "Nodal stripe width in field units. Fixed 0.05 matches the notebook's explicit sand example."},
-    {"group": "field", "name": "approach", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Plate modes to open directional interference."},
-    {"group": "field", "name": "symmetry", "kind": "float", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Cosine products to antisymmetric swapped products."},
-    {"group": "field", "name": "period", "kind": "float", "default": 0.35, "min": 0.04, "max": 4.0, "doc": "Base period across the normalized open-wave image."},
-    {"group": "field", "name": "directions", "kind": "int", "default": 5, "min": 2, "max": 12, "doc": "Rotational order of open directional waves."},
-    {"group": "field", "name": "rotation", "kind": "float", "default": 0.0, "min": -1000.0, "max": 1000.0, "doc": "Open wave direction offset, radians."},
-    {"group": "common", "name": "width", "kind": "int", "default": 256, "min": 0, "max": 4096},
-    {"group": "common", "name": "height", "kind": "int", "default": 256, "min": 0, "max": 4096}
+    {"group": "field", "name": "sigma", "kind": "num", "default": 0.05, "min": 0.001, "max": 0.4, "doc": "Nodal stripe width in field units. Fixed 0.05 matches the notebook's explicit sand example."},
+    {"group": "field", "name": "approach", "kind": "num", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Plate modes to open directional interference."},
+    {"group": "field", "name": "symmetry", "kind": "num", "default": 0.0, "min": 0.0, "max": 1.0, "doc": "Cosine products to antisymmetric swapped products."},
+    {"group": "field", "name": "period", "kind": "num", "default": 0.35, "min": 0.04, "max": 4.0, "doc": "Base period across the normalized open-wave image."},
+    {"group": "field", "name": "directions", "kind": "num", "int": true, "default": 5, "min": 2, "max": 12, "doc": "Rotational order of open directional waves."},
+    {"group": "field", "name": "rotation", "kind": "num", "default": 0.0, "min": -1000.0, "max": 1000.0, "doc": "Open wave direction offset, radians."},
+    {"group": "common", "name": "width", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096},
+    {"group": "common", "name": "height", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096}
   ] }
 */
 

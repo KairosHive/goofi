@@ -1,7 +1,5 @@
-/**
- * Min/max decimation for line plots: each channel folds to two points per target column.
- * `base` is the sample-index origin — 1 under log-x, since log10(0) has no place on the axis.
- */
+/** Min/max decimation for line plots: each channel folds to two points per target column.
+ * `base` is the sample-index origin. */
 export interface Decimated {
 	xs: number[];
 	ys: ArrayLike<number>[];

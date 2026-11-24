@@ -5,32 +5,38 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# WASAPI publishes an interface as one stereo endpoint per pair the driver exposes, so a
-# multi-input card is reachable past its first pair only through the driver's own ASIO view. cpal
-# target-gates `asio-sys` to Windows, so this feature is INERT on Linux and macOS and costs a build
-# there nothing. On Windows it needs libclang, which is what `goofi-init` asks for; it does NOT need
-# a hand-supplied SDK, since asio-sys downloads the Steinberg one itself when `CPAL_ASIO_DIR` names
-# no copy. What the SDK's licence still bars is a goofi BINARY someone else redistributes —
-# `roadmap/audio-engine.md` carries that, and it is a question for a release, not for a build.
+# ASIO reaches a multi-input card past WASAPI's first stereo pair. Inert off Windows; on Windows it
+# needs libclang (`goofi-init`) and asio-sys fetches the SDK. The licence: `roadmap/audio-engine.md`.
 asio = ["cpal/asio"]
 
 [dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }
-goofi-control = { path = "../../goofi-control" }
+goofi-runtime = { path = "../../goofi-runtime" }
 goofi-window = { path = "../../goofi-window" }
 goofi-audio-sdk = { path = "../goofi-audio-sdk", features = ["host"] }
 goofi-build = { path = "../../goofi-build" }
 indexmap = "2"
 rtrb = "0.3"
-# Every host cpal can build, so `available_hosts()` answers what the machine actually runs and the
-# choice between them is the user's. cpal target-gates each one, so a feature named here that the
-# platform has no host for costs nothing.
-cpal = { version = "0.18", features = ["pipewire", "pulseaudio", "jack", "realtime", "realtime-dbus"] }
+# Every host the binary can carry without linking a system library beyond ALSA: PulseAudio is
+# pure Rust over a socket, JACK is opened at run time, and PipeWire machines are reached through
+# both. The native PipeWire host links libpipewire and is left out. cpal target-gates each one,
+# so a feature named here that the platform has no host for costs nothing.
+cpal = { version = "0.18", features = ["pulseaudio", "jack", "realtime", "realtime-dbus"] }
+# cpal promotes its callback thread to real time under ALSA and WASAPI alone; every other host's
+# callback is promoted here, on its first run.
+audio_thread_priority = "0.35"
 midir = "0.11"
 vst3 = "0.3.0"
 libloading = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# rtkit, the real-time door a user outside the audio group has, speaks D-Bus: libdbus is built
+# from its bundled sources (AFL-2.1) into the binary, so no system library is asked for.
+[target.'cfg(target_os = "linux")'.dependencies]
+libdbus-sys = { version = "0.2", features = ["vendored"] }
+libc = "0.2"

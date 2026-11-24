@@ -15,6 +15,20 @@ import { closeAddedTab, closeSplit, splitRight, waitForApp } from '../lib/app';
 import { expectIntact } from '../lib/invariants';
 import { addNode, frameSummary, selectNode, waitForNode } from '../lib/goofi';
 import { rawCall } from '../lib/raw';
+import { touchSession, type TouchSession } from '../lib/touch';
+
+/** Use the project's pointer for held drags. */
+async function pointerSession(page: Page, hasTouch: boolean): Promise<TouchSession> {
+	if (hasTouch) return touchSession(page);
+	return {
+		down: async ({ x, y }) => {
+			await page.mouse.move(x, y);
+			await page.mouse.down();
+		},
+		moveTo: ({ x, y }) => page.mouse.move(x, y, { steps: 6 }),
+		up: () => page.mouse.up()
+	};
+}
 
 /** Open the panel header menu, reveal its content submenu, and answer every row it shows. */
 async function panelTypeRows(page: Page): Promise<string[]> {
@@ -132,7 +146,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 			// A PSD floor sits far below 1e-22 — a range a naive log tick walk never terminates on.
 			// A spectrum needs a run of samples that knows its own rate, so the source emits blocks
 			// and the buffer already on the canvas is what gathers them.
-			await rawCall(page, 'node param edit', { node: osc, param: 'output/mode', value: 'block' });
+			await rawCall(page, 'node param edit', { node: osc, param: 'lfo/mode', value: 'block' });
 			const psd = await addNode(page, 'Psd', [320, 240]);
 			await waitForNode(page, psd);
 			await page.evaluate(
@@ -241,8 +255,34 @@ test('a patch under construction holds together at every stage', async ({ page }
 				expect(names).toContain('Inspector');
 				expect(names).not.toContain('Parameters');
 				expect(names).not.toContain('Metadata');
+				// A machine with every kind of thing on it, so the State machine panel mounts a full scene.
+				await rawCall(page, 'machine add', { name: 'sweep' });
+				await rawCall(page, 'machine attribute add', { machine: 'sweep', name: 'level', value: 0.5, kind: { type: 'num', vmin: 0, vmax: 1 } });
+				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'A', pos: [0, 0], values: { level: 0.2 } });
+				await rawCall(page, 'machine state add', { machine: 'sweep', name: 'B', pos: [320, 40] });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'A', to: 'B', duration: 1 });
+				await rawCall(page, 'machine transition add', { machine: 'sweep', from: 'B', to: 'B', condition: 'vars.system.time > 1' });
+				await rawCall(page, 'machine state edit', { machine: 'sweep', name: 'A', interval: 2, noop: 0.5, weights: { t1: 0.5 } });
+				await rawCall(page, 'machine playhead add', { machine: 'sweep', start: 'A' });
 				for (const name of names) {
 					await choosePanelType(page, name);
+					if (name === 'State machine') {
+						// A panel holds its machine by id.
+						const sweep = Object.entries((await rawCall(page, 'machine list')).result.machines).find(([, m]: any) => m.name === 'sweep')![0];
+						await page.evaluate((machine) => {
+							const g = (window as any).goofi;
+							g.commands.setPanelState(g.query.panels()[0].panelId, { machine });
+						}, sweep);
+						await expect(page.getByTestId('state-card-A')).toBeVisible();
+						// The label shows once a box of the transition is selected; picked, it lights its
+						// arc in the score, whose chip opens the transition's settings.
+						await page.getByTestId('state-card-A').getByTestId('state-card-name').click();
+						await page.getByTestId('transition-t1').click();
+						await expect(page.getByTestId('arc-t1')).toHaveClass(/picked/);
+						await page.getByTestId('arc-t1').click();
+						await expect(page.getByTestId('machine-transition')).toBeVisible();
+						await page.keyboard.press('Escape');
+					}
 					if (name === 'Inspector') {
 						await page.getByTestId('panel-node').locator('select').selectOption(osc);
 						await expect(page.locator('.param-form')).toBeVisible();
@@ -254,6 +294,7 @@ test('a patch under construction holds together at every stage', async ({ page }
 					await expectIntact(page, `the ${name} panel`);
 				}
 				await choosePanelType(page, 'Node Editor');
+				await rawCall(page, 'machine remove', { machine: 'sweep' });
 			});
 		}
 
@@ -285,7 +326,7 @@ test('parameter groups keep readable widths and scroll to the last group', async
 		const status = (await rawCall(page, 'session status')).result;
 		const source = path.join(status.workspace, 'nodes_signal', 'many_groups.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });
-		const params = groups.map((g) => `"${g}": {"amount": goofi.FloatParam(0.5, 0.0, 1.0)}`).join(', ');
+		const params = groups.map((g) => `"${g}": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}`).join(', ');
 		fs.writeFileSync(source, `import goofi\nclass ManyGroups(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {${params}}\n`);
 		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
 		const uid = await addNode(page, 'ManyGroups');
@@ -345,11 +386,11 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 			'    OUTPUTS = {"out": goofi.DataType.ARRAY}',
 			'    PARAMS = {',
 			'        "filter": [',
-			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.IntParam(64, 1, 512, show=("mode", ["fir"]))},',
-			'            {"order": goofi.IntParam(4, 2, 8, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.FloatParam(0.5, 0.0, 1.0, show=("order", [4, 8]))},',
-			'            {"gain": goofi.FloatParam(1.0, 0.0, 2.0)},',
+			'            {"mode": goofi.StringParam("fir", options=["fir", "iir"]), "taps": goofi.NumParam(64, 1, 512, int=True, show=("mode", ["fir"]))},',
+			'            {"order": goofi.NumParam(4, 2, 8, int=True, options=[2, 4, 8], show=("mode", ["iir"])), "ripple": goofi.NumParam(0.5, 0.0, 1.0, show=[("mode", ["iir"]), ("order", [4, 8])])},',
+			'            {"gain": goofi.NumParam(1.0, 0.0, 2.0)},',
 			'        ],',
-			'        "iir": {"q": goofi.FloatParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
+			'        "iir": {"q": goofi.NumParam(0.7, 0.1, 10.0, show=("filter.mode", ["iir"]))},',
 			'    }',
 			''
 		].join('\n'));
@@ -365,7 +406,7 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 		await expect(tabs).toHaveText(['filter', 'common']);
 		await expect(row('filter/taps')).toBeVisible();
 		await expect(row('filter/order')).toHaveCount(0);
-		await expect(row('filter/ripple'), 'a param shown by a hidden one hides with it').toHaveCount(0);
+		await expect(row('filter/ripple'), 'a param hides while any of its rules fails').toHaveCount(0);
 		await expect(lines).toHaveCount(1);
 
 		await page.getByTestId('param-field-mode').locator('select').selectOption('iir');
@@ -389,6 +430,321 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 		await expect(tabs).toHaveText(['filter', 'common']);
 		await expect(row('filter/taps')).toBeVisible();
 		await expect(lines).toHaveCount(1);
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('each node opens on the param group last fronted on it, else on its first', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const status = (await rawCall(page, 'session status')).result;
+		const source = path.join(status.workspace, 'nodes_signal', 'two_groups.py');
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		fs.writeFileSync(source, [
+			'import goofi',
+			'class TwoGroups(goofi.Node):',
+			'    PARAMS = {"shape": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}, "timing": {"rate": goofi.NumParam(1.0, 0.0, 10.0)}}',
+			''
+		].join('\n'));
+		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
+		const a = await addNode(page, 'TwoGroups', [0, 0]);
+		const b = await addNode(page, 'TwoGroups', [0, 120]);
+		await waitForNode(page, a);
+		await waitForNode(page, b);
+		const front = page.getByTestId('param-tabs').getByRole('tab', { selected: true });
+
+		await selectNode(page, a);
+		await expect(front).toHaveText('shape');
+		await page.getByTestId('param-tabs').getByRole('tab', { name: 'timing' }).click();
+		await expect(front).toHaveText('timing');
+
+		await selectNode(page, b);
+		await expect(front, 'a node never fronted opens on its first group').toHaveText('shape');
+
+		await selectNode(page, a);
+		await expect(front, 'a node opens on the group last fronted on it').toHaveText('timing');
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a list section opens one slot per count, and its + button opens another', async ({ page, hasTouch }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// Gradient's stops are a list: a count row heads it, and each open slot shows its members under
+		// its own number. A slot past the count keeps its value but draws nothing.
+		const uid = await addNode(page, 'graphics:Gradient', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
+		const count = page.getByTestId('param-count-stops');
+		await expect(count).toHaveText('2');
+		await expect(row('ramp/at_1')).toBeVisible();
+		await expect(row('ramp/at_2')).toHaveCount(0);
+		const slot = (n: number) => page.getByTestId(`param-slot-stops-${n}`);
+		await expect(slot(1).getByTestId('param-slot-number')).toHaveText('2');
+		await expect(slot(1), 'a slot holds its members').toContainText('at');
+		await expect(row('ramp/at_1').getByText('at', { exact: true }), 'a slot wears its name inside the section').toBeVisible();
+
+		await page.getByTestId('param-count-more-stops').click();
+		await expect(count).toHaveText('3');
+		await expect(row('ramp/at_2')).toBeVisible();
+		await expect(slot(2).getByTestId('param-slot-number')).toHaveText('3');
+		await expect(page.getByTestId('param-count-stops').locator('..'), 'the count is one row').toHaveCSS('flex-direction', 'row');
+		await expectIntact(page, 'a list section with three slots');
+
+		// A slot drags by its grip into another place, and the values follow: the third goes first.
+		for (const [name, value] of [['at_1', 0.7], ['at_2', 0.9]] as const) {
+			await rawCall(page, 'node param edit', { node: uid, param: `ramp/${name}`, value });
+		}
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+		await expect.poll(state).toContain('ramp.at_2 = 0.9');
+		const grip = slot(2).getByTestId('param-slot-grip');
+		await grip.scrollIntoViewIfNeeded();
+		const from = (await grip.boundingBox())!;
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: from.x + from.width / 2, y: from.y + from.height / 2 });
+		await expect(slot(2), 'the grip lifts the third slot').toHaveClass(/lifted/);
+		// The short landscape inspector cannot show both ends of this list at once.
+		await slot(0).getByTestId('param-slot-grip').scrollIntoViewIfNeeded();
+		const target = (await slot(0).boundingBox())!;
+		await hand.moveTo({ x: target.x + 20, y: target.y + 2 });
+		await expect(slot(0), 'the drop line shows above the first slot').toHaveClass(/before/);
+		await hand.up();
+		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0 [\s\S]*ramp\.at_2 = 0\.7/);
+
+		// The row shortcuts reach a slot's member: `e` over it binds an expression, `c` a constant.
+		const text = async () => (await rawCall(page, 'node state', { node: uid })).result.text as string;
+		await row('ramp/at_1').hover();
+		await page.keyboard.press('e');
+		await expect.poll(text).toMatch(/at_1 = expr:/);
+		// `e` left the focus in the expression editor, where a letter is text; a press on the slot's
+		// number lets it go, and `c` over the row is the shortcut again.
+		await slot(1).getByTestId('param-slot-number').click();
+		await row('ramp/at_1').hover();
+		await page.keyboard.press('c');
+		await expect.poll(text).not.toMatch(/at_1 = expr:/);
+
+		// A slot's X closes THAT slot: the ones after it move up, and the list is one shorter.
+		await slot(1).getByTestId('param-slot-remove').click();
+		await expect(count).toHaveText('2');
+		await expect(row('ramp/at_2')).toHaveCount(0);
+		await expect.poll(state).toMatch(/ramp\.at_0 = 0\.9[\s\S]*ramp\.at_1 = 0\.7/);
+		await expect(page.getByTestId('param-count-less-stops'), 'the floor of the list').toBeDisabled();
+		await expect(slot(0).getByTestId('param-slot-remove'), 'the floor closes no slot').toBeDisabled();
+		await expect(page.locator('.pf-rows'), 'no gap between params').toHaveCSS('row-gap', 'normal');
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a plain vector opens as one list or as its entries', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const status = (await rawCall(page, 'session status')).result;
+		const source = path.join(status.workspace, 'nodes_signal', 'shifted.py');
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		fs.writeFileSync(source, 'import goofi\nclass Shifted(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {"look": {"shift": goofi.NumParam([0.1, 0.2, 0.3, 0.4], 0.0, 1.0)}}\n');
+		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
+		const uid = await addNode(page, 'Shifted', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const shift = page.locator('[data-param-key="look/shift"]');
+		await expect(shift.getByTestId('param-vector').getByRole('textbox')).toHaveCount(4);
+		await shift.getByRole('button', { name: 'shift', exact: true }).click();
+		await expect(shift.getByTestId('param-list')).toHaveValue('[0.1, 0.2, 0.3, 0.4]');
+		await expect(shift.getByTestId('param-mode')).toBeVisible();
+		// As entries, the list and the whole foot leave: each row carries its own source and learn.
+		await shift.getByTestId('param-view-individual').click();
+		await expect(shift.getByTestId('param-elements').locator('.pf-element')).toHaveCount(4);
+		await expect(shift.getByTestId('param-list')).toHaveCount(0);
+		await expect(shift.getByTestId('param-mode')).toHaveCount(0);
+		await expect(shift.locator('.pf-more').getByRole('button', { name: /midi/i })).toHaveCount(4);
+		await shift.getByTestId('param-view-list').click();
+		await expect(shift.getByTestId('param-list')).toHaveValue('[0.1, 0.2, 0.3, 0.4]');
+		await expect(shift.getByTestId('param-mode')).toBeVisible();
+		// A source on the whole shows its editor in the list view only; the entries stand alone, held.
+		await rawCall(page, 'node param edit', { node: uid, param: 'look/shift', expression: '0.5' });
+		await expect(shift.getByTestId('param-expr-input')).toBeVisible();
+		await expect(shift.getByTestId('param-list')).toHaveCount(0);
+		await shift.getByTestId('param-view-individual').click();
+		await expect(shift.getByTestId('param-expr-input')).toHaveCount(0);
+		await expect(shift.getByTestId('param-mode')).toHaveCount(0);
+		await expect(shift.getByTestId('param-element-number-0')).toBeDisabled();
+		await shift.getByTestId('param-view-list').click();
+		await shift.getByTestId('param-mode-constant').click();
+		await expect(shift.getByTestId('param-list')).toBeVisible();
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a colormap list is one row, and its configurator seeds, blends, adds, drags and removes stops', async ({ page, hasTouch }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// SignalIn's stops are a list the inspector draws whole: hidden under a preset colormap, and
+		// under `custom` one row — the map — with no count row and no slot of its own.
+		const uid = await addNode(page, 'graphics:SignalIn', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const row = (key: string) => page.locator(`[data-param-key="${key}"]`);
+		await expect(row('signal/colormap')).toBeVisible();
+		await expect(row('signal/stops')).toHaveCount(0);
+		await rawCall(page, 'node param edit', { node: uid, param: 'signal/colormap', value: 'custom' });
+		const bar = page.getByTestId('param-colormap');
+		await expect(bar).toHaveAttribute('title', '2 stops');
+		await expect(row('signal/at_0')).toHaveCount(0);
+		await expect(page.getByTestId('param-count-stops')).toHaveCount(0);
+		await expect(page.getByTestId('param-slot-stops-0')).toHaveCount(0);
+		await bar.click();
+		const pop = page.getByTestId('colormap-pop');
+		await expect(pop).toBeVisible();
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+
+		// A preset seeds the whole list: jet is six stops, evenly spaced and blended straight.
+		await pop.getByTestId('colormap-preset-jet').click();
+		await expect(bar).toHaveAttribute('title', '6 stops');
+		await expect.poll(state).toMatch(/signal\.at_1 = 0\.2 [\s\S]*signal\.colour_5 = \[0\.50\d*, 0, 0, 1\]/);
+		// The blend between two stops is picked between their rows.
+		await pop.getByTestId('colormap-blend-0-step').click();
+		await expect.poll(state).toContain('signal.blend_0 = \\"step\\"');
+
+		// A press on the track where no handle is opens a stop there, in its place by `at`.
+		const track = pop.getByTestId('colormap-bar');
+		const box = (await track.boundingBox())!;
+		await track.click({ position: { x: box.width * 0.5, y: box.height / 2 } });
+		await expect(bar).toHaveAttribute('title', '7 stops');
+		await expect.poll(state).toMatch(/signal\.at_3 = 0\.(49|5)\d* /);
+
+		// A handle drags along the track, and the list re-orders by place: the stop from the middle
+		// lands at 0.9, past the one at 0.8, so it is the sixth of seven.
+		const handle = pop.getByTestId('colormap-stop-3');
+		const from = (await handle.boundingBox())!;
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: from.x + from.width / 2, y: from.y + from.height / 2 });
+		await hand.moveTo({ x: box.x + box.width * 0.9, y: box.y + box.height / 2 });
+		await hand.up();
+		await expect.poll(state).toMatch(/signal\.at_5 = 0\.(89|9)\d* /);
+
+		// The picker edits the stop in hand: its hex field names the colour exactly.
+		await pop.getByTestId('colormap-swatch-0').click();
+		await pop.getByTestId('color-hex').fill('#ff0000');
+		await pop.getByTestId('color-hex').press('Enter');
+		await expect.poll(state).toContain('signal.colour_0 = [1, 0, 0, 1]');
+
+		// A stop's ✕ closes it, and the floor closes none.
+		await pop.getByTestId('colormap-remove-6').click();
+		await expect(bar).toHaveAttribute('title', '6 stops');
+		await expect.poll(state).toMatch(/signal\.stops = 6 /);
+		for (const i of [5, 4, 3, 2]) await pop.getByTestId(`colormap-remove-${i}`).click();
+		await expect(bar).toHaveAttribute('title', '2 stops');
+		await expect(pop.getByTestId('colormap-remove-0'), 'the floor of the list').toBeDisabled();
+		await expectIntact(page, 'a custom colormap');
+	} finally {
+		await tearDown(page);
+	}
+});
+
+test('a colour param is picked, and its alpha slid', async ({ page, hasTouch }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const uid = await addNode(page, 'graphics:Threshold', [300, 60]);
+		await waitForNode(page, uid);
+		await selectNode(page, uid);
+		const above = page.locator('[data-param-key="threshold/above"]');
+		const picker = above.getByTestId('param-color');
+		await expect(picker.getByRole('button')).toHaveAttribute('title', 'rgba(255, 255, 255, 1)');
+		await picker.getByRole('button').click();
+		const state = async () => JSON.stringify((await rawCall(page, 'node state', { node: uid })).result);
+		// Hue 0 and the square's top-right corner is pure red; the alpha strip is in the same picker.
+		await page.getByTestId('color-hue').fill('0');
+		const square = page.getByTestId('color-square');
+		const box = (await square.boundingBox())!;
+		await square.click({ position: { x: box.width - 1, y: 1 } });
+		// A hand lands within a pixel of the corner, so the colour is red to the nearest hundredth.
+		const red = (alpha: string) => new RegExp(`threshold\\.above = \\[(1|0\\.99\\d*), 0(\\.00\\d*)?, 0(\\.00\\d*)?, ${alpha}\\] \\(4d color 0\\.\\.1\\)`);
+		await expect.poll(state).toMatch(red('1'));
+		await page.getByTestId('color-alpha').fill('0.5');
+		await expect.poll(state).toMatch(red('0\\.5'));
+		// The hex field names the colour exactly, alpha byte included.
+		await page.getByTestId('color-hex').fill('#ff000080');
+		await page.getByTestId('color-hex').press('Enter');
+		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.5019608]');
+		await page.getByTestId('color-channel-3').fill('40');
+		await page.getByTestId('color-channel-3').press('Enter');
+		await expect.poll(state).toContain('threshold.above = [1, 0, 0, 0.4] (4d color 0..1)');
+		await expect(picker.getByRole('button'), 'the swatch shows what was picked').toHaveAttribute('title', 'rgba(255, 0, 0, 0.4)');
+		await expect(above.locator('input[type=range]'), 'no slider beside the picker').toHaveCount(0);
+
+		// Opened, a colour shows its list as one row; as a VECTOR it shows one row per element, and
+		// each element takes a source of its own that drives that dimension alone.
+		await expect(above.getByTestId('param-view-individual'), 'the L/I switch sits on the row itself').toBeVisible();
+		// The picker closes first: a press beside it would close it and do nothing else.
+		await page.keyboard.press('Escape');
+		await expect(page.getByTestId('color-hex')).toHaveCount(0);
+		await above.getByRole('button', { name: 'above', exact: true }).click();
+		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0, 0.4]');
+		await above.getByTestId('param-view-individual').click();
+		await expect(above.getByTestId('param-elements').locator('.pf-element')).toHaveCount(4);
+		await expect(above.getByTestId('param-list')).toHaveCount(0);
+		await above.getByTestId('param-element-mode-expression-1').click();
+		const text = async () => (await rawCall(page, 'node state', { node: uid })).result.text as string;
+		await expect.poll(text).toMatch(/threshold\.above\[1\] = expr: 0/);
+		await above.getByTestId('param-element-number-2').fill('0.25');
+		await above.getByTestId('param-element-number-2').press('Enter');
+		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.4\]/);
+		await above.getByTestId('param-element-mode-constant-1').click();
+		await expect.poll(text).not.toMatch(/above\[1\] = expr:/);
+		// An element left driven makes the whole colour driven: the picker is disabled rather than
+		// writing a literal the driven channel would snap away from.
+		await expect(above.getByTestId('param-mode'), 'the element rows stand in for the whole foot').toHaveCount(0);
+		await expect(above.getByTestId('param-element-learn-0')).toBeVisible();
+		await above.getByTestId('param-element-mode-expression-0').click();
+		await expect.poll(text).toMatch(/above\[0\] = expr: 1/);
+		await above.getByTestId('param-view-list').click();
+		await expect(picker.getByRole('button')).toBeDisabled();
+		await above.getByTestId('param-view-individual').click();
+		await above.getByTestId('param-element-mode-constant-0').click();
+		await expect.poll(text).not.toMatch(/above\[0\] = expr:/);
+		await above.getByTestId('param-view-list').click();
+		await expect(above.getByTestId('param-list')).toHaveValue('[1, 0, 0.25, 0.4]');
+		// Back in colour view the picker drives the same list: a drag on the alpha strip holds.
+		await picker.getByRole('button').click();
+		const strip = page.getByTestId('color-alpha');
+		await strip.scrollIntoViewIfNeeded();
+		const sbox = (await strip.boundingBox())!;
+		const hand = await pointerSession(page, hasTouch);
+		await hand.down({ x: sbox.x + sbox.width * 0.4, y: sbox.y + sbox.height / 2 });
+		await hand.moveTo({ x: sbox.x + sbox.width * 0.9, y: sbox.y + sbox.height / 2 });
+		await hand.up();
+		await expect.poll(text).toMatch(/threshold\.above = \[1, 0, 0\.25, 0\.[89]\d*\]/);
+		// The square and the hue strip hold too, with the row open and after a second switch.
+		await page.keyboard.press('Escape');
+		await above.getByTestId('param-view-individual').click();
+		await above.getByTestId('param-view-list').click();
+		await picker.getByRole('button').click();
+		const hue = page.getByTestId('color-hue');
+		await hue.scrollIntoViewIfNeeded();
+		const hbox = (await hue.boundingBox())!;
+		// A native touch slider drags its thumb; a press elsewhere only selects the track.
+		await hand.down({ x: hbox.x + hbox.width * Number(await hue.inputValue()) / 360, y: hbox.y + hbox.height / 2 });
+		await hand.moveTo({ x: hbox.x + hbox.width * 0.5, y: hbox.y + hbox.height / 2 });
+		await hand.up();
+		await expect(hue, 'the hue drag reaches cyan').toHaveValue('180');
+		await square.scrollIntoViewIfNeeded();
+		const qbox = (await page.getByTestId('color-square').boundingBox())!;
+		await hand.down({ x: qbox.x + qbox.width * 0.9, y: qbox.y + qbox.height * 0.9 });
+		await hand.moveTo({ x: qbox.x + qbox.width * 0.95, y: qbox.y + qbox.height * 0.1 });
+		await hand.up();
+		await expect.poll(text).toMatch(/threshold\.above = \[0\.[01]\d*, 0\.[89]\d*, 0\.[89]\d*, 0\.[89]\d*\]/);
+		await page.keyboard.press('Escape');
+		await expectIntact(page, 'a colour row');
 	} finally {
 		await tearDown(page);
 	}

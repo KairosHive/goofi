@@ -1,11 +1,8 @@
-<!--
-  ExprEditor — the param's expression surface: a Python expression with goofi's completions. It
-  reads the graph store, so it lives here and never in `$lib/ui`, which must stay a leaf layer.
--->
+<!-- A Python expression with goofi's completions — a param's, or a machine's; it reads the graph
+     store, so it is not in $lib/ui. -->
 <script lang="ts">
-	import { loadExprEditor } from './load';
 	import type { ExprEditorHandle } from './editor';
-	import { liveCatalogue } from './catalogue';
+	import { liveCatalogue, machineCatalogue } from './catalogue';
 
 	let {
 		value,
@@ -15,7 +12,7 @@
 		placeholder = '',
 		testid,
 		selfName,
-		disabled = false
+		machine
 	}: {
 		value: string;
 		error?: string | null;
@@ -27,7 +24,8 @@
 		testid: string;
 		/** The edited node's display name — what `me` completes against. */
 		selfName?: string;
-		disabled?: boolean;
+		/** The machine whose expression this is: `me` is then the playhead, `sm()` its states and playheads. */
+		machine?: string;
 	} = $props();
 
 	let host = $state<HTMLDivElement | null>(null);
@@ -40,12 +38,12 @@
 		if (!el) return;
 		let live = true;
 		let mounted: ExprEditorHandle | null = null;
-		loadExprEditor().then((mod) => {
+		import('./editor').then((mod) => {
 			if (!live) return;
 			const attributes = { 'data-testid': testid, 'aria-label': label };
 			mounted = mod.createExprEditor(el, {
 				doc: value,
-				catalogue: () => ({ ...liveCatalogue(), self: selfName }),
+				catalogue: () => ({ ...liveCatalogue(), self: selfName, ...(machine ? { machine: machineCatalogue(machine) } : {}) }),
 				onCommit: (v) => onCommit(v),
 				error,
 				placeholder,
@@ -69,7 +67,7 @@
 	});
 </script>
 
-<div class="expr-host" class:disabled bind:this={host} inert={disabled || undefined}>
+<div class="expr-host" bind:this={host}>
 	{#if !handle}
 		<!-- The stand-in until the lazy chunk lands: out of flow, so the host's height never depends on it. -->
 		<pre class="stand-in" aria-hidden="true">{value}</pre>
@@ -93,8 +91,11 @@
 		overflow: hidden;
 		tab-size: 4;
 	}
-	.expr-host.disabled {
-		opacity: 0.5;
+	/* The window under it continues the box: no seam, no rounded corners between the two. The
+	   attribute is the window's (window.ts), set at runtime, so the rule is stated global. */
+	:global(.expr-host[data-window-open]) {
+		border-bottom-left-radius: 0;
+		border-bottom-right-radius: 0;
 	}
 	/* Restated because CodeMirror's base theme pins `outline: none` at a specificity app.css cannot reach. */
 	.expr-host:has(:focus-visible) {

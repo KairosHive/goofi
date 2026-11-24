@@ -8,9 +8,10 @@
 // The oracle is a RAW `/control` socket of the test's own. Asking the page's replica what the
 // backend holds would ask the accused to testify.
 
+type Link = { node_out: string; node_in: string; slot_in: string };
 import { test, expect, type Browser, type Page } from '@playwright/test';
 import { touchSession } from '../lib/touch';
-import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { appReady, closeAddedTab, closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
 import {
 	armSocketControl,
 	backendDoc,
@@ -141,7 +142,7 @@ test.describe('the control socket', () => {
 					[osc, buf]
 				);
 				await expect
-					.poll(async () => (await backendDoc(page)).links.length, {
+					.poll(async () => Object.keys((await backendDoc(page)).links).length, {
 						message: 'the link reached the manager'
 					})
 					.toBe(1);
@@ -172,7 +173,7 @@ test.describe('the control socket', () => {
 					osc
 				);
 				await expect
-					.poll(async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency.expr)
+					.poll(async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency.expression)
 					.toBe('2 * 3');
 				const param = (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 				expect(param.mode, 'the mode rode with the text').toBe('expression');
@@ -199,10 +200,12 @@ test.describe('the control socket', () => {
 				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.7), osc);
 				const field = page.getByTestId('param-field-amplitude');
 				await expect(field).toBeVisible();
-				const range = field.locator('input[type=range]');
-				await range.scrollIntoViewIfNeeded();
-				const slider = (await range.boundingBox())!;
-				await page.mouse.move(slider.x + slider.width * 0.7, slider.y + slider.height / 2);
+				// Held by its name: a press on the slider would preview the slider's own position, and
+				// the release would commit that over the edit this step lands from outside.
+				const label = field.locator('.ui-field-label').first();
+				await label.scrollIntoViewIfNeeded();
+				const name = (await label.boundingBox())!;
+				await page.mouse.move(name.x + name.width / 2, name.y + name.height / 2);
 				await page.mouse.down();
 				await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'lfo', 'amplitude', 0.42), osc);
 				await expect.poll(async () => (await nodeParams(page, osc)).lfo.amplitude.value).toBeCloseTo(0.42);
@@ -221,29 +224,55 @@ test.describe('the control socket', () => {
 				await page.getByTestId('param-search').fill('');
 			});
 
+			await test.step('a slider drag previews each move and commits on release', async () => {
+				await page.getByTestId('param-search').fill('phase');
+				const field = page.getByTestId('param-field-phase');
+				const range = field.locator('input[type=range]');
+				await range.scrollIntoViewIfNeeded();
+				const box = (await range.boundingBox())!;
+				const y = box.y + box.height / 2;
+				const phase = async () => (await backendDoc(page)).nodes[osc].params.lfo.phase.value as number;
+				await page.mouse.move(box.x + box.width * 0.2, y);
+				await page.mouse.down();
+				await page.mouse.move(box.x + box.width * 0.5, y, { steps: 6 });
+				await expect.poll(phase, { message: 'the manager follows the finger before it lifts' }).toBeGreaterThan(0.4);
+				await page.mouse.move(box.x + box.width * 0.8, y, { steps: 6 });
+				await page.mouse.up();
+				await expect.poll(phase).toBeGreaterThan(0.7);
+				await page.getByTestId('param-search').fill('');
+			});
+
+			await test.step('a split drag is the same gesture: previews on the way, one op on release', async () => {
+				await splitRight(page);
+				const sizes = async (): Promise<number[]> => {
+					const root = (await backendDoc(page)).arrangement.tabs[0].root;
+					return root.kind === 'split' ? root.children.map((c: { size: number }) => c.size) : [];
+				};
+				await expect.poll(sizes).toHaveLength(2);
+				const before = await sizes();
+				const seam = page.locator('.splitter.row').first();
+				const box = (await seam.boundingBox())!;
+				const x = box.x + box.width / 2;
+				const y = box.y + box.height / 2;
+				await page.mouse.move(x, y);
+				await page.mouse.down();
+				await page.mouse.move(x - 80, y, { steps: 5 });
+				await expect
+					.poll(async () => (await sizes())[0], { message: 'the manager follows the seam before it lifts' })
+					.toBeLessThan(before[0] - 0.02);
+				await page.mouse.move(x - 160, y, { steps: 5 });
+				await page.mouse.up();
+				await expect.poll(async () => (await sizes())[0]).toBeLessThan(before[0] - 0.06);
+				await closeSplit(page);
+			});
+
 			await test.step('a variable is patch state, and lands the same way', async () => {
-				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7, 'float'));
+				await page.evaluate(() => (window as any).goofi.commands.addVariable('patch.seam_probe', 7));
+				// A value is a frame, not a document field: the list answers it.
 				await expect
-					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value)
+					.poll(async () => (await rawCall(page, 'variable list', {})).result.variables.find((v: any) => v.name === 'patch.seam_probe')?.value)
 					.toBe(7);
-			});
-
-			await test.step('undo reaches the manager — the history is the manager’s, not the tab’s', async () => {
-				const before = await backendNodes(page);
-				await undo(page);
-				await expect
-					.poll(async () => (await backendDoc(page)).variables['patch.seam_probe'], {
-						message: 'the undone variable is gone from the manager'
-					})
-					.toBeUndefined();
-				expect(await backendNodes(page), 'and nothing else moved').toEqual(before);
-				await expectAgreement(page, 'after undo');
-			});
-
-			await test.step('…and redo puts it back, through the same door', async () => {
-				await redo(page);
-				await expect.poll(async () => (await backendDoc(page)).variables['patch.seam_probe']?.value).toBe(7);
-				await expectAgreement(page, 'after redo');
+				expect((await backendDoc(page)).variables['patch.seam_probe']).toEqual({});
 			});
 
 			await test.step('a delta landing mid-drag does not put the node back where it started', async () => {
@@ -266,7 +295,7 @@ test.describe('the control socket', () => {
 				expect(Math.abs(after.y - held.y)).toBeLessThan(2);
 				await page.mouse.up();
 				await expect
-					.poll(async () => (await backendDoc(page)).nodes[osc].pos.x)
+					.poll(async () => (await backendDoc(page)).nodes[osc].pos[0])
 					.toBeGreaterThan(60);
 				const rested = (await card.boundingBox())!;
 				expect(Math.abs(rested.x - held.x), 'and the drop holds through the round trip').toBeLessThan(2);
@@ -324,7 +353,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === port && l.node_in === buf
 						)
 					)
@@ -348,7 +377,7 @@ test.describe('the control socket', () => {
 				);
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string; node_in: string }) => l.node_out === feeder && l.node_in === port
 						),
 						{ message: 'the manager stores the cable against the PORT' }
@@ -379,14 +408,14 @@ test.describe('the control socket', () => {
 				await page.evaluate((p) => (window as any).goofi.commands.renameNode(p, 'left'), port);
 				await page.evaluate((p) => (window as any).goofi.commands.setNodePos(p, [7, 9]), port);
 				await expect.poll(async () => (await backendDoc(page)).nodes[port].name).toBe('left');
-				expect((await backendDoc(page)).nodes[port].pos).toEqual({ x: 7, y: 9 });
+				expect((await backendDoc(page)).nodes[port].pos).toEqual([7, 9]);
 
 				// …and so does the delete, which takes the port's inner wire with it.
 				await page.evaluate((p) => (window as any).goofi.commands.removeNodes([p]), port);
 				await expect.poll(async () => (await backendDoc(page)).nodes[port]).toBeUndefined();
 				await expect
 					.poll(async () =>
-						(await backendDoc(page)).links.some(
+						Object.values<Link>((await backendDoc(page)).links).some(
 							(l: { node_out: string }) => l.node_out === port
 						)
 					)
@@ -424,6 +453,9 @@ test.describe('the control socket', () => {
 
 				// Copy the FACADE and paste it. A sub-patch is not one type, so what rides the
 				// clipboard has to be its members, its ports and the wiring among them.
+				// The steps before left the view zoomed onto other cards: frame this one first, or the
+				// inspector the press opens can cover it.
+				await page.locator('.svelte-flow__controls-fitview').click();
 				await selectNode(page, scope);
 				// Each press lands off the one before it: two on one spot inside 350 ms enter the sub-patch.
 				const aside = { x: 12, y: 6 };
@@ -437,6 +469,8 @@ test.describe('the control socket', () => {
 						)
 						.toBe(true);
 				const label = page.getByTestId('node-name');
+				// The pane slides open from no width, and unrendered text selects as ''.
+				await expect(label).toBeVisible();
 				const selectedText = await label.textContent();
 				await label.evaluate((el) => {
 					const range = document.createRange();
@@ -473,6 +507,10 @@ test.describe('the control socket', () => {
 				await page.keyboard.press('Control+v');
 				expect(await backendDoc(page)).toEqual(beforePaste);
 				await selectNode(page, scope, aside);
+				// The paste lands where the mouse is on the canvas, off its centre: the copy's corner is there.
+				const canvas = (await page.locator('.editor-panel.canvas-wrap').boundingBox())!;
+				const aim = { x: canvas.x + canvas.width / 4, y: canvas.y + canvas.height / 4 };
+				await page.mouse.move(aim.x, aim.y);
 				await page.keyboard.press('Control+v');
 				await expect
 					.poll(
@@ -486,6 +524,15 @@ test.describe('the control socket', () => {
 				const copy = Object.entries((await backendDoc(page)).nodes).find(
 					([uid, n]: [string, any]) => n.type === 'SubPatch' && uid !== scope
 				)![0];
+				await expect
+					.poll(
+						async () => {
+							const box = await page.locator(`.svelte-flow__node[data-id="${copy}"]`).boundingBox();
+							return box && Math.max(Math.abs(box.x - aim.x), Math.abs(box.y - aim.y));
+						},
+						{ message: 'the copy stands where the mouse was' }
+					)
+					.toBeLessThanOrEqual(2);
 				expect(await inside(copy), 'holding everything the original held').toBe(held);
 
 				// CUT a plain selection, then paste it INSIDE a sub-patch. Cut is a copy and a
@@ -532,8 +579,8 @@ test.describe('the control socket', () => {
 					.filter(([, n]: [string, any]) => n.scope === scope)
 					.map(([uid]) => uid);
 				expect(
-					doc.links.some(
-						(l: { node_out: string; node_in: string; slot_in: string }) =>
+					Object.values(doc.links as Record<string, Link>).some(
+						(l) =>
 							within.includes(l.node_out) && within.includes(l.node_in) && l.slot_in === 'input'
 					),
 					'the cut carried the wiring among the cut nodes'
@@ -560,15 +607,15 @@ test.describe('the control socket', () => {
 				);
 				expect(await expectAgreement(page, 'after remove')).toEqual([]);
 				await expect
-					.poll(async () => (await backendDoc(page)).links.length, {
+					.poll(async () => Object.keys((await backendDoc(page)).links).length, {
 						message: 'and the link went with the nodes'
 					})
 					.toBe(0);
 			});
 			await test.step('a drawing restores its pixels through undo, redo and replacement', async () => {
+				await rawCall(page, 'control add', { group: 'review', kind: 'paint', element: 'picture', x: 0, y: 0, w: 5, h: 5 });
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
-					await g.commands.addVariable('review.picture', '', 'string', { kind: 'paint', x: 0, y: 0, w: 5, h: 5 });
 					const panel = g.query.panels()[0];
 					g.commands.setPanelType(panel.panelId, 'control');
 					g.commands.setPanelState(panel.panelId, { group: 'review' });
@@ -577,34 +624,60 @@ test.describe('the control socket', () => {
 				await expect(canvas).toBeVisible();
 				// A panel opens in edit mode, where a widget takes no pointer: leave it to draw.
 				await page.getByTestId('control-edit-toggle').click();
-				const empty = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				const pixels = () => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
+				const empty = await pixels();
 				const box = (await canvas.boundingBox())!;
 				await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
 				await page.mouse.down();
 				await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 8 });
 				await page.mouse.up();
-				const picture = await canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL());
-				expect(picture).not.toBe(empty);
-				await expect.poll(async () => (await backendDoc(page)).variables['review.picture']?.value).toBe(picture);
+				// The hand stroke lands in the variable's sheet, which comes back over the data plane and
+				// replaces the local preview: the picture is what the manager painted.
+				const inked = () =>
+					page.evaluate(() => {
+						const v = (window as any).goofi.query.variables().find((e: any) => e.name === 'review.picture')?.value;
+						return Array.isArray(v) && v.some((row: number[][]) => row.some((px) => px[3] > 0));
+					});
+				await expect.poll(inked).toBe(true);
+				await expect.poll(pixels).not.toBe(empty);
+				const picture = await pixels();
 				await undo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await expect.poll(pixels).toBe(empty);
 				await redo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await expect.poll(pixels).toBe(picture);
 				await page.getByTestId('paint-clear').click();
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(empty);
+				await expect.poll(pixels).toBe(empty);
 				await undo(page);
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: empty });
-				await rawCall(page, 'variable entry edit', { name: 'review.picture', value: picture });
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(picture);
+				await expect.poll(pixels).toBe(picture);
+				// A CLI stroke draws through the same op and shows on the pad.
 				await rawCall(page, 'control paint', {
-					group: 'review', element: 'picture', steps: 'clear\npen #ff0000\nwidth 40\ngoto 100 100\nforward 200'
+					group: 'review', element: 'picture', ops: 'stroke #ff0000 width 40 : M 100 800 L 300 800'
 				});
-				await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) => el.toDataURL())).not.toBe(picture);
+				await expect.poll(pixels).not.toBe(picture);
+				const red = await canvas.evaluate((el: HTMLCanvasElement) =>
+					Array.from(el.getContext('2d')!.getImageData(Math.round(el.width * 0.2), Math.round(el.height * 0.8), 1, 1).data)
+				);
+				expect(red).toEqual([255, 0, 0, 255]);
 				await page.evaluate(async () => {
 					const g = (window as any).goofi;
 					await g.commands.removeVariable('review.picture');
 				});
+			});
+			await test.step('a text widget writes each key, and its cross removes it', async () => {
+				await rawCall(page, 'control add', { group: 'review', kind: 'text', element: 'note', x: 0, y: 0, w: 6, h: 3 });
+				const widget = page.getByTestId('control-review-note');
+				const held = () =>
+					page.evaluate(() => (window as any).goofi.query.variables().find((e: any) => e.name === 'review.note')?.value);
+				const box = widget.locator('textarea');
+				await box.click();
+				await box.pressSequentially('hi');
+				// The value lands while the box still has the focus: no blur between a key and the write.
+				await expect.poll(held).toBe('hi');
+				await expect(box).toBeFocused();
+				await page.getByTestId('control-edit-toggle').click();
+				await widget.getByTestId('control-delete').click();
+				await expect(widget).toHaveCount(0);
+				await expect.poll(held).toBeUndefined();
 			});
 
 		} finally {
@@ -613,7 +686,7 @@ test.describe('the control socket', () => {
 		}
 	});
 
-	test('two tabs on one manager converge, and each undoes only its own work', async ({
+	test('two tabs on one manager converge, and undo takes back the last write whoever made it', async ({
 		page,
 		browser
 	}: {
@@ -643,11 +716,26 @@ test.describe('the control socket', () => {
 				await expect.poll(() => replicaNodes(page)).toContain(theirs);
 			});
 
-			await test.step('both tabs and the manager hold ONE document', async () => {
-				const truth = await backendNodes(page);
-				expect(truth.sort()).toEqual([mine, theirs].sort());
-				await expect.poll(() => replicaNodes(page)).toEqual(truth);
-				await expect.poll(() => replicaNodes(other)).toEqual(truth);
+			await test.step('each tab counts the other, sees its pointer, and loses it across a tab switch', async () => {
+				for (const tab of [page, other]) await expect(tab.getByTestId('topbar-peers')).toHaveText('2');
+				const box = other.viewportSize()!;
+				await page.mouse.move(200, 300);
+				await page.mouse.move(240, 320, { steps: 3 });
+				const cursor = other.getByTestId('peer-cursor');
+				await expect(cursor).toHaveCount(1);
+				// Fractions of the window, so the point lands where this window's 240,320 is.
+				const mine = page.viewportSize()!;
+				await expect
+					.poll(async () => {
+						const at = (await cursor.boundingBox())!;
+						return Math.abs(at.x + at.width / 2 - (240 / mine.width) * box.width);
+					})
+					.toBeLessThan(4);
+				await other.evaluate(() => (window as any).goofi.commands.addTab());
+				await expect(other.getByTestId('peer-cursor'), 'a peer on another tab is not drawn').toHaveCount(0);
+				await page.mouse.move(260, 330);
+				await expect(other.getByTestId('peer-cursor')).toHaveCount(0);
+				await closeAddedTab(other);
 			});
 
 			await test.step('a peer’s delta lands mid-drag, and the marquee still selects what it drew', async () => {
@@ -689,18 +777,28 @@ test.describe('the control socket', () => {
 				await expect
 					.poll(() => selectedCount(page), { message: 'the release commits what the box drew' })
 					.toBe(2);
+				// No rectangle stands over the cards the box picked: a click on one of them is that
+				// card's, and picks it alone.
+				await page.locator('.svelte-flow__node .header').first().click();
+				await expect
+					.poll(() => selectedCount(page), { message: 'a click on one picked card picks it alone' })
+					.toBe(1);
 			});
 
-			await test.step('an undo here takes back MY node, and leaves the peer’s standing', async () => {
-				// The manager filters undo by session, which is what makes two tabs independent editors
-				// of one document rather than two hands on one stack.
+			await test.step('an undo here takes back the last write, whoever made it, and the peer sees it', async () => {
+				// One history for every tab: two hands on one stack, and each step reaches both. The
+				// peer's rename is the last write; its add sits under the tab it opened and closed.
 				await undo(page);
 				await expect
-					.poll(() => backendNodes(page), { message: 'my add was rolled back' })
-					.toEqual([theirs]);
+					.poll(async () => (await nodes(page)).map((n) => n.name), { message: 'the peer’s rename was taken back' })
+					.not.toContain('renamed');
+				for (let i = 0; i < 4 && (await backendNodes(page)).includes(theirs); i++) await undo(page);
 				await expect
-					.poll(() => replicaNodes(other), { message: 'and the peer saw the removal, not its own loss' })
-					.toEqual([theirs]);
+					.poll(() => backendNodes(page), { message: 'then the peer’s add, under its layout steps' })
+					.toEqual([mine]);
+				await expect
+					.poll(() => replicaNodes(other), { message: 'and the peer saw its node go' })
+					.toEqual([mine]);
 			});
 		} finally {
 			await clearGraph(page);
@@ -797,6 +895,35 @@ test.describe('the control socket', () => {
 		}
 	});
 
+	test('a reloaded tab keeps the undo the manager still holds for it', async ({ page }) => {
+		// The actor lives in sessionStorage, so a reload rejoins as the same editor. The hello then
+		// carries this actor's history, and the fresh-session reset must not drop it on the floor.
+		await page.goto('/');
+		await waitForApp(page);
+		await clearGraph(page);
+		const undoButton = page.getByTestId('topbar-undo');
+		try {
+			const uid = await addNode(page, 'LFO');
+			await waitForNode(page, uid);
+			await expect(undoButton, 'the reply enabled Undo').toBeEnabled();
+			const title = await undoButton.getAttribute('title');
+			expect(title, 'and named the step').toMatch(/^Undo .+/);
+
+			await page.reload();
+			await appReady(page);
+			await waitForNode(page, uid);
+			await expect(undoButton, 'the hello re-enabled Undo for the same actor').toBeEnabled();
+			await expect(undoButton, 'with the step it still holds').toHaveAttribute('title', title!);
+
+			await undo(page);
+			await expect
+				.poll(() => backendNodes(page), { message: 'and the undo reaches the manager' })
+				.toEqual([]);
+		} finally {
+			await clearGraph(page);
+		}
+	});
+
 	test('a client the manager cannot speak to is told, not left half-working', async ({ page }) => {
 		// The one failure mode where BOTH halves' own suites stay green: `PROTOCOL_VERSION` is declared
 		// by hand on each side, each comments that the other must be bumped with it, and a client one
@@ -805,7 +932,7 @@ test.describe('the control socket', () => {
 		//
 		// The socket is PROXIED to the real server, not faked — only the hello frame's version is
 		// rewritten on the way through, so everything else is the manager's own traffic.
-		await page.routeWebSocket(/\/control$/, (ws) => {
+		await page.routeWebSocket(/\/control(\?.*)?$/, (ws) => {
 			const server = ws.connectToServer();
 			server.onMessage((m) => {
 				if (typeof m !== 'string') return ws.send(m);
@@ -842,17 +969,23 @@ test.describe('the control socket', () => {
 			await waitForNode(page, osc);
 			await page.evaluate((u) => {
 				const g = (window as any).goofi;
-				g.commands.updateParam(u, 'output', 'mode', 'block');
-				g.commands.updateParam(u, 'output', 'sfreq', 64);
+				g.commands.updateParam(u, 'lfo', 'mode', 'block');
+				g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 			}, osc);
 
 			const read = () => frameSummary(page, osc);
 			// The producer's emit counter on the newest frame the tab holds; -1 before any.
 			const index = async (): Promise<number> => (await read())?.index ?? -1;
+			// A block holds the samples elapsed since the last, so the first blocks are a sample
+			// long and span nothing: the frame read below is the first with a span.
+			const spanning = async () => {
+				const s = await read();
+				return s?.numeric && s.numeric.max - s.numeric.min > 0 ? s : null;
+			};
 			await test.step('frames arrive on the slot the viewer subscribed', async () => {
-				await expect.poll(read, { message: 'a decoded frame reached the tab' }).not.toBeNull();
+				await expect.poll(spanning, { message: 'a decoded frame with a span reached the tab' }).not.toBeNull();
 			});
-			const summary = await read();
+			const summary = await spanning();
 
 			await test.step('a SECOND viewer on the same slot is served, and closing it leaves the first', async () => {
 				// "One data stream per (node, slot), whatever the viewer count" is the architecture's
@@ -887,30 +1020,6 @@ test.describe('the control socket', () => {
 					.toBeGreaterThan(closed);
 			});
 
-			await test.step('the wire is capped at the rate the app paints, not the rate the node emits', async () => {
-				// The producer is pushed WELL past the cap, so an uncapped manager would show up
-				// as roughly double. A paint count cannot answer this: the paint is capped either
-				// way, and every frame above the cap is bytes the tab decodes and throws away.
-				await page.evaluate((u) => {
-					const g = (window as any).goofi;
-					g.commands.updateParam(u, 'common', 'max_frequency', 100);
-				}, osc);
-				const rate = () =>
-					page.evaluate((u) => (window as any).goofi.query.arrivalRate(u, 'out'), osc);
-				await expect.poll(async () => (await nodeParams(page, osc)).common.max_frequency.value).toBe(100);
-				const edited = await index();
-				await expect
-					.poll(index, { message: 'the stream still delivers, capped rather than stalled' })
-					.toBeGreaterThan(edited);
-				// A read starts a window at most 0.5 s back; 200 emits at 100 Hz after it keep that tail,
-				// which may predate the edit, under a fifth of the next reading.
-				await rate();
-				const opened = await index();
-				await expect.poll(index, { message: 'two seconds of the edited producer' }).toBeGreaterThan(opened + 200);
-				const fps = (await rate()) ?? 0;
-				expect(fps, `arriving at ${fps} fps, and the cap is 30`).toBeLessThan(45);
-			});
-
 			await test.step('…and it decodes to a real signal, not to zeroes', async () => {
 				expect(summary.dtype, 'the wire dtype survived — numpy spelling, little-endian f32').toBe('<f4');
 				expect(summary.numeric, 'an array frame carries its numbers').toBeTruthy();
@@ -939,7 +1048,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 	try {
 		await page.evaluate(async () => {
 			const g = (window as any).goofi;
-			await g.commands.addVariable('desk.level', 0.5, 'float', {
+			await g.commands.addVariable('desk.level', 0.5, {
 				kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3
 			});
 			const panel = g.query.panels()[1];
@@ -965,7 +1074,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		}
 		await dragLabel();
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await source()).mode).toBe('expression');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
@@ -983,7 +1092,7 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await page.getByTestId('control-edit-toggle').click();
 		await dragLabel(true);
 		await page.mouse.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
@@ -994,13 +1103,184 @@ test('widget drags set parameter expressions with one undo step', async ({ page 
 		await finger.moveTo({ x: target.x + target.width / 2, y: target.y + target.height / 2 });
 		await expect(row).toHaveClass(/over/);
 		await finger.up();
-		await expect.poll(async () => (await source()).expr).toBe('variables.desk.level');
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		expect((await backendDoc(page)).variables['desk.level']).toEqual(before);
 	} finally {
 		await handBack(
 			() => clearGraph(page),
 			() => closeSplit(page),
 			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'))
+		);
+	}
+});
+
+test('a widget moves through its own settings, which stand down for the drag', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5, { kind: 'knob', min: 0, max: 1, x: 0, y: 0, w: 3, h: 3 });
+			const panel = g.query.panels()[1];
+			await g.commands.setPanelType(panel.panelId, 'control');
+			await g.commands.setPanelState(panel.panelId, { group: 'desk' });
+		});
+		const widget = page.getByTestId('control-desk-level');
+		const props = page.getByTestId('control-props');
+		await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
+		const cell = async (): Promise<{ y: number }> => {
+			const c = (await backendDoc(page)).variables['desk.level'].control;
+			return { y: c.y };
+		};
+		// A press picks the widget, and its settings open under it.
+		const before = (await widget.boundingBox())!;
+		await page.mouse.move(before.x + before.width / 2, before.y + 8);
+		await page.mouse.down();
+		await expect(props).toBeVisible();
+		const settings = (await props.boundingBox())!;
+		// Carried down through where the settings were: they stand down, and the widget follows.
+		await page.mouse.move(before.x + before.width / 2, before.y + 40, { steps: 4 });
+		await expect(props).toHaveCount(0);
+		await page.mouse.move(settings.x + settings.width / 2, settings.y + settings.height / 2, { steps: 12 });
+		await expect(page.getByTestId('drag-ghost'), 'inside the panel the drag is a move').toHaveCount(0);
+		await page.mouse.up();
+		await expect.poll(async () => (await cell()).y, 'the widget landed lower').toBeGreaterThan(0);
+		await expect(props, 'the settings return once the drag lands').toBeVisible();
+	} finally {
+		await handBack(
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level'))
+		);
+	}
+});
+
+test('a node with several outputs dropped on a param asks which, in a list the keyboard walks', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO', [40, 40]);
+	const quant = await addNode(page, 'signal:Quantize', [40, 300]);
+	await waitForNode(page, osc);
+	await waitForNode(page, quant);
+	await selectNode(page, osc);
+	try {
+		const row = page.getByTestId('param-field-frequency');
+		await row.scrollIntoViewIfNeeded();
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const name = (await backendDoc(page)).nodes[quant].name;
+		const header = page.locator(`.svelte-flow__node[data-id="${quant}"] .header`);
+		const pick = page.getByTestId('quick-pick');
+		async function dropOnRow(): Promise<void> {
+			const [a, b] = await Promise.all([header.boundingBox(), row.boundingBox()]);
+			await page.mouse.move(a!.x + a!.width / 2, a!.y + a!.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(a!.x + a!.width / 2 + 30, a!.y + a!.height / 2 + 30, { steps: 4 });
+			await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2, { steps: 12 });
+			await expect(row).toHaveClass(/over/);
+			await page.mouse.up();
+		}
+		// Two outputs feed a number, so the drop asks; up from the first wraps to the last.
+		await dropOnRow();
+		await expect(pick.getByRole('option')).toHaveCount(2);
+		await expect(pick.getByRole('option', { name: 'out' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('ArrowUp');
+		await expect(pick.getByRole('option', { name: 'index' })).toHaveAttribute('aria-selected', 'true');
+		await page.keyboard.press('Enter');
+		await expect(pick).toHaveCount(0);
+		await expect.poll(async () => (await source()).expression).toBe(`nd('${name}').out.index`);
+		// The row is driven now, its controls disabled: a release over one must still end the drag.
+		// Escape lets the list go, and the param keeps what it had.
+		await dropOnRow();
+		await expect(pick).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(pick).toHaveCount(0);
+		await expect(page.locator('.svelte-flow__node.dragging')).toHaveCount(0);
+		expect((await source()).expression).toBe(`nd('${name}').out.index`);
+	} finally {
+		await handBack(() => clearGraph(page));
+	}
+});
+
+test('the add-node list wraps its arrow keys and keeps the lit row in view', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	await page.setViewportSize({ width: 1280, height: 500 });
+	await page.locator('.svelte-flow__pane').first().dblclick();
+	const search = page.getByTestId('add-menu-search');
+	await expect(search).toBeFocused();
+	const list = page.getByTestId('add-menu-list');
+	const rows = list.locator('.item');
+	const lit = list.locator('.item.hl');
+	const inView = async (): Promise<boolean> =>
+		lit.evaluate((el) => {
+			const r = el.getBoundingClientRect();
+			const box = el.closest('[data-testid="add-menu-list"]')!.getBoundingClientRect();
+			return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+		});
+	/** Which row is lit, by its place in the list. */
+	const litIndex = (): Promise<number> => rows.evaluateAll((els) => els.findIndex((el) => el.classList.contains('hl')));
+	const count = await rows.count();
+	expect(count).toBeGreaterThan(3);
+	await expect.poll(litIndex).toBe(0);
+	await search.press('ArrowUp');
+	await expect.poll(litIndex, 'up from the first lands on the last').toBe(count - 1);
+	expect(await inView(), 'and the last is scrolled into view').toBe(true);
+	await search.press('ArrowDown');
+	await expect.poll(litIndex, 'down from the last lands on the first').toBe(0);
+	expect(await inView()).toBe(true);
+	await search.press('Escape');
+});
+
+test('a variables row drags its variable onto a parameter of its own form', async ({ page }) => {
+	await page.goto('/');
+	await waitForApp(page);
+	await clearGraph(page);
+	const osc = await addNode(page, 'LFO');
+	await waitForNode(page, osc);
+	await selectNode(page, osc);
+	await splitRight(page);
+	try {
+		await page.evaluate(async () => {
+			const g = (window as any).goofi;
+			await g.commands.addVariable('desk.level', 0.5);
+			await g.commands.addVariable('desk.title', 'hi');
+			await g.commands.setPanelType(g.query.panels()[1].panelId, 'variables');
+		});
+		const desk = page.getByTestId('variables-panel').locator('[data-group="desk"]');
+		await desk.getByTestId('variable-group-toggle').click();
+		// The form a row offers is the one its stream shows, so the text row is a text row first.
+		await expect(desk.locator('[data-name="desk.title"]').getByTestId('variable-type').locator('select')).toHaveValue('text');
+		const row = page.getByTestId('param-field-frequency');
+		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
+		const original = await source();
+		async function dragGrip(name: string): Promise<void> {
+			const grip = (await desk.locator(`[data-name="${name}"]`).getByTestId('variable-grip').boundingBox())!;
+			const target = (await row.boundingBox())!;
+			await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+			await page.mouse.down();
+			await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
+		}
+		// A text variable is no source for a number: the row never arms, and the drop writes nothing.
+		await dragGrip('desk.title');
+		await expect(page.getByTestId('drag-ghost')).toHaveText('vars.desk.title');
+		await expect(row).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		expect(await source()).toEqual(original);
+		await dragGrip('desk.level');
+		await expect(row).toHaveClass(/over/);
+		await page.mouse.up();
+		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
+		await undo(page);
+		await expect.poll(source).toEqual(original);
+	} finally {
+		await handBack(
+			() => clearGraph(page),
+			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level')),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.title'))
 		);
 	}
 });
@@ -1033,37 +1313,39 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await summary.focus();
 	await page.keyboard.press('Enter');
 	await expect(summary).toHaveAttribute('aria-expanded', 'true');
+	// A press hands the focus to the control the row names, so the summary is focused again.
+	await summary.focus();
 	await page.keyboard.press('Space');
 	await expect(summary).toHaveAttribute('aria-expanded', 'false');
 	const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 	const original = await source();
 	async function expectModulation(kind: string, previous: unknown): Promise<void> {
-		await expect.poll(async () => (await source()).expr).not.toBe(previous);
+		await expect.poll(async () => (await source()).expression).not.toBe(previous);
 		const param = await source();
 		expect(param.mode).toBe('expression');
-		const match = param.expr.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
+		const match = param.expression.match(new RegExp(`^${kind}\\(freq=([0-9.]+)\\)$`));
 		expect(match).not.toBeNull();
 		const freq = Number(match![1]);
 		expect(freq).toBeGreaterThanOrEqual(0.01);
 		expect(freq).toBeLessThanOrEqual(0.2);
 	}
-	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'noi']]) {
+	for (const [label, kind] of [['LFO', 'lfo'], ['Noise', 'nse']]) {
 		for (let i = 0; i < 2; i++) {
 			const previous = await source();
 			await row.click({ button: 'right' });
 			await page.getByRole('menuitem', { name: label, exact: true }).click();
-			await expectModulation(kind, previous.expr);
+			await expectModulation(kind, previous.expression);
 		}
 		await undo(page);
 		await undo(page);
 		await expect.poll(source).toEqual(original);
 	}
-	for (const [key, kind] of [['l', 'lfo'], ['n', 'noi']]) {
+	for (const [key, kind] of [['l', 'lfo'], ['n', 'nse']]) {
 		for (let i = 0; i < 2; i++) {
 			const previous = await source();
 			await row.hover();
 			await page.keyboard.press(key);
-			await expectModulation(kind, previous.expr);
+			await expectModulation(kind, previous.expression);
 		}
 		await undo(page);
 		await undo(page);
@@ -1072,17 +1354,22 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	await row.hover();
 	await page.keyboard.press('e');
 	await expect.poll(async () => (await source()).mode).toBe('expression');
-	await expect.poll(async () => (await source()).expr).toBe(String(original.value));
+	await expect.poll(async () => (await source()).expression).toBe(String(original.value));
 	await page.keyboard.press('c');
 	await expect.poll(async () => (await source()).mode).toBe('constant');
 	await page.keyboard.press('e');
 	await expect.poll(async () => (await source()).mode).toBe('expression');
-	await page.keyboard.press('r');
+	await page.keyboard.press('x');
 	await expect.poll(async () => (await source()).mode).toBe('constant');
 	const randomized = await source();
 	const bounds = (await nodeParams(page, osc)).lfo.frequency;
 	expect(randomized.value).toBeGreaterThanOrEqual(bounds.vmin);
 	expect(randomized.value).toBeLessThanOrEqual(bounds.vmax);
+	// R puts the param back on its default, source and value in one undo step.
+	await page.keyboard.press('r');
+	await expect.poll(async () => { const s = await source(); return [s.mode ?? 'constant', s.value]; }).toEqual(['constant', bounds.default]);
+	await undo(page);
+	await expect.poll(source).toEqual(randomized);
 	await undo(page);
 	await expect.poll(async () => (await source()).mode).toBe('expression');
 	await undo(page);
@@ -1092,8 +1379,8 @@ test('parameter modulation menu and hover keys use expressions with undo', async
 	const search = page.getByTestId('param-search');
 	await search.focus();
 	await row.hover();
-	await page.keyboard.type('lnrce');
-	await expect(search).toHaveValue('lnrce');
+	await page.keyboard.type('lnxrce');
+	await expect(search).toHaveValue('lnxrce');
 	expect(await source()).toEqual(original);
 	await search.fill('');
 	await search.blur();

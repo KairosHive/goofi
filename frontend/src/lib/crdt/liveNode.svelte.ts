@@ -1,12 +1,11 @@
-/**
- * A node as the editor reads it: ONE stable object per uid whose fields are read off the reactive
- * replica, the static catalog and the event-sourced runtime overlay on every access. Nothing is
- * assembled or diffed: a reader of `node.name` re-runs for that leaf of the document alone.
- */
+/** A node as the editor reads it: ONE stable object per uid, whose fields read the replica, the
+ * catalog and the runtime overlay on each access, so a reader re-runs for its own leaf alone. */
 import type { NodeInstanceInfo, NodeTypeInfo, NodeStage, NodeStats, NodeRuntime } from '$lib/api/control';
-import { PARAM_MODES, type ParamDescriptor, type ParamMode } from '$lib/api/types';
+import { PARAM_MODES, type ElementSource, type ParamDescriptor, type ParamMode } from '$lib/api/types';
 import { boundaryType } from '$lib/api/vocab';
-import { nodesMap, nodeView, viewersJson, baselineJson, type Doc, type FacadeFace } from './graphDoc';
+import { nodesMap, type Doc, type FacadeFace } from './graphDoc';
+import { ROOT_ID } from '$lib/editor/subpatchScene';
+import { isObj, obj, type Obj } from './ops';
 
 /** What the runtime planes report about one node — never in the document. */
 export interface RuntimeOverlay {
@@ -31,9 +30,6 @@ export interface ViewSources {
 	runtime(uid: string): RuntimeOverlay | undefined;
 }
 
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
-
 /** Define `getters` as enumerable accessors on `target`, so a spread or a stringify reads them too. */
 function accessors<T extends object>(target: T, getters: Record<string, () => unknown>): T {
 	for (const [key, get] of Object.entries(getters)) {
@@ -46,16 +42,15 @@ function accessors<T extends object>(target: T, getters: Record<string, () => un
 const UNKNOWN: ParamDescriptor = {
 	type: 'unknown',
 	value: undefined,
-	default: undefined,
+	default: null,
 	doc: null,
 	refreshable: false,
 	mode: 'constant',
 	expression: null,
-	reference: null,
-	triggers: false,
 	error: null,
 	section: 0,
-	show: null
+	show: [],
+	role: null
 };
 
 /** One param: the catalog's static fields, and the document's and the runtime's live ones. */
@@ -67,21 +62,48 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
 		return typeof m === 'string' && (PARAM_MODES as readonly string[]).includes(m) ? (m as ParamMode) : 'constant';
 	};
 	const p = { ...base } as ParamDescriptor;
+	const dims = base.type === 'num' && Array.isArray(base.value) ? base.value.length : 1;
+	// One element's source record: the leaf `name[i]` beside the param, and its live value.
+	const element = (i: number): ElementSource => {
+		const key = `${name}[${i}]`;
+		const el = obj(obj(obj(obj(nodesMap(cx.doc())[uid]).params)[group])[key]);
+		const m = el.mode;
+		const mode = typeof m === 'string' && (PARAM_MODES as readonly string[]).includes(m) ? (m as ParamMode) : 'constant';
+		const live = mode !== 'constant' ? cx.runtime(uid)?.values?.[group]?.[key] : undefined;
+		return {
+			mode,
+			expression: typeof el.expression === 'string' ? el.expression : null,
+			error: cx.runtime(uid)?.errors?.[group]?.[key] ?? null,
+			value: typeof live === 'number' ? live : undefined
+		};
+	};
 	return accessors(p, {
 		mode,
-		expression: () => (typeof leaf().expr === 'string' ? leaf().expr : null),
-		reference: () => (typeof leaf().ref === 'string' ? leaf().ref : null),
-		triggers: () => leaf().triggers === true,
+		...(dims > 1 ? { elements: () => Array.from({ length: dims }, (_, i) => element(i)) } : {}),
+		expression: () => (typeof leaf().expression === 'string' ? leaf().expression : null),
 		error: () => cx.runtime(uid)?.errors?.[group]?.[name] ?? null,
 		// What a param SHOWS: a driven one reads what its source evaluated to, a withdrawn value
 		// falls back to the committed leaf, and neither leaves the declared default standing.
 		value: () => {
 			const committed = leaf().value;
-			const held = typeof committed === 'number' || typeof committed === 'string' || typeof committed === 'boolean' ? committed : undefined;
+			const held =
+				Array.isArray(committed) || typeof committed === 'number' || typeof committed === 'string' || typeof committed === 'boolean'
+					? committed
+					: undefined;
 			const driven = base.type !== 'pulse' && mode() !== 'constant';
 			const live = driven ? cx.runtime(uid)?.values?.[group]?.[name] : undefined;
 			const v = live !== undefined ? live : held;
-			return v !== undefined ? v : base.value;
+			const whole = v !== undefined ? v : base.value;
+			// An element driven on its own shows what IT evaluated to, in its dimension.
+			if (dims > 1 && Array.isArray(whole)) {
+				const merged = [...whole];
+				for (let i = 0; i < dims; i++) {
+					const e = element(i).value;
+					if (e !== undefined) merged[i] = e;
+				}
+				return merged;
+			}
+			return whole;
 		},
 		...(base.type === 'string'
 			? {
@@ -98,7 +120,11 @@ function liveParam(uid: string, group: string, name: string, catalog: ParamDescr
  * document's own groups for a type the catalog lacks); every leaf inside it is a live read. */
 export function liveNode(uid: string, cx: ViewSources): NodeInstanceInfo {
 	const rec = (): Obj => obj(nodesMap(cx.doc())[uid]);
-	const type = (): string => (typeof rec().type === 'string' ? (rec().type as string) : '');
+	const text = (key: string): string | undefined => {
+		const value = rec()[key];
+		return typeof value === 'string' ? value : undefined;
+	};
+	const type = (): string => text('type') ?? '';
 	const catalog = () => cx.catalog(type());
 	const params = $derived.by(() => {
 		const cat = catalog();
@@ -111,14 +137,17 @@ export function liveNode(uid: string, cx: ViewSources): NodeInstanceInfo {
 		}
 		return out;
 	});
-	const viewers = $derived((viewersJson(cx.doc(), uid) ?? {}) as NodeInstanceInfo['viewers']);
-	const baseline = $derived(baselineJson(cx.doc(), uid) as NodeInstanceInfo['baseline']);
+	const viewers = $derived(obj(rec().viewers) as NodeInstanceInfo['viewers']);
+	const baseline = $derived(isObj(rec().baseline) ? rec().baseline as NodeInstanceInfo['baseline'] : undefined);
 	const virtual = (): boolean => !!boundaryType(type()) || cx.face(uid) !== undefined;
 	return accessors({ uid } as NodeInstanceInfo, {
-		name: () => nodeView(cx.doc(), uid)?.name ?? '',
+		name: () => text('name') ?? '',
 		type,
-		pos: () => nodeView(cx.doc(), uid)?.pos ?? [0, 0],
-		scope: () => nodeView(cx.doc(), uid)?.scope ?? '',
+		pos: () => {
+			const p = rec().pos;
+			return [0, 1].map((i) => Array.isArray(p) && typeof p[i] === 'number' ? p[i] : 0);
+		},
+		scope: () => text('scope') ?? ROOT_ID,
 		doc: () => catalog()?.doc ?? '',
 		editor: () => catalog()?.editor,
 		input_slots: () => cx.face(uid)?.input_slots ?? catalog()?.input_slots ?? {},

@@ -130,7 +130,8 @@ static PARAMS: &[ParamDecl] = &[
              two axes of a grid. Empty keeps the order.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "reshape",
@@ -142,7 +143,8 @@ static PARAMS: &[ParamDecl] = &[
              to work out. Empty keeps the shape.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -8,7 +8,9 @@ license.workspace = true
 embed = ["goofi-python/embed"]
 
 [dependencies]
-goofi-host = { path = "../../goofi-host" }
+# The 8-bit tap goes out as the GOOF frame it is.
+bytes = "1"
+goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 goofi-python = { path = "../../signal/goofi-python" }
 goofi-build = { path = "../../goofi-build" }
@@ -17,10 +19,10 @@ goofi-view = { path = "../../goofi-view" }
 goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }
-goofi-control = { path = "../../goofi-control" }
+goofi-runtime = { path = "../../goofi-runtime" }
 goofi-window = { path = "../../goofi-window" }
-goofi-record = { path = "../../goofi-record" }
 wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "metal", "dx12", "std"] }
 naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
 half = "2"
+serde = { version = "1", features = ["derive"] }

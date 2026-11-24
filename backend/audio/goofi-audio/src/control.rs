@@ -1,28 +1,29 @@
-//! The audio engine's half of a node's control thread. The thread, the door, the desired state
-//! and the bindings are `goofi-control`'s, shared with every scheduled engine; what is here is
-//! what an ARRIVAL becomes on the audio plane, what a tap publishes, and the OS handles a node
-//! owns — a device, a MIDI port, a file — which are opened on this thread and never leave it.
+//! The audio engine's executor on a node's runtime: what an arrival becomes, what a tap publishes,
+//! and the OS handles a node owns (a device, a MIDI port, a file), opened on this thread alone.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use goofi_supervisor::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
 use goofi_audio_sdk::BLOCK;
-use goofi_control::{flag, text, Cx, Half, Ticked};
+use goofi_runtime::{flag, text, Cx, Executor, Out, Ticked};
 use goofi_core::{Data, Meta, Param};
 use goofi_node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
-use crate::runtime::{Entry, REC_HEADER};
+use crate::runtime::{Entry, Resample, REC_HEADER};
 use crate::{wav, Clock, DEFAULT_DEVICE, NO_DEVICE, RATE};
 
 /// An inbox is born this many floats wide and follows the frames that arrive: four of the
 /// newest, grown when one does not fit and shrunk when it is sixteen times too wide.
 pub const INBOX_SEED: usize = 4096;
+/// The longest a frame may play, in seconds: what bounds the ring minted for it.
+pub const LONGEST_FRAME: f64 = 10.0;
 /// A device's or a file's feed holds a second at sixteen channels; a chunk that does not fit is dropped.
 pub const DEVICE_RING: usize = RATE as usize * 16;
 /// A tap holds a quarter second of blocks at `width`, what a reader takes between two ticks;
@@ -31,10 +32,12 @@ pub fn tap_ring(width: u16) -> usize {
     (1 + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK / 4)
 }
 /// A recording ring holds one second of blocks at `width`: the control half drains it every tick,
-/// and a second is what a parked drain thread may cost before the recorder counts a gap.
+/// and a second is what a parked recorder may cost before it counts a gap.
 pub fn rec_ring(width: u16) -> usize {
     (REC_HEADER + width.max(1) as usize * BLOCK) * (RATE as usize / BLOCK)
 }
+/// The computed results ring holds a few blocks of a few channels; a wider result is dropped.
+pub const BLOCKS_RING: usize = (3 + 8 * BLOCK) * 4;
 /// Notes a port may hold between two blocks.
 pub const NOTE_RING: usize = 1024;
 /// How much of a file one read takes, in frames of the file's own rate.
@@ -58,33 +61,79 @@ pub struct Ports {
 /// on every host. A device is opened at the clock's rate, so the name AND the rate gate a reopen.
 #[derive(Default)]
 struct Io {
-    stream: Option<goofi_core::registry::Leased<cpal::Stream>>,
-    midi: Option<goofi_core::registry::Leased<midir::MidiInputConnection<()>>>,
-    /// The device name, the clock's rate and the channel selection — every input the open
-    /// depends on, so a move in any one of them reopens the stream.
-    device: Option<(String, f64, String)>,
+    stream: Option<goofi_supervisor::scope::Leased<cpal::Stream>>,
+    midi: Option<goofi_supervisor::scope::Leased<midir::MidiInputConnection<()>>>,
+    /// The device name, the clock's rate, the channel selection and the frames per callback —
+    /// every input the open depends on, so a move in any one of them reopens the stream.
+    device: Option<(String, f64, String, u32)>,
     port: Option<String>,
     /// Raised by the input stream's error callback; the name is then tried once more.
     dead: Arc<AtomicBool>,
 }
 
-/// What every audio control half shares, beside the generic `goofi_control::Shared`: the clock's
+/// What every audio executor shares, beside the generic `goofi_runtime::Shared`: the clock's
 /// rate, what drives it, and what a plugin's own editor wrote.
 pub struct AudioShared {
     /// The clock's rate, `f64` bits: what a crossing resamples to and a tap is stamped with.
     pub rate: AtomicU64,
+    /// `audio.buffer_size` as the last settle read it: the frames per callback every device stream
+    /// asks for, the clock's output and each input alike; 0 is the host's own.
+    pub buffer: AtomicU32,
     /// What drives the blocks: a live stream is opened only where the device does.
     pub clock: Clock,
-    /// What a plugin's own editor wrote — node, plugin param id, normalized value — for the
-    /// worker to put through the param op.
-    pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64)>>,
+    /// What a plugin reported of its own values — node, plugin param id, normalized value, and
+    /// what moved it — for the worker to put into the document.
+    pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64, goofi_node::Origin)>>,
     /// The drain's door, so an edit made on the window thread is taken without waiting for a tick.
     pub waker: Arc<goofi_node::DrainWaker>,
     /// The block count and its one tie to the clock: what dates every recorded block.
     pub anchor: Arc<crate::runtime::Anchor>,
     /// The control halves' ends of rings the engine grew, by node, taken at the half's next tick.
     pub swaps: Mutex<HashMap<goofi_node::Uid, Swap>>,
+    /// A plugin's state, readable OFF the runtime lock — VST3 lets a host read it beside
+    /// `process` — so a save never holds the callback's lock for the plugin's serialization.
+    pub savers: Mutex<HashMap<goofi_node::Uid, Saver>>,
+    pub tracks: TrackPorts,
 }
+
+/// The timeline's note tracks as the MIDI ports a `MidiIn` may pick: the names there are, and
+/// each port by its name.
+#[derive(Clone, Default)]
+pub struct TrackPorts(Arc<Mutex<Listed>>);
+
+type Listed = (Vec<String>, HashMap<String, TrackPort>);
+
+/// A track's port: the note rings of the nodes on it, each held as long as its node holds it, and
+/// the notes that sound, which a node that joins takes as struck.
+#[derive(Default)]
+struct TrackPort {
+    rings: Vec<std::sync::Weak<Mutex<rtrb::Producer<Note>>>>,
+    held: Vec<Note>,
+}
+
+/// What a track's port is listed as, before the track's name.
+const TRACK: &str = "timeline: ";
+
+impl TrackPorts {
+    /// The ports there are: one per note track, by the track's name.
+    pub fn list(&self, names: Vec<String>) {
+        self.0.lock().0 = names;
+    }
+
+    /// One note into every node on `port`, as a device's callback hands one over: it lands at the
+    /// start of the next block. A velocity of 0 is the note's end.
+    pub fn strike(&self, port: &str, pitch: u8, velocity: f64) {
+        let note = Note { on: velocity > 0.0, note: pitch, velocity: (velocity * 127.0).round() as u8, pedal: false, wheel: None };
+        let mut ports = self.0.lock();
+        let port = ports.1.entry(port.to_string()).or_default();
+        port.held.retain(|held| held.note != pitch);
+        port.held.extend(note.on.then_some(note));
+        port.rings.retain(|ring| ring.upgrade().map(|ring| ring.lock().push(note)).is_some());
+    }
+}
+
+/// What answers a plugin node's opaque state from any thread.
+pub type Saver = Arc<dyn Fn() -> Vec<u8> + Send + Sync>;
 
 /// The control half's ends of grown rings, by inbox or output index.
 #[derive(Default)]
@@ -98,6 +147,10 @@ impl AudioShared {
     pub fn rate(&self) -> f64 {
         f64::from_bits(self.rate.load(Ordering::Relaxed))
     }
+
+    pub fn buffer(&self) -> u32 {
+        self.buffer.load(Ordering::Relaxed)
+    }
 }
 
 /// The key of one declared param, off the `'static` manifest — never off `&self`, which a caller
@@ -106,22 +159,28 @@ fn key_of(manifest: &NodeManifest, param: usize) -> ParamKey {
     ParamKey::new(manifest.params[param].group, manifest.params[param].name)
 }
 
-/// One output's tap: the ring the audio thread fills after every block.
-struct Tap {
-    ring: rtrb::Consumer<f32>,
-}
-
 /// The audio plane's half of a control thread.
 pub struct AudioHalf {
     uid: goofi_node::Uid,
     manifest: &'static NodeManifest,
     /// The node's scalar params, which say how its inboxes play what enters them.
     params: Arc<[AtomicU64]>,
+    /// Per param, the functional a bare binding holds, and the ramp it is rendered by.
+    functionals: Vec<Option<Arc<[u8]>>>,
+    ramps: Arc<[crate::runtime::Ramps]>,
+    evaluator: goofi_runtime::SharedEvaluator,
     playback: crate::runtime::Playback,
     /// Why the last frame an oscillator was handed could not sound, shown on its `mode`.
     refused: Option<String>,
+    /// The pulse params raised since the last run, by index.
+    pulses: Vec<usize>,
     inboxes: Vec<Inbox>,
-    taps: Vec<Tap>,
+    /// The computed params' results to the audio thread, and per param the channel count the
+    /// plan sizes its region by.
+    blocks: rtrb::Producer<f32>,
+    param_chans: Vec<Arc<AtomicU16>>,
+    /// One per output: the ring the audio thread fills after every block.
+    taps: Vec<rtrb::Consumer<f32>>,
     ports: Ports,
     io: Io,
     /// One per output: the blocks the audio thread left, each wearing its own number.
@@ -129,6 +188,8 @@ pub struct AudioHalf {
     /// An `AudioPlayback`'s file; every other node has none.
     play: Option<Play>,
     audio: Arc<AudioShared>,
+    /// Raised once the node is on the audio thread: until then this half is a node in setup.
+    born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
@@ -136,12 +197,17 @@ pub struct Birth {
     pub uid: goofi_node::Uid,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
+    pub ramps: Arc<[crate::runtime::Ramps]>,
+    pub evaluator: goofi_runtime::SharedEvaluator,
     pub inboxes: Vec<Inbox>,
+    pub blocks: rtrb::Producer<f32>,
+    pub param_chans: Vec<Arc<AtomicU16>>,
     pub taps: Vec<rtrb::Consumer<f32>>,
     /// Per output: the recording ring's consumer.
     pub recs: Vec<rtrb::Consumer<f32>>,
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
+    pub born: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AudioHalf {
@@ -156,22 +222,28 @@ impl AudioHalf {
         AudioHalf {
             uid: birth.uid,
             manifest: birth.manifest,
+            functionals: vec![None; birth.manifest.params.len()],
+            ramps: birth.ramps,
+            evaluator: birth.evaluator,
             params: birth.params,
             playback: crate::runtime::Playback::of(birth.manifest),
             refused: None,
+            pulses: Vec::new(),
             inboxes: birth.inboxes,
-            taps: birth.taps.into_iter().map(|ring| Tap { ring }).collect(),
+            blocks: birth.blocks,
+            param_chans: birth.param_chans,
+            taps: birth.taps,
             recs: birth.recs,
             play: ports.play.take().map(Play::new),
             ports,
             io: Io::default(),
             audio: birth.audio,
+            born: birth.born,
         }
     }
 
-    /// The one refreshable list a type has — the graph refuses a refresh on any other param —
-    /// enumerated here rather than under the graph lock: every host's devices behind the platform
-    /// default, or the MIDI ports behind `none`.
+    /// The type's one refreshable list, off the graph lock: every host's devices behind the
+    /// platform default, or the MIDI ports behind `none`.
     fn enumerate(&self) -> Option<Vec<String>> {
         let named = |kind: crate::host::Kind| {
             let mut names = vec![DEFAULT_DEVICE.to_string()];
@@ -186,18 +258,18 @@ impl AudioHalf {
                 if let Ok(input) = midir::MidiInput::new("goofi") {
                     names.extend(input.ports().iter().filter_map(|p| input.port_name(p).ok()));
                 }
+                names.extend(self.audio.tracks.0.lock().0.iter().map(|track| format!("{TRACK}{track}")));
                 Some(names)
             }
             _ => None,
         }
     }
 
-    /// A device or a port a param names is opened here, on this thread, when the name moves — or
-    /// the clock's rate, or the stream died; a name that failed stands as an error on that param
-    /// until it moves.
+    /// Open the device or port a param names when the name, the clock's rate or the stream moves;
+    /// a name that failed stands as an error on that param until it moves.
     fn open_io(&mut self, consts: &[Param], errors: &mut Vec<(ParamKey, Option<String>)>) -> bool {
         let manifest = self.manifest;
-        let (rate, clock) = (self.audio.rate(), self.audio.clock);
+        let (rate, clock, buffer) = (self.audio.rate(), self.audio.clock, self.audio.buffer());
         let (io, ports) = (&mut self.io, &self.ports);
         let mut replan = false;
         if io.dead.swap(false, Ordering::Acquire) {
@@ -205,15 +277,13 @@ impl AudioHalf {
             io.device = None;
         }
         if let Some((producer, chans)) = ports.audio_in.clone() {
-            let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS));
+            let wanted = (text(consts, audio_in::P::DEVICE), rate, text(consts, audio_in::P::CHANNELS), buffer);
             if io.device.as_ref() != Some(&wanted) {
                 io.stream = None;
-                // A selection that does not parse is the CHANNELS param's error and not the
-                // device's: the device may be perfectly openable, and an error hung on the wrong
-                // param is one the reader looks for in the wrong place.
+                // A selection that does not parse is the CHANNELS param's error, not the device's.
                 let (stream, error, sel_error) = match crate::chanmap::parse(&wanted.2) {
                     Err(why) => (None, None, Some(why)),
-                    Ok(sel) => match open_input(&wanted.0, wanted.1, sel.as_deref(), producer, io.dead.clone(), clock) {
+                    Ok(sel) => match open_input(&wanted.0, wanted.1, wanted.3, sel.as_deref(), producer, io.dead.clone(), clock) {
                         Ok(Some((stream, c))) => {
                             chans.store(c, Ordering::Relaxed);
                             (Some(stream), None, None)
@@ -224,7 +294,7 @@ impl AudioHalf {
                 };
                 replan = true;
                 io.stream = stream.map(|s| {
-                    goofi_core::registry::leased(goofi_core::registry::Kind::Device, format!("audio in {}", wanted.0), s)
+                    goofi_supervisor::scope::leased(goofi_supervisor::scope::Kind::Device, format!("audio in {}", wanted.0), s)
                 });
                 io.device = Some(wanted);
                 errors.push((key_of(manifest, audio_in::P::DEVICE), error));
@@ -235,13 +305,29 @@ impl AudioHalf {
             let wanted = text(consts, midi_in::P::PORT);
             if io.port.as_deref() != Some(wanted.as_str()) {
                 io.midi = None;
+                let (ring, mut tracks) = (Arc::downgrade(&producer), self.audio.tracks.0.lock());
+                // The track the node leaves ends the notes that sound there.
+                for port in tracks.1.values_mut().filter(|port| port.rings.iter().any(|r| r.ptr_eq(&ring))) {
+                    port.rings.retain(|r| !r.ptr_eq(&ring));
+                    for note in &port.held {
+                        let _ = producer.lock().push(Note { on: false, ..*note });
+                    }
+                }
                 let error = if wanted == NO_PORT {
                     None
+                } else if let Some(track) = wanted.strip_prefix(TRACK) {
+                    let port = tracks.1.entry(track.to_string()).or_default();
+                    for note in &port.held {
+                        let _ = producer.lock().push(*note);
+                    }
+                    port.rings.push(ring);
+                    None
                 } else {
+                    drop(tracks);
                     match open_port(&wanted, producer) {
                         Ok(connection) => {
-                            io.midi = Some(goofi_core::registry::leased(
-                                goofi_core::registry::Kind::Device,
+                            io.midi = Some(goofi_supervisor::scope::leased(
+                                goofi_supervisor::scope::Kind::Device,
                                 format!("midi in {wanted}"),
                                 connection,
                             ));
@@ -257,14 +343,13 @@ impl AudioHalf {
         replan
     }
 
-    /// The file, driven from settled state: a name that moved is opened, a `position` that moved
-    /// or a `reset` skips, and the ring is kept a second ahead so the DSP half never runs dry. A
-    /// name that will not open stands as an error on it until it moves.
+    /// The file, from settled state: a moved name opens, a moved `position` or a `reset` skips, and
+    /// the ring is kept a second ahead. A name that will not open stands as an error until it moves.
     fn playback(&mut self, cx: &Cx<'_>) -> (Option<String>, bool) {
         let rate = self.audio.rate();
         let named = text(cx.consts, audio_playback::P::FILE);
         let position = f64::from_bits(cx.params[audio_playback::P::POSITION].load(Ordering::Relaxed));
-        let reset = cx.pulses.contains(&audio_playback::P::RESET);
+        let reset = self.pulses.contains(&audio_playback::P::RESET);
         let looping = flag(cx.consts, audio_playback::P::LOOPING);
         let Some(play) = self.play.as_mut() else { return (None, false) };
         let mut moved = false;
@@ -334,10 +419,51 @@ impl AudioHalf {
     }
 }
 
-impl Half for AudioHalf {
-    /// One frame into the crossing that resamples it to the clock's rate, or that enters its
-    /// values as they are for an oscillator to sound.
-    fn arrive(&mut self, inbox: usize, frame: &Data) -> bool {
+impl AudioHalf {
+    /// Every functional read at the start of each of the `POINTS` blocks from the one the audio
+    /// thread renders next, which the clock tie places in patch time; the ramps take the points.
+    fn breakpoints(&mut self, cx: &Cx<'_>, anchor: &crate::runtime::Anchor) {
+        if self.functionals.iter().all(Option::is_none) {
+            return;
+        }
+        let Some(ev) = self.evaluator.lock().clone() else { return };
+        let (first, epoch) = (anchor.blocks.load(Ordering::Relaxed), anchor.epoch());
+        for (param, code) in self.functionals.iter().enumerate() {
+            let Some(code) = code else { continue };
+            let range = match &cx.consts[param] {
+                goofi_core::Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
+                _ => (0.0, 1.0),
+            };
+            let mut values = [0f32; crate::runtime::POINTS];
+            let mut whole = true;
+            for (i, v) in values.iter_mut().enumerate() {
+                let t = cx.time.position_at(anchor.seconds(first + i as u64, epoch));
+                match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range, state: None }) {
+                    Ok(frame) => *v = goofi_core::control::number_of(&frame) as f32,
+                    Err(_) => {
+                        whole = false;
+                        break;
+                    }
+                }
+            }
+            // A functional that cannot be read holds its ramp where it is; the binding's own error
+            // is the runtime's to report.
+            if whole {
+                self.ramps[param].set(first, &values);
+            }
+        }
+    }
+}
+
+impl Executor for AudioHalf {
+    /// Setup while the node is still being made on its own thread; ready once it processes.
+    fn stage(&self) -> goofi_node::NodeStage {
+        if self.born.load(Ordering::Acquire) { goofi_node::NodeStage::Ready } else { goofi_node::NodeStage::Setup }
+    }
+
+    /// One frame into the crossing that resamples it by its `speed`, or that enters its values as
+    /// they are for an oscillator to sound.
+    fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
         let rate = self.audio.rate();
         let entry = self.playback.entry(&self.params);
         self.refused = None;
@@ -347,22 +473,60 @@ impl Half for AudioHalf {
                     self.refused = Some(format!("an oscillator takes [n] pitches or [2, n] pitches and phases, not {:?}", a.shape()));
                     return false;
                 }
-                Entry::Waveform { mix: false, .. } if channels_of(a.shape()).is_some_and(|c| c > crate::plan::CEILING as usize) => {
+                Entry::Waveform { mix: false, .. } if layout(a.shape()).is_some_and(|l| l.0 > crate::plan::CEILING as usize) => {
                     let most = crate::plan::CEILING;
                     self.refused = Some(format!("a waveform plays at most {most} channels, not {:?}: mix them", a.shape()));
+                    return false;
+                }
+                Entry::Waveform { step, .. } if lasts(a.shape(), step, rate) > LONGEST_FRAME => {
+                    let t = layout(a.shape()).map_or(0, |l| l.1);
+                    self.refused = Some(format!("a frame of {t} samples at speed {step} lasts too long to play: at most {LONGEST_FRAME} s"));
                     return false;
                 }
                 _ => {}
             }
         }
-        self.inboxes[inbox].enter(frame, rate, entry).unwrap_or(false)
+        self.inboxes[inbox].enter(frame, entry).unwrap_or(false)
     }
 
-    fn unwired(&mut self, inbox: usize) {
-        self.inboxes[inbox].pos = 0.0;
+    /// A computed result, `[t]` or `[c, t]`, to the audio thread as one chunk; a moved channel
+    /// count asks for the re-plan that re-sizes its region.
+    fn frame(&mut self, param: usize, frame: &Data) -> bool {
+        let goofi_core::Value::Array(a) = frame.value() else { return false };
+        let (chans, len) = match a.shape() {
+            [t] => (1, *t),
+            [c, t] => (*c, *t),
+            _ => return false,
+        };
+        let width = (chans.min(crate::plan::CEILING as usize)) as u16;
+        let moved = chans * len > 0 && self.param_chans[param].swap(width, Ordering::Relaxed) != width;
+        if let Ok(chunk) = self.blocks.write_chunk_uninit(3 + chans * len) {
+            chunk.fill_from_iter([param as f32, chans as f32, len as f32].into_iter().chain(a.values()));
+        }
+        moved
     }
 
-    fn tick(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, &[u8])) -> Ticked {
+    /// A functional on a param is rendered by a ramp through the block boundaries ahead; without
+    /// one the scalar fills as before.
+    fn functional(&mut self, param: usize, code: Option<&Arc<[u8]>>) {
+        if code.is_none() && self.functionals[param].is_some() {
+            self.ramps[param].clear();
+        }
+        self.functionals[param] = code.cloned();
+    }
+
+    fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        if wires.is_empty() {
+            self.inboxes[inbox].pos = 0.0;
+        }
+    }
+
+    fn pulse(&mut self, param: usize) -> Ticked {
+        self.pulses.push(param);
+        Ticked::default()
+    }
+
+    fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
         let mut ticked = Ticked::default();
         ticked.replan |= self.open_io(cx.consts, &mut ticked.errors);
         if let Some(mode) = self.playback.mode() {
@@ -374,35 +538,37 @@ impl Half for AudioHalf {
             ticked.errors.push((key, error));
             ticked.replan |= moved;
         }
+        self.pulses.clear();
         let rate = self.audio.rate();
         let anchor = self.audio.anchor.clone();
+        self.breakpoints(cx, &anchor);
         for (i, ring) in self.recs.iter_mut().enumerate() {
-            record_out(ring, cx, i, rate, &anchor);
+            record_out(ring, cx, i, rate, &anchor, publish);
         }
         for (i, tap) in self.taps.iter_mut().enumerate() {
-            let Some((c, planar)) = drain_blocks(&mut tap.ring) else { continue };
+            let Some((c, planar)) = drain_blocks(tap) else { continue };
             if !cx.readers[i] {
                 continue;
             }
             let t = planar.len() / c;
             let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
             if let Ok(frame) = Data::array_f32(vec![c, t], bytes, Meta::new().with_sfreq(Some(rate))) {
-                publish(i, &goofi_codec::encode(&frame));
+                publish(i, Out::Wire(&frame));
             }
         }
         // After the drains, so what the old rings still held went out before they go.
-        let swap = self.audio.swaps.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.uid);
+        let swap = self.audio.swaps.lock().remove(&self.uid);
         if let Some(swap) = swap {
             let entry = self.playback.entry(&self.params);
             for (i, ring) in swap.inboxes {
                 self.inboxes[i].ring = ring;
                 // The frame the old ring could not take enters the one minted for it.
                 if let Some(frame) = self.inboxes[i].pending.take() {
-                    ticked.replan |= self.inboxes[i].enter(&frame, rate, entry).unwrap_or(false);
+                    ticked.replan |= self.inboxes[i].enter(&frame, entry).unwrap_or(false);
                 }
             }
             for (i, ring) in swap.taps {
-                self.taps[i].ring = ring;
+                self.taps[i] = ring;
             }
             for (i, ring) in swap.recs {
                 self.recs[i] = ring;
@@ -411,7 +577,7 @@ impl Half for AudioHalf {
         ticked
     }
 
-    fn refresh(&mut self) -> Option<Vec<String>> {
+    fn refresh(&mut self, _: usize) -> Option<Vec<String>> {
         self.enumerate()
     }
 }
@@ -441,22 +607,20 @@ impl Inbox {
         if !fits {
             self.pending = Some(frame.clone());
         }
-        let resize = !fits || need * 16 < capacity;
-        if resize {
-            self.wanted.store(need * 4, Ordering::Relaxed);
+        let resize = !fits || need.saturating_mul(16) < capacity;
+        let wanted = need.checked_mul(4).filter(|_| resize);
+        if let Some(wanted) = wanted {
+            self.wanted.store(wanted, Ordering::Relaxed);
         }
-        (fits, resize)
+        (fits, wanted.is_some())
     }
 
-    /// Resample one frame linearly from its `sfreq` to the rate and enter it whole, as one chunk
-    /// headed by its channel count and length. A frame with no `sfreq` enters one sample per
-    /// sample. [`Entry::Pitches`] enters an `[n]` or `[2, n]` frame as pitches in Hz and phases
-    /// for one channel of sines, a volt per octave turned to Hz. Answers whether the plan must
-    /// settle again: the channel count moved, or the ring must be re-minted.
-    fn enter(&mut self, frame: &Data, rate: f64, entry: Entry) -> Option<bool> {
+    /// Resample one frame at `step` frame samples per audio sample and enter it as one chunk headed
+    /// by its channel count and length. Answers whether the channel count moved or the ring must grow.
+    fn enter(&mut self, frame: &Data, entry: Entry) -> Option<bool> {
         let goofi_core::Value::Array(a) = frame.value() else { return None };
-        let (mix, range) = match entry {
-            Entry::Waveform { mix, range } => (mix, range),
+        let (mix, range, step, resample) = match entry {
+            Entry::Waveform { mix, range, step, resample } => (mix, range, step, resample),
             Entry::Pitches { volts } => {
                 let width = pitch_width(a.shape())?;
                 let n = a.as_bytes().len() / 4;
@@ -465,7 +629,7 @@ impl Inbox {
                     return Some(true);
                 }
                 let chunk = self.ring.write_chunk_uninit(n + 2).ok()?;
-                let values = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")));
+                let values = a.values();
                 let head = [width as f32, (n / width) as f32];
                 // Row 0 is the pitch; row 1, where there is one, stays the phase.
                 let values = values.enumerate().map(|(i, v)| match v.is_finite() {
@@ -478,18 +642,11 @@ impl Inbox {
                 return Some(self.chans.swap(1, Ordering::Relaxed) != 1 || resize);
             }
         };
-        // Where lane `ch` sample `i` sits: a signal frame is planar `[C, T]`, and a texture is
-        // texels — every channel of one position together, `[H, W, C]` in scan order.
-        let (c, t, lane, stride) = match *a.shape() {
-            [t] => (1, t, t, 1),
-            [c, t] => (c, t, t, 1),
-            [h, w, c] => (c, h * w, 1, c),
-            _ => return None,
-        };
+        let (c, t, lane, stride) = layout(a.shape())?;
         if c == 0 || t == 0 {
             return None;
         }
-        let mut x: Vec<f32> = a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let mut x: Vec<f32> = a.values().collect();
         // Any number of rows mix into one channel; unmixed, a port carries at most the ceiling.
         let (c, lane, stride) = match mix && c > 1 {
             true => {
@@ -499,7 +656,6 @@ impl Inbox {
             false if c > crate::plan::CEILING as usize => return None,
             false => (c, lane, stride),
         };
-        let step = frame.meta().sfreq().filter(|sf| *sf > 0.0).map_or(1.0, |sf| sf / rate);
         let moved = self.chans.swap(c as u16, Ordering::Relaxed) != c as u16;
         if moved {
             self.pos = 0.0;
@@ -512,8 +668,8 @@ impl Inbox {
             return Some(true);
         }
         if let Ok(chunk) = self.ring.write_chunk_uninit(need) {
-            let at = |ch: usize, i: usize| {
-                let v = x[ch * lane + i.min(t - 1) * stride];
+            let at = |ch: usize, i: isize| {
+                let v = x[ch * lane + (i.clamp(0, t as isize - 1) as usize) * stride];
                 // A linear map, not a clamp: a pitch in volts past the range is still a pitch.
                 match range {
                     _ if !v.is_finite() => 0.0,
@@ -525,23 +681,41 @@ impl Inbox {
                 let p = pos + k as f64 * step;
                 let i = p.floor();
                 let f = (p - i) as f32;
-                let i = i as usize;
-                (0..c).map(move |ch| at(ch, i) + (at(ch, i + 1) - at(ch, i)) * f)
+                let i = i as isize;
+                (0..c).map(move |ch| match resample {
+                    Resample::Nearest => at(ch, if f < 0.5 { i } else { i + 1 }),
+                    Resample::Linear => at(ch, i) + (at(ch, i + 1) - at(ch, i)) * f,
+                    Resample::Cubic => {
+                        let (p0, p1, p2, p3) = (at(ch, i - 1), at(ch, i), at(ch, i + 1), at(ch, i + 2));
+                        let (b, c2, d) = (p2 - p0, 2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3, 3.0 * (p1 - p2) + p3 - p0);
+                        p1 + 0.5 * f * (b + f * (c2 + f * d))
+                    }
+                })
             });
             chunk.fill_from_iter([c as f32, n as f32].into_iter().chain(samples));
         }
         self.pos = pos + n as f64 * step - t as f64;
+        // A frame that moved the channel count is held: the replan it asks for may mint a new
+        // ring, and a producer at rest — a variable — sends no next frame to fill it.
+        self.pending = moved.then(|| frame.clone());
         Some(moved || resize)
     }
 }
 
-/// The channels a waveform frame carries: `[T]`, `[C, T]`, or `[H, W, C]` texels.
-fn channels_of(shape: &[usize]) -> Option<usize> {
+/// A waveform frame's channels, samples per channel, and where lane `ch` sample `i` sits
+/// (`ch * lane + i * stride`): planar `[T]` or `[C, T]`, or `[H, W, C]` texels in scan order.
+fn layout(shape: &[usize]) -> Option<(usize, usize, usize, usize)> {
     match *shape {
-        [_] => Some(1),
-        [c, _] | [_, _, c] => Some(c),
+        [t] => Some((1, t, t, 1)),
+        [c, t] => Some((c, t, t, 1)),
+        [h, w, c] => Some((c, h * w, 1, c)),
         _ => None,
     }
+}
+
+/// How long a frame plays at `step` frame samples per audio sample, in seconds.
+fn lasts(shape: &[usize], step: f64, rate: f64) -> f64 {
+    layout(shape).map_or(0, |l| l.1) as f64 / step / rate
 }
 
 /// How many rows an oscillator's frame has: pitches, or pitches over phases.
@@ -554,8 +728,7 @@ fn pitch_width(shape: &[usize]) -> Option<usize> {
 }
 
 /// Everything the audio thread pushed into a ring since the last read, as one planar `[C, T]`
-/// frame — up to a block whose channel count differs, which the next read starts from. The
-/// framing a tap and a take share, read in one place.
+/// frame, up to a block whose channel count differs.
 fn drain_blocks(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, Vec<f32>)> {
     let mut chans = 0;
     let mut planar: Vec<Vec<f32>> = Vec::new();
@@ -605,11 +778,9 @@ fn take_block(ring: &mut rtrb::Consumer<f32>) -> Option<(usize, u64, u64, Vec<f3
     Some((c, crate::runtime::number_in(head[1], head[2]), head[3] as u64, planar))
 }
 
-/// Every whole block the audio thread left, as one frame each. The BLOCK carries its own number, so
-/// a block that never reached the ring leaves a gap the recorder counts, and the blocks around it
-/// keep the instants they were rendered at. An unarmed slot's blocks are dropped here, so the ring
-/// never fills while nobody records.
-fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor) {
+/// Every whole block the audio thread left, as one frame each at the instant its own number gives;
+/// an unarmed slot's blocks are dropped, so the ring never fills while nobody records.
+fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64, anchor: &crate::runtime::Anchor, publish: &mut dyn FnMut(usize, Out<'_>)) {
     let drift = anchor.drift();
     while let Some((c, n, epoch, planar)) = take_block(ring) {
         if !cx.recorded[out] {
@@ -617,10 +788,10 @@ fn record_out(ring: &mut rtrb::Consumer<f32>, cx: &Cx<'_>, out: usize, rate: f64
         }
         let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut meta = Meta::new().with_sfreq(Some(rate)).with_index(Some(n));
-        meta.set_time(Some(anchor.seconds(n, epoch)));
+        meta.set_procstart(Some(anchor.seconds(n, epoch)));
         meta.set(goofi_core::META_DRIFT, goofi_core::MetaValue::Float(drift));
         if let Ok(frame) = Data::array_f32(vec![c, BLOCK], bytes, meta) {
-            (cx.record)(out, &goofi_codec::encode(&frame));
+            publish(out, Out::Record(goofi_core::record::Frame::Data(frame)));
         }
     }
 }
@@ -649,7 +820,10 @@ impl Play {
 fn enter_planar(inbox: &mut Inbox, channels: u16, frames: usize, planar: &[f32], from: f64, rate: f64) -> bool {
     let bytes: Vec<u8> = planar.iter().flat_map(|v| v.to_le_bytes()).collect();
     match Data::array_f32(vec![channels as usize, frames], bytes, Meta::new().with_sfreq(Some(from))) {
-        Ok(frame) => inbox.enter(&frame, rate, Entry::Waveform { mix: false, range: None }).unwrap_or(false),
+        Ok(frame) => {
+            let entry = Entry::Waveform { mix: false, range: None, step: from / rate, resample: Resample::Linear };
+            inbox.enter(&frame, entry).unwrap_or(false)
+        }
         Err(_) => false,
     }
 }
@@ -668,33 +842,36 @@ fn source_path(name: &str) -> PathBuf {
     if rooted(Path::new(&name)) {
         PathBuf::from(name)
     } else {
-        goofi_core::home::recordings().join(name)
+        goofi_supervisor::layout::recordings().join(name)
     }
 }
 
-/// The device's input stream, opened AT the clock's rate — a device that cannot is the error —
-/// its callback entering interleaved frames into the node's inbox as the Array crossing does.
-/// The name is resolved whatever the clock, so an absent one is still named; only the device
-/// clock opens what it resolved to.
+/// The device's input stream, opened AT the clock's rate and with the output's frames per
+/// callback, its callback entering frames into the node's inbox. Only the device clock opens it;
+/// an absent name is an error under any clock.
 fn open_input(
     name: &str,
     rate: f64,
+    buffer: u32,
     sel: Option<&[u16]>,
     producer: Feed<f32>,
     dead: Arc<AtomicBool>,
     clock: Clock,
 ) -> Result<Option<(cpal::Stream, u16)>, String> {
     let device = crate::host::device(crate::host::Kind::Input, name)?;
-    if !clock.owns_devices() {
+    if !crate::owns_devices(clock) {
         return Ok(None);
     }
     let supported = device.default_input_config().map_err(|e| format!("`{name}`: {e}"))?;
     let format = supported.sample_format();
     let mut config = supported.config();
     config.sample_rate = rate as u32;
-    // A device answers with every channel the interface has — eighteen on a Scarlett 4pre —
-    // and all of them are carried. A SELECTION opens the stream just wide enough to CONTAIN the
-    // highest channel it names, and only the selection leaves the callback.
+    // A host left to itself may hold seconds of input, as it does of output.
+    if buffer > 0 {
+        config.buffer_size = cpal::BufferSize::Fixed(buffer);
+    }
+    // A selection opens the stream just wide enough to contain the highest channel it names, and
+    // only the selection leaves the callback.
     let device_width = config.channels;
     config.channels = match sel {
         Some(sel) => crate::chanmap::needed_width(sel).min(device_width),
@@ -715,10 +892,8 @@ fn open_input(
             return Err(format!("`{name}`: {why}"));
         }
     }
-    // The word the DRIVER speaks, not the one goofi would prefer. A shared-mode host reformats to
-    // `f32` for every client, so demanding it cost nothing and was never wrong there; a host that
-    // hands over the device's own word — a Focusrite's is `i32` — failed outright on a format goofi
-    // never asked about. Reading it and converting in the callback is the whole of the difference.
+    // The sample format the DRIVER speaks, converted in the callback: an exclusive host hands over
+    // the device's own word.
     let refused = |f| format!("the driver's sample format {f} is one goofi does not read");
     let sel = sel.map(<[u16]>::to_vec);
     let open = |f| {
@@ -729,14 +904,8 @@ fn open_input(
     Ok(Some((stream, channels)))
 }
 
-/// Why `wanted` Hz cannot be had from a device offering `ranges`, or `None` when it can.
-///
-/// A device that cannot run at the clock's rate is still the error — one rate crosses the graph —
-/// but the refusal should say what the device DOES offer. What a card is set to is set somewhere
-/// else, in a driver's own control panel or by another application holding it, so "unsupported"
-/// almost always means "go and change it", and the message is worth nothing if it does not say to
-/// what. A host that will not enumerate says nothing here: `ranges` is empty and the open is left
-/// to fail on its own terms rather than be refused on a guess.
+/// Why `wanted` Hz cannot be had from a device offering `ranges`, naming the rates it offers; an
+/// empty `ranges` refuses nothing and leaves the open to fail on its own.
 fn rate_refusal(wanted: u32, ranges: &[(u32, u32)]) -> Option<String> {
     if ranges.is_empty() || ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&wanted)) {
         return None;
@@ -766,26 +935,26 @@ where
     T: cpal::SizedSample,
     f32: cpal::FromSample<T>,
 {
-    // The width the NODE emits, which is the selection's length or the whole opened stream. The
-    // selection is held by value in the callback and never read from the control thread again, so
-    // a change of selection is a new stream rather than a message to a live one.
+    // The width the node emits: the selection's length, or the whole stream. A new selection is a
+    // new stream, as the callback holds this one by value.
     let emitted = sel.as_ref().map_or(opened, |s| s.len() as u16);
+    let rate = config.sample_rate;
+    let mut realtime = crate::Realtime::Unasked;
     device
         .build_input_stream::<T, _, _>(
             config,
             move |data: &[T], _| {
-                let Ok(mut inbox) = producer.try_lock() else { return };
                 let frames = data.len() / opened as usize;
+                realtime.claim(frames, rate);
+                let Some(mut inbox) = producer.try_lock() else { return };
                 let len = frames * emitted as usize;
                 if let Ok(chunk) = inbox.write_chunk_uninit(2 + len) {
                     let header = [f32::from(emitted), frames as f32].into_iter();
                     let _ = match &sel {
                         // No selection: the stream's own interleaving is already the answer.
                         None => chunk.fill_from_iter(header.chain(data.iter().map(|s| f32::from_sample_(*s)))),
-                        // A selection GATHERS: frame by frame, the named channels in the order they
-                        // were named, so `4-3` really does arrive swapped and a repeat really does
-                        // fan out. `sel` was checked against the opened width at open, so the index
-                        // is in range for every frame this stream will ever deliver.
+                        // A selection gathers the named channels in order, per frame; open checked
+                        // it against the opened width.
                         Some(sel) => chunk.fill_from_iter(header.chain((0..frames).flat_map(|f| {
                             sel.iter().map(move |c| f32::from_sample_(data[f * opened as usize + *c as usize]))
                         }))),
@@ -816,7 +985,7 @@ fn open_port(name: &str, producer: Feed<Note>) -> Result<midir::MidiInputConnect
             &port,
             "goofi-in",
             move |_, bytes, _| {
-                if let (Some(note), Ok(mut notes)) = (Note::parse(bytes), producer.try_lock()) {
+                if let (Some(note), Some(mut notes)) = (Note::parse(bytes), producer.try_lock()) {
                     let _ = notes.push(note);
                 }
             },

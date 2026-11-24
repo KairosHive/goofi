@@ -32,6 +32,7 @@ impl Node for TableSelect {
             Value::Str(_) => "string",
             Value::Table(_) => "table",
             Value::Texture(_) => return Err("texture submissions cannot be selected as signal data".into()),
+            Value::Functional(_) => return Err("a functional cannot be selected as signal data".into()),
         };
         out.set(slot, here.clone());
         Ok(())
@@ -45,7 +46,8 @@ static PARAMS: &[ParamDecl] = &[ParamDecl {
     expression: None,
     doc: Some("Which field to take. `a.b.c` reaches through a table inside a table."),
     section: 0,
-    show: None,
+    show: &[],
+    role: None,
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

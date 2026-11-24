@@ -1,5 +1,5 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 /// The most voices a `MidiIn` deals out.
 const VOICES: u16 = 64;
@@ -18,27 +18,30 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: None,
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     BEND = ParamDecl {
         group: "midi",
         name: "bend_range",
-        spec: ParamSpec::Float { default: 2.0, min: 0.0, max: 24.0 },
+        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("how many semitones a full pitch wheel reaches, up and down"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     VOICES = ParamDecl {
         group: "midi",
         name: "voices",
-        spec: ParamSpec::Int { default: 4, min: 1, max: VOICES as i64, options: &[] },
+        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 
@@ -170,8 +173,6 @@ impl AudioNode for MidiIn {
         let voices = (params.get(P::VOICES).copied().unwrap_or(1.0) as u16).clamp(1, VOICES);
         (0..outs).map(|i| if i == 3 { voices * 2 } else { voices }).collect()
     }
-
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let voices = (b.outs[0].channels() as usize).max(1);

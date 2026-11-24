@@ -19,9 +19,9 @@ class HarmonicVoices(goofi.Node):
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}
     OUTPUTS = {k: goofi.DataType.ARRAY for k in ("pitch", "gain")}
     PARAMS = {"sound": {
-        "voices": goofi.IntParam(8, 1, 8, doc="Fixed voice count; takes the lowest components, including fading slots."),
-        "level": goofi.FloatParam(0.2, 0.0, 1.0, doc="Total gain ceiling. Zero mutes the sound without changing the geometry."),
-        "transpose": goofi.FloatParam(0.0, -4.0, 4.0, doc="Pitch shift in octaves, relative to harmonic metadata base_freq."),
+        "voices": goofi.NumParam(8, 1, 8, int=True, doc="Fixed voice count; takes the lowest components, including fading slots."),
+        "level": goofi.NumParam(0.2, 0.0, 1.0, doc="Total gain ceiling. Zero mutes the sound without changing the geometry."),
+        "transpose": goofi.NumParam(0.0, -4.0, 4.0, doc="Pitch shift in octaves, relative to harmonic metadata base_freq."),
     }}
 
     def process(self, input):

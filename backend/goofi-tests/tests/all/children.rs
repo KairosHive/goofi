@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use goofi_tests::WAIT;
 
-use goofi_core::child;
-use goofi_core::registry::{self, Kind};
+use goofi_supervisor::child;
+use goofi_supervisor::scope::{self, Kind};
 
 /// Turns this binary into the sleeping child. Set, the test below runs and sleeps; unset — every
 /// ordinary suite run — it does nothing.
@@ -19,14 +19,16 @@ fn sleeper() {
         return;
     }
     // As every goofi child does: end when the parent dies.
-    child::watch_parent().expect("watch the parent");
+    if std::env::var_os(OUTPUT_HOLDER).is_none() {
+        child::watch_parent().expect("watch the parent");
+    }
     // Deaf to a polite stop, as an agent saving its state is, so the insist meets a LIVE child.
     #[cfg(unix)]
     // SAFETY: installing a signal disposition in a single-threaded test child.
     unsafe {
         libc::signal(libc::SIGTERM, libc::SIG_IGN);
     }
-    println!("SLEEPING {}", std::env::var(goofi_core::session::ENV).unwrap_or_default());
+    println!("SLEEPING {}", std::env::var(goofi_supervisor::session::ENV).unwrap_or_default());
     loop {
         std::thread::park();
     }
@@ -51,6 +53,22 @@ fn alive(pid: u32) -> bool {
 /// names the grandchild's pid, and holds it until killed or its stdin closes.
 const INTERMEDIATE: &str = "GOOFI_TEST_INTERMEDIATE";
 
+/// A completed tool whose child retains its output pipes and does not watch the liveness pipe.
+const OUTPUT_HOLDER: &str = "GOOFI_TEST_OUTPUT_HOLDER";
+
+#[test]
+fn output_holder() {
+    let Some(path) = std::env::var_os(OUTPUT_HOLDER) else { return };
+    let grandchild = sleeper_command()
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the output holder");
+    std::fs::write(path, grandchild.id().to_string()).expect("record the output holder");
+    // This fixture exits without waiting; the tool owner's deadline must stop the inherited group.
+    std::mem::forget(grandchild);
+}
+
 #[test]
 fn intermediate() {
     if std::env::var(INTERMEDIATE).is_err() {
@@ -63,11 +81,10 @@ fn intermediate() {
 
 /// The liveness pipe, end to end: a parent killed with no chance to clean up takes its child
 /// with it, because the pipe's write end closes with the parent and the child exits on EOF.
-#[cfg(unix)]
 #[test]
 fn a_hard_killed_parent_still_stops_its_child() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_tests::session_id();
     let mut parent = Command::new(std::env::current_exe().expect("this test binary"))
         .args([&format!("{}::intermediate", crate::situation(module_path!())), "--exact", "--nocapture"])
         .env(INTERMEDIATE, "1")
@@ -86,10 +103,8 @@ fn a_hard_killed_parent_still_stops_its_child() {
     }
     let grandchild: u32 = line.trim().strip_prefix("GRANDCHILD ").and_then(|p| p.parse().ok()).expect("a pid");
     assert!(alive(grandchild));
-    // SAFETY: SIGKILL to a child this test spawned and has not reaped.
-    unsafe {
-        libc::kill(parent.id() as i32, libc::SIGKILL);
-    }
+    // std's kill is the hard one: SIGKILL, or TerminateProcess.
+    parent.kill().expect("kill the intermediate parent");
     let _ = parent.wait();
     let deadline = Instant::now() + WAIT;
     while alive(grandchild) && Instant::now() < deadline {
@@ -97,7 +112,7 @@ fn a_hard_killed_parent_still_stops_its_child() {
     }
     let orphaned = alive(grandchild);
     if orphaned {
-        let _ = child::force_kill(grandchild);
+        let _ = child::Tree::by_pid(grandchild).map(|tree| tree.kill());
     }
     assert!(!orphaned, "pid {grandchild} outlived its hard-killed parent: the liveness pipe did not fire");
 }
@@ -105,8 +120,8 @@ fn a_hard_killed_parent_still_stops_its_child() {
 #[test]
 fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     goofi_tests::walled_home();
-    goofi_transport::session();
-    let listed = || registry::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
+    goofi_tests::session_id();
+    let listed = || scope::inventory().into_iter().filter(|e| e.kind == Kind::Child).map(|e| e.name).collect::<Vec<_>>();
 
     let mut child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
     let pid = child.id();
@@ -117,7 +132,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
     // It was told the session — the same one this process runs under — and what it printed is
     // in the process log under its name, on the stream it used, without a pipe of the owner's.
     let said = || {
-        goofi_core::log::global().lock().unwrap().since(None).groups.into_iter()
+        goofi_supervisor::log::since(None).groups.into_iter()
             .filter_map(|g| g.message)
             .find(|m| m.source.component == "sleeper" && m.text.starts_with("SLEEPING"))
     };
@@ -126,7 +141,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let line = said().expect("the child's line reached the log");
-    assert_eq!(line.text, format!("SLEEPING {}", goofi_transport::session()));
+    assert_eq!(line.text, format!("SLEEPING {}", goofi_tests::session_id()));
     assert_eq!(line.stream.as_deref(), Some("stdout"));
 
     // Deaf to the ask; the stop closes the pipe first, which is what ends it, and insists after
@@ -140,7 +155,7 @@ fn a_child_is_listed_while_it_lives_and_leaves_when_stopped() {
 #[test]
 fn a_dropped_child_does_not_outlive_its_owner() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_tests::session_id();
     let pid = {
         let child = child::spawn("sleeper", &mut sleeper_command()).expect("spawn");
         child.id()
@@ -151,10 +166,28 @@ fn a_dropped_child_does_not_outlive_its_owner() {
 #[test]
 fn a_tool_past_its_deadline_is_killed_and_reported() {
     goofi_tests::walled_home();
-    goofi_transport::session();
+    goofi_tests::session_id();
     let refused = child::output("sleeper", &mut sleeper_command(), Duration::from_millis(500));
     let err = refused.expect_err("a tool that never finishes is refused");
     assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
+
+    // A tool's exit does not close a pipe another process holds. The deadline also bounds those
+    // readers and kills the tree, including a descendant that watches no liveness pipe.
+    {
+        let record = tempfile::NamedTempFile::new().expect("the holder's pid file");
+        let mut held = Command::new(std::env::current_exe().expect("this test binary"));
+        held.args([&format!("{}::output_holder", crate::situation(module_path!())), "--exact", "--nocapture"])
+            .env(OUTPUT_HOLDER, record.path());
+        let err = child::output("held output", &mut held, Duration::from_millis(500))
+            .expect_err("an output pipe past the deadline is refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut, "{err}");
+        let pid: u32 = std::fs::read_to_string(record.path()).expect("the holder's pid").parse().expect("a pid");
+        let deadline = Instant::now() + WAIT;
+        while alive(pid) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(!alive(pid), "the output holder left with its owner");
+    }
 
     // One that finishes answers with its output, status and all.
     let mut quick = Command::new(std::env::current_exe().expect("this test binary"));

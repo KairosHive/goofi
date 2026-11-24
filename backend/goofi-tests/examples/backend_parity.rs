@@ -2,18 +2,17 @@
 //! and subprocess Python, in one engine.
 //!   PYO3_PYTHON=<python3.14t> LD_LIBRARY_PATH=<base>/lib PYTHONPATH=<ft-sp> \
 //!     cargo run -p goofi-tests --features embed --example backend_parity --release
-//! GOOFI_SUBPROC_PYTHON names an iceoryx2-capable interpreter for the subprocess tier.
+//! GOOFI_SUBPROC_PYTHON names an interpreter with the goofi wheel for the subprocess tier.
 
 use std::time::{Duration, Instant};
 
-use goofi_core::variables::VariableValue;
 use goofi_core::{Data, Param, Value};
 use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
 use goofi_node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, Params, SlotDecl};
 use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 use goofi_python::inproc::PyNode;
-use goofi_python::subproc::RemoteNode;
+use goofi_python::subproc::{subproc, RemoteNode};
 
 static BENCH_TIER: IsolationCell = IsolationCell::new(Isolation::InProcess);
 
@@ -82,10 +81,10 @@ type Factory = Box<dyn Fn(&ParamGroups) -> Box<dyn Node> + Send + Sync>;
 /// Fan `n` nodes off one _TestConst and measure the rate each sustains, counted from
 /// `meta["index"]`, plus whether every error channel stayed clean.
 fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, window: Duration) -> (f64, bool) {
-    let mut g = goofi_bridge::fresh_graph(Some(goofi_bridge::Clock::External), goofi_bridge::RenderClock::External);
+    let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::hub(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
-    // Every producer's rate cap is `variables.system.default_ufreq`; the patch default measures 30 Hz.
-    g.apply_variable_change("system.default_ufreq", Some(VariableValue::Float(1e6)), None, None).unwrap();
+    // Every producer's rate cap is `vars.signal.default_ufreq`; the patch default measures 30 Hz.
+    g.apply_variable_change("signal.default_ufreq", Some(goofi_core::Data::number(1e6)), None, None).unwrap();
     goofi_bridge::register_dyn_type(&mut g, manifest, factory, &BENCH_TIER);
     let src = g.add_node("_TestConst", None).unwrap();
     g.update_param(src, "constant", "value", Param::float(0.5, -1e9, 1e9)).unwrap();
@@ -94,7 +93,8 @@ fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, 
     let mut probes = Vec::new();
     for _ in 0..n {
         let node = g.add_node(manifest.type_name, None).unwrap();
-        probes.push(OutputProbe::open(&g, node, "out"));
+        g.settle();
+        probes.push(OutputProbe::open(&goofi_tests::hub(), &g, node, "out"));
         g.add_link(src, "out", node, "data").unwrap();
         nodes.push(node);
     }
@@ -135,7 +135,7 @@ fn bench(manifest: &'static NodeManifest, factory: Factory, len: i64, n: usize, 
 
 fn main() {
     let len: i64 = 1024;
-    // The subprocess tier needs an `iceoryx2` + `numpy` python, which PYO3_PYTHON usually is not.
+    // The subprocess tier needs a python with the goofi wheel and numpy, which PYO3_PYTHON usually is not.
     let python = std::env::var("GOOFI_SUBPROC_PYTHON")
         .or_else(|_| std::env::var("PYO3_PYTHON"))
         .unwrap_or_else(|_| "python3".to_string());
@@ -175,7 +175,7 @@ fn rebuild(m: &'static NodeManifest, python: &str) -> Factory {
         "bench_ftpy" => Box::new(|_| Box::new(PyNode::from_source(PY_SRC, vec![("data", false)], vec!["out"]).expect("PyNode")) as Box<dyn Node>),
         _ => {
             let py = python.to_string();
-            Box::new(move |_| Box::new(RemoteNode::new(py.clone(), PY_SRC, vec![("data", false)])) as Box<dyn Node>)
+            Box::new(move |_| Box::new(RemoteNode::new(subproc(goofi_tests::hub(), py.clone(), PY_SRC), vec![("data", false)])) as Box<dyn Node>)
         }
     }
 }

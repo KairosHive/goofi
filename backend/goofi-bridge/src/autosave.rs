@@ -5,8 +5,9 @@
 //! watcher on the mount pulse, and writes once the pulses go quiet. Without a watcher it looks every [`CAP`].
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use goofi_supervisor::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 use goofi_graph::archive;
 use notify::Watcher;
@@ -26,7 +27,9 @@ const SIDECAR: &str = "autosave.json";
 
 /// What the last autosave wrote: the manifest and the workspace, so a tick where nothing moved
 /// writes nothing.
-type Stamp = (String, archive::Fingerprint);
+/// What the last autosave wrote from: the graph's revision and the store's value version then, the
+/// workspace's fingerprint, and the manifest text — so a quiet patch costs a walk and no archive.
+type Stamp = (u64, u64, archive::Fingerprint, String);
 
 /// The directory an autosave lives in: the mount's nonce directory, `patch.yaml` beside `workspace/`.
 fn dir_of(mount: &Path) -> PathBuf {
@@ -36,19 +39,13 @@ fn dir_of(mount: &Path) -> PathBuf {
 /// Start the worker; it ends with `state.stopping`, before the mount goes.
 pub(crate) fn spawn(state: AppState) {
     let owner = state.clone();
-    let worker = goofi_core::worker::spawn("goofi-autosave", move || {
+    owner.scope.spawn("goofi-autosave", move || {
         let mut last: Option<Stamp> = None;
         let mut watch = Watch::new(&state);
         loop {
             state.changed.wait_timeout(if watch.at.is_some() { PARK } else { CAP });
             // Debounce: wait for a quiet window, but no longer than the cap since the first pulse.
-            let first = Instant::now();
-            loop {
-                let left = (first + CAP).saturating_duration_since(Instant::now());
-                if left.is_zero() || !state.changed.wait_timeout(QUIET.min(left)) {
-                    break;
-                }
-            }
+            state.changed.wait_quiet(QUIET, goofi_supervisor::timing::Deadline::within(CAP));
             if state.stopping.stopped() {
                 return;
             }
@@ -56,9 +53,6 @@ pub(crate) fn spawn(state: AppState) {
             tick(&state, &mut last);
         }
     });
-    if let Ok(worker) = worker {
-        owner.workers.lock().unwrap().push(worker);
-    }
 }
 
 /// Every live mount, as given and symlink-free, and the waker its event pulses. ONE watcher serves
@@ -70,13 +64,13 @@ static MOUNTS: Mutex<Vec<(PathBuf, PathBuf, Arc<goofi_node::DrainWaker>)>> = Mut
 static WATCHER: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
 
 fn watch(mount: &Path) -> bool {
-    let mut watcher = WATCHER.lock().unwrap();
+    let mut watcher = WATCHER.lock();
     if watcher.is_none() {
         match notify::recommended_watcher(|event: notify::Result<notify::Event>| {
             let hit = |at: &[&PathBuf]| {
                 event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| at.iter().any(|m| p.starts_with(m))))
             };
-            for (_, _, changed) in MOUNTS.lock().unwrap().iter().filter(|(m, real, _)| hit(&[m, real])) {
+            for (_, _, changed) in MOUNTS.lock().iter().filter(|(m, real, _)| hit(&[m, real])) {
                 changed.notify();
             }
         }) {
@@ -85,7 +79,7 @@ fn watch(mount: &Path) -> bool {
                 static SAID: std::sync::Once = std::sync::Once::new();
                 SAID.call_once(|| {
                     let why = format!("autosave: no watcher on the workspace, so it is walked every {CAP:?}: {e}");
-                    goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Warning, None, why);
+                    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Warning, None, why);
                 });
             }
         }
@@ -115,15 +109,15 @@ impl Watch {
         self.release();
         if watch(&mount) {
             let real = goofi_core::path::canonical(&mount).unwrap_or_else(|_| mount.clone());
-            MOUNTS.lock().unwrap().push((mount.clone(), real, self.changed.clone()));
+            MOUNTS.lock().push((mount.clone(), real, self.changed.clone()));
             self.at = Some(mount);
         }
     }
 
     fn release(&mut self) {
         let Some(old) = self.at.take() else { return };
-        MOUNTS.lock().unwrap().retain(|(m, _, _)| *m != old);
-        if let Some(w) = WATCHER.lock().unwrap().as_mut() {
+        MOUNTS.lock().retain(|(m, _, _)| *m != old);
+        if let Some(w) = WATCHER.lock().as_mut() {
             let _ = w.unwatch(&old);
         }
     }
@@ -139,6 +133,10 @@ impl Drop for Watch {
 /// autosave removed, so what a crash leaves is exactly what was not on disk.
 fn tick(state: &AppState, last: &mut Option<Stamp>) {
     let mount = state.mount();
+    // The mount is released at shutdown; a tick that outlives it has nowhere to write.
+    if mount.as_os_str().is_empty() {
+        return;
+    }
     let dir = dir_of(&mount);
     let seen = archive::fingerprint(&mount);
     if !state.dirty_against(&seen) {
@@ -148,27 +146,49 @@ fn tick(state: &AppState, last: &mut Option<Stamp>) {
         }
         return;
     }
-    let manifest = state.graph.lock().unwrap().serialize();
-    if last.as_ref().is_some_and(|(m, fp)| *m == manifest && *fp == seen) {
+    // Taken under the graph lock, encoded and written after it: the status drain waits on that lock.
+    // Nothing moved since the last write — no settle, no value, no file — and there is nothing to
+    // archive.
+    let (revision, moves, archived, wide) = {
+        let g = state.graph.lock();
+        let (revision, moves) = (g.revision(), g.variables().moves());
+        if last.as_ref().is_some_and(|(r, m, fp, _)| *r == revision && *m == moves && *fp == seen) {
+            return;
+        }
+        (revision, moves, g.archive(), g.wide_variables())
+    };
+    let manifest = archived.to_yaml();
+    if let Err(e) = goofi_graph::write_variables(&dir.join(archive::WORKSPACE), &wide) {
+        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
+    }
+    if last.as_ref().is_some_and(|(_, _, fp, m)| *m == manifest && *fp == seen) {
+        *last = Some((revision, moves, seen, manifest));
         return;
     }
     let at = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-    let sidecar = json!({ "home": state.save_path(), "at": at });
+    // `goofi_home` names the `.goofi` this session ran under: a crash is recovered by THAT home's
+    // next boot, and a boot under another leaves it be.
+    let sidecar = json!({ "home": state.save_path(), "at": at, "goofi_home": goofi_home() });
     let written = archive::write_manifest(&dir, &manifest)
         .and_then(|()| std::fs::write(dir.join(SIDECAR), sidecar.to_string()).map_err(|e| e.to_string()));
     if let Err(e) = written {
-        goofi_core::log::record(goofi_core::log::Source::component("bridge"), goofi_core::log::Level::Error, None, format!("autosave: {e}"));
+        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("autosave: {e}"));
         return;
     }
-    *last = Some((manifest, seen));
+    *last = Some((revision, moves, seen, manifest));
+}
+
+/// The sidecar beside an autosave, or `Null` where none was written.
+fn sidecar(dir: &Path) -> Value {
+    std::fs::read(dir.join(SIDECAR))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// What a recovery holds: its path, the patch's home, and when the autosave was taken.
 fn entry(dir: &Path) -> Value {
-    let sidecar: Value = std::fs::read(dir.join(SIDECAR))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or(Value::Null);
+    let sidecar = sidecar(dir);
     json!({
         "workspace": goofi_core::path::to_slash(dir),
         "home": sidecar.get("home").cloned().unwrap_or(Value::Null),
@@ -204,27 +224,37 @@ fn move_tree(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))
 }
 
+/// This process's `.goofi`, as the sidecar spells it.
+fn goofi_home() -> String {
+    goofi_core::path::to_slash(&goofi_supervisor::layout::home())
+}
+
 /// The boot pass over the workspaces: a dead session's directory that carries an autosave is
 /// moved to the recovery base for safekeeping, one that carries none held no unsaved work and
-/// goes. Nothing a living session owns is touched. Answers how many went either way.
+/// goes. Nothing a living session owns is touched, and an autosave another home's session took
+/// is left for that home's boot. Answers how many went either way.
 pub fn sweep_dead() -> usize {
     let mut swept = 0;
-    for (id, dir) in nonces(&goofi_core::session::workspaces_base(), |id| !goofi_core::session::alive(id)) {
+    let own = goofi_home();
+    for (id, dir) in nonces(&goofi_supervisor::session::workspaces_base(), |id| !goofi_supervisor::session::alive(id)) {
         let Some(nonce) = dir.file_name() else { continue };
         let done = if archive::has_manifest(&dir) {
-            move_tree(&dir, &goofi_core::session::recovery_base().join(&id).join(nonce)).is_ok()
+            if sidecar(&dir)["goofi_home"] != own {
+                continue;
+            }
+            move_tree(&dir, &goofi_supervisor::layout::recovery().join(&id).join(nonce)).is_ok()
         } else {
             std::fs::remove_dir_all(&dir).is_ok()
         };
         swept += usize::from(done);
-        let _ = std::fs::remove_dir(goofi_core::session::workspace_dir(&id));
+        let _ = std::fs::remove_dir(goofi_supervisor::session::workspace_dir(&id));
     }
     swept
 }
 
 /// Every recovery on this machine, oldest session first.
 pub fn recoverable() -> Vec<Value> {
-    nonces(&goofi_core::session::recovery_base(), |_| true)
+    nonces(&goofi_supervisor::layout::recovery(), |_| true)
         .into_iter()
         .filter(|(_, dir)| archive::has_manifest(dir))
         .map(|(_, dir)| entry(&dir))
@@ -235,7 +265,7 @@ pub fn recoverable() -> Vec<Value> {
 /// autosave in it. Anything else is refused — this is the one path an op removes wholesale.
 pub fn recovery(workspace: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(crate::fsbrowse::resolve(workspace));
-    let base = goofi_core::path::canonical(&goofi_core::session::recovery_base()).map_err(|e| e.to_string())?;
+    let base = goofi_core::path::canonical(&goofi_supervisor::layout::recovery()).map_err(|e| e.to_string())?;
     let under = dir.parent().and_then(Path::parent) == Some(base.as_path());
     if !under {
         return Err(format!("{workspace}: not a recovery goofi keeps"));

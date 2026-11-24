@@ -9,6 +9,8 @@ import ViewerPanel from './ViewerPanel.svelte';
 import ConsolePanel from './ConsolePanel.svelte';
 import VariablesPanel from './VariablesPanel.svelte';
 import ControlPanel from './ControlPanel.svelte';
+import MachinePanel from './MachinePanel.svelte';
+import TimelinePanel from './TimelinePanel.svelte';
 import AgentPanel from './AgentPanel.svelte';
 import RecorderPanel from './RecorderPanel.svelte';
 
@@ -20,6 +22,8 @@ const components: Record<PanelTypeId, Component<PanelProps>> = {
 	console: ConsolePanel,
 	variables: VariablesPanel,
 	control: ControlPanel,
+	machine: MachinePanel,
+	timeline: TimelinePanel,
 	agent: AgentPanel,
 	recorder: RecorderPanel
 };
@@ -34,19 +38,13 @@ const confirmClose: Partial<Record<PanelTypeId, (panelId: string) => boolean>> =
 	}
 };
 
-let done = false;
-
 export function registerAppPanels(): void {
-	if (done) return;
-	done = true;
-
 	for (const t of PANEL_TYPES) {
 		registerPanel({
 			id: t.id,
 			title: t.title,
 			icon: t.icon,
 			component: components[t.id],
-			acceptsNode: t.acceptsNode,
 			confirmClose: confirmClose[t.id]
 		});
 	}

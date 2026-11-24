@@ -2,24 +2,38 @@
 	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { graph } from '$lib/stores/graph.svelte';
-	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableType, type VariableView } from '$lib/crdt/graphDoc';
-	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput, Toggle } from '$lib/ui';
+	import type { Literal } from '$lib/api/generated';
+	import { effectiveLock, groupedVariables, isValidIdentifier, type VariableView } from '$lib/crdt/graphDoc';
+	import { variableForm, variableValue, watchVariables, type Form } from '$lib/stores/variableValues.svelte';
+	import { Button, Icon, IconButton, MODE_ATTRS, NumberInput, ScrollArea, Select, TextInput } from '$lib/ui';
+	import { draggable, type DragSource } from '$lib/drag';
 
 	let {}: PanelProps = $props();
 	const g = graph();
-	const variables = $derived(g.variables);
-	const groups = $derived(groupedVariables(variables, g.variableGroups));
+	const groups = $derived(groupedVariables(g.variables, g.variableGroups));
 	let panel: HTMLDivElement;
 	let open = $state<Record<string, boolean>>({});
+	// Values come over the data plane, one stream per variable shown: a collapsed group shows none.
+	watchVariables(() => groups.filter((grp) => open[grp.group]).flatMap((grp) => grp.entries.map((entry) => entry.name)));
 	let editing = $state<string | null>(null);
 	let groupName = $state('');
 	let focusEntry = $state<string | null>(null);
 	let busy = $state(false);
 	let error = $state('');
 
+	/** What a row's grip lifts: the variable, carried as `vars.<name>`, in the form it holds. */
+	function lift(entry: VariableView, form: Form): DragSource {
+		return {
+			key: entry.name,
+			tags: [form === 'text' ? 'text' : 'number'],
+			label: `vars.${entry.name}`,
+			expression: () => `vars.${entry.name}`
+		};
+	}
+
 	$effect(() => {
 		const name = focusEntry;
-		if (name && variables.some((entry) => entry.name === name)) {
+		if (name && g.variables.some((entry) => entry.name === name)) {
 			focusEntry = null;
 			void tick().then(() => {
 				const input = panel.querySelector<HTMLInputElement>(`[data-name="${name}"] [data-testid="variable-name"]`);
@@ -44,11 +58,11 @@
 		input.select();
 	}
 
-	async function addGroup(): Promise<void> {
+	async function guarded(op: () => Promise<void>): Promise<void> {
 		busy = true;
 		error = '';
 		try {
-			editGroup(await g.addVariableGroup());
+			await op();
 		} catch (reason) {
 			report(reason);
 		} finally {
@@ -78,28 +92,27 @@
 		}
 	}
 
-	async function addEntry(group: string): Promise<void> {
-		busy = true;
-		error = '';
-		try {
-			focusEntry = await g.addVariableEntry(group);
-		} catch (reason) {
-			report(reason);
-		} finally {
-			busy = false;
-		}
+	function shown(value: Literal | null): string {
+		return value === null ? '' : typeof value === 'string' ? value : JSON.stringify(value);
 	}
-
-	function commitValue(entry: VariableView, raw: string | number | boolean): void {
-		let value: number | string | boolean;
-		if (entry.type === 'bool') value = raw === true;
-		else if (entry.type === 'string') value = String(raw);
-		else {
-			const number = Number(raw);
-			if (!Number.isFinite(number)) return;
-			value = entry.type === 'int' ? Math.round(number) : number;
-		}
+	function commitValue(entry: VariableView, raw: string | number): void {
+		const form = variableForm(entry.name);
+		let value: Literal = Number(raw);
+		if (form === 'text') value = String(raw);
+		else if (form === 'list' || form === 'image') {
+			try {
+				value = JSON.parse(String(raw));
+			} catch {
+				return;
+			}
+			if (!Array.isArray(value)) return;
+		} else if (!Number.isFinite(value)) return;
 		void g.setVariableValue(entry.name, value).catch(report);
+	}
+	/** Switching the form starts the value over: 0, an empty text, or a list of one. */
+	function setForm(entry: VariableView, form: Form): void {
+		if (form === variableForm(entry.name)) return;
+		void g.setVariableValue(entry.name, form === 'text' ? '' : form === 'list' ? [0] : 0).catch(report);
 	}
 
 	function commitName(entry: VariableView, raw: string): void {
@@ -108,7 +121,7 @@
 	}
 </script>
 
-<div class="wrap" data-testid="variables-panel" bind:this={panel}>
+<div class="panel-wrap" data-testid="variables-panel" bind:this={panel}>
 	<ScrollArea>
 		<div class="gp-body">
 			{#each groups as grp (grp.group)}
@@ -137,8 +150,13 @@
 							{/if}
 						{/if}
 						<span class="grp-tags">
-							{#if controlled}
+							{#if g.machineGroups[grp.group]}
+								<span class="grp-control" role="img" aria-label="State machine" title={`Playhead of ${g.machines[g.machineGroups[grp.group]]?.name}`}><Icon name="waypoints" /></span>
+							{:else if controlled}
 								<span class="grp-control" role="img" aria-label="Control panel" title="Control panel"><Icon name="sliders-horizontal" /></span>
+							{/if}
+							{#if g.midiGroups[grp.group]}
+								<span class="grp-control" role="img" aria-label="MIDI device" title={`MIDI device ${g.midiGroups[grp.group]}`}><Icon name="piano" /></span>
 							{/if}
 							{#if lock.config || lock.value}
 								<span class="grp-lock" role="img" aria-label="Built-in lock" title="Built-in lock"><Icon name="lock" /></span>
@@ -150,9 +168,14 @@
 						<div class="grp-body">
 							{#each grp.entries as entry (entry.name)}
 								{@const held = effectiveLock(entry, lock)}
+								{@const value = variableValue(entry.name)}
+								{@const form = variableForm(entry.name)}
 								<div class="entry" data-testid="variable-row" data-name={entry.name}
 									data-lock-config={held.config} data-lock-value={held.value}
 									data-control={entry.control?.kind}>
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<span class="grip" title="Drag onto a parameter to set its expression" data-testid="variable-grip"
+										use:draggable={{ source: () => lift(entry, form) }}><Icon name="grip-vertical" /></span>
 									<div class="entry-name">
 										{#if held.config}
 											<span class="fixed">{entry.element}</span>
@@ -162,22 +185,20 @@
 										{/if}
 									</div>
 									<div class="entry-value">
-										{#if held.value || entry.source}
-											<span class="ro-value" data-testid="variable-value">{String(entry.value)}</span>
-										{:else if entry.type === 'bool'}
-											<Toggle data-testid="variable-value" value={entry.value === true} onChange={(value) => commitValue(entry, value)} />
-										{:else if entry.type === 'string'}
-											<TextInput inputmode="search" data-testid="variable-value" aria-label="Entry value"
-												value={String(entry.value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
-										{:else}
-											<NumberInput data-testid="variable-value" aria-label="Entry value" value={Number(entry.value)}
+										{#if held.value || entry.expression !== undefined || value === null}
+											<span class="ro-value" data-testid="variable-value">{shown(value)}</span>
+										{:else if typeof value === 'number'}
+											<NumberInput data-testid="variable-value" aria-label="Entry value" {value}
 												onChange={(value) => commitValue(entry, value)} />
+										{:else}
+											<TextInput inputmode="search" data-testid="variable-value" aria-label="Entry value"
+												value={shown(value)} autocomplete="off" onChange={(value) => commitValue(entry, value)} />
 										{/if}
 									</div>
-									<Select data-testid="variable-type" aria-label="Entry type" value={entry.type}
-										disabled={held.config || held.value || !!entry.source}
-										options={['float', 'int', 'bool', 'string']}
-										onChange={(value) => void g.setVariableType(entry.name, value as VariableType).catch(report)} />
+									<Select data-testid="variable-type" aria-label="Entry form" value={form}
+										disabled={held.config || held.value || entry.expression !== undefined}
+										options={form === 'number' || form === 'text' ? ['number', 'text'] : ['number', 'text', form]}
+										onChange={(value) => setForm(entry, value as Form)} />
 									{#if !held.config}
 										<IconButton variant="ghost" size="sm" data-testid="variable-delete" title="Delete entry"
 											label={`Delete ${entry.name}`} onclick={() => void g.removeVariable(entry.name).catch(report)}><Icon name="x" /></IconButton>
@@ -186,25 +207,20 @@
 							{/each}
 							{#if !lock.config}
 								<Button class="add-row" variant="ghost" size="sm" data-testid="variable-add-in" disabled={busy}
-									onclick={() => void addEntry(grp.group)}><Icon name="plus" />entry</Button>
+									onclick={() => void guarded(async () => { focusEntry = await g.addVariableEntry(grp.group); })}><Icon name="plus" />entry</Button>
 							{/if}
 						</div>
 					{/if}
 				</section>
 			{/each}
 			<Button class="add-row new-group" variant="ghost" size="sm" data-testid="variable-add-group-btn"
-				disabled={busy} onclick={() => void addGroup()}><Icon name="plus" />group</Button>
-			{#if error}<p class="error" role="alert">{error}</p>{/if}
+				disabled={busy} onclick={() => void guarded(async () => editGroup(await g.addVariableGroup()))}><Icon name="plus" />group</Button>
+			{#if error}<p class="error-text" role="alert">{error}</p>{/if}
 		</div>
 	</ScrollArea>
 </div>
 
 <style>
-	.wrap {
-		height: 100%;
-		min-height: 0;
-		container-type: inline-size;
-	}
 	.gp-body {
 		padding: var(--space-3) var(--space-5) var(--space-6);
 	}
@@ -266,9 +282,6 @@
 	.group-name-input {
 		width: 12ch;
 		flex: 1;
-		background: var(--surface-1);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
 	}
 	.grp-tags {
 		display: inline-flex;
@@ -286,11 +299,17 @@
 	}
 	.entry {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
+		grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto var(--hit);
 		gap: var(--space-2);
 		align-items: center;
 		padding: var(--space-2) 0;
 		font-size: var(--fs-small);
+	}
+	.grip {
+		display: inline-flex;
+		color: var(--text-muted);
+		cursor: grab;
+		touch-action: none;
 	}
 	.entry + .entry {
 		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
@@ -307,10 +326,10 @@
 		justify-content: center;
 	}
 	.gp-body :global(.new-group) { margin-top: var(--space-4); }
-	.error { color: var(--danger); font-size: var(--fs-small); overflow-wrap: anywhere; }
 	@container (max-width: 280px) {
-		.entry { grid-template-columns: minmax(0, 1fr) auto var(--hit); }
-		.entry-name { grid-column: 1 / -1; }
+		.entry { grid-template-columns: auto minmax(0, 1fr) auto var(--hit); }
+		.entry-name { grid-column: 2 / -1; }
+		.entry-value { grid-column: 2; }
 	}
 	@media (hover: none) and (pointer: coarse) {
 		.group-name-input { font-size: 16px; }

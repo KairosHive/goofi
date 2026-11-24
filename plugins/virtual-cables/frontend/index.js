@@ -72,8 +72,8 @@ export default function (plugin) {
 					const zone = `${panel.panel_id}#${cable.name}`;
 					const cls = ['row', drag ? 'armed' : '', drag && drag.zone === cable.name ? 'target' : ''].filter(Boolean).join(' ');
 					return `<li class="${cls}" data-node-drop="${escape(zone)}" data-testid="cable-row" data-cable="${escape(cable.name)}">
-	<span class="name" title="${escape(cable.device)}">${escape(cable.name)}</span>
-	<span class="device">${escape(cable.device)}</span>
+	<span class="name" title="out: ${escape(cable.output)} · in: ${escape(cable.input)}">${escape(cable.name)}</span>
+	<span class="device">${escape(cable.output)}</span>
 	<span class="num" title="Channels">${cable.channels}ch</span>
 	<button type="button" class="remove" aria-label="Remove ${escape(cable.name)}" title="Remove">✕</button>
 </li>`;

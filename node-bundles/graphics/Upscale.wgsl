@@ -4,7 +4,7 @@
   "inputs": [{"name": "input", "kind": "TEXTURE"}],
   "params": [
     {"group": "upscale", "name": "method", "kind": "str", "default": "fsr1", "options": ["linear", "fsr1", "nis"]},
-    {"group": "upscale", "name": "sharpness", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0} ] }
+    {"group": "upscale", "name": "sharpness", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0} ] }
 */
 // FSR 1 EASU/RCAS port, Copyright (c) 2021 Advanced Micro Devices, Inc.
 //   https://github.com/GPUOpen-Effects/FidelityFX-FSR

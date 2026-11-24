@@ -1,6 +1,6 @@
 //! A whole authoring session: build a patch, save it, find it again, and open it somewhere else.
 
-use goofi_tests::{hex, j, Goofi};
+use goofi_tests::{f32s, hex, j, Goofi};
 use serde_json::Value;
 
 fn panel(g: &Goofi) -> String {
@@ -25,22 +25,27 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     g.link(osc, "out", buf, "input");
     g.link(buf, "out", sink, "input");
 
-    g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0, "type": "float" }));
+    g.call("variable entry add", j!({ "name": "patch.gain", "value": 2.0 }));
     g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size",
-                                   "expression": "variables.patch.gain * 64" }));
+                                   "expression": "vars.patch.gain * 64" }));
     // A control element is a variable that carries a widget, and the archive carries the record.
     g.call("variable entry edit", j!({ "name": "patch.gain", "control":
         { "kind": "knob", "min": 0.0, "max": 4.0, "step": 0.01, "x": 2.0, "y": 1.0, "w": 2.0, "h": 2.0 } }));
-    let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "toggle" } }));
-    assert!(why.contains("toggle") && why.contains("float"), "a widget that cannot draw the type: {why}");
-    // A lock rides the archive too, the entry's own and its group's, and so does what it follows.
+    let why = g.refuse("variable entry edit", j!({ "name": "patch.gain", "control": { "kind": "text" } }));
+    assert!(why.contains("text") && why.contains("array"), "a widget that cannot draw the value: {why}");
+    // A pad's sheet is a WIDE array: it rides the archive as a native file beside the manifest,
+    // and a narrow value as a literal in it.
+    g.call("control add", j!({ "group": "patch", "kind": "paint", "element": "pad", "resolution": 16 }));
+    g.call("control paint", j!({ "group": "patch", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
+    let sheet = g.until("the painted sheet", |g| Some(g.snapshot_array("variables/patch.pad")).filter(|d| f32s(d)[3] > 0.0));
+    // A lock rides the archive too, the entry's own and its group's, and so does what computes it.
     g.call("variable entry lock", j!({ "name": "patch.gain", "value": true }));
-    g.call("variable entry source", j!({ "name": "patch.gain", "reference": "level.out", "index": 0 }));
+    g.call("variable entry edit", j!({ "name": "patch.gain", "expression": "nd('level')[0]" }));
     g.call("variable group lock", j!({ "group": "patch", "config": true }));
-    // …and a reference over it: the archive carries the whole record, the expression retained.
+    // …and a literal over the sink's expression: the archive carries the whole record, the text retained.
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
-    g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size", "reference": "level.out" }));
+    g.call("node param edit", j!({ "node": hex(sink), "param": "buffer/size", "value": 256 }));
 
     let scope = g.call("nodes group", j!({ "nodes": [hex(buf)], "pos": [40.0, 10.0] }))["inst_id"]
         .as_str().unwrap().to_string();
@@ -60,23 +65,93 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     let saved: serde_json::Value = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(saved["goofi"], env!("CARGO_PKG_VERSION"), "the manifest names its writer");
-    assert!(saved["root"].get("scopes").is_none(), "no block of its own for the structure");
-    let recs = saved["root"]["nodes"].as_object().unwrap();
+    assert!(saved["patch"].get("scopes").is_none(), "no block of its own for the structure");
+    let recs = saved["patch"]["nodes"].as_object().unwrap();
     assert_eq!(recs[&outer]["type"], "SubPatch", "the facade is a node record: {:?}", recs[&outer]);
     assert_eq!(recs[&spare]["type"], "OutTable", "…and so is the port");
     assert_eq!(recs[&scope]["scope"], outer, "membership rides the record it belongs to");
-    let source = &recs[&hex(sink)]["sources"][0];
-    assert_eq!((&source["mode"], &source["expression"], &source["reference"]),
-               (&j!("reference"), &j!("variables.patch.gain * 64"), &j!("level.out")), "{source}");
+    // A source rides INLINE on the param it drives: the literal, the mode and the retained text.
+    let source = &recs[&hex(sink)]["params"]["buffer"]["size"];
+    assert_eq!((&source["value"], &source["mode"], &source["expression"]),
+               (&j!(256), &j!("constant"), &j!("vars.patch.gain * 64")), "{source}");
+    assert!(saved["patch"]["links"].as_object().is_some_and(|l| !l.is_empty()), "links are a keyed map");
 
-    let saved_gain = saved["variables"].as_array().unwrap().iter()
-        .find(|e| e["name"] == "patch.gain").cloned().expect("the element is in the file");
+    let saved_gain = saved["patch"]["variables"]["patch.gain"].clone();
+    assert!(saved_gain.is_object(), "the element is in the file: {}", saved["patch"]["variables"]);
     assert_eq!((&saved_gain["control"]["kind"], &saved_gain["control"]["x"]), (&j!("knob"), &j!(2.0)),
                "the widget and its place ride the archive: {saved_gain}");
     assert_eq!(saved_gain["lock"], j!({ "config": false, "value": true }), "{saved_gain}");
-    assert_eq!(saved_gain["source"], j!({ "reference": "level.out", "index": 0 }), "{saved_gain}");
-    assert_eq!(saved["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["variable_groups"]);
-    assert!(saved["variable_groups"].get("system").is_none(), "the system group's lock is goofi's, not the file's");
+    assert_eq!(saved_gain["expression"], j!("nd('level')[0]"), "{saved_gain}");
+    assert!(saved_gain["value"].is_number(), "a narrow value is a literal in the manifest: {saved_gain}");
+    assert!(saved["patch"]["variables"]["patch.pad"].get("value").is_none(), "a wide array is a file beside it");
+    assert_eq!(saved["patch"]["variable_groups"]["patch"]["lock"]["config"], true, "{}", saved["patch"]["variable_groups"]);
+    for group in goofi_core::variables::OWN_GROUPS {
+        assert!(saved["patch"]["variable_groups"].get(group).is_none(), "`{group}`'s lock is goofi's, not the file's");
+    }
+
+    // Step: a MIDI device is a group on the bus, the session's and never a patch's: a learn opens
+    // every port the host lists, and a port stays open while the patch reads its group. A machine
+    // with no sequencer has no port to make, and a learn there finds nothing.
+    #[cfg(unix)]
+    if midir::MidiOutput::new("goofi-test").is_ok() {
+        use midir::os::unix::VirtualOutput;
+        let mut keys = Some(midir::MidiOutput::new("goofi-test").unwrap().create_virtual("goofi-test-keys").expect("a virtual port"));
+        // The learn's own reply names the port open: a quiet patch has no settle to open it on.
+        let groups = g.call("midi learn", j!({ "on": true }))["groups"].clone();
+        let live = groups.as_array().unwrap().iter()
+            .find(|p| p["port"].as_str().unwrap().contains("goofi-test-keys")).map(|p| p["group"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| panic!("the learn opens the port it lists, at once: {groups}"));
+        // Named after the port as the host lists it: ALSA puts the client's name and its own
+        // numbers around it, CoreMIDI lists the port alone. The numbers never reach the name.
+        assert!(live.ends_with("goofi_test_keys") && !live.chars().any(|c| c.is_ascii_digit()),
+                "named after the port, the host's own numbers left off: {live}");
+        let held = |g: &Goofi| g.call("session status", j!({}))["resources"].as_array().unwrap().iter()
+            .any(|r| r["kind"] == "device" && r["name"].as_str().unwrap().contains("goofi-test-keys"));
+        assert!(held(&g), "the port is a device the session holds");
+        let group = g.call("variable list", j!({}))["groups"][&live].clone();
+        assert!(group["owner"]["midi"].as_str().unwrap().contains("goofi-test-keys"), "{group}");
+        let why = g.refuse("variable entry add", j!({ "group": &live }));
+        assert!(why.contains("config-locked"), "a device's group takes no entry of a user's: {why}");
+        let why = g.refuse("variable entry edit", j!({ "name": format!("{live}.cc"), "value": 1 }));
+        assert!(why.contains("value-locked"), "its values are the device's: {why}");
+        assert!(g.refuse("variable group rename", j!({ "from": &live, "to": "keys" })).contains("config-locked"));
+        assert!(g.refuse("variable group lock", j!({ "group": &live, "config": false })).contains("MIDI device"));
+        assert_eq!(f32s(&g.snapshot_array(&format!("variables/{live}.cc"))).len(), 16 * 128, "every controller on every channel, at rest");
+        // What the device plays lands on the bus: controller 74 on channel 1, 7 on channel 2.
+        g.until("the controllers turned on the port to land on the bus", |g| {
+            let keys = keys.as_mut().unwrap();
+            keys.send(&[0xb0, 74, 64]).expect("a control change");
+            keys.send(&[0xb1, 7, 127]).expect("a control change");
+            Some(g.snapshot_array(&format!("variables/{live}.cc"))).filter(|d| (f32s(d)[74] - 64.0 / 127.0).abs() < 1e-6 && f32s(d)[128 + 7] > 0.99)
+        });
+        // A widget reads an entry of the bus as it reads a node's output, index and all, and the
+        // read is what keeps the device open once the learn ends. No patch carries the group.
+        g.call("control add", j!({ "group": "desk", "kind": "slider", "element": "cutoff" }));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("vars.{live}.cc[74]") }));
+        g.until("the widget to follow the controller", |g| Some(g.variable("desk.cutoff")).filter(|v| v.as_f64().is_some_and(|v| (v - 64.0 / 127.0).abs() < 1e-6)));
+        g.call("midi learn", j!({ "on": false }));
+        assert!(g.call("variable list", j!({}))["groups"].get(&live).is_some(), "read by a widget, the device stays open");
+        assert!(held(&g));
+        let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
+        let saved: serde_json::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert!(saved["patch"]["variable_groups"].get(&live).is_none() && saved["patch"]["variables"].get(format!("{live}.cc")).is_none(),
+                "the device is the session's, the reader the patch's: {}", saved["patch"]["variable_groups"]);
+        // The last reader gone, the device is let go with its group; a reader made with no device
+        // open waits for one, and the watch opens the port for it without a learn.
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": "" }));
+        g.until("the device to close with no reader", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
+        assert!(!held(&g), "a device nothing reads is let go");
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": format!("vars.{live}.cc[74]") }));
+        g.until("the device to open for its reader", |g| held(g).then_some(()));
+        // Pulled, the device takes its group with it; the reader waits for the next plug.
+        drop(keys.take());
+        g.until("the pulled device's group to go", |g| g.call("variable list", j!({}))["groups"].get(&live).is_none().then_some(()));
+        g.call("control edit", j!({ "group": "desk", "element": "cutoff", "expression": "" }));
+        g.call("control remove", j!({ "group": "desk", "element": "cutoff" }));
+    } else {
+        assert_eq!(g.call("midi learn", j!({ "on": true }))["groups"], j!([]), "no sequencer, no port");
+        g.call("midi learn", j!({ "on": false }));
+    }
 
     g.call("layout panel edit", j!({ "panel": panel(&g), "type": "viewer",
                                         "state": { "node": hex(osc), "slot": "out" } }));
@@ -116,6 +191,8 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
                "every node came back as it was, uid for uid — facades and ports among them");
     assert_eq!(after["links"], before["links"], "and so did every wire, inner ones included");
     assert_eq!(after["variables"], before["variables"]);
+    assert_eq!(f32s(&other.snapshot_array("variables/patch.pad")), f32s(&sheet), "the sheet came back whole from `variables/patch.pad.npy`");
+    assert!(path.exists() && std::fs::read(&path).unwrap().windows(27).any(|w| w == b"workspace/variables/patch.p"), "the archive carries the file");
     assert_eq!(after["arrangement"], before["arrangement"],
                "…so the panel still names a node that exists");
     assert_eq!(std::fs::read(other.state.mount().join("notes.md")).unwrap(),
@@ -170,7 +247,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     // An archive from before groups existed cannot come up half-alive: every expression reading
     // its variables would be broken, so the load stops and names the variable.
     let flat = g.call("session manifest", j!({}))["yaml"].as_str().unwrap()
-        .replace("name: patch.gain", "name: gain");
+        .replace("  patch.gain:", "  gain:");
     let why = g.refuse("session load", j!({ "content": flat }));
     assert!(why.contains("gain") && why.contains("group.element"), "the load names the variable: {why}");
 
@@ -179,14 +256,16 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert_eq!((&reborn["control"]["kind"], &reborn["control"]["w"]), (&j!("knob"), &j!(2.0)),
                "the load restored the widget and its place: {reborn}");
     assert_eq!(reborn["lock"], j!({ "config": true, "value": true }), "the load restored both locks: {reborn}");
-    assert_eq!(reborn["source"]["reference"], "level.out", "…and what it follows: {reborn}");
+    assert_eq!(reborn["expression"], "nd('level')[0]", "…and what computes it: {reborn}");
     let held = g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
         .find(|e| e["name"] == "system.goofi_home").cloned().unwrap();
-    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_core::home::dir())));
+    assert_eq!(held["value"], j!(goofi_core::path::to_slash(&goofi_supervisor::layout::home())));
 
     let snap = ev.next("graph_replaced");
     assert_eq!(snap["runtime"][hex(late)]["stage"], "creating",
                "the load rebuilt it at the uid it was saved with, and the snapshot caught it starting");
+    assert_eq!(snap["doc_version"], g.state.doc.lock().version(),
+               "the load projected before it announced, so the snapshot names the loaded document's version");
     g.ready(late);
     // The stage stream is a delta over that snapshot, so the node reaching `ready` again HAS to be
     // said — the uid it came back at reported the same thing in its previous life.
@@ -277,7 +356,7 @@ fn only_a_file_gives_a_patch_a_home_a_refused_load_changes_nothing_and_a_broken_
     assert_ne!(broken, yaml, "the fixture actually corrupted something");
     let r = g.call("session load", j!({ "content": broken }));
     assert_eq!(r["ok"], true, "the patch still opens: {r}");
-    assert!(r["layout_warning"].as_str().is_some_and(|w| w.contains("appears twice")),
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("appears twice")),
             "…and says why the arrangement was dropped: {r}");
     assert_eq!(g.nodes().len(), 1, "with the graph intact");
     // An upload carries no file, so inheriting the previous path would save a different patch over it.
@@ -399,18 +478,21 @@ fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits
     let mount = g.state.mount();
     assert_ne!(mount, old_mount, "a fresh workspace");
     assert!(!old_mount.exists(), "and the one it replaced is released, not leaked");
-    // `new` MINTS the workspace, so it seeds the orientation while `load`, one line away, must not.
-    assert!(!mount.join("agent.md").exists());
-    assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("goofi is a live"));
-    assert_eq!(std::fs::read_to_string(mount.join("CLAUDE.md")).unwrap(), "@AGENTS.md\n");
+    // `new` MINTS the workspace, so it seeds the note while `load`, one line away, must not. The
+    // note says what the directory is and where the orientation is; the orientation itself is
+    // `guide get orientation`, the same for an agent here and one outside.
+    assert!(!mount.join("CLAUDE.md").exists(), "AGENTS.md is the one file every harness reads");
+    let agents = std::fs::read_to_string(mount.join("AGENTS.md")).unwrap();
+    assert_eq!(agents, goofi_bridge::orientation::AGENTS_MD);
+    assert!(agents.contains(".goofiignore") && agents.contains("guide get orientation"), "{agents}");
     let ignore = goofi_graph::archive::IGNORE_FILE;
     assert_eq!(std::fs::read_to_string(mount.join(ignore)).unwrap(), goofi_graph::archive::DEFAULT_IGNORE);
     // Absent-only: what an agent or the author made of a seeded file is theirs.
-    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+    for name in ["AGENTS.md", ignore] {
         std::fs::write(mount.join(name), "their own\n").unwrap();
     }
-    goofi_bridge::term::seed_orientation(&mount);
-    for name in ["AGENTS.md", "CLAUDE.md", ignore] {
+    goofi_bridge::orientation::seed(&mount);
+    for name in ["AGENTS.md", ignore] {
         assert_eq!(std::fs::read_to_string(mount.join(name)).unwrap(), "their own\n", "{name} was seeded over");
     }
 }
@@ -526,8 +608,8 @@ fn autosave_dir(g: &Goofi) -> std::path::PathBuf {
 /// cannot let go of its own session's lock. Answers the nonce directory, and where the next boot
 /// moves it to for safekeeping, both as goofi spells them.
 fn crashed_copy(dir: &std::path::Path) -> (String, String) {
-    let id = goofi_core::session::fresh_id();
-    let dead = goofi_core::session::workspace_dir(&id).join(dir.file_name().unwrap());
+    let id = goofi_supervisor::session::fresh_id().unwrap();
+    let dead = goofi_supervisor::session::workspace_dir(&id).join(dir.file_name().unwrap());
     fn copy(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap().flatten() {
@@ -540,7 +622,7 @@ fn crashed_copy(dir: &std::path::Path) -> (String, String) {
         }
     }
     copy(dir, &dead);
-    let kept = goofi_core::session::recovery_base().join(&id).join(dir.file_name().unwrap());
+    let kept = goofi_supervisor::layout::recovery().join(&id).join(dir.file_name().unwrap());
     (goofi_core::path::to_slash(&dead), goofi_core::path::to_slash(&kept))
 }
 
@@ -568,9 +650,9 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     // say it moved — and then the graph, both kept with the patch's home.
     std::fs::write(g.state.mount().join("notes.md"), b"kept").unwrap();
     g.until("a workspace edit to be autosaved", |g| manifest(g).exists().then_some(()));
-    g.set_param(osc, "output", "sfreq", 3.0);
+    g.set_param(osc, "lfo", "sfreq", 3.0);
     g.until("the latest edit to be autosaved", |g| {
-        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq: 3.0")).map(|_| ())
+        std::fs::read_to_string(manifest(g)).ok().filter(|m| m.contains("sfreq:\n            value: 3\n")).map(|_| ())
     });
     let dir = autosave_dir(&g);
 
@@ -578,12 +660,20 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     // one to drop. Nothing is offered until a boot moves it to the recovery base for safekeeping.
     let (left, recover) = crashed_copy(&dir);
     let (_, discard) = crashed_copy(&dir);
+    // …and one a session under ANOTHER home took: temp is machine-wide, the recovery is the home's.
+    let (foreign, elsewhere) = crashed_copy(&dir);
+    let sidecar = std::path::Path::new(&foreign).join("autosave.json");
+    std::fs::write(&sidecar, std::fs::read_to_string(&sidecar).unwrap().replace(
+        &goofi_core::path::to_slash(&goofi_supervisor::layout::home()), "/somewhere/else/.goofi")).unwrap();
     assert!(g.call("session recoverable", j!({}))["recoveries"].as_array().unwrap().is_empty());
     let opened = Goofi::new();
     assert!(!std::path::Path::new(&left).exists(), "the boot moved it out of temp");
+    assert!(std::path::Path::new(&foreign).exists(), "another home's crash is left for that home's boot");
     let listed = opened.call("session recoverable", j!({}));
     let names: Vec<&str> = listed["recoveries"].as_array().unwrap().iter().map(|r| r["workspace"].as_str().unwrap()).collect();
     assert!(names.contains(&recover.as_str()) && names.contains(&discard.as_str()), "both offered: {listed}");
+    assert!(!names.contains(&elsewhere.as_str()), "and not the other home's: {listed}");
+    std::fs::remove_dir_all(std::path::Path::new(&foreign).parent().unwrap()).unwrap();
     let entry = listed["recoveries"].as_array().unwrap().iter().find(|r| r["workspace"] == recover).unwrap();
     assert_eq!(entry["home"], j!(spelled(&home)), "the home the save gave the patch");
     assert!(entry["at"].as_f64().unwrap() > 0.0, "when it was taken");
@@ -604,7 +694,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
     opened.call("session recover", j!({ "workspace": &recover }));
     let uid = opened.nodes()[0].clone();
     assert_eq!(opened.doc()["nodes"][&uid]["name"], "carrier");
-    assert_eq!(opened.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 3.0);
+    assert_eq!(opened.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 3.0);
     assert_eq!(std::fs::read(opened.state.mount().join("notes.md")).unwrap(), b"kept");
     assert_eq!(save_path(&opened), Some(spelled(&home)));
     assert!(dirty(&opened), "a recovery is unsaved work");
@@ -616,7 +706,7 @@ fn unsaved_work_is_autosaved_beside_the_mount_and_a_crash_leaves_it_for_the_next
 
     // The boot pass: a dead session's directory with no autosave held nothing and goes. A clean
     // shutdown leaves neither.
-    let husk = goofi_core::session::workspace_dir(&goofi_core::session::fresh_id()).join("nonce");
+    let husk = goofi_supervisor::session::workspace_dir(&goofi_supervisor::session::fresh_id().unwrap()).join("nonce");
     std::fs::create_dir_all(husk.join("workspace")).unwrap();
     std::fs::write(husk.join("workspace").join("AGENTS.md"), b"seeded").unwrap();
     let _booted = Goofi::new();

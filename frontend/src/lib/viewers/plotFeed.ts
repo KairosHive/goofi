@@ -2,9 +2,8 @@
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, type ImagePlot, type LineData } from 'plotluck';
 import { decimateMinMax } from './decimate';
-import { isU8, sampleRange } from './depth';
-import { envelopeBand, readEnvelope } from './envelope';
-import type { SettingsMap } from './settingsSchema';
+import { sampleRange, toUnit } from './depth';
+import type { SettingsMap } from './module';
 
 /** `cols` is the plot's width in device px: a frame denser than two samples per column is min/max folded. */
 export function lineData(frame: DataFrame, cols: number, logX: boolean): LineData {
@@ -18,11 +17,6 @@ export function lineData(frame: DataFrame, cols: number, logX: boolean): LineDat
 	for (let c = 0; c < series; c++) rows.push(v.subarray(c * m, (c + 1) * m));
 	// The index axis starts at 1 under log x, since log10(0) has no place on it.
 	const base = logX ? 1 : 0;
-	const env = readEnvelope(frame.meta, shape.length);
-	if (env) {
-		const band = envelopeBand(rows, env.origLen, base);
-		return { rows: band.ys, xs: band.xs };
-	}
 	if (m > cols * 2) {
 		const dec = decimateMinMax(rows, m, cols, base);
 		return { rows: dec.ys, xs: dec.xs };
@@ -34,21 +28,75 @@ export function lineData(frame: DataFrame, cols: number, logX: boolean): LineDat
  * One and two channels share one window: the LUT input, or red and green alike. */
 export function pushImage(plot: ImagePlot, frame: DataFrame, settings: SettingsMap): void {
 	const arr = frame.data as ArrayData;
-	const values = arr.values;
 	const [height, width] = arr.shape;
 	const channels = arr.shape.length === 3 ? arr.shape[2] : 1;
-	const u8 = isU8(arr.dtype);
+	const range = sampleRange(arr.dtype, frame.meta);
+	if (channels <= 2 && settings.log === true) {
+		const { values, lo, hi } = logImage(arr.values, range, settings);
+		plot.push({ values, width, height, channels, lo, hi });
+		return;
+	}
+	const values = arr.values;
 	// An 8-bit texel samples in [0, 1] whatever the frame's units, so a manual range is scaled with it.
-	const texels = (u8 && sampleRange(frame.meta)) || [0, 1];
-	const t0 = u8 ? texels[0] : 0;
-	const tw = u8 ? texels[1] - texels[0] || 1 : 1;
+	const [t0, t1] = range ?? [0, 1];
+	const tw = t1 - t0 || 1;
 	let lo = 0;
 	let hi = 1;
 	if (channels <= 2 && settings.auto === false) {
 		lo = (Number(settings.vmin ?? 0) - t0) / tw;
 		hi = (Number(settings.vmax ?? 1) - t0) / tw;
-	} else if (channels <= 2 && !u8) {
+	} else if (channels <= 2 && !range) {
 		[lo, hi] = extent(values) ?? [0, 1];
 	}
-	plot.push({ values, width, height, channels, lo, hi });
+	plot.push({ values: channels === 4 ? overChecker(values, width, height) : values, width, height, channels, lo, hi });
+}
+
+/** The frame as log10 of its values in the node's units, windowed over its positive extent or
+ * the manual range: a value at or below zero sits at the bottom of the window. */
+export function logImage(
+	values: Uint8Array | Float32Array,
+	range: [number, number] | null,
+	settings: SettingsMap
+): { values: Float32Array; lo: number; hi: number } {
+	const out = new Float32Array(values.length);
+	let min = Infinity;
+	let max = -Infinity;
+	for (let i = 0; i < values.length; i++) {
+		const v = range ? toUnit(values[i], range) : values[i];
+		if (v > 0) {
+			const l = Math.log10(v);
+			out[i] = l;
+			if (l < min) min = l;
+			if (l > max) max = l;
+		} else out[i] = -Infinity;
+	}
+	let [lo, hi] = min <= max ? [min, max] : [0, 1];
+	if (settings.auto === false) {
+		const bound = (x: unknown, fallback: number) => (Number(x) > 0 ? Math.log10(Number(x)) : fallback);
+		lo = bound(settings.vmin, lo);
+		hi = bound(settings.vmax, hi);
+	}
+	for (let i = 0; i < out.length; i++) if (out[i] === -Infinity) out[i] = lo;
+	return { values: out, lo, hi };
+}
+
+/** How many texels a square of the checkerboard spans. */
+const CHECK = 8;
+
+/** An RGBA frame composited over the classic grey checkerboard, so its alpha reads as what it is
+ * on a surface that is drawn opaque. The caller's array is never written. */
+export function overChecker(values: Uint8Array | Float32Array, width: number, height: number): Uint8Array | Float32Array {
+	const u8 = values instanceof Uint8Array;
+	const out = u8 ? new Uint8Array(values.length) : new Float32Array(values.length);
+	const full = u8 ? 255 : 1;
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const i = (y * width + x) * 4;
+			const check = (((x / CHECK) | 0) + ((y / CHECK) | 0)) % 2 === 0 ? 0.5 * full : 0.75 * full;
+			const a = Math.min(1, Math.max(0, values[i + 3] / full));
+			for (let c = 0; c < 3; c++) out[i + c] = values[i + c] * a + check * (1 - a);
+			out[i + 3] = full;
+		}
+	}
+	return out;
 }

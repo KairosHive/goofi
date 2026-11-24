@@ -3,10 +3,12 @@
 //! suite's plugin registers a timer.
 
 use std::ffi::c_void;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
-use super::{Id, Pumped, Screen, Wake};
+use goofi_supervisor::timing::Event;
+
+use super::{Id, Monitor, Pumped, Screen, Wake};
 
 #[derive(Default)]
 pub struct Platform {
@@ -14,16 +16,13 @@ pub struct Platform {
     next: Id,
 }
 
+/// The pump's door: a wake rings it, and the pump parks on it until its deadline.
 #[derive(Default)]
-struct Signal {
-    woke: Mutex<bool>,
-    cv: Condvar,
-}
+struct Signal(Event);
 
 impl Wake for Signal {
     fn wake(&self) {
-        *self.woke.lock().unwrap() = true;
-        self.cv.notify_one();
+        self.0.ring(0);
     }
 }
 
@@ -32,7 +31,12 @@ impl Screen for Platform {
         self.wake.clone()
     }
 
-    fn create(&mut self, _title: &str, _size: (u32, u32)) -> Result<(Id, *mut c_void), String> {
+    /// One monitor, so a placement has a screen to name and a fullscreen window a size to take.
+    fn monitors(&self) -> Vec<Monitor> {
+        vec![Monitor { at: (0, 0), size: (1280, 720) }]
+    }
+
+    fn create(&mut self, _title: &str, _size: (u32, u32), _on: Option<Monitor>, _cover: bool) -> Result<(Id, *mut c_void), String> {
         self.next += 1;
         Ok((self.next, self.next as usize as *mut c_void))
     }
@@ -42,19 +46,10 @@ impl Screen for Platform {
     fn destroy(&mut self, _id: Id) {}
 
     fn pump(&mut self, until: Option<Instant>, _fds: &[i32]) -> Pumped {
-        let mut woke = self.wake.woke.lock().unwrap();
-        while !*woke {
-            let Some(until) = until else {
-                woke = self.wake.cv.wait(woke).unwrap();
-                continue;
-            };
-            let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            woke = self.wake.cv.wait_timeout(woke, left).unwrap().0;
-        }
-        *woke = false;
+        match until {
+            Some(until) => self.wake.0.wait_until(until),
+            None => self.wake.0.wait(),
+        };
         Pumped { closed: Vec::new(), ready: Vec::new(), dead: false }
     }
 }

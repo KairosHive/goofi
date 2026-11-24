@@ -1,56 +1,40 @@
-//! The expression rewrite (spec §5.3): `nd('lfo').out.sig.mean() * variables.gain` becomes
+//! The expression rewrite (spec §5.3): `nd('lfo').out.sig.mean() * vars.desk.gain` becomes
 //! `__v0.mean() * __v1` plus the variable map the graph resolves. Slots live behind `.out`,
-//! params behind `.params`, a bare reference is the single output, and `me` is this node.
+//! params behind `.params`, a bare `nd('x')` is the single output, `me` is this node and
+//! `sm('ph').x` a playhead's element. A machine's expression is rewritten by [`rewrite_machine`]
+//! instead: there `me` is the playhead and `sm('A')` a state or a playhead, each a record Python
+//! reads by attribute.
 
 use goofi_node::expr::is_ident;
 use goofi_node::ExprError;
 
 /// One variable of a rewritten expression, before the graph resolves it to a service or a value.
 #[derive(Clone, Debug, PartialEq)]
-pub enum VarRef {
-    /// `nd('name').out.slot`, or bare `nd('name')` for a single-output node.
-    Node { var: String, name: String, slot: Option<String> },
-    /// `nd('name').params.group.param` — a node's param, read where the binding is derived.
-    NodeParam { var: String, name: String, group: String, param: String },
-    /// `me.out.slot`, or bare `me` for a node with one output.
-    MeOut { var: String, slot: Option<String> },
-    /// `me.params.group.param` — this node's own param.
-    MeParam { var: String, group: String, param: String },
-    Variable { var: String, key: String },
-}
-
-impl VarRef {
-    pub fn var(&self) -> &str {
-        match self {
-            VarRef::Node { var, .. }
-            | VarRef::NodeParam { var, .. }
-            | VarRef::MeOut { var, .. }
-            | VarRef::MeParam { var, .. }
-            | VarRef::Variable { var, .. } => var,
-        }
-    }
+pub struct VarRef {
+    pub var: String,
+    pub target: Target,
 }
 
 /// What a term refers to. Two terms with equal targets share one variable, and one mailbox.
-#[derive(Clone, PartialEq)]
-enum Target {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// `nd('name').out.slot`, or bare `nd('name')` for a single-output node.
     Node { name: String, slot: Option<String> },
+    /// `nd('name').params.group.param` — a node's param, read where the binding is derived.
     NodeParam { name: String, group: String, param: String },
+    /// `me.out.slot`, or bare `me` for a node with one output.
     MeOut { slot: Option<String> },
+    /// `me.params.group.param` — this node's own param.
     MeParam { group: String, param: String },
     Variable { key: String },
-}
-
-impl Target {
-    fn into_ref(self, var: String) -> VarRef {
-        match self {
-            Target::Node { name, slot } => VarRef::Node { var, name, slot },
-            Target::NodeParam { name, group, param } => VarRef::NodeParam { var, name, group, param },
-            Target::MeOut { slot } => VarRef::MeOut { var, slot },
-            Target::MeParam { group, param } => VarRef::MeParam { var, group, param },
-            Target::Variable { key } => VarRef::Variable { var, key },
-        }
-    }
+    /// A node's `sm('playhead').element`: one element of the playhead's group, read as the
+    /// variable it is published as.
+    PlayheadField { playhead: String, field: String },
+    /// A machine's bare `me`: the playhead, a record of its name, state, arrival and attributes.
+    Playhead,
+    /// A machine's `sm('name')`: a state, a record of who rests in it and who moved this instant,
+    /// or a playhead, the record `me` is.
+    State { name: String },
 }
 
 /// One span of the source to replace, and what it refers to.
@@ -93,11 +77,9 @@ fn path_after(source: &str, end: usize, head: &str) -> Result<Path, ExprError> {
     }
 }
 
-/// Rewrite every `nd(..)`, `me` and `variables.*` term into a generated variable, answering the
-/// rewritten source and the variables it names, in first-seen order.
-pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
-    let mut terms: Vec<Term> = Vec::new();
-    for call in goofi_node::expr::scan_nd_calls(source) {
+/// Every `nd(..)` term of `source` as a node reference: the single output, a slot or a param.
+fn node_terms(source: &str, terms: &mut Vec<Term>) -> Result<(), ExprError> {
+    for call in goofi_node::expr::scan_calls(source, "nd") {
         // `nd('')` names nothing however it is spelled, so this precedes the unclosed-call check.
         if call.name.is_empty() {
             return Err(ExprError("nd() needs a node name".to_string()));
@@ -117,6 +99,42 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start: call.start, end: target.0, target: target.1 });
     }
+    Ok(())
+}
+
+/// One `sm(..)` call and, where one follows, the element after it with where it ends.
+type MachineCall<'a> = (goofi_node::expr::Call<'a>, Option<(&'a str, usize)>);
+
+/// Every `sm(..)` call of `source` with its name and, where one follows, the element after it.
+fn machine_calls(source: &str) -> Result<Vec<MachineCall<'_>>, ExprError> {
+    let mut out = Vec::new();
+    for call in goofi_node::expr::scan_calls(source, "sm") {
+        if call.name.is_empty() {
+            return Err(ExprError("sm() needs a state's or a playhead's name".to_string()));
+        }
+        let field = call.end.and_then(|end| ident_after(source, end));
+        out.push((call, field));
+    }
+    Ok(out)
+}
+
+/// Rewrite every `nd(..)`, `sm(..)`, `me` and `vars.*` term into a generated variable, answering
+/// the rewritten source and the variables it names, in first-seen order.
+pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
+    let mut terms: Vec<Term> = Vec::new();
+    node_terms(source, &mut terms)?;
+    for (call, field) in machine_calls(source)? {
+        if call.end.is_none() {
+            continue;
+        }
+        let Some((field, at)) = field else {
+            return Err(ExprError(format!(
+                "sm('{}') needs an element here: `.state`, `.progress` or `.<attribute>` of the playhead",
+                call.name
+            )));
+        };
+        terms.push(Term { start: call.start, end: at, target: Target::PlayheadField { playhead: call.name.to_string(), field: field.to_string() } });
+    }
     for (start, end) in goofi_node::expr::scan_me(source) {
         let target = match path_after(source, end, "me")? {
             Path::Bare { end: at } => (at, Target::MeOut { slot: None }),
@@ -132,21 +150,40 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
             target: Target::Variable { key: read.name.to_string() },
         });
     }
-    let terms = merge(terms);
+    Ok(generate(source, terms))
+}
 
+/// Rewrite a machine's expression: every `nd(..)`, `vars.*`, bare `me` and `sm('name')` term into
+/// a generated variable, answering the rewritten source and what each names, in first-seen order.
+pub fn rewrite_machine(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
+    let mut terms: Vec<Term> = Vec::new();
+    node_terms(source, &mut terms)?;
+    for (call, _) in machine_calls(source)? {
+        let Some(end) = call.end else { continue };
+        terms.push(Term { start: call.start, end, target: Target::State { name: call.name.to_string() } });
+    }
+    for (start, end) in goofi_node::expr::scan_me(source) {
+        terms.push(Term { start, end, target: Target::Playhead });
+    }
+    for read in goofi_node::expr::scan_variables(source) {
+        terms.push(Term { start: read.start, end: read.end, target: Target::Variable { key: read.name.to_string() } });
+    }
+    Ok(generate(source, terms))
+}
+
+/// Splice `terms` out of `source`, each for a generated variable, in first-seen order.
+fn generate(source: &str, terms: Vec<Term>) -> (String, Vec<VarRef>) {
     let mut vars: Vec<VarRef> = Vec::new();
-    let mut targets: Vec<Target> = Vec::new();
     let mut out = String::with_capacity(source.len());
     let mut cursor = 0;
-    for term in terms {
+    for term in merge(terms) {
         // Two spellings of one reference share ONE variable: `nd('a').out.x + nd('a').out.x`
         // subscribes once.
-        let var = match targets.iter().position(|t| *t == term.target) {
-            Some(at) => vars[at].var().to_string(),
+        let var = match vars.iter().find(|v| v.target == term.target) {
+            Some(v) => v.var.clone(),
             None => {
                 let var = format!("__v{}", vars.len());
-                vars.push(term.target.clone().into_ref(var.clone()));
-                targets.push(term.target);
+                vars.push(VarRef { var: var.clone(), target: term.target });
                 var
             }
         };
@@ -155,10 +192,10 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         cursor = term.end;
     }
     out.push_str(&source[cursor..]);
-    Ok((out, vars))
+    (out, vars)
 }
 
-/// The two scans' terms as ONE ascending, non-overlapping list — the only shape the splice can
+/// The scans' terms as ONE ascending, non-overlapping list — the only shape the splice can
 /// consume. An unsorted or nested term slices backwards, which panics under the graph mutex.
 fn merge(mut terms: Vec<Term>) -> Vec<Term> {
     terms.sort_by_key(|t| t.start);
@@ -180,7 +217,7 @@ pub fn rename_refs(
     rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
 ) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for call in goofi_node::expr::scan_nd_calls(source) {
+    for call in goofi_node::expr::scan_calls(source, "nd") {
         let slot = call
             .end
             .and_then(|end| path_after(source, end, "").ok())
@@ -196,20 +233,11 @@ pub fn rename_refs(
             edits.push((at - was.len(), at, label));
         }
     }
-    if edits.is_empty() {
-        return None;
-    }
-    // Splice right-to-left, so earlier byte offsets stay valid as the string is edited.
-    let mut out = source.to_string();
-    edits.sort_by_key(|(start, _, _)| *start);
-    for (start, end, repl) in edits.into_iter().rev() {
-        out.replace_range(start..end, &repl);
-    }
-    Some(out)
+    splice(source, edits)
 }
 
-/// Rewrite the `variables.<group>.<element>` terms `rename` answers for, leaving every other byte
-/// alone.
+/// Rewrite the variable reads `rename` answers for, leaving every other byte alone — spelled
+/// `vars.<group>.<element>`, or `sm('<playhead>').<element>` where the playhead's group is the one.
 pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for read in goofi_node::expr::scan_variables(source) {
@@ -217,10 +245,43 @@ pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -
             edits.push((read.end - read.name.len(), read.end, to));
         }
     }
+    for (call, field) in machine_calls(source).unwrap_or_default() {
+        let Some((field, at)) = field else { continue };
+        let Some(to) = rename(&format!("{}.{field}", call.name)) else { continue };
+        let Some((group, element)) = to.split_once('.') else { continue };
+        edits.push((call.name_start, call.name_end, group.to_string()));
+        edits.push((at - field.len(), at, element.to_string()));
+    }
+    splice(source, edits)
+}
+
+/// Rewrite the `sm('name')` terms `rename` answers for, leaving every other byte alone.
+pub fn rename_states(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let edits = goofi_node::expr::scan_calls(source, "sm")
+        .into_iter()
+        .filter_map(|call| Some((call.name_start, call.name_end, rename(call.name)?)))
+        .collect();
+    splice(source, edits)
+}
+
+/// Rewrite the `me.<field>` terms `rename` answers for, leaving every other byte alone: a
+/// playhead's attribute reads under its name.
+pub fn rename_me_fields(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let edits = goofi_node::expr::scan_me(source)
+        .into_iter()
+        .filter_map(|(_, end)| {
+            let (field, at) = ident_after(source, end)?;
+            Some((at - field.len(), at, rename(field)?))
+        })
+        .collect();
+    splice(source, edits)
+}
+
+/// Apply `edits` right-to-left, so earlier byte offsets stay valid; `None` when there are none.
+fn splice(source: &str, mut edits: Vec<(usize, usize, String)>) -> Option<String> {
     if edits.is_empty() {
         return None;
     }
-    // Splice right-to-left, so earlier byte offsets stay valid as the string is edited.
     let mut out = source.to_string();
     edits.sort_by_key(|(start, _, _)| *start);
     for (start, end, repl) in edits.into_iter().rev() {
@@ -229,23 +290,11 @@ pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -
     Some(out)
 }
 
-/// The same rename over a reference's `node.slot`, so one closure serves both retained texts.
-pub fn rename_reference(
-    reference: &str,
-    rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
-) -> Option<String> {
-    let (base, index) = goofi_node::mailbox::split_index(reference).ok()?;
-    let (name, slot) = base.split_once('.')?;
-    let (new_name, new_slot) = rename(name, Some(slot));
-    if new_name.is_none() && new_slot.is_none() {
-        return None;
-    }
-    Some(format!(
-        "{}.{}{}",
-        new_name.unwrap_or_else(|| name.to_string()),
-        new_slot.unwrap_or_else(|| slot.to_string()),
-        index.map_or_else(String::new, |i| format!("[{i}]"))
-    ))
+/// Whether a rewritten expression is BARE: exactly one target with an optional flat index, which
+/// an engine reads in Rust and never hands the interpreter. The one owner of that predicate.
+pub fn is_bare(rewritten: &str) -> bool {
+    let Ok((var, _)) = goofi_node::mailbox::split_index(rewritten.trim()) else { return false };
+    var.strip_prefix("__v").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The identifier after a `.` at `end`, and where it stops. `None` when the next thing is a

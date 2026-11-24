@@ -8,7 +8,7 @@ function fragment(): GraphFragment {
 			uidA: { pos: [0, 0] },
 			uidB: { pos: [100, 40] }
 		},
-		links: [{ node_out: 'uidA', slot_out: 'out', node_in: 'uidB', slot_in: 'in' }]
+		links: { 'uidA.out>uidB.in': { node_out: 'uidA', slot_out: 'out', node_in: 'uidB', slot_in: 'in' } }
 	};
 }
 
@@ -23,10 +23,10 @@ describe('clipboard — the payload is the manager’s own fragment, carried ver
 		expect(parseClipboard('not json')).toBeNull();
 		expect(parseClipboard(JSON.stringify({ nodes: {} })), 'no version marker').toBeNull();
 		expect(
-			parseClipboard(JSON.stringify({ __goofi_clip__: 1, doc: fragment() })),
+			parseClipboard(JSON.stringify({ __goofi_clip__: 2, doc: fragment() })),
 			'an older payload shape is refused rather than half-read'
 		).toBeNull();
-		expect(parseClipboard(JSON.stringify({ __goofi_clip__: 2, doc: {} })), 'no nodes map').toBeNull();
+		expect(parseClipboard(JSON.stringify({ __goofi_clip__: 3, doc: {} })), 'no nodes map').toBeNull();
 	});
 
 	it('centres a fragment on its ROOTS, so a paste anchors where the user is looking', () => {

@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use goofi_tests::fixtures::Latch;
@@ -32,8 +32,8 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let buf = g.add("Buffer");
     g.set_param(buf, "buffer", "unit", "samples");
     g.set_param(buf, "buffer", "size", 64);
-    g.set_param(osc, "output", "sfreq", 64.0);
-    g.set_param(osc, "output", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 64.0);
+    g.set_param(osc, "lfo", "mode", "block");
     // Nothing has flowed yet, so the raw read answers null WITH the reason — and the ask itself
     // is what opens the slot's feed.
     let idle = g.call("node snapshot", j!({ "output": ep(hex(buf), "out") }));
@@ -83,24 +83,77 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     let vals = npy_f32s(&bytes);
     assert!(vals.iter().all(|v| v.is_finite() && v.abs() <= 1.0), "the unit sine, raw: {vals:?}");
     assert_eq!(snap["meta"]["sfreq"], 64.0, "meta rides the snapshot: {snap}");
-    assert!(snap["meta"]["time"].as_f64().is_some(), "…and so does the frame's time: {snap}");
+    assert!(snap["meta"]["procstart"].as_f64().is_some(), "…and so does the frame's run: {snap}");
 
-    // One patch time, and every node reads it. A frame's value is the wave at the second the frame
-    // is STAMPED with, so an oscillator made now is already in phase with one made at boot.
+    // One patch time, and every node reads it, and an oscillator's phase is a running sum on it:
+    // a run advances the phase by the time since the last run, at the frequency it reads, so a
+    // frequency edit bends the wave from where it sits. A sawtooth reads the phase back, value =
+    // 2·phase − 1, and triggered runs put the edit between two known runs.
     let late = g.add("LFO");
+    g.set_param(late, "lfo", "waveform", "sawtooth");
     g.set_param(late, "lfo", "frequency", 2.0);
+    g.set_param(late, "common", "autotrigger", false);
     let lp = g.probe(late, "out");
     g.ready(late);
-    let (v, t) = g.until("the late oscillator's first frame", |_| {
-        let d = lp.latest()?;
-        Some((f32s(&d).first().copied()? as f64, d.meta().time()?))
+    let runs = g.until("the late oscillator to settle", |g| {
+        let c = lp.count();
+        g.stays(|_| lp.count() == c).then_some(c)
     });
-    assert!(t > 0.0 && t < 3600.0, "patch seconds, never an epoch: {t}");
-    let want = (std::f64::consts::TAU * 2.0 * t).sin();
-    assert!((v - want).abs() < 1e-4, "the wave at its own stamp: {v} vs sin(2\u{3c0}\u{b7}2\u{b7}{t}) = {want}");
+    let read = |d: goofi_core::Data| Some(((f32s(&d).first().copied()? as f64 + 1.0) / 2.0, d.meta().procstart()?));
+    let pulse = |g: &Goofi| g.call("node param request", j!({ "node": hex(late), "param": "common/trigger", "request": "pulse" }));
+    pulse(&g);
+    let (p1, t1) = g.until("one run on the pulse", |_| (lp.count() == runs + 1).then(|| read(lp.latest()?)).flatten());
+    assert!(t1 > 0.0 && t1 < 3600.0, "patch seconds, never an epoch: {t1}");
+    g.set_param(late, "lfo", "frequency", 5.0);
+    assert!(g.stays(|_| lp.count() == runs + 1), "a param edit ran the oscillator");
+    pulse(&g);
+    let (p2, t2) = g.until("the run after the edit", |_| (lp.count() == runs + 2).then(|| read(lp.latest()?)).flatten());
+    let want = (p1 + 5.0 * (t2 - t1)).rem_euclid(1.0);
+    assert!((p2 - want).abs() < 1e-4,
+            "the phase continues from where it sat, at the new rate: {p2} vs {p1} + 5\u{b7}({t2} \u{2212} {t1}) = {want}");
+    g.set_param(late, "common", "autotrigger", true);
 
+    // A frame also says where it left from and which input frames it was made from — the
+    // immediate ones, each by node, output, index and the run that made it — so a latency is read
+    // hop by hop from the frames themselves, and nothing behind an input rides along.
+    let smooth = g.add("Smoothing");
+    g.link(late, "out", smooth, "input");
+    let sp = g.probe(smooth, "out");
+    let (d, up) = g.until("a smoothed frame", |_| Some((sp.latest()?, lp.latest()?)));
+    let m = d.meta();
+    assert_eq!(m.origin(), Some((hex(smooth).as_str(), "out")), "a frame names the node and output it left by: {m:?}");
+    let source = m.source().expect("the input frames");
+    let field = |e: &goofi_core::MetaValue, k: &str| match e {
+        goofi_core::MetaValue::Map(e) => e.get(k).cloned(),
+        _ => None,
+    };
+    use goofi_core::MetaValue::{Float, Int, List, Str, Uint};
+    // A count comes back off the wire signed; the engine stamps it unsigned.
+    let count = |v: Option<goofi_core::MetaValue>| match v {
+        Some(Uint(u)) => Some(u),
+        Some(Int(i)) if i >= 0 => Some(i as u64),
+        _ => None,
+    };
+    assert_eq!(source.keys().collect::<Vec<_>>(), vec!["input"], "one entry per input slot that held a frame: {source:?}");
+    let Some(List(held)) = source.get("input") else { panic!("the input slot's frame: {source:?}") };
+    let [from] = &held[..] else { panic!("one frame on a single slot: {held:?}") };
+    assert_eq!(field(from, "node"), Some(Str(hex(late))), "made from the oscillator's frame: {from:?}");
+    assert_eq!(field(from, "slot"), Some(Str("out".into())));
+    let upstream = up.meta().index().unwrap();
+    assert!(count(field(from, "index")).is_some_and(|i| i <= upstream), "{from:?} against {upstream}");
+    let (Some(Float(began)), Some(Float(left))) = (field(from, "procstart"), field(from, "procend")) else { panic!("the input's run: {from:?}") };
+    assert!(began <= left, "the oscillator's run ended after it began: {began} <= {left}");
+    assert!(left < m.procstart().unwrap(), "the oscillator's frame left before the smoothed run began: {left} < {:?}", m.procstart());
+    assert!(m.procstart().unwrap() <= m.procend().unwrap(), "the smoothed run ended after it began: {m:?}");
+    assert!(field(from, "source").is_none(), "an input is named, not its history: {from:?}");
+    assert!(up.meta().source().is_none(), "a frame made from no input has no source: {:?}", up.meta());
+
+    // A beat broadcasts a rate the moment it moves, and a node's first measured rate is a move:
+    // a node born after the subscription is what a listener is sure to hear of.
     let mut ev = g.events();
-    let stats = g.until("a node_stats broadcast", |_| ev.next("node_stats")["stats"].get(hex(osc)).cloned());
+    let born = g.add("LFO");
+    g.ready(born);
+    let stats = g.until("a node_stats broadcast for the new node", |_| ev.next("node_stats")["stats"].get(hex(born)).cloned());
     assert!(stats["updates_per_second"].as_f64().is_some_and(|r| r > 0.0), "{stats}");
 }
 
@@ -113,20 +166,18 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     g.set_param(osc, "common", "max_frequency", 5.0);
     g.ready(osc);
 
-    // Read from the index STAMP: a data wire is one deep, so a poll loop counts its own rate.
-    let runs = |window: Duration| {
-        let (mut first, mut last, end) = (None, 0, Instant::now() + window);
-        while Instant::now() < end {
-            if let Some(i) = probe.latest().and_then(|d| d.meta().index()) {
-                first.get_or_insert(i);
-                last = i;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        last - first.unwrap_or(last)
+    // Frames counted against the producer's own stamps: a slow runner stretches both alike.
+    let at_most = |cap: f64, frames: u64| {
+        let first = g.until("a first stamped frame", |_| probe.latest().and_then(|d| Some((d.meta().index()?, d.meta().procstart()?))));
+        let last = g.until("frames to count", |_| {
+            let d = probe.latest()?;
+            let (i, t) = (d.meta().index()?, d.meta().procstart()?);
+            (i >= first.0 + frames).then_some((i, t))
+        });
+        let (n, span) = (last.0 - first.0, last.1 - first.1);
+        assert!(n as f64 <= cap * span + 1.0, "{n} frames in {span:.3} s of stamps, OVER the {cap} Hz cap");
     };
-    let slow = runs(Duration::from_millis(800));
-    assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the cap is not honoured");
+    at_most(5.0, 4);
 
     g.set_param(osc, "common", "max_frequency", 60.0);
     // Half the old period apart, which the 5 Hz cap never allows.
@@ -135,11 +186,10 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     // The delivered rate never goes OVER the cap, and a low cap hides that, so the window that
     // judges it is a fast one. Edits land in order: a 1 kHz frame was made under the new cap.
     g.set_param(osc, "common", "max_frequency", 200.0);
-    g.set_param(osc, "output", "mode", "block");
-    g.set_param(osc, "output", "sfreq", 1000.0);
+    g.set_param(osc, "lfo", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 1000.0);
     g.until("the new cap to take hold", |_| probe.latest().filter(|d| d.meta().sfreq() == Some(1000.0)));
-    let fast = runs(Duration::from_millis(1000));
-    assert!(fast <= 201, "a 200 Hz cap delivered {fast} frames in a second — OVER the cap");
+    at_most(200.0, 100);
 }
 
 #[test]
@@ -241,9 +291,9 @@ async fn a_restart_recovers_a_node_and_the_viewer_follows_it_to_its_new_home() {
 
     let mut v = Viewer::open(&base, &hex(uid), "out").await;
     assert_eq!(f32s(&v.decoded().await)[0], 1.0, "the stream is live on the recovered generation");
-    let before = goofi_bridge::output_service_of(&g.state.graph.lock().unwrap(), uid, "out");
+    let before = goofi_bridge::output_service_of(&g.graph(), uid, "out");
     g.call("node restart", j!({ "node": hex(uid) }));
-    assert_ne!(goofi_bridge::output_service_of(&g.state.graph.lock().unwrap(), uid, "out"), before,
+    assert_ne!(goofi_bridge::output_service_of(&g.graph(), uid, "out"), before,
                "a rebirth is a new name");
     // For up to one rehome interval the reducer is still listening on the dead name.
     v.until(|d| f32s(d)[0] == 2.0).await;
@@ -255,8 +305,8 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     let base = g.serve().await;
     let osc = g.add("LFO");
     // Far more samples per frame than any viewer asks for, so there is a reduction to fold at all.
-    g.set_param(osc, "output", "sfreq", 20000.0);
-    g.set_param(osc, "output", "mode", "block");
+    g.set_param(osc, "lfo", "sfreq", 20000.0);
+    g.set_param(osc, "lfo", "mode", "block");
     // A block holds the samples the clock advanced by, so the rate cap is what makes it big.
     g.set_param(osc, "common", "max_frequency", 20.0);
     let key = (osc, "out".to_string());
@@ -275,7 +325,7 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
                || g.state.reducers.subscribers(&key) == 0).await;
 
     let spec = |max: usize| j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
-                                  "reduce": [{ "dim": -1, "max": max, "method": "envelope" }] }]);
+                                  "reduce": [{ "dim": -1, "max": max }] }]);
     let mut wide = Viewer::open(&base, &hex(osc), "out").await;
     wide.view(spec(256)).await;
     let mut narrow = Viewer::open(&base, &hex(osc), "out").await;
@@ -288,14 +338,36 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
         rest.push(v);
     }
 
-    // The fold takes the largest need per dim, and an envelope of width W carries 2·W samples.
+    // The fold takes the largest need per dim: a subsample of width W carries W samples.
     // Every one of the six is awaited: a viewer holding a folded frame is a viewer that is counted.
     for v in [&mut wide, &mut narrow].into_iter().chain(rest.iter_mut()) {
-        let d = v.until(|d| f32s(d).len() == 512).await;
+        let d = v.until(|d| f32s(d).len() == 256).await;
         assert!(d.meta().reduced().is_some(), "the frame says it is a reduction");
     }
     assert_eq!(g.state.reducers.active_slots(), 1, "six viewers, one reducer");
     assert_eq!(g.state.reducers.subscribers(&key), 6);
+
+    // A viewer that asks a dim WHOLE draws it whole, so the fold stops reducing that dim for
+    // everyone: the narrow ones now see the raw frame too, and the cap returns once it leaves.
+    let mut whole = Viewer::open(&base, &hex(osc), "out").await;
+    whole.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [],
+                     "reduce": [{ "dim": -1, "max": "whole" }] }])).await;
+    for v in [&mut whole, &mut wide, &mut narrow] {
+        let d = v.until(|d| !f32s(d).is_empty() && d.meta().reduced().is_none()).await;
+        assert!(f32s(&d).len() > 256, "the whole frame, not the fold of the others");
+    }
+    drop(whole);
+    eventually("the whole-frame viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
+    wide.until(|d| f32s(d).len() == 256).await;
+
+    // A viewer that names a dim neither way has no opinion on it: the fold is the others', and
+    // it is served their subsample rather than pulling the whole frame for everyone.
+    let mut silent = Viewer::open(&base, &hex(osc), "out").await;
+    silent.view(j!([{ "dtype": "array", "ndim": [["le", 2]], "dims": [], "reduce": [] }])).await;
+    let d = silent.until(|d| f32s(d).len() == 256).await;
+    assert!(d.meta().reduced().is_some(), "an unstated dim takes the fold of the stated ones");
+    drop(silent);
+    eventually("the silent viewer to leave", || g.state.reducers.subscribers(&key) == 6).await;
 
     // A sub-patch boundary port is a NAMING indirection over this same stream — it never runs and
     // never holds a frame — so a viewer on one has to land on the reducer already here rather than
@@ -389,17 +461,13 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
                    || g.state.reducers.subscribers(&key) == 0).await;
     }
 
-    // An idle gap closes the feed, and the attach after is the re-open — the only path that mints,
-    // and one mint per attach panicked a reducer thread on Windows, where a birth is a directory create.
-    let iox = g.state.reducers.iox_node_id();
-    assert!(iox.is_some(), "the feeds so far minted the one node they share");
+    // An idle gap closes the feed, and the attach after is the re-open.
     for round in 0..3 {
         eventually(&format!("round {round}: the idle feed to close"),
-                   || !g.state.graph.lock().unwrap().view_watched(osc, "out")).await;
+                   || !g.graph().view_watched(osc, "out")).await;
         let mut v = Viewer::open(&base, &hex(osc), "out").await;
         v.view(spec(32)).await;
         v.until(|d| !f32s(d).is_empty()).await;
-        assert_eq!(g.state.reducers.iox_node_id(), iox, "round {round}: the re-open minted a node");
         drop(v);
     }
 
@@ -493,7 +561,7 @@ fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
     g.until("the wire planned during the build to carry a frame", |_| probe.latest());
     g.call("node remove", j!({ "node": hex(quick) }));
 
-    returns(&g, "the exit with two nodes inside a run", |c| c.state.graph.lock().unwrap().shutdown());
+    returns(&g, "the exit with two nodes inside a run", |c| c.graph().shutdown());
     assert_eq!(busy.inside(), 2, "the exit JOINED a busy node instead of waiting to a ceiling");
 
     // An idle node parks on its doorbell with no timeout, so only `signal_stop` ringing it ends it.
@@ -504,9 +572,9 @@ fn a_busy_node_never_holds_up_the_control_plane_and_never_wedges_the_exit() {
     for _ in 0..8 {
         idle.ready(idle.add("_TestParkedExit")); // unwired, so it parks rather than running
     }
-    returns(&idle, "the exit with parked nodes", |c| c.state.graph.lock().unwrap().shutdown());
+    returns(&idle, "the exit with parked nodes", |c| c.graph().shutdown());
     idle.until("every parked node's thread to end, which a lost doorbell never lets happen", |_| {
-        goofi_core::registry::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
+        goofi_supervisor::scope::inventory().iter().all(|e| e.name != "goofi-_TestParkedExit").then_some(())
     });
 }
 
@@ -525,7 +593,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
         let p = ev.next("state_update");
         (p["node"] == hex(picker)).then_some(p)
     });
-    let options = p["params"]["io"]["device"]["options"].as_array().cloned().unwrap_or_default();
+    let options = p["options"]["io"]["device"].as_array().cloned().unwrap_or_default();
     assert!(options.iter().any(|o| o.as_str().is_some_and(|s| s.starts_with("dev"))),
             "the re-enumerated list reached the client: {options:?}");
     assert_eq!(p["refreshed_params"], j!([["io", "device"]]), "…and the spinner is cleared");
@@ -537,7 +605,7 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
         (p["node"] == hex(mute)).then_some(p)
     });
     assert_eq!(p["refreshed_params"], j!([["io", "device"]]), "the spinner is cleared regardless");
-    assert_eq!(p["params"]["io"]["device"]["options"], j!(["none"]), "options left as declared");
+    assert_eq!(p["options"]["io"]["device"], j!(["none"]), "options left as declared");
 
     // A fixed list is refused, which is what lifts the spinner on the frontend's side.
     let osc = g.add("LFO");
@@ -550,7 +618,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     // A pulse is a REQUEST: the op makes it once, a source makes it on every rising edge, and
     // neither leaves a value behind.
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
     let n = g.add("_TestResettable");
     let gate = g.add("_TestScalar");
     let gate_name = g.doc()["nodes"][hex(gate)]["name"].as_str().expect("a minted name").to_string();
@@ -573,10 +641,42 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     let why = g.refuse("node param request", j!({ "node": hex(n), "param": "common/max_frequency", "request": "pulse" }));
     assert!(why.contains("not a pulse"), "{why}");
 
+    // A param never runs a node. With `autotrigger` off and nothing wired in, the count stands;
+    // a param edit leaves it standing; the `common.trigger` pulse runs it once. An expression of
+    // the time on a param is read for a run, so it moves only when the node runs.
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.set_param(gate, "common", "autotrigger", false);
+    g.call("node param edit", j!({ "node": hex(gate), "param": "control/value", "expression": "lfo(freq=1000)" }));
+    let gate_probe = g.probe(gate, "out");
+    let runs = g.until("the gate to settle", |g| {
+        let c = gate_probe.count();
+        g.stays(|_| gate_probe.count() == c).then_some(c)
+    });
+    // The value each run read, as the state shows it.
+    let value = |g: &Goofi| {
+        let text = g.call("node state", j!({ "node": hex(gate) }))["text"].as_str().unwrap_or_default().to_string();
+        text.lines().find(|l| l.contains("control.value = expr:"))?.rsplit("→ ").next()?.trim().parse::<f64>().ok()
+    };
+    g.set_param(gate, "common", "max_frequency", 60.0);
+    assert!(g.stays(|_| gate_probe.count() == runs), "a param edit ran the node");
+    let before = g.until("the value of the runs so far", |g| value(g));
+    g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
+    g.until("one run on the pulse", |_| (gate_probe.count() == runs + 1).then_some(()));
+    let read = g.until("the value read for that run", |g| value(g).filter(|v| *v != before));
+    assert!(g.stays(|_| gate_probe.count() == runs + 1), "the pulse is one run");
+    g.call("node param request", j!({ "node": hex(gate), "param": "common/trigger", "request": "pulse" }));
+    g.until("the next run", |_| (gate_probe.count() == runs + 2).then_some(()));
+    let next = g.until("the value read for the next run", |g| value(g).filter(|v| *v != read));
+    assert_ne!(next, read, "each run reads the time once");
+    assert!(g.stays(|g| value(g).is_none_or(|v| v == next)), "between runs the value stands");
+    g.call("node param edit", j!({ "node": hex(gate), "param": "control/value", "value": 0.0, "mode": "constant" }));
+    g.set_param(gate, "common", "autotrigger", true);
+    g.graph().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
+
     // A reference on a pulse is a gate, and a low one fires nothing.
     let bound = g.call("node param edit",
                        j!({ "node": hex(n), "param": "count/reset",
-                            "reference": format!("{gate_name}.out"), "mode": "reference" }));
+                            "expression": format!("nd('{gate_name}')") }));
     assert!(bound["error"].is_null(), "{bound}");
     g.until("the count to climb under a low gate", |_| past(20.0).then_some(()));
 
@@ -621,8 +721,65 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     g.set_param(n, "common", "max_frequency", 25.0);
     g.call("node param request", j!({ "node": hex(n), "param": "count/reset", "request": "pulse" }));
     assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
-    assert_eq!(g.doc()["nodes"][hex(n)]["params"]["common"]["max_frequency"]["value"], j!(50.0),
+    assert_eq!(g.doc()["nodes"][hex(n)]["params"]["common"]["max_frequency"]["value"], j!(50),
                "the undo took back the param edit, so the pulse left nothing on the stack");
+}
+
+#[test]
+fn a_gate_expression_opens_on_a_rising_edge_and_closes_after_its_decay() {
+    // `gte()` keeps its state in the binding: the edge it saw and when. So one rising edge opens
+    // the gate once, the decay closes it while the source stays high, and only the next edge
+    // opens it again — what a VST's gate param needs from a state change.
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    let src = g.add("_TestScalar");
+    let out = g.add("_TestScalar");
+    let src_name = g.doc()["nodes"][hex(src)]["name"].as_str().expect("a minted name").to_string();
+    for n in [src, out] {
+        g.set_param(n, "common", "max_frequency", 50.0);
+        g.ready(n);
+    }
+    let probe = g.probe(out, "out");
+    let level = || probe.latest().map(|d| f32s(&d)[0]);
+    // An edge is a change the expression EVALUATED: a level of 0 is also the level before its first
+    // run, so a low source counts once `out` has run since `src` sent it, never by the level alone.
+    let fed = g.probe(src, "out");
+    let heard = |low: f32| {
+        let sent = g.until("the source's low frame", |_| {
+            fed.latest().filter(|d| f32s(d)[0] == low).and_then(|d| d.meta().procend())
+        });
+        g.until("a run of the gate since that frame", |_| {
+            probe.latest().and_then(|d| d.meta().procstart()).filter(|t| *t > sent).map(|_| ())
+        });
+    };
+    // A binding reaches the node's thread on its own clock, and its FIRST evaluation is the level it
+    // starts from. So each expression is bound over a constant while the source is low: once the
+    // level leaves that constant, the new binding has run, and it started from a low source.
+    let bind_low = |expression: String| {
+        g.set_param(src, "control", "value", 0.0);
+        heard(0.0);
+        g.set_param(out, "control", "value", 0.75);
+        g.until("the constant under the binding", |_| level().filter(|v| *v == 0.75).map(|_| ()));
+        let bound = g.call("node param edit", j!({ "node": hex(out), "param": "control/value", "expression": expression }));
+        assert!(bound["error"].is_null(), "{bound}");
+        g.until("the binding live over a low source", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    };
+    bind_low(format!("gte(nd('{src_name}')[0], decay=0.5)"));
+    g.set_param(src, "control", "value", 1.0);
+    g.until("the gate the rising edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
+    g.until("the gate the decay closed while the source stays high", |_| level().filter(|v| *v == 0.0).map(|_| ()));
+    assert!(g.stays(|_| level() == Some(0.0)), "a level that never fell opened the gate again");
+    g.set_param(src, "control", "value", 0.0);
+    assert!(g.stays(|_| level() == Some(0.0)), "the falling edge opened the gate");
+    heard(0.0);
+    g.set_param(src, "control", "value", 0.3);
+    g.until("the gate the second edge opened", |_| level().filter(|v| *v == 1.0).map(|_| ()));
+
+    // The same function shapes a gain: the level passes between 0 and 1 and comes to rest at 0.
+    bind_low(format!("gte(nd('{src_name}')[0], attack=0.3, decay=0.3, sustain=0.5, release=0.3)"));
+    g.set_param(src, "control", "value", 1.0);
+    g.until("the gain on its way up", |_| level().filter(|v| *v > 0.0 && *v < 1.0).map(|_| ()));
+    g.until("the gain at rest again", |_| level().filter(|v| *v == 0.0).map(|_| ()));
 }
 
 #[test]

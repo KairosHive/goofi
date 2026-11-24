@@ -42,7 +42,7 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
 
     let mut v = Viewer::open(&base, &uid, "out").await;
     let frame = v.frame().await;
-    assert_eq!((&frame[0..4], frame[4], frame[5]), (&b"GOOF"[..], 2, 0), "magic, version, ARRAY tag");
+    assert_eq!((&frame[0..4], frame[4]), (&b"GOOF"[..], 0), "magic, ARRAY tag");
     let mut bad = Viewer::open(&base, &uid, "nope").await;
     assert_eq!(bad.close_code().await, Some(4004));
 
@@ -79,21 +79,20 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert_eq!((texels[0], texels[15]), (0, 255), "both ends of the frame's own range");
 
     // Step: the depth rides BESIDE an axis reduction, which is what a real image viewer asks for
-    // — it always sends two `area` reductions — so neither block displaces the other.
+    // — its box is a reduction of both picture axes — so neither block displaces the other.
     g.set_param(img, "control", "gray", false);
     v8.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
-                  "reduce": [{ "dim": 0, "max": 2, "method": "area" }], "depth": "u8" }])).await;
+                  "reduce": [{ "dim": 0, "max": 2 }], "aspect": true, "depth": "u8" }])).await;
     let frame = raw_until(&mut v8, |dtype, shape| dtype == "|u1" && shape == [2, 4, 3]).await;
     let (_, meta, _) = goofi_codec::split_frame(&frame).unwrap();
     assert_eq!(depth_range(meta), (0.0, 1.0), "the colour range survives the reduction");
     let axis = at(&reduced(meta), "0").expect("the reduced axis stands beside the depth");
     assert_eq!(at(&axis, "orig_len").and_then(|v| v.as_u64()), Some(4));
-    assert_eq!(at(&axis, "method").and_then(|v| v.as_str().map(str::to_string)), Some("area".into()));
 
-    // Step: a line viewer draws half floats and is served them — half the bytes of an f32
-    // envelope — and the codec widens them back to the f32 the producer emitted.
+    // Step: a line viewer draws half floats and is served them — half the bytes of the f32
+    // subsample — and the codec widens them back to the f32 the producer emitted.
     v.view(j!([{ "dtype": "array", "ndim": [], "dims": [],
-                 "reduce": [{ "dim": -1, "max": 8, "method": "envelope" }], "depth": "f16" }])).await;
+                 "reduce": [{ "dim": -1, "max": 8 }], "depth": "f16" }])).await;
     let frame = raw_until(&mut v, |dtype, _| dtype == "<f2").await;
     let (_, _, body) = goofi_codec::split_frame(&frame).unwrap();
     let (_, shape, halves) = array_body(body);
@@ -128,11 +127,22 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert!(held.silent_for(Duration::from_millis(700)).await, "a held value was sent again");
     let (first, next) = (held.stamps().await, held.stamps().await);
     assert!(next.index() > first.index(), "the held frame's stamps keep moving: {first:?} then {next:?}");
-    assert!(next.time() > first.time(), "in time as well as in count");
+    assert!(next.procstart() > first.procstart(), "in time as well as in count");
     let mut joiner = Viewer::open(&base, &hex(konst), "out").await;
     assert_eq!(f32s(&joiner.until(|d| f32s(d) == [3.0]).await), [3.0], "a joiner gets the held frame");
     g.set_param(konst, "constant", "value", 4.0);
     held.until(|d| f32s(d) == [4.0]).await;
+
+    // A table carries each child's stamps in its body. Equal child values with new stamps must
+    // reach the viewer as a new table: a stamps-only reply can replace only the outer meta.
+    let table = g.add("signal:Table");
+    g.set_param(table, "table", "keys", "value");
+    g.link(konst, "out", table, "arrays");
+    let mut tables = Viewer::open(&base, &hex(table), "out").await;
+    let leaf = |d: &goofi_core::Data| d.as_table().ok()?.get("value").cloned();
+    let first = tables.until(|d| leaf(d).is_some_and(|v| f32s(&v) == [4.0])).await;
+    let index = leaf(&first).unwrap().meta().index().expect("the child index");
+    tables.until(|d| leaf(d).is_some_and(|v| f32s(&v) == [4.0] && v.meta().index().is_some_and(|n| n > index))).await;
 
     // Step: on a half-float ask, a value no half holds arrives as the f32 it is — THAT frame alone.
     held.view(j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [], "depth": "f16" }])).await;
@@ -142,20 +152,10 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
     assert_eq!(f32s(&goofi_codec::decode(&wide).unwrap()), [1e6], "beyond a half's range, unchanged");
 }
 
-/// A GOOF array body: `[u8 ndim][u8 len][dtype][ndim x u32 shape][samples]`.
+/// A GOOF array body's dtype, shape and samples, read by the codec's own head parser.
 fn array_body(body: &[u8]) -> (String, Vec<usize>, Vec<u8>) {
-    let ndim = body[0] as usize;
-    let len = body[1] as usize;
-    let dtype = String::from_utf8(body[2..2 + len].to_vec()).unwrap();
-    let mut at = 2 + len;
-    let shape: Vec<usize> = (0..ndim)
-        .map(|_| {
-            let d = u32::from_le_bytes(body[at..at + 4].try_into().unwrap()) as usize;
-            at += 4;
-            d
-        })
-        .collect();
-    (dtype, shape, body[at..].to_vec())
+    let (dtype, shape, samples) = goofi_codec::array_head(body).expect("an array body");
+    (String::from_utf8(dtype.to_vec()).unwrap(), shape, samples.to_vec())
 }
 
 fn at(v: &rmpv::Value, key: &str) -> Option<rmpv::Value> {
@@ -218,11 +218,17 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
 
     assert_eq!(c.doc().read_at(&["variable_groups", "system", "lock", "config"]), Some(j!(true)),
                "the system group's lock rides the replica");
-    peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07", "type": "string" })).await;
-    c.until_doc(|d| d.read_at(&["variables", "patch.subject", "value"]).is_some()).await;
-    assert_eq!(c.doc().read_at(&["variables", "patch.subject", "value"]), Some(j!("P07")));
+    peer.call("variable entry add", j!({ "name": "patch.subject", "value": "P07" })).await;
+    c.until_doc(|d| d.read_at(&["variables", "patch.subject"]).is_some()).await;
+    assert_eq!(c.doc().read_at(&["variables", "patch.subject"]), Some(j!({})), "a value is no document field");
     assert_eq!(c.doc().read_at(&["variables", "patch.subject", "lock"]), None,
                "a user variable carries no lock until one is set");
+    // A rename keeps its place, and a list shows the replica's key order: it must be the manager's.
+    peer.call("variable entry add", j!({ "name": "patch.tail", "value": 1.0 })).await;
+    peer.call("variable entry rename", j!({ "name": "patch.subject", "to": "patch.zed" })).await;
+    c.until_doc(|d| d.read_at(&["variables", "patch.zed"]).is_some()).await;
+    let order = |v: &Value| v["variables"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>());
+    assert_eq!(order(&c.doc().to_json()), order(&g.call("session state", j!({}))), "the replica's variable order");
 
     // A value rides the doc patch alone; the descriptor echo is a source edit's. The first
     // `state_update` this node sends is the expression's.
@@ -230,15 +236,23 @@ async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_edit
     c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "value": 0.25 })).await;
     c.until_doc(|d| d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]) == Some(j!(0.25))).await;
     c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "7" })).await;
-    let echo = ev.next("state_update");
-    assert_eq!((&echo["node"], &echo["params"]["lfo"]["amplitude"]["mode"]), (&j!(uid), &j!("expression")),
-               "the value edit echoed a descriptor: {echo}");
+    // The echo follows the delta it belongs with, so the first one comes after the source moved.
+    let mut sourced = false;
+    let echo = loop {
+        match ev.next_of(&["doc_patch", "state_update"]) {
+            (name, echo) if name == "state_update" => break echo,
+            (_, patch) => sourced |= patch["ops"].as_array().is_some_and(|ops| ops.iter().any(|op| {
+                op["path"] == j!(["nodes", uid, "params", "lfo", "amplitude", "mode"]) && op["value"] == j!("expression")
+            })),
+        }
+    };
+    assert!(sourced && echo["node"] == j!(uid), "the value edit echoed: {echo}");
 
     // `/params` restates a pair only when it moved: the peer holds the last one it was sent.
     let level = g.add("_TestScalar");
     g.call("node edit", j!({ "node": hex(level), "name": "level" }));
     g.set_param(level, "control", "value", 0.25);
-    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "reference": "level.out" })).await;
+    c.call("node param edit", j!({ "node": uid.clone(), "param": "lfo/amplitude", "expression": "nd('level')" })).await;
     let (mut live, _) = tokio_tungstenite::connect_async(format!("{base}/params/{uid}")).await.unwrap();
     let pair = |m: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>| -> Value {
         let Some(Ok(Message::Text(t))) = m else { panic!("the params socket stopped: {m:?}") };
@@ -287,16 +301,21 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     let g = Goofi::new();
     let base = g.serve().await;
     let mut victim = narrow(&base, "/control").await;
-    victim.next().await; // the initial hello, then stall
+    // The initial hello, which carries the palette, then stall.
+    let first = victim.next().await;
+    let Some(Ok(Message::Text(first))) = first else { panic!("no hello: {first:?}") };
+    let first: Value = serde_json::from_str(first.as_str()).unwrap();
+    assert!(first["payload"]["node_types"].as_array().is_some_and(|t| !t.is_empty()), "a fresh socket takes the palette");
 
-    // Re-binding the SAME expression pushes a `state_update` without touching the doc, isolating events.
     // Stalled for the WHOLE flood, and the flood sized in bytes: the ring lags only once the
     // socket's send buffer is full, and Linux autotunes that up to 4 MB before a write blocks.
+    // Each step moves a 16 KB viewer blob, so 1000 of them are four times that.
     let osc = g.add("LFO");
+    let pad = "x".repeat(16384);
     let flood = std::thread::spawn(move || {
-        for _ in 0..4000 {
-            g.call("node param edit", j!({ "node": hex(osc), "param": "common/max_frequency",
-                                           "expression": "7" }));
+        for i in 0..1000 {
+            g.call("node edit", j!({ "node": hex(osc), "viewer": [{ "slot": "out", "kind": "line",
+                                                                  "settings": { "pad": format!("{pad}{i}") } }] }));
         }
     });
     flood.join().unwrap();
@@ -304,8 +323,10 @@ async fn a_tab_that_fell_behind_is_recovered_with_a_fresh_snapshot() {
     let recovered = tokio::time::timeout(WAIT, async {
         loop {
             if let Some(Ok(Message::Text(t))) = victim.next().await {
-                if serde_json::from_str::<Value>(t.as_str()).unwrap()["event"] == "hello" {
-                    return true;
+                let v = serde_json::from_str::<Value>(t.as_str()).unwrap();
+                if v["event"] == "hello" {
+                    // A lag may have dropped a `node_types` event: the re-seed ships the palette again.
+                    return v["payload"]["node_types"].as_array().is_some_and(|t| !t.is_empty());
                 }
             }
         }
@@ -327,8 +348,8 @@ async fn a_viewer_that_stops_reading_parks_nothing_and_reading_again_draws_the_n
     let base = g.serve().await;
     // A ten-second window of a 10 kHz block: frames that grow to 400 kB, each unlike the last.
     let lfo = g.add("LFO");
-    g.set_param(lfo, "output", "mode", "block");
-    g.set_param(lfo, "output", "sfreq", 10_000.0);
+    g.set_param(lfo, "lfo", "mode", "block");
+    g.set_param(lfo, "lfo", "sfreq", 10_000.0);
     let buf = g.add("Buffer");
     g.set_param(buf, "buffer", "size", 10.0);
     g.link(lfo, "out", buf, "input");
@@ -369,8 +390,9 @@ async fn a_viewer_that_stops_reading_parks_nothing_and_reading_again_draws_the_n
 
 #[tokio::test]
 async fn a_patch_travels_as_bytes_between_two_instances_and_a_bad_upload_changes_nothing() {
-    // Two servers, because a round trip through one would pass against a route that packed nothing.
-    let src = Goofi::new();
+    // Two servers, because a round trip through one would pass against a route that packed nothing;
+    // both with `/mcp`, the door the `tool` helper drives them through.
+    let src = Goofi::mcp();
     let source = host(&src.serve().await).to_string();
     tool(&source, "node add --type LFO").await;
     tool(&source, "node add --type Buffer").await;
@@ -381,7 +403,7 @@ async fn a_patch_travels_as_bytes_between_two_instances_and_a_bad_upload_changes
     assert!(head.to_ascii_lowercase().contains("content-disposition"),
             "the reply names a filename, or the browser invents one from the URL: {head}");
 
-    let dst = Goofi::new();
+    let dst = Goofi::mcp();
     let dest = host(&dst.serve().await).to_string();
     let octet = "Content-Type: application/octet-stream\r\n";
     assert!(!tool(&dest, "nodes inspect").await.contains("LFO"), "it starts empty");
@@ -442,6 +464,7 @@ const ROUTES: &[(&str, &str, u16)] = &[
     ("/control", "WS", 101),
     ("/data/deadbeef/out", "WS", 101),
     ("/params/deadbeef", "WS", 101),
+    ("/presence", "WS", 101),
     ("/term/no-such-instance", "WS", 101),
     ("/mcp", "POST", 200),
     // 400, not 200: `/exec` refuses the probe's empty body for its own reason, and that reason
@@ -481,7 +504,8 @@ async fn ask(addr: &str, path: &str, method: &str, headers: &str, host: &str) ->
 
 #[tokio::test]
 async fn every_route_answers_the_same_origin_question_the_same_way() {
-    let g = Goofi::new();
+    // Served WITH `/mcp`, so the route walk below covers it: a route added later inherits the guard.
+    let g = Goofi::mcp();
     let addr = host(&g.serve_spa(&[("index.html", b"<!doctype html>goofi")]).await).to_string();
     let port = addr.rsplit(':').next().unwrap().to_string();
 
@@ -557,7 +581,7 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
     });
     let tb = tokio::spawn(async move {
         for i in 0..BURST {
-            b.call("variable entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64, "type": "float" })).await;
+            b.call("variable entry add", j!({ "name": format!("patch.g{i}"), "value": i as f64 })).await;
         }
         b
     });
@@ -581,9 +605,64 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
         let uid = d.to_json()["nodes"].as_object().unwrap().iter()
             .find(|(_, n)| n["name"] == j!(format!("osc{i}"))).map(|(u, _)| u.clone())
             .unwrap_or_else(|| panic!("osc{i} is missing from the replica"));
-        assert_eq!(d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]),
-                   Some(j!(0.1 * i as f64)), "A's rename and its param edit both landed on osc{i}");
-        assert_eq!(d.read_at(&["variables", &format!("patch.g{i}"), "value"]), Some(j!(i as f64)),
-                   "device B's variable g{i}");
+        let amplitude = d.read_at(&["nodes", uid.as_str(), "params", "lfo", "amplitude", "value"]).and_then(|v| v.as_f64());
+        assert!((amplitude.unwrap_or(f64::NAN) - 0.1 * i as f64).abs() < 1e-6,
+                "A's rename and its param edit both landed on osc{i}: {amplitude:?}");
+        assert_eq!(g.variable(&format!("patch.g{i}")), j!(i), "device B's variable g{i}");
     }
+}
+
+/// The next JSON frame on a `/presence` socket.
+async fn presence_frame(ws: &mut Ws) -> Value {
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Text(t))) => return serde_json::from_str(t.as_str()).unwrap(),
+            Some(Ok(_)) => continue,
+            other => panic!("the presence socket ended: {other:?}"),
+        }
+    }
+}
+
+/// Read `/presence` frames until one satisfies `want`.
+async fn presence_until(ws: &mut Ws, what: &str, want: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, presence_frame(ws)).await
+            .unwrap_or_else(|_| panic!("no presence frame said: {what}"));
+        if want(&frame) {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tab_is_a_peer_while_its_presence_socket_is_open_and_its_pointer_reaches_the_others() {
+    let g = Goofi::new();
+    let base = g.serve().await;
+    let (mut one, _) = tokio_tungstenite::connect_async(format!("{base}/presence")).await.unwrap();
+    let me = presence_frame(&mut one).await;
+    let my_id = me["you"].as_u64().expect("a peer id");
+    assert!(me["hue"].as_u64().is_some_and(|h| h < 360), "a hue to draw in: {me}");
+    presence_until(&mut one, "a roster of one", |f| f["peers"].as_array().is_some_and(|p| p.len() == 1)).await;
+
+    let (mut two, _) = tokio_tungstenite::connect_async(format!("{base}/presence")).await.unwrap();
+    let other = presence_frame(&mut two).await;
+    assert_ne!(other["you"], me["you"], "each socket is its own peer");
+    assert_ne!(other["hue"], me["hue"], "with its own colour");
+    for (ws, who) in [(&mut one, "the first"), (&mut two, "the second")] {
+        presence_until(ws, &format!("{who} sees a roster of two"),
+                       |f| f["peers"].as_array().is_some_and(|p| p.len() == 2)).await;
+    }
+
+    // A pointer is fractions of the window and the tab it is on; it reaches every peer as the
+    // sender's id and hue, and a leave takes it back.
+    one.send(Message::Text(r#"{"tab":"tab-1","x":0.25,"y":0.5}"#.into())).await.unwrap();
+    let seen = presence_until(&mut two, "the pointer", |f| f.get("cursor").is_some()).await;
+    assert_eq!(seen["cursor"], j!({ "id": my_id, "hue": me["hue"], "tab": "tab-1", "x": 0.25, "y": 0.5 }));
+    one.send(Message::Text(r#"{"leave":true}"#.into())).await.unwrap();
+    presence_until(&mut two, "the leave", |f| f["gone"] == j!(my_id)).await;
+
+    // The close is the leave: no heartbeat, nothing to expire.
+    drop(one);
+    presence_until(&mut two, "the roster of one again", |f| f["peers"].as_array().is_some_and(|p| p.len() == 1)).await;
 }

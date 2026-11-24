@@ -1,4 +1,3 @@
 mne
-specparam
 scipy
 networkx

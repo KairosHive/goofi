@@ -14,8 +14,8 @@ class ImageFile(goofi.Node):
     PARAMS = {
         'file': {'path': goofi.StringParam('', doc='Absolute path to a local image. Paste the path without quotes.'),
                  'reload': goofi.PulseParam(doc='Read the image again. File changes also reload automatically.')},
-        'image': {'max_size': goofi.IntParam(1024, 64, 4096, doc='Maximum width or height. Preserve aspect ratio; do not enlarge small images.')},
-        'common': {'max_frequency': goofi.FloatParam(1.0, 0.1, 10.0)},
+        'image': {'max_size': goofi.NumParam(1024, 64, 4096, int=True, doc='Maximum width or height. Preserve aspect ratio; do not enlarge small images.')},
+        'common': {'max_frequency': goofi.NumParam(1.0, 0.1, 10.0)},
     }
 
     def setup(self):

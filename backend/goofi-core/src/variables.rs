@@ -1,64 +1,20 @@
-//! Patch-scoped variables — named typed scalars shared across a patch.
+//! Patch-scoped variables — named frames, an array or a string each, shared across a patch.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-/// A patch variable's value — a typed scalar. The serde shape is the `{type, value}` of the `.gfi`
-/// and the doc: the tag is what preserves float-vs-int through JSON's whole-float normalization.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "lowercase")]
-pub enum VariableValue {
-    Float(f64),
-    Int(i64),
-    Bool(bool),
-    #[serde(rename = "string")]
-    Str(String),
-}
+use crate::{control, Data, Meta, Value, ENVELOPE_BORN};
 
-impl VariableValue {
-    /// The type's name, as the doc and every op spell it.
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            VariableValue::Float(_) => "float",
-            VariableValue::Int(_) => "int",
-            VariableValue::Bool(_) => "bool",
-            VariableValue::Str(_) => "string",
-        }
-    }
-
-    /// Convert to a named type, using an empty value when conversion is not possible.
-    pub fn converted_to(&self, ty: &str) -> Option<VariableValue> {
-        let template = match ty {
-            "float" => VariableValue::Float(0.0),
-            "int" => VariableValue::Int(0),
-            "bool" => VariableValue::Bool(false),
-            "string" => VariableValue::Str(String::new()),
-            _ => return None,
-        };
-        Some(self.clone().coerced_like(&template))
-    }
-
-    /// Coerce to `template`'s variant, so an existing variable's declared type stays stable on set.
-    fn coerced_like(self, template: &VariableValue) -> VariableValue {
-        use VariableValue as G;
-        match (template, self) {
-            (G::Float(_), G::Int(v)) => G::Float(v as f64),
-            (G::Float(_), G::Bool(v)) => G::Float(if v { 1.0 } else { 0.0 }),
-            (G::Float(_), G::Str(_)) => G::Float(0.0),
-            (G::Int(_), G::Float(v)) => G::Int(v.round() as i64),
-            (G::Int(_), G::Bool(v)) => G::Int(v.into()),
-            (G::Int(_), G::Str(_)) => G::Int(0),
-            (G::Bool(_), G::Float(_) | G::Int(_) | G::Str(_)) => G::Bool(false),
-            (G::Str(_), G::Float(v)) => G::Str(v.to_string()),
-            (G::Str(_), G::Int(v)) => G::Str(v.to_string()),
-            (G::Str(_), G::Bool(v)) => G::Str(v.to_string()),
-            (_, same) => same,
-        }
-    }
+/// Where a variable's frames go: the data plane the store publishes on. A value write is a
+/// publish and nothing else; a removed variable retires its wire.
+pub trait Plane: Send + Sync {
+    fn publish(&self, name: &str, value: &Data);
+    fn retire(&self, name: &str);
 }
 
 /// What a control element is drawn as.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ControlKind {
     Knob,
@@ -68,11 +24,14 @@ pub enum ControlKind {
     Toggle,
     Dropdown,
     Paint,
+    Vector,
+    Color,
+    Envelope,
 }
 
 impl ControlKind {
     /// Every kind, in the order a palette offers them.
-    pub const ALL: [ControlKind; 7] = [
+    pub const ALL: [ControlKind; 10] = [
         ControlKind::Knob,
         ControlKind::Slider,
         ControlKind::Number,
@@ -80,6 +39,9 @@ impl ControlKind {
         ControlKind::Toggle,
         ControlKind::Dropdown,
         ControlKind::Paint,
+        ControlKind::Vector,
+        ControlKind::Color,
+        ControlKind::Envelope,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -91,17 +53,23 @@ impl ControlKind {
             ControlKind::Toggle => "toggle",
             ControlKind::Dropdown => "dropdown",
             ControlKind::Paint => "paint",
+            ControlKind::Vector => "vector",
+            ControlKind::Color => "color",
+            ControlKind::Envelope => "envelope",
         }
     }
 
-    /// The value a widget of this kind is born holding — which is also its type.
-    pub fn born_value(self) -> VariableValue {
+    /// What a widget of this kind draws: one `number`, a `text`, an `image` (an `[h, w, 4]` RGBA array
+    /// in 0..1), a `vector` (`[n]`), a `color` (`[4]` RGBA in 0..1), an `envelope` (`[4]` ADSR), or `any` frame's truth.
+    pub fn draws(self) -> &'static str {
         match self {
-            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => VariableValue::Float(0.0),
-            ControlKind::Toggle => VariableValue::Bool(false),
-            // A drawing is a `data:image/png;base64,…` URL, which is a STRING like any other: the
-            // widget draws it, an expression reads it, and nothing new crosses the wire for it.
-            ControlKind::Text | ControlKind::Dropdown | ControlKind::Paint => VariableValue::Str(String::new()),
+            ControlKind::Knob | ControlKind::Slider | ControlKind::Number => "number",
+            ControlKind::Toggle => "any",
+            ControlKind::Text | ControlKind::Dropdown => "text",
+            ControlKind::Paint => "image",
+            ControlKind::Vector => "vector",
+            ControlKind::Color => "color",
+            ControlKind::Envelope => "envelope",
         }
     }
 
@@ -117,6 +85,9 @@ impl ControlKind {
             ControlKind::Dropdown => (6.0, 2.0),
             ControlKind::Toggle => (2.0, 2.0),
             ControlKind::Paint => (8.0, 8.0),
+            ControlKind::Vector => (8.0, 2.0),
+            ControlKind::Color => (2.0, 2.0),
+            ControlKind::Envelope => (8.0, 4.0),
         }
     }
 }
@@ -147,7 +118,8 @@ pub fn free_cell(taken: &[(f64, f64, f64, f64)], w: f64, h: f64) -> (f64, f64) {
 
 /// A variable drawn in a control panel: the widget, its range, and its place in the grid. Carrying
 /// one is what makes a variable an ELEMENT — there is no second list of what a panel holds.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(optional_fields)]
 pub struct Control {
     pub kind: ControlKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +130,9 @@ pub struct Control {
     pub step: Option<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// A paint pad's side in texels; absent is 128.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<u32>,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -169,26 +144,43 @@ pub struct Control {
 }
 
 impl Control {
-    /// Whether this widget can draw `value`'s type.
-    pub fn fits(&self, value: &VariableValue) -> bool {
-        use ControlKind as K;
-        use VariableValue as G;
+    /// Whether this widget can draw `value`, by what its kind draws.
+    pub fn fits(&self, value: &Data) -> bool {
+        match (self.kind.draws(), value.value()) {
+            ("number", Value::Array(a)) => a.shape() == [1],
+            ("vector", Value::Array(a)) => a.shape().len() == 1,
+            ("color" | "envelope", Value::Array(a)) => a.shape() == [4],
+            ("image", Value::Array(a)) => matches!(a.shape(), [_, _, 4]),
+            ("any", _) | ("text", Value::Str(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// The value a widget of this kind is born holding: a paint pad, a clear `[side, side, 4]` sheet;
+    /// a vector three zeros; a colour opaque black; an envelope a short pluck.
+    pub fn born_value(&self) -> Data {
         match self.kind {
-            K::Knob | K::Slider | K::Number => matches!(value, G::Float(_) | G::Int(_)),
-            K::Toggle => matches!(value, G::Bool(_)),
-            K::Text | K::Dropdown | K::Paint => matches!(value, G::Str(_)),
+            ControlKind::Text | ControlKind::Dropdown => Data::text(""),
+            ControlKind::Vector => Data::array_f32(vec![3], vec![0; 12], Meta::default()).expect("three numbers"),
+            ControlKind::Color => Data::numbers([0.0, 0.0, 0.0, 1.0]),
+            ControlKind::Envelope => Data::numbers(ENVELOPE_BORN),
+            ControlKind::Paint => {
+                let side = self.resolution.unwrap_or(128).clamp(1, 1024) as usize;
+                Data::array_f32(vec![side, side, 4], vec![0; side * side * 16], Meta::default()).expect("a whole number of texels")
+            }
+            _ => Data::number(0.0),
         }
     }
 
     /// Why this widget cannot draw `value`, in the words a refusal uses.
-    pub fn mismatch(&self, value: &VariableValue) -> String {
-        format!("a `{}` cannot draw a {}", self.kind.as_str(), value.type_name())
+    pub fn mismatch(&self, value: &Data) -> String {
+        format!("a `{}` cannot draw {}", self.kind.as_str(), control::form(value))
     }
 }
 
-/// A lock on a variable or a whole group: `config` freezes the name, the type, the widget and
+/// A lock on a variable or a whole group: `config` freezes the name, the widget and
 /// membership; `value` freezes the value alone. A group's lock reaches every member.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct Lock {
     #[serde(default)]
     pub config: bool,
@@ -206,22 +198,56 @@ impl Lock {
     }
 }
 
-/// What a variable follows: one producer output, `node.slot`, and for a frame wider than one
-/// number the index it reads. A followed variable is written by the manager on every frame and by
-/// nobody else — a MIDI knob bound to a widget is one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct VariableSource {
-    pub reference: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index: Option<usize>,
+/// Who owns a group: a MIDI device, by the port the host lists — the session's fact, never a
+/// patch's, as the group exists while the device is open; a machine, by its id, whose playhead
+/// the group is; or a timeline track, by its id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Owner {
+    Midi(String),
+    Machine(String),
+    Track(String),
 }
+
+/// A group's own record: its lock and, for an OWNED group, its owner. An owned group is locked
+/// whole against every hand but its owner's, and the owner writes it through
+/// [`VariableStore::drive`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+pub struct Group {
+    #[serde(default)]
+    pub lock: Lock,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner: Option<Owner>,
+}
+
+impl Group {
+    pub fn owned(&self) -> bool {
+        self.owner.is_some()
+    }
+
+    /// Who holds the group, in the words a refusal uses.
+    fn owner(&self) -> &'static str {
+        match self.owner {
+            Some(Owner::Midi(_)) => "a MIDI device's",
+            Some(Owner::Machine(_)) => "a machine's playhead",
+            Some(Owner::Track(_)) => "a timeline track's",
+            None => "nobody's",
+        }
+    }
+}
+
+/// The entries a MIDI group holds, over all 16 channels: every controller in 0..1 and every held
+/// note's velocity at `(channel - 1) * 128 + number`, the wheel in -1..1 and the pressure in 0..1.
+pub const MIDI_ENTRIES: [(&str, usize); 4] = [("cc", 16 * 128), ("notes", 16 * 128), ("bend", 16), ("pressure", 16)];
+
 
 /// A code-owned system variable: its group is config-locked for life. An EPHEMERAL one is
 /// value-locked too — goofi derives its value, it is re-derived at every reassert, and a `.gfi`
 /// never carries it.
 pub struct VariableDef {
     pub name: &'static str,
-    pub value: fn() -> VariableValue,
+    pub value: fn() -> Data,
     pub doc: &'static str,
     /// Whether goofi owns the value outright: nobody may set it, and no patch carries it.
     pub ephemeral: bool,
@@ -231,67 +257,94 @@ pub struct VariableDef {
 /// graphics chain with nothing to follow falls back to it.
 pub const DEFAULT_SIZE: u32 = 1024;
 
+/// The rate the graphics clock starts at, in frames per second.
+pub const DEFAULT_FPS: i64 = 60;
+
+/// The frames a device stream, output or input, takes per callback unless `audio.buffer_size`
+/// says otherwise: 5.3 ms at 48 kHz, room for several heavy plugins to finish a period on time.
+pub const DEFAULT_BUFFER: u32 = 256;
+
+/// The fastest a viewer is served, and the pace the graphics engine reads a watched texture back
+/// from the GPU for its viewers.
+pub const DEFAULT_VIEWER_FPS: f64 = 30.0;
+
 pub static SYSTEM_VARIABLES: &[VariableDef] = &[
     VariableDef {
-        name: "system.default_ufreq",
-        value: || VariableValue::Float(30.0),
+        name: "system.viewer_fps",
+        value: || Data::number(DEFAULT_VIEWER_FPS),
+        doc: "The fastest a viewer is served (frames a second), whatever rate its display declares; the graphics engine reads a watched texture back from the GPU at this pace too.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "system.goofi_home",
+        value: || Data::text(crate::path::to_slash(&goofi_supervisor::layout::home())),
+        doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
+        ephemeral: true,
+    },
+    VariableDef {
+        name: "signal.default_ufreq",
+        value: || Data::number(30.0),
         doc: "Default update rate (Hz) for producer nodes that have not overridden it.",
         ephemeral: false,
     },
     VariableDef {
-        name: "system.viewer_fps",
-        value: || VariableValue::Float(30.0),
-        doc: "The fastest a viewer is served (frames a second), whatever rate its display declares.",
-        ephemeral: false,
-    },
-    VariableDef {
-        name: "system.default_width",
-        value: || VariableValue::Int(DEFAULT_SIZE as i64),
+        name: "graphics.default_width",
+        value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture width (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
-        name: "system.default_height",
-        value: || VariableValue::Int(DEFAULT_SIZE as i64),
+        name: "graphics.default_height",
+        value: || Data::number(f64::from(DEFAULT_SIZE)),
         doc: "Default texture height (pixels) for graphics nodes that make their own frames.",
         ephemeral: false,
     },
     VariableDef {
-        name: "system.audio_rate",
-        value: || VariableValue::Float(0.0),
+        name: "graphics.fps",
+        value: || Data::number(DEFAULT_FPS as f64),
+        doc: "The rate the graphics engine renders at under its own clock: what a window shows and what a recording is encoded at. A viewer is capped by `system.viewer_fps` on top.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "audio.buffer_size",
+        value: || Data::number(f64::from(DEFAULT_BUFFER)),
+        doc: "The frames every audio device stream is asked for per callback: the buffer between goofi and the speakers, and between a microphone and AudioIn. 0 leaves the choice to the host, which may hold seconds. The streams reopen when it moves.",
+        ephemeral: false,
+    },
+    VariableDef {
+        name: "audio.rate",
+        value: || Data::number(0.0),
         doc: "The audio clock's sample rate. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_channels",
-        value: || VariableValue::Int(0),
+        name: "audio.channels",
+        value: || Data::number(0.0),
         doc: "How many channels the audio clock carries. The audio engine says it; 0 where no engine runs.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_device",
-        value: || VariableValue::Str(String::new()),
+        name: "audio.device",
+        value: || Data::text(""),
         doc: "The device driving the audio clock, empty under the external clock or where none is open.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_driver",
-        value: || VariableValue::Str(String::new()),
+        name: "audio.driver",
+        value: || Data::text(""),
         doc: "The ASIO driver holding the process, empty where none does — one loads at a time, so it is the patch's.",
         ephemeral: true,
     },
     VariableDef {
-        name: "system.audio_hosts",
-        value: || VariableValue::Str(String::new()),
+        name: "audio.hosts",
+        value: || Data::text(""),
         doc: "The audio APIs this build carries, comma separated. Every device name begins with one of them, so this is the whole of what a device can be chosen from.",
         ephemeral: true,
     },
-    VariableDef {
-        name: "system.goofi_home",
-        value: || VariableValue::Str(crate::path::to_slash(&crate::home::dir())),
-        doc: "The .goofi folder, where goofi keeps its own files. The machine says where it is.",
-        ephemeral: true,
-    },
+    VariableDef { name: "clock.bpm", value: || Data::number(120.0), doc: "The tempo, in beats a minute: what a time in beats is read by.", ephemeral: false },
+    VariableDef { name: "clock.length", value: || Data::number(0.0), doc: "The timeline's length in beats: the clock's position restarts from 0 when it reaches it. 0 is endless, the position counts up from the load.", ephemeral: false },
+    VariableDef { name: "clock.time", value: || Data::number(0.0), doc: "The clock's position in seconds: what `t` is. `clock set` pauses and places it.", ephemeral: true },
+    VariableDef { name: "clock.playing", value: || Data::number(1.0), doc: "Whether the clock's position plays: 0 while it is paused.", ephemeral: true },
 ];
 
 /// Python's keywords, plus goofi's own namespace token `variables`. A regex reads each as an
@@ -304,10 +357,13 @@ const RESERVED: &[&str] = &[
     "while", "with", "yield",
 ];
 
+/// What an owned group holds: each entry's name, the value it is born with, and its widget.
+pub type Entries = Vec<(String, Data, Option<Control>)>;
+
 /// A legal name in the ONE expression namespace: `[A-Za-z_][A-Za-z0-9_]*` and not reserved.
 ///
 /// Every name an expression can spell is held to this, because an expression reads one as an
-/// ATTRIBUTE — `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
+/// ATTRIBUTE — `vars.gain`, and a sub-patch's slot in `nd('chain').drain`. A name Python cannot
 /// parse there breaks every reference to it and takes the rewrite with it: the next rename has no
 /// `nd('<old>')` left to follow, so the damage cannot be undone by renaming back.
 pub fn is_valid_identifier(name: &str) -> bool {
@@ -354,9 +410,31 @@ pub fn is_valid_name(name: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
-/// The group `system`, which is goofi's own: born config-locked, and no lock of its is a caller's
-/// to set.
-pub const SYSTEM_GROUP: &str = "system";
+/// The groups goofi owns: each born config-locked, named for life, and no lock of theirs is a
+/// caller's to set. `system` is the machine's, `clock` the patch clock's, the other three are
+/// one engine's each.
+pub const OWN_GROUPS: [&str; 5] = ["system", "signal", "graphics", "audio", "clock"];
+
+pub fn is_own_group(group: &str) -> bool {
+    OWN_GROUPS.contains(&group)
+}
+
+/// A variable's name as a producer's slot name: one leaked copy per distinct name, because a
+/// slot is spelled `&'static str` everywhere a wire is, and a patch names few variables.
+pub fn slot_name(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut held = NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    match held.get(name) {
+        Some(s) => s,
+        None => {
+            let s: &'static str = Box::leak(name.to_string().into_boxed_str());
+            held.insert(s);
+            s
+        }
+    }
+}
 
 fn is_ephemeral(name: &str) -> bool {
     SYSTEM_VARIABLES.iter().any(|d| d.ephemeral && d.name == name)
@@ -366,15 +444,88 @@ fn group_of(name: &str) -> &str {
     split_variable(name).map(|(g, _)| g).unwrap_or(name)
 }
 
+/// One variable: its latest frame beside the widget, expression and lock it carries. The frame is
+/// the plane's; the rest is the document's (`goofi_graph::doc::VariableRecord`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Variable {
+    pub value: Data,
+    pub control: Option<Control>,
+    /// The expression the manager computes it by — bare, one producer's frame copied as it comes;
+    /// in Python, evaluated as a param's is. A computed variable is written by nobody else.
+    pub expression: Option<String>,
+    /// The variable's OWN lock, apart from its group's; absent is the default.
+    pub lock: Option<Lock>,
+}
+
+impl Variable {
+    pub fn of(value: Data) -> Variable {
+        Variable { value, control: None, expression: None, lock: None }
+    }
+
+    pub fn own_lock(&self) -> Lock {
+        self.lock.unwrap_or_default()
+    }
+}
+
+/// Told the name of every value that moved.
+pub type Watch = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+/// The store as it stood at one instant: every entry and group, and the configuration version
+/// then. What a history entry keeps and puts back; the values are shared, so it is pointers.
+#[derive(Clone)]
+pub struct Snapshot {
+    entries: IndexMap<String, Variable>,
+    groups: IndexMap<String, Group>,
+    pub version: u64,
+}
+
+impl Snapshot {
+    /// The variables `other` holds differently from this one, by name, and whether the groups do.
+    pub fn differing(&self, other: &Snapshot) -> (Vec<String>, bool) {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.entries.keys().chain(other.entries.keys()) {
+            if self.entries.get(name) != other.entries.get(name) && !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        (names, self.groups != other.groups)
+    }
+
+    /// `names` as `from` holds them, and the groups too where `groups`; the rest stays.
+    pub fn take(&mut self, from: &Snapshot, names: &[String], groups: bool) {
+        for name in names {
+            match from.entries.get(name) {
+                Some(v) => {
+                    self.entries.insert(name.clone(), v.clone());
+                }
+                None => {
+                    self.entries.shift_remove(name);
+                }
+            }
+        }
+        if groups {
+            self.groups = from.groups.clone();
+        }
+    }
+}
+
 /// The authoritative variables map. Locks decide what a caller may change, and the insertion order
-/// is observable (the panel, the `.gfi` and the mirror all read it).
+/// is observable (the panel, the `.gfi` and the mirror all read it). Every value write goes out on
+/// the plane from here, under the store's own lock, so the order the plane sees is the store's.
 #[derive(Clone)]
 pub struct VariableStore {
-    values: IndexMap<String, VariableValue>,
-    controls: IndexMap<String, Control>,
-    sources: IndexMap<String, VariableSource>,
-    locks: IndexMap<String, Lock>,
-    groups: IndexMap<String, Lock>,
+    entries: IndexMap<String, Variable>,
+    groups: IndexMap<String, Group>,
+    plane: Option<std::sync::Arc<dyn Plane>>,
+    /// Told the name of every value that moved, whoever wrote it: the machines' reason to look again.
+    watch: Option<Watch>,
+    /// Bumped by every change to what the store HOLDS — a variable or a group added, removed,
+    /// renamed, re-sourced, re-controlled or re-locked, and a value an op set — never by a value
+    /// the plane drives. What a settle compares to know the bindings that read the store moved.
+    version: u64,
+    /// Bumped by every value that moved, the plane's included: what autosave compares to know the
+    /// values it would write moved.
+    moves: u64,
 }
 
 impl Default for VariableStore {
@@ -385,152 +536,330 @@ impl Default for VariableStore {
 
 impl VariableStore {
     pub fn new() -> VariableStore {
-        let mut s = VariableStore {
-            values: IndexMap::new(),
-            controls: IndexMap::new(),
-            sources: IndexMap::new(),
-            locks: IndexMap::new(),
-            groups: IndexMap::new(),
-        };
+        let mut s = VariableStore { entries: IndexMap::new(), groups: IndexMap::new(), plane: None, watch: None, version: 0, moves: 0 };
         s.reassert_system();
         s
     }
 
-    /// Back-fill any missing system variable with its default — on construction and after a load —
-    /// and re-lock the system group. An EPHEMERAL one is overwritten instead: goofi says what it
-    /// holds, never a file.
-    pub fn reassert_system(&mut self) {
-        for def in SYSTEM_VARIABLES {
-            if def.ephemeral {
-                self.values.insert(def.name.to_string(), (def.value)());
-                self.locks.insert(def.name.to_string(), Lock { config: false, value: true });
-            } else {
-                self.values.entry(def.name.to_string()).or_insert_with(def.value);
+    /// The configuration version: moved by every change to what the store holds.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The value version: moved by every value that moved, whoever wrote it.
+    pub fn moves(&self) -> u64 {
+        self.moves
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { entries: self.entries.clone(), groups: self.groups.clone(), version: self.version }
+    }
+
+    /// Put a snapshot back: every entry and group as it was, an ephemeral one excepted, since goofi
+    /// says what that holds now. A value that moved goes out on the plane and to the watch; a
+    /// variable the snapshot does not hold retires its wire.
+    pub fn restore(&mut self, s: &Snapshot) {
+        self.version += 1;
+        let mut entries = s.entries.clone();
+        for (name, held) in &self.entries {
+            if is_ephemeral(name) {
+                entries.insert(name.clone(), held.clone());
+            } else if !entries.contains_key(name) {
+                self.retire(name);
             }
         }
-        self.groups.insert(SYSTEM_GROUP.to_string(), Lock { config: true, value: false });
+        let moved: Vec<String> = entries
+            .iter()
+            .filter(|(name, v)| self.entries.get(*name).is_none_or(|held| held.value != v.value))
+            .map(|(name, _)| name.clone())
+            .collect();
+        self.entries = entries;
+        self.groups = s.groups.clone();
+        self.moves += moved.len() as u64;
+        for name in moved {
+            self.emit(&name, &self.entries[&name].value);
+            if let Some(watch) = &self.watch {
+                watch(&name);
+            }
+        }
     }
 
-    pub fn get(&self, name: &str) -> Option<&VariableValue> {
-        self.values.get(name)
+    /// Have every moved value's name told to `watch`.
+    pub fn set_watch(&mut self, watch: Watch) {
+        self.watch = Some(watch);
+    }
+
+    /// Put the store on a plane: every frame it holds goes out now, and every write from here on.
+    pub fn set_plane(&mut self, plane: std::sync::Arc<dyn Plane>) {
+        self.plane = Some(plane);
+        for (name, v) in &self.entries {
+            self.emit(name, &v.value);
+        }
+    }
+
+    fn emit(&self, name: &str, value: &Data) {
+        if let Some(p) = &self.plane {
+            p.publish(name, value);
+        }
+    }
+
+    fn retire(&self, name: &str) {
+        if let Some(p) = &self.plane {
+            p.retire(name);
+        }
+    }
+
+    /// Back to the seeded store a load starts from, every wire of the old content retired.
+    pub fn reset(&mut self) {
+        self.version += 1;
+        // The system wires stay open: every node's default expression reads one, and a wire
+        // reopened under a live reader is a second service. Their values start over in place.
+        // A device's group is the session's as well, and stays as the device does.
+        let gone: Vec<String> = self.entries.keys().filter(|n| !is_own_group(group_of(n)) && !matches!(self.owner(group_of(n)), Some(Owner::Midi(_)))).cloned().collect();
+        for name in &gone {
+            self.retire(name);
+            self.entries.shift_remove(name);
+        }
+        self.groups.retain(|_, rec| matches!(rec.owner, Some(Owner::Midi(_))));
+        self.seed_system(true);
+    }
+
+    /// Back-fill any missing system variable with its default — on construction and after a load —
+    /// and re-lock goofi's own groups. An EPHEMERAL one is overwritten instead: goofi says what it
+    /// holds, never a file.
+    pub fn reassert_system(&mut self) {
+        self.version += 1;
+        self.seed_system(false);
+    }
+
+    fn seed_system(&mut self, all: bool) {
+        for def in SYSTEM_VARIABLES {
+            if all || def.ephemeral || !self.entries.contains_key(def.name) {
+                let mut v = Variable::of((def.value)());
+                v.lock = def.ephemeral.then_some(Lock { config: false, value: true });
+                self.emit(def.name, &v.value);
+                self.entries.insert(def.name.to_string(), v);
+            }
+        }
+        for group in OWN_GROUPS {
+            self.groups.insert(group.to_string(), Group { lock: Lock { config: true, value: false }, ..Group::default() });
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Data> {
+        self.entries.get(name).map(|v| &v.value)
     }
     pub fn contains(&self, name: &str) -> bool {
-        self.values.contains_key(name)
+        self.entries.contains_key(name)
     }
 
-    /// Every variable in order, with its OWN lock, the control record that makes it an element, and
-    /// the source it follows.
-    pub fn entries(&self) -> impl Iterator<Item = (&str, &VariableValue, Lock, Option<&Control>, Option<&VariableSource>)> {
-        self.values.iter().map(|(k, v)| {
-            (k.as_str(), v, self.locks.get(k).copied().unwrap_or_default(), self.controls.get(k), self.sources.get(k))
-        })
+    /// Every variable in order, whole.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &Variable)> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    pub fn source(&self, name: &str) -> Option<&VariableSource> {
-        self.sources.get(name)
+    pub fn expression(&self, name: &str) -> Option<&str> {
+        self.entries.get(name)?.expression.as_deref()
     }
 
-    /// Set or clear what a variable follows, answering what it followed. A source is config.
-    pub fn set_source(&mut self, name: &str, source: Option<VariableSource>) -> Result<Option<VariableSource>, String> {
-        if !self.values.contains_key(name) {
+    /// Set or clear the expression a variable is computed by, answering the one it replaced. An
+    /// expression is config.
+    pub fn set_expression(&mut self, name: &str, expression: Option<String>) -> Result<Option<String>, String> {
+        self.version += 1;
+        if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        Ok(match source {
-            Some(s) => self.sources.insert(name.to_string(), s),
-            None => self.sources.shift_remove(name),
-        })
+        Ok(std::mem::replace(&mut self.entries[name].expression, expression.filter(|e| !e.trim().is_empty())))
     }
 
-    /// The follower's own write: what the source delivered, coerced to the type held. It answers
-    /// whether the value CHANGED, and a value-locked variable takes nothing, silently.
-    pub fn follow(&mut self, name: &str, value: VariableValue) -> bool {
-        // A variable with no source has no follower: a pick already in flight when one is cleared
-        // would otherwise land after, and overwrite the value the clearing author then typed.
-        if is_ephemeral(name) || self.lock_of(name).value || !self.sources.contains_key(name) {
-            return false;
+    /// The follower's own write: what the expression delivered. A value-locked variable takes
+    /// nothing, silently.
+    pub fn follow(&mut self, name: &str, value: Data) {
+        // A variable with no expression has no follower: a pick already in flight when one is
+        // cleared would otherwise land after, and overwrite the value the clearing author then typed.
+        if !is_ephemeral(name) && !self.lock_of(name).value && self.expression(name).is_some() {
+            self.move_value(name, value);
         }
-        let Some(existing) = self.values.get(name) else { return false };
-        let coerced = value.coerced_like(existing);
-        if *existing == coerced {
-            return false;
-        }
-        self.values.insert(name.to_string(), coerced);
-        true
     }
 
     /// An ENGINE's own published fact, which is why it passes the value lock: the lock exists to
     /// keep every other writer out, and the engine is the one it is held for. Only an ephemeral
-    /// name takes one. Answers whether the value MOVED, which is what a rebind is worth doing for.
-    pub fn publish(&mut self, name: &str, value: VariableValue) -> bool {
-        if !is_ephemeral(name) {
+    /// name takes one.
+    pub fn publish(&mut self, name: &str, value: Data) {
+        if is_ephemeral(name) {
+            self.move_value(name, value);
+        }
+    }
+
+    fn move_value(&mut self, name: &str, value: Data) -> bool {
+        let Some(existing) = self.entries.get_mut(name) else { return false };
+        if existing.value == value {
             return false;
         }
-        let Some(existing) = self.values.get(name) else { return false };
-        let coerced = value.coerced_like(existing);
-        if *existing == coerced {
-            return false;
+        existing.value = value;
+        self.moves += 1;
+        self.emit(name, &self.entries[name].value);
+        if let Some(watch) = &self.watch {
+            watch(name);
         }
-        self.values.insert(name.to_string(), coerced);
         true
     }
 
-    /// Explicit groups and their built-in flags, in creation order.
-    pub fn groups(&self) -> impl Iterator<Item = (&str, Lock)> {
-        self.groups.iter().map(|(g, l)| (g.as_str(), *l))
+    /// Explicit groups and their records, in creation order.
+    pub fn groups(&self) -> impl Iterator<Item = (&str, &Group)> {
+        self.groups.iter().map(|(g, rec)| (g.as_str(), rec))
     }
 
-    /// Whether a `.gfi` must leave `name` out: an ephemeral variable's value is goofi's own.
+    /// Who owns a group, if it is owned.
+    pub fn owner(&self, group: &str) -> Option<&Owner> {
+        self.groups.get(group)?.owner.as_ref()
+    }
+
+    fn owned(&self, group: &str) -> bool {
+        self.groups.get(group).is_some_and(Group::owned)
+    }
+
+    /// Open a device as a group: the device's flag, which locks the group whole, and its entries
+    /// at rest. Not a command — the session owns it, as it owns the system group.
+    pub fn grab_midi(&mut self, group: &str, port: &str) -> Result<(), String> {
+        self.version += 1;
+        if self.has_group(group) {
+            return Err(format!("variable group `{group}` already exists"));
+        }
+        let record = Group { owner: Some(Owner::Midi(port.to_string())), ..Group::default() };
+        let entries = MIDI_ENTRIES.map(|(entry, width)| (format!("{group}.{entry}"), Data::numbers(std::iter::repeat_n(0.0, width)), None));
+        self.claim(group, record, entries.into())
+    }
+
+    /// Hold `group` whole for its owner, with exactly `entries`: one already held keeps its value
+    /// and takes the widget, a new one is born at its value, one not named is retired. The owner's
+    /// write, never a command; a group that is somebody else's is refused.
+    pub fn claim(&mut self, group: &str, record: Group, entries: Entries) -> Result<(), String> {
+        self.version += 1;
+        if !is_valid_identifier(group) || is_own_group(group) {
+            return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
+        }
+        if self.has_group(group) && self.groups.get(group).map(|r| &r.owner) != Some(&record.owner) {
+            return Err(format!("variable group `{group}` already exists"));
+        }
+        if let Some((name, ..)) = entries.iter().find(|(n, ..)| split_variable(n).is_none_or(|(g, _)| g != group)) {
+            return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
+        }
+        let gone: Vec<String> =
+            self.entries.keys().filter(|n| group_of(n) == group && !entries.iter().any(|(e, ..)| e == *n)).cloned().collect();
+        for name in &gone {
+            self.retire(name);
+            self.entries.shift_remove(name);
+        }
+        for (name, value, control) in entries {
+            match self.entries.get_mut(&name) {
+                Some(held) => held.control = control,
+                None => {
+                    self.emit(&name, &value);
+                    self.entries.insert(name, Variable { control, ..Variable::of(value) });
+                }
+            }
+        }
+        self.groups.insert(group.to_string(), record);
+        Ok(())
+    }
+
+    /// Close an owned group: its entries retired, its record gone. Nothing if `group` is nobody's.
+    pub fn release(&mut self, group: &str) {
+        self.version += 1;
+        if !self.owned(group) {
+            return;
+        }
+        let gone: Vec<String> = self.entries.keys().filter(|n| group_of(n) == group).cloned().collect();
+        for name in &gone {
+            self.retire(name);
+            self.entries.shift_remove(name);
+        }
+        self.groups.shift_remove(group);
+    }
+
+    /// An owner's rename: each `(from, to)` entry it holds moves with its value, to a name that is
+    /// free, and a group whose entries all left follows them, in its place. Not a command.
+    pub fn move_owned(&mut self, moved: &[(String, String)]) {
+        self.version += 1;
+        for (from, to) in moved.iter().filter(|(from, to)| self.entries.contains_key(from.as_str()) && !self.entries.contains_key(to.as_str())).cloned().collect::<Vec<_>>() {
+            self.move_entry(&from, &to);
+            let (was, now) = (group_of(&from), group_of(&to));
+            if was != now && !self.entries.keys().any(|n| group_of(n) == was) {
+                if let Some((at, _, record)) = self.groups.shift_remove_full(was) {
+                    self.groups.shift_insert(at, now.to_string(), record);
+                }
+            }
+        }
+    }
+
+    /// An owner's write: lands only on an owned group's entry, under no lock, with no undo.
+    pub fn drive(&mut self, name: &str, value: Data) -> bool {
+        self.owned(group_of(name)) && self.move_value(name, value)
+    }
+
+    /// Whether a `.gfi` must leave `name` out: an ephemeral value is goofi's own, a device's is
+    /// the session's, a playhead's is the machine's to re-derive.
     pub fn is_ephemeral(&self, name: &str) -> bool {
-        is_ephemeral(name)
+        is_ephemeral(name) || self.owned(group_of(name))
     }
 
     /// A variable's OWN lock, apart from its group's.
     pub fn own_lock(&self, name: &str) -> Lock {
-        self.locks.get(name).copied().unwrap_or_default()
+        self.entries.get(name).map(Variable::own_lock).unwrap_or_default()
     }
 
+    /// A group's lock as it holds its members: an owned group is its owner's on both axes.
     pub fn group_lock(&self, group: &str) -> Lock {
-        self.groups.get(group).copied().unwrap_or_default()
+        let Some(rec) = self.groups.get(group) else { return Lock::default() };
+        if rec.owned() { Lock { config: true, value: true } } else { rec.lock }
     }
 
     /// What holds `name` right now: its own lock and its group's together.
     pub fn lock_of(&self, name: &str) -> Lock {
-        self.locks.get(name).copied().unwrap_or_default().or(self.group_lock(group_of(name)))
+        self.own_lock(name).or(self.group_lock(group_of(name)))
     }
 
-    /// Set a variable's own lock, answering the one it held. The system group's are not a caller's.
+    /// Set a variable's own lock, answering the one it held. Goofi's own groups' are not a caller's.
     pub fn set_lock(&mut self, name: &str, lock: Lock) -> Result<Lock, String> {
-        if group_of(name) == SYSTEM_GROUP {
+        self.version += 1;
+        if is_own_group(group_of(name)) {
             return Err(format!("`{name}` is goofi's own; its lock is not yours to set"));
         }
-        if !self.values.contains_key(name) {
+        let Some(v) = self.entries.get_mut(name) else {
             return Err(format!("no such variable `{name}`"));
-        }
-        let old = self.locks.get(name).copied().unwrap_or_default();
-        match lock.is_default() {
-            true => drop(self.locks.shift_remove(name)),
-            false => drop(self.locks.insert(name.to_string(), lock)),
-        }
+        };
+        let old = v.own_lock();
+        v.lock = (!lock.is_default()).then_some(lock);
         Ok(old)
     }
 
     /// Set or remove a group record, answering the previous record for undo.
     pub fn set_group_lock(&mut self, group: &str, lock: Option<Lock>) -> Result<Option<Lock>, String> {
-        if group == SYSTEM_GROUP {
-            return Err(format!("`{SYSTEM_GROUP}` is goofi's own; its lock is not yours to set"));
+        self.version += 1;
+        if is_own_group(group) {
+            return Err(format!("`{group}` is goofi's own; its lock is not yours to set"));
         }
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
-        Ok(match lock {
-            Some(lock) => self.groups.insert(group.to_string(), lock),
-            None => self.groups.shift_remove(group),
-        })
+        if let Some(rec) = self.groups.get(group).filter(|r| r.owned()) {
+            return Err(format!("group `{group}` is {}; it is locked whole", rec.owner()));
+        }
+        let old = self.groups.get(group).map(|rec| rec.lock);
+        match lock {
+            Some(lock) => self.groups.entry(group.to_string()).or_default().lock = lock,
+            None => {
+                self.groups.shift_remove(group);
+            }
+        }
+        Ok(old)
     }
 
     /// Create an empty group at its saved position.
     pub fn add_group(&mut self, group: &str, at: Option<usize>) -> Result<(), String> {
+        self.version += 1;
         if !is_valid_identifier(group) {
             return Err(format!("invalid group name `{group}`: {VARIABLE_NAME_RULE}"));
         }
@@ -538,7 +867,7 @@ impl VariableStore {
             return Err(format!("variable group `{group}` already exists"));
         }
         let at = at.unwrap_or(self.groups.len()).min(self.groups.len());
-        self.groups.shift_insert(at, group.to_string(), Lock::default());
+        self.groups.shift_insert(at, group.to_string(), Group::default());
         Ok(())
     }
 
@@ -548,10 +877,11 @@ impl VariableStore {
 
     /// Remove an empty, unlocked group.
     pub fn remove_group(&mut self, group: &str) -> Result<(), String> {
+        self.version += 1;
         if self.group_lock(group).config || self.group_lock(group).value {
             return Err(format!("variable group `{group}` is locked"));
         }
-        if self.values.keys().any(|name| group_of(name) == group) {
+        if self.entries.keys().any(|name| group_of(name) == group) {
             return Err(format!("variable group `{group}` is not empty"));
         }
         self.groups.shift_remove(group).ok_or_else(|| format!("no variable group `{group}`"))?;
@@ -560,131 +890,123 @@ impl VariableStore {
 
     fn config_locked(&self, name: &str) -> Result<(), String> {
         match self.lock_of(name).config {
-            true if group_of(name) == SYSTEM_GROUP => Err(format!("`{name}` is a system variable; its name is goofi's")),
+            true if is_own_group(group_of(name)) => Err(format!("`{name}` is a system variable; its name is goofi's")),
             true => Err(format!("variable `{name}` is config-locked")),
             false => Ok(()),
         }
     }
 
     pub fn control(&self, name: &str) -> Option<&Control> {
-        self.controls.get(name)
+        self.entries.get(name)?.control.as_ref()
     }
 
-    pub fn check_control(&self, name: &str, value: &VariableValue, control: Option<&Control>) -> Result<(), String> {
-        self.config_locked(name)?;
-        match control {
-            Some(c) if !c.fits(value) => Err(c.mismatch(value)),
-            _ => Ok(()),
-        }
-    }
-
-    pub fn set_control(&mut self, name: &str, control: Option<Control>) -> Result<(), String> {
-        let value = self.values.get(name).ok_or_else(|| format!("no such variable `{name}`"))?;
-        self.check_control(name, value, control.as_ref())?;
-        match control {
-            Some(c) => { self.controls.insert(name.to_string(), c); }
-            None => { self.controls.shift_remove(name); }
-        }
-        Ok(())
-    }
-
-    /// Set an existing variable. A type change also requires an unlocked configuration.
-    pub fn set(&mut self, name: &str, value: VariableValue) -> Result<(), String> {
+    /// Set an existing variable. A change of FORM, an array for a string or back, is what every
+    /// expression reading it depends on, so it also needs an unlocked configuration.
+    pub fn set(&mut self, name: &str, value: Data) -> Result<(), String> {
+        self.version += 1;
         if is_ephemeral(name) {
             return Err(format!("variable `{name}` is read-only: it is ephemeral, and goofi says what it holds"));
         }
         if self.lock_of(name).value {
             return Err(format!("variable `{name}` is value-locked"));
         }
-        if let Some(s) = self.sources.get(name) {
-            return Err(format!("variable `{name}` follows `{}`; clear its source to set it", s.reference));
+        if let Some(e) = self.expression(name) {
+            return Err(format!("variable `{name}` is computed by `{e}`; clear its expression to set it"));
         }
-        match self.values.get(name) {
-            Some(existing) => {
-                if existing.type_name() != value.type_name() {
-                    self.config_locked(name)?;
-                }
-                self.values.insert(name.to_string(), value);
-                Ok(())
-            }
-            None => Err(format!("no such variable `{name}`")),
+        let Some(existing) = self.get(name) else { return Err(format!("no such variable `{name}`")) };
+        if existing.dtype_tag() != value.dtype_tag() {
+            self.config_locked(name).map_err(|why| {
+                format!("{why}, and it holds {}: {} is {}", control::form(existing), control::text(&value), control::form(&value))
+            })?;
         }
+        self.moves += 1;
+        self.emit(name, &value);
+        self.entries[name].value = value;
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
+        Ok(())
     }
 
     /// Add a NEW user variable, at ordered position `at` (clamped) when given — the re-add a
     /// delete/rename undo needs. Errors on an invalid name or a collision.
-    pub fn add(&mut self, name: &str, value: VariableValue, at: Option<usize>) -> Result<(), String> {
+    pub fn add(&mut self, name: &str, value: Data, at: Option<usize>) -> Result<(), String> {
+        self.version += 1;
         if !is_valid_variable_name(name) {
             return Err(format!("invalid variable name `{name}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.values.contains_key(name) {
+        if self.entries.contains_key(name) {
             return Err(format!("variable `{name}` already exists"));
         }
         if self.group_lock(group_of(name)).config {
             return Err(format!("group `{}` is config-locked", group_of(name)));
         }
-        let at = at.unwrap_or(usize::MAX).min(self.values.len());
-        self.values.shift_insert(at, name.to_string(), value);
+        let at = at.unwrap_or(usize::MAX).min(self.entries.len());
+        self.moves += 1;
+        self.emit(name, &value);
+        self.entries.shift_insert(at, name.to_string(), Variable::of(value));
+        if let Some(watch) = &self.watch {
+            watch(name);
+        }
         Ok(())
     }
 
     /// Ordered position of `name` — a delete's inverse captures it to re-add at the original slot.
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.values.get_index_of(name)
+        self.entries.get_index_of(name)
     }
 
     /// Remove a variable; errors when it is config-locked or absent.
     pub fn remove(&mut self, name: &str) -> Result<(), String> {
-        if !self.values.contains_key(name) {
+        self.version += 1;
+        if !self.entries.contains_key(name) {
             return Err(format!("no such variable `{name}`"));
         }
         self.config_locked(name)?;
-        self.values.shift_remove(name);
-        self.controls.shift_remove(name);
-        self.sources.shift_remove(name);
-        self.locks.shift_remove(name);
+        self.entries.shift_remove(name);
+        self.retire(name);
         Ok(())
     }
 
     /// Rename a variable, keeping its ordered position; its own lock travels with it.
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), String> {
-        if !self.values.contains_key(from) {
+        self.version += 1;
+        if !self.entries.contains_key(from) {
             return Err(format!("no such variable `{from}`"));
         }
         self.config_locked(from)?;
         if !is_valid_variable_name(to) {
             return Err(format!("invalid variable name `{to}`: {VARIABLE_NAME_RULE}"));
         }
-        if self.values.contains_key(to) {
+        if self.entries.contains_key(to) {
             return Err(format!("variable `{to}` already exists"));
         }
         if self.group_lock(group_of(to)).config && group_of(to) != group_of(from) {
             return Err(format!("group `{}` is config-locked", group_of(to)));
         }
-        let at = self.values.get_index_of(from).expect("checked above");
-        let value = self.values.shift_remove(from).expect("the index answered");
-        self.values.shift_insert(at, to.to_string(), value);
-        if let Some(c) = self.controls.shift_remove(from) {
-            self.controls.insert(to.to_string(), c);
-        }
-        if let Some(l) = self.locks.shift_remove(from) {
-            self.locks.insert(to.to_string(), l);
-        }
-        if let Some(s) = self.sources.shift_remove(from) {
-            self.sources.insert(to.to_string(), s);
-        }
+        self.move_entry(from, to);
         Ok(())
+    }
+
+    /// The rename itself: the entry keeps its position, its wire is retired and reopened.
+    fn move_entry(&mut self, from: &str, to: &str) {
+        let at = self.entries.get_index_of(from).expect("checked by the caller");
+        let variable = self.entries.shift_remove(from).expect("the index answered");
+        self.retire(from);
+        self.emit(to, &variable.value);
+        self.entries.shift_insert(at, to.to_string(), variable);
     }
 
     /// Rename a group, answering every member's old and new name in order. A group with no member
     /// is not refused here: a control panel naming it is what makes it a group, and only the graph
     /// sees panels.
     pub fn rename_group(&mut self, from: &str, to: &str) -> Result<Vec<(String, String)>, String> {
+        self.version += 1;
         if !is_valid_identifier(to) {
             return Err(format!("invalid group name `{to}`: {VARIABLE_NAME_RULE}"));
         }
-        if from == SYSTEM_GROUP {
-            return Err(format!("`{SYSTEM_GROUP}` is goofi's own; it keeps its name"));
+        if is_own_group(from) {
+            return Err(format!("`{from}` is goofi's own; it keeps its name"));
         }
         if self.group_lock(from).config {
             return Err(format!("group `{from}` is config-locked"));
@@ -693,29 +1015,29 @@ impl VariableStore {
             return Err(format!("variable group `{to}` already exists"));
         }
         let moved: Vec<(String, String)> = self
-            .values
+            .entries
             .keys()
             .filter_map(|k| split_variable(k).filter(|(g, _)| *g == from).map(|(_, e)| (k.clone(), format!("{to}.{e}"))))
             .collect();
         for (old, new) in &moved {
-            if self.values.contains_key(new.as_str()) {
+            if self.entries.contains_key(new.as_str()) {
                 return Err(format!("variable `{new}` already exists"));
             }
             self.config_locked(old)?;
         }
         for (old, new) in &moved {
-            self.rename(old, new)?;
+            self.move_entry(old, new);
         }
         if let Some(at) = self.groups.get_index_of(from) {
-            let lock = self.groups.shift_remove(from).unwrap_or_default();
-            self.groups.shift_insert(at, to.to_string(), lock);
+            let rec = self.groups.shift_remove(from).unwrap_or_default();
+            self.groups.shift_insert(at, to.to_string(), rec);
         }
         Ok(moved)
     }
 
     /// Whether a group has an explicit record or an entry.
     pub fn has_group(&self, group: &str) -> bool {
-        self.groups.contains_key(group) || self.values.keys().any(|k| group_of(k) == group)
+        self.groups.contains_key(group) || self.entries.keys().any(|k| group_of(k) == group)
     }
 
     /// Apply one change: `Some(v)` sets or adds (a NEW variable lands at `at`); `None` leaves the
@@ -723,14 +1045,32 @@ impl VariableStore {
     pub fn apply_change(
         &mut self,
         name: &str,
-        value: Option<VariableValue>,
+        value: Option<Data>,
         at: Option<usize>,
+        control: Option<Option<Control>>,
     ) -> Result<(), String> {
-        match value {
-            Some(v) if self.values.contains_key(name) => self.set(name, v),
-            Some(v) => self.add(name, v, at),
-            None if self.values.contains_key(name) => Ok(()),
-            None => Err(format!("no such variable `{name}`")),
+        self.version += 1;
+        // The widget that will be held must fit the value that will be held, checked before any write.
+        let held = value.as_ref().or_else(|| self.get(name)).ok_or_else(|| format!("no such variable `{name}`"))?;
+        let widget = match &control {
+            Some(c) => {
+                self.config_locked(name)?;
+                c.as_ref()
+            }
+            None if value.is_some() => self.control(name),
+            None => None,
+        };
+        if let Some(c) = widget.filter(|c| !c.fits(held)) {
+            return Err(c.mismatch(held));
         }
+        match value {
+            Some(v) if self.entries.contains_key(name) => self.set(name, v)?,
+            Some(v) => self.add(name, v, at)?,
+            None => {}
+        }
+        if let Some(c) = control {
+            self.entries[name].control = c;
+        }
+        Ok(())
     }
 }

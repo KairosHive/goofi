@@ -15,6 +15,7 @@ class Empty:
 @dataclass
 class Select:
     subject: str
+    tags: list[str] | None = None
 
 @dataclass
 class Mode:
@@ -40,7 +41,7 @@ async def select(ctx, args: Select) -> dict:
         raise ValueError("subject must contain letters or digits")
     subject = args.subject
     (ctx.data_dir / "subject.json").write_text(json.dumps(subject))
-    return {"subject": subject}
+    return {"subject": subject, "tags": args.tags}
 
 @plugin.op("status", kind="read")
 async def status(ctx, args: Empty) -> dict:

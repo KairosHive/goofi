@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, OnceLock};
+use goofi_supervisor::layout::{self, Tool};
+use goofi_supervisor::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
@@ -15,6 +17,12 @@ include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
 /// The goofi version every artifact is stamped with and checked against.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// What an artifact's `goofi_version` must answer: the version and the SDK sources it was built
+/// against, so a node built on an SDK this binary does not carry is refused by name.
+pub fn built_against() -> String {
+    format!("{VERSION}+{SDK_HASH}")
+}
 
 /// One engine's authoring crate: what a node file compiles against, the crates it may reach
 /// beyond it, and the line that makes the generated crate a cdylib of that engine.
@@ -29,21 +37,21 @@ pub const SIGNAL: Sdk = Sdk {
     name: "goofi-signal-sdk",
     dir: "backend/signal/goofi-signal-sdk",
     allow: &[("rustfft", "6.4.1"), ("realfft", "3"), ("libm", "0.2")],
-    glue: "goofi_signal_sdk::cdylib!(node);",
+    glue: "goofi_signal_sdk::cdylib!(node, {sdk});",
 };
 
 pub const GRAPHICS: Sdk = Sdk {
     name: "goofi-graphics-sdk",
     dir: "backend/graphics/goofi-graphics-sdk",
     allow: &[],
-    glue: "goofi_graphics_sdk::cdylib!(node);",
+    glue: "goofi_graphics_sdk::cdylib!(node, {sdk});",
 };
 
 pub const AUDIO: Sdk = Sdk {
     name: "goofi-audio-sdk",
     dir: "backend/audio/goofi-audio-sdk",
     allow: &[("libm", "0.2")],
-    glue: "goofi_audio_sdk::cdylib!(node);",
+    glue: "goofi_audio_sdk::cdylib!(node, {sdk});",
 };
 
 pub fn sdk(name: &str) -> Option<&'static Sdk> {
@@ -53,18 +61,6 @@ pub fn sdk(name: &str) -> Option<&'static Sdk> {
 /// How long one node build may run. A first build compiles the SDK's dependency tree, which is
 /// minutes on a slow machine; a build past this is stuck, not slow.
 const BUILD_WAIT: std::time::Duration = std::time::Duration::from_secs(1800);
-
-/// Where the extracted SDK, the generated crates, one shared cargo target and every artifact
-/// live: `$GOOFI_BUILD_DIR`, else `<home>/system/build`.
-pub fn base_dir(home: &Path) -> PathBuf {
-    let dir = std::env::var_os("GOOFI_BUILD_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("system").join("build"));
-    // A generated crate names the SDK by path, and cargo resolves that against the crate's own
-    // directory: only an absolute base survives the trip.
-    std::path::absolute(&dir).unwrap_or(dir)
-}
 
 /// What one source builds to, keyed by everything that decides it: the goofi version, the SDK
 /// sources, the crates the SDK lets a node reach, and the file's own bytes.
@@ -117,7 +113,7 @@ pub fn built(sdk: &Sdk, source: &Path, base: &Path) -> Result<PathBuf, String> {
     if artifact.is_file() {
         return Ok(artifact);
     }
-    let failed = FAILED.lock().unwrap_or_else(|e| e.into_inner());
+    let failed = FAILED.lock();
     Err(failed.get(&key).cloned().unwrap_or_else(|| "not built yet — refresh the library".into()))
 }
 
@@ -130,25 +126,26 @@ pub fn ensure(sdk: &Sdk, source: &Path, base: &Path) -> Result<PathBuf, String> 
     }
     let result = build(sdk, source, base, &key, &artifact);
     if let Err(why) = &result {
-        FAILED.lock().unwrap_or_else(|e| e.into_inner()).insert(key, why.clone());
+        FAILED.lock().insert(key, why.clone());
     }
     result
 }
 
 fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> Result<PathBuf, String> {
-    let Some(cargo) = cargo() else {
+    let Some(mut cmd) = cargo() else {
         return Err("needs `cargo` to build — install a Rust toolchain, or use a shipped node".into());
     };
     static BUILDING: Mutex<()> = Mutex::new(());
-    let _one_at_a_time = BUILDING.lock().unwrap_or_else(|e| e.into_inner());
+    let _one_at_a_time = BUILDING.lock();
     if artifact.is_file() {
         return Ok(artifact.to_path_buf());
     }
-    goofi_core::startup::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
+    goofi_supervisor::progress::report(format!("Building native node {}", source.file_name().unwrap_or_default().to_string_lossy()));
     let crate_dir = base.join("crates").join(key);
-    let crate_name = format!("goofi_node_{}", stem_of(source).to_lowercase());
+    // The key in the crate name keeps one source's uplift apart from another's in the shared
+    // target, so a build never reads back what a concurrent process placed there.
+    let crate_name = format!("goofi_node_{}_{}", stem_of(source).to_lowercase(), &key[..12]);
     generate(sdk, source, &sdk_root(base), &crate_dir, &crate_name)?;
-    let mut cmd = Command::new(cargo);
     cmd.args(["build", "--release", "--message-format", "short", "--color", "never"]).current_dir(&crate_dir);
     // A nested cargo must not inherit the outer build's own knobs — `OUT_DIR`, encoded rustflags,
     // a target triple — only the jobserver, the home, and the machine's own fetch settings.
@@ -164,7 +161,7 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
         }
     }
     cmd.env("CARGO_TARGET_DIR", base.join("target"));
-    let output = goofi_core::child::output(format!("cargo build {crate_name}"), &mut cmd, BUILD_WAIT)
+    let output = goofi_supervisor::child::output(format!("cargo build {crate_name}"), &mut cmd, BUILD_WAIT)
         .map_err(|e| format!("could not run cargo: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -180,15 +177,16 @@ fn build(sdk: &Sdk, source: &Path, base: &Path, key: &str, artifact: &Path) -> R
     Ok(artifact.to_path_buf())
 }
 
-fn cargo() -> Option<PathBuf> {
-    let cargo = std::env::var_os("CARGO").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cargo"));
-    Command::new(&cargo).arg("--version").output().ok().filter(|o| o.status.success()).map(|_| cargo)
+/// PATH's cargo, when it answers.
+fn cargo() -> Option<Command> {
+    let answers = layout::command(Tool::Cargo).arg("--version").output().ok().filter(|o| o.status.success());
+    answers.map(|_| layout::command(Tool::Cargo))
 }
 
-/// The embedded SDK, written out under `base` for this goofi version — each file only when its
-/// bytes differ, so an unchanged tree never re-dirties cargo's view of it.
+/// The embedded SDK, written out under `base` — each file only when its bytes differ, so an
+/// unchanged tree never re-dirties cargo's view of it. The base is one version's already.
 pub fn sdk_root(base: &Path) -> PathBuf {
-    let root = base.join("sdk").join(VERSION);
+    let root = base.join("sdk");
     for (rel, bytes) in SOURCES {
         write_if_changed(&root.join(rel), bytes);
     }
@@ -241,7 +239,7 @@ fn generate(sdk: &Sdk, source: &Path, sdk_root: &Path, crate_dir: &Path, crate_n
          #[forbid(unsafe_code)]\n#[path = {:?}]\nmod node;\n{}\n",
         source.display(),
         slash(&std::path::absolute(source).map_err(|e| e.to_string())?),
-        sdk.glue,
+        sdk.glue.replace("{sdk}", &format!("{SDK_HASH:?}")),
     );
     std::fs::create_dir_all(crate_dir.join("src")).map_err(|e| e.to_string())?;
     write_if_changed(&crate_dir.join("Cargo.toml"), manifest.as_bytes());
@@ -273,7 +271,7 @@ pub fn place(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().expect("an artifact has a directory");
     std::fs::create_dir_all(dir)?;
     // Named by the session, so the boot pass can sweep what a crash left here.
-    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), goofi_core::session::tag()));
+    let part = dir.join(format!(".{}.{}", path.file_name().unwrap().to_string_lossy(), goofi_supervisor::session::tag()));
     std::fs::write(&part, bytes)?;
     // A lost race is not a failure: another builder put the artifact there. Windows refuses to
     // rename onto a mapped DLL, which is that same case seen from the loser's side.
@@ -289,23 +287,24 @@ pub struct Opened {
     pub describe: String,
 }
 
-/// Load an artifact, once per path: `goofi_version` first — a mismatch is a refusal naming both
-/// versions, never a call into a stale ABI — then `goofi_describe`.
+/// Load an artifact, once per path: `goofi_version` first — a mismatch of the version or the SDK
+/// hash is a refusal naming both, never a call into a stale ABI — then `goofi_describe`.
 pub fn open(path: &Path) -> Result<Opened, String> {
-    static DESCRIBED: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
-    let mut described = DESCRIBED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     let library = library(path)?;
-    if let Some(describe) = described.get(path) {
+    let mut opened = opened();
+    let entry = opened.get_mut(path).expect("`library` opened it");
+    if let Some(describe) = &entry.2 {
         return Ok(Opened { library, describe: describe.clone() });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // SAFETY: the two symbols are the ones `cdylib!` emits, with these signatures, at every version.
     let version = unsafe { c_string(library, c"goofi_version") }?;
-    if version != VERSION {
-        return Err(format!("{name}: built for goofi {version}, and this is {VERSION}"));
+    let expected = built_against();
+    if version != expected {
+        return Err(format!("{name}: built for goofi {version}, and this is {expected}"));
     }
     let describe = unsafe { c_string(library, c"goofi_describe") }?;
-    described.insert(path.to_path_buf(), describe.clone());
+    entry.2 = Some(describe.clone());
     Ok(Opened { library, describe })
 }
 
@@ -313,28 +312,37 @@ pub fn open(path: &Path) -> Result<Opened, String> {
 /// kept private, and its own folder searched first. Every dynamic seam loads through here.
 pub fn library(path: &Path) -> Result<&'static libloading::Library, String> {
     let mut opened = opened();
-    if let Some(library) = opened.get(path) {
-        return Ok(library.0);
+    if let Some(entry) = opened.get(path) {
+        return Ok(entry.0);
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let (library, handle) = load(path).map_err(|e| format!("{name}: could not load: {e}"))?;
     let library: &'static libloading::Library = Box::leak(Box::new(library));
-    opened.insert(path.to_path_buf(), (library, handle));
+    opened.insert(path.to_path_buf(), (library, handle, None));
     Ok(library)
+}
+
+/// Whether [`library`] has opened `path` in this process — a library that is, is current for
+/// its bytes, since an artifact's path is a key over them.
+pub fn is_open(path: &Path) -> bool {
+    opened().contains_key(path)
 }
 
 /// The OS handle of a library [`library`] opened — what a module's own entry hook is handed.
 #[cfg(unix)]
 pub fn handle(path: &Path) -> Option<*mut std::ffi::c_void> {
-    opened().get(path).map(|(_, handle)| *handle as *mut std::ffi::c_void)
+    opened().get(path).map(|(_, handle, _)| *handle as *mut std::ffi::c_void)
 }
 
 /// Sendable across the map: a handle is an address the loader owns for the life of the process.
 type Handle = usize;
 
-fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, (&'static libloading::Library, Handle)>> {
-    static OPENED: OnceLock<Mutex<HashMap<PathBuf, (&'static libloading::Library, Handle)>>> = OnceLock::new();
-    OPENED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+/// Each opened library, its handle, and what it says it is once [`open`] asked.
+type Entry = (&'static libloading::Library, Handle, Option<String>);
+
+fn opened() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Entry>> {
+    static OPENED: OnceLock<Mutex<HashMap<PathBuf, Entry>>> = OnceLock::new();
+    OPENED.get_or_init(Default::default).lock()
 }
 
 /// A symbol of `library` as the function type `F`.

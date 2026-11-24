@@ -47,9 +47,9 @@ fn first_f32(d: &Data) -> f32 {
 /// Watch one node's `out` slot until it carries `want`. The probe is opened per call because a
 /// restart is a REBIRTH onto the next generation's service, and the frame in flight may be old.
 fn emits(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.graph.lock().unwrap(), uid, "out");
+    let probe = OutputProbe::open(&g.state.hub, &g.graph(), uid, "out");
     g.until(&format!("{uid} to emit {want}"), |g| {
-        let mut graph = g.state.graph.lock().unwrap();
+        let mut graph = g.graph();
         probe.frame(&mut graph).filter(|d| first_f32(d) == want)
     });
 }
@@ -73,6 +73,12 @@ fn a_node_file_in_the_workspace_is_live_after_a_rescan_and_follows_its_edits() {
     let g = Goofi::new();
     let mount = g.state.mount();
     write_node(&mount.join("nodes_signal"), "my_thing.py", "1.0");
+    let declare = |params: &str| {
+        let path = mount.join("nodes_signal/my_thing.py");
+        let source = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, source.replace("    PRODUCER", &format!("    PARAMS = {{'tuning': {params}}}\n    PRODUCER"))).unwrap();
+    };
+    declare("{'retired': goofi.NumParam(1.0, 0.0, 1.0), 'shape': goofi.NumParam([1.0, 0.5, 0.0], 0.0, 1.0)}");
 
     assert_eq!(rescan(&g)["added"], j!(["signal:MyThing"]), "the file becomes a type");
     // The baseline is what the LAST scan found, so refresh with nothing edited says nothing changed.
@@ -82,12 +88,21 @@ fn a_node_file_in_the_workspace_is_live_after_a_rescan_and_follows_its_edits() {
 
     let live = g.add("MyThing");
     emits(&g, live, 1.0);
+    for name in ["retired", "shape[0]", "shape[2]"] {
+        g.call("node param edit", j!({ "node": live.to_string(), "param": format!("tuning/{name}"), "expression": "0.25", "mode": "constant" }));
+    }
 
     write_node(&mount.join("nodes_signal"), "my_thing.py", "2.0");
+    declare("{'shape': goofi.NumParam([1.0, 0.5], 0.0, 1.0)}");
     let diff = rescan(&g);
     assert_eq!(diff["changed"], j!(["signal:MyThing"]), "an edited file reports as changed");
     assert_eq!((&diff["added"], &diff["removed"]), (&j!([]), &j!([])));
     emits(&g, live, 2.0); // the running node is the new code
+    for name in ["retired", "shape[2]"] {
+        assert!(g.graph().param_source(live, "tuning", name).is_none(), "a retired param has no source: {name}");
+    }
+    assert_eq!(g.graph().param_source(live, "tuning", "shape[0]").unwrap().state.expression, "0.25", "a kept element retains its source");
+    assert!(g.error(live).is_none(), "the new instance has no error from retired params: {:?}", g.error(live));
 
     // Removal closes the door; it does not reach into the graph.
     std::fs::remove_file(mount.join("nodes_signal").join("my_thing.py")).unwrap();
@@ -183,7 +198,7 @@ fn loading_a_patch_registers_the_nodes_it_ships_before_resolving_them() {
     let opened = Goofi::new();
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     assert_eq!(opened.nodes().len(), 1);
-    let uid = opened.state.graph.lock().unwrap().node_uids()[0];
+    let uid = opened.graph().node_uids()[0];
     emits(&opened, uid, 5.0); // the instance runs the patch's code
 
     // `new` swaps in an empty workspace, so a type the previous patch brought stops being addable.
@@ -214,11 +229,37 @@ const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node
 
 /// Drive the audio clock and watch one node's `out` tap until it holds `want`.
 fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
-    let probe = OutputProbe::open(&g.state.graph.lock().unwrap(), uid, "out");
+    let probe = OutputProbe::open(&g.state.hub, &g.graph(), uid, "out");
     g.until(&format!("{uid} to hold {want}"), |g| {
         drive(g, 4800);
-        probe.frame(&mut g.state.graph.lock().unwrap()).filter(|d| first_f32(d) == want)
+        probe.frame(&mut g.graph()).filter(|d| first_f32(d) == want)
     });
+}
+
+/// A load scans every type again. A shipped Rust node's library has been open in this process
+/// since boot, so it is the build that runs: native still, never a child per instance.
+#[test]
+fn a_load_keeps_the_libraries_the_boot_scan_opened_native() {
+    let g = Goofi::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native.gfi");
+    let constant = g.add("signal:Constant");
+    g.call("session save", j!({ "path": path.to_string_lossy() }));
+    g.call("session load", j!({ "path": path.to_string_lossy() }));
+    let shipped = ["Constant", "Math", "Noise", "Reshape"];
+    for ty in shipped {
+        let r = g.call("library get", j!({ "type": format!("signal:{ty}") }));
+        assert_eq!((&r["language"], &r["tier"]), (&j!("rust"), &j!("native")), "{r}");
+    }
+    g.call("node param request", j!({ "node": goofi_tests::hex(constant), "param": "common/trigger", "request": "pulse" }));
+    // The resource index is the process's, and other situations host nodes of their own beside this one.
+    let hosts: Vec<String> = g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
+        .filter(|e| e["kind"] == "child")
+        .filter_map(|e| e["name"].as_str())
+        .filter(|n| shipped.iter().any(|ty| n.starts_with(&format!("native node {ty} "))))
+        .map(str::to_string)
+        .collect();
+    assert!(hosts.is_empty(), "a shipped node runs in this process after a load, not in a child: {hosts:?}");
 }
 
 #[test]
@@ -255,6 +296,56 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
             .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node Twice")).map(str::to_string).collect()
     };
     assert_eq!(hosts(&g).len(), 1, "one host child for the one instance: {:?}", hosts(&g));
+    // A removed instance's child leaves on its own, taking its exchange's shared memory with it.
+    // The session is shared by every situation, so the check reads only the child's own segments.
+    let twice_hosts = || -> std::collections::BTreeSet<u32> {
+        std::fs::read_dir("/proc").into_iter().flatten().flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+                let ppid = stat.rsplit(") ").next().and_then(|rest| rest.split(' ').nth(1)).and_then(|p| p.parse::<u32>().ok());
+                let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                ppid == Some(std::process::id()) && cmd.ends_with(b"Twice\0")
+            })
+            .collect()
+    };
+    let before = twice_hosts();
+    let second = g.add("Twice");
+    emits(&g, second, 2.0);
+    assert_eq!(hosts(&g).len(), 2, "{:?}", hosts(&g));
+    let born: Vec<u32> = twice_hosts().difference(&before).copied().collect();
+    // Only Linux has /proc to find the child by; elsewhere the leftover check stands down.
+    let left_behind: Box<dyn Fn() -> Vec<String>> = match cfg!(target_os = "linux") {
+        false => Box::new(Vec::new),
+        true => {
+            let [pid] = born[..] else { panic!("one new host child, not {born:?}") };
+            let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("the child's environment");
+            let exchange = environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(b"GOOFI_EXCHANGE=")).expect("an exchange");
+            // `<session>;<exchange>;<port>;<token>`: the segments are `g<session>_<exchange>…`.
+            let fields: Vec<&[u8]> = exchange.split(|b| *b == b';').collect();
+            let prefix = format!("g{}_{}", String::from_utf8_lossy(fields[0]), String::from_utf8_lossy(fields[1]));
+            let left_behind = move || -> Vec<String> {
+                std::fs::read_dir("/dev/shm").into_iter().flatten().flatten()
+                    .filter(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        name.starts_with(&format!("{prefix}q")) || name.starts_with(&format!("{prefix}a"))
+                    })
+                    .map(|e| e.path().to_string_lossy().into_owned())
+                    .collect()
+            };
+            assert!(!left_behind().is_empty(), "the running child's exchange has segments under /dev/shm");
+            Box::new(left_behind)
+        }
+    };
+    g.call("node remove", j!({ "node": goofi_tests::hex(second) }));
+    g.until("the removed instance's child to be gone", |g| (hosts(g).len() == 1).then_some(()));
+    let start = std::time::Instant::now();
+    let mut after = left_behind();
+    while !after.is_empty() && start.elapsed() < goofi_tests::WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        after = left_behind();
+    }
+    assert!(after.is_empty(), "the removed instance's child left shared memory behind: {after:?}");
     let level = g.add("audio:Level");
     holds(&g, level, 0.25);
     let read = |ty: &str| g.call("library get", j!({ "type": ty, "source": true }));
@@ -328,7 +419,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     assert_eq!(rescan(&g)["added"], j!(["signal:Doomed"]));
     let doomed = g.add("Doomed");
     g.call("node remove", j!({ "node": goofi_tests::hex(doomed) }));
-    g.until("the doomed instance to be gone", |g| (g.state.graph.lock().unwrap().node_count() == 2).then_some(()));
+    g.until("the doomed instance to be gone", |g| (g.graph().node_count() == 2).then_some(()));
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "the server answers after the drop");
 
     // A hosted node that ABORTS takes its child, not goofi: the node reports the exit, and the
@@ -348,6 +439,27 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     g.until("the abort to be reported on the node", |g| g.error(crash).filter(|e| e.contains("exited")).map(drop));
     assert!(g.call("library list", j!({}))["types"].as_array().is_some(), "goofi answers after the child died");
     emits(&g, live, 3.0);
+
+    // A hosted node that hands an input on unchanged emits that very frame: it crosses back to
+    // goofi as the input's name, and what leaves the node is what came in.
+    std::fs::write(
+        mount.join("nodes_signal").join("Through.rs"),
+        "use goofi_core::SlotType;\n\
+         use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};\n\
+         #[derive(Default)]\nstruct Through;\n\
+         impl Node for Through {\n    \
+         fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {\n        \
+         o.set(\"out\", i.get(\"data\").cloned().ok_or(\"no data\")?);\n        Ok(())\n    }\n}\n\
+         static INS: &[SlotDecl] = &[SlotDecl { name: \"data\", kind: SlotType::Array, trigger_process: true, multi: false, required: true }];\n\
+         static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Array }];\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"passes its input on\", inputs: INS, outputs: OUTS, params: &[], producer: false };\n\
+         goofi_signal_sdk::export!(Through, MANIFEST);\n",
+    )
+    .unwrap();
+    assert_eq!(rescan(&g)["added"], j!(["signal:Through"]));
+    let through = g.add("Through");
+    g.link(live, "out", through, "data");
+    emits(&g, through, 3.0);
 
     // An audio slot belongs to the audio SDK: a signal node that declares one is greyed out with
     // the SDK named, never registered.
@@ -388,7 +500,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     opened.call("session load", j!({ "path": target.to_string_lossy() }));
     let of_type = |ty: &str| {
         let doc = opened.doc();
-        let uids = opened.state.graph.lock().unwrap().node_uids();
+        let uids = opened.graph().node_uids();
         uids.into_iter().find(|u| doc["nodes"][goofi_tests::hex(*u)]["type"] == ty).expect(ty)
     };
     emits(&opened, of_type("signal:Twice"), 3.0);
@@ -553,7 +665,7 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
             "the archive's copy is dropped where the library already holds it, byte for byte");
     assert_eq!(source(&opened, "signal:MyKept"), "custom");
     assert_eq!(opened.call("session status", j!({}))["dirty"], false, "…and dropping it is not an edit");
-    let running = |g: &Goofi| g.state.graph.lock().unwrap().node_uids()[0];
+    let running = |g: &Goofi| g.graph().node_uids()[0];
     emits(&opened, running(&opened), 1.0);
 
     // The library is the ONE source: an edit there reaches the patch that was saved before it.
@@ -574,4 +686,39 @@ fn a_node_saved_to_the_private_library_leaves_the_patch_rides_the_archive_and_st
         assert_eq!(source(&opened, "signal:MyKept"), "patch", "…and the patch's own wins the name");
         emits(&opened, running(&opened), 1.0);
     }
+}
+
+/// `Select` with `interpolate` reads a position with a fraction as a point between two entries
+/// and blends them, so a swept `keep` glides along the axis; without it, the same text names no
+/// entry at all. The point is held inside the axis, and the entry carries the nearer label.
+#[test]
+fn select_blends_two_entries_at_a_fractional_position_when_asked() {
+    let g = Goofi::new();
+    let (text, json, table, pick) = (g.add("Text"), g.add("FromJson"), g.add("TableSelect"), g.add("Select"));
+    g.set_param(text, "text", "value", r#"{"rows": [[0.0, 1.0], [10.0, 11.0], [20.0, 21.0]]}"#);
+    g.set_param(table, "table", "key", "rows");
+    g.set_param(pick, "select", "keep", "0.25");
+    g.set_param(pick, "select", "interpolate", true);
+    g.link(text, "out", json, "input");
+    g.link(json, "out", table, "input");
+    g.link(table, "array", pick, "input");
+    let out = format!("{}/out", g.name(&goofi_tests::hex(pick)));
+    let blended = g.until("a quarter of the way from the first row to the second", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [2.5, 3.5])
+    });
+    assert_eq!(goofi_tests::shape(&blended), [2], "one entry, squeezed");
+
+    g.set_param(pick, "select", "keep", "-0.5");
+    g.until("a point past the last row is held on it", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [20.0, 21.0])
+    });
+    g.set_param(pick, "select", "keep", "1.5, 0");
+    g.until("a blend beside an exact position, the axis kept", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [15.0, 16.0, 0.0, 1.0] && goofi_tests::shape(d) == [2, 2])
+    });
+
+    g.set_param(pick, "select", "interpolate", false);
+    g.until("without `interpolate`, `1.5, 0` names only the position 0", |g| {
+        Some(g.snapshot_array(&out)).filter(|d| goofi_tests::f32s(d) == [0.0, 1.0])
+    });
 }

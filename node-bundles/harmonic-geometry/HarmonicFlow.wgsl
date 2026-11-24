@@ -4,17 +4,17 @@
   "state": ["dye"],
   "inputs": [{"name": "flow", "kind": "ARRAY"}],
   "params": [
-    {"group": "motion", "name": "rate", "kind": "float", "default": 1.0, "min": 0.0, "max": 3.0, "doc": "Advection steps per frame; 0 freezes all state."},
-    {"group": "motion", "name": "travel", "kind": "float", "default": 2.0, "min": 0.0, "max": 8.0, "doc": "Travel in output pixels per frame at unit flow."},
-    {"group": "motion", "name": "feedback", "kind": "float", "default": 0.7, "min": 0.0, "max": 4.0, "doc": "Extra flow from the curl of the ink's own memory."},
-    {"group": "motion", "name": "memory", "kind": "float", "default": 0.97, "min": 0.5, "max": 0.999, "doc": "How much old memory remains after a step."},
-    {"group": "motion", "name": "diffusion", "kind": "float", "default": 0.015, "min": 0.0, "max": 0.2, "doc": "Local mixing; higher values smooth the ink faster."},
-    {"group": "seed", "name": "seed", "kind": "int", "default": 7, "min": 0, "max": 65535},
-    {"group": "seed", "name": "grain", "kind": "float", "default": 4.0, "min": 1.0, "max": 32.0, "doc": "Initial ink grain size in pixels."},
-    {"group": "seed", "name": "injection", "kind": "float", "default": 0.0, "min": 0.0, "max": 0.1, "doc": "Optional continuous replenishment; 0 preserves the seeded experiment."},
+    {"group": "motion", "name": "rate", "kind": "num", "default": 1.0, "min": 0.0, "max": 3.0, "doc": "Advection steps per frame; 0 freezes all state."},
+    {"group": "motion", "name": "travel", "kind": "num", "default": 2.0, "min": 0.0, "max": 8.0, "doc": "Travel in output pixels per frame at unit flow."},
+    {"group": "motion", "name": "feedback", "kind": "num", "default": 0.7, "min": 0.0, "max": 4.0, "doc": "Extra flow from the curl of the ink's own memory."},
+    {"group": "motion", "name": "memory", "kind": "num", "default": 0.97, "min": 0.5, "max": 0.999, "doc": "How much old memory remains after a step."},
+    {"group": "motion", "name": "diffusion", "kind": "num", "default": 0.015, "min": 0.0, "max": 0.2, "doc": "Local mixing; higher values smooth the ink faster."},
+    {"group": "seed", "name": "seed", "kind": "num", "int": true, "default": 7, "min": 0, "max": 65535},
+    {"group": "seed", "name": "grain", "kind": "num", "default": 4.0, "min": 1.0, "max": 32.0, "doc": "Initial ink grain size in pixels."},
+    {"group": "seed", "name": "injection", "kind": "num", "default": 0.0, "min": 0.0, "max": 0.1, "doc": "Optional continuous replenishment; 0 preserves the seeded experiment."},
     {"group": "seed", "name": "reset", "kind": "bool", "default": false, "doc": "Hold true to seed, then release to evolve."},
-    {"group": "common", "name": "width", "kind": "int", "default": 256, "min": 0, "max": 4096},
-    {"group": "common", "name": "height", "kind": "int", "default": 256, "min": 0, "max": 4096}
+    {"group": "common", "name": "width", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096},
+    {"group": "common", "name": "height", "kind": "num", "int": true, "default": 256, "min": 0, "max": 4096}
   ] }
 */
 

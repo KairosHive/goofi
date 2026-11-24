@@ -1,0 +1,57 @@
+name: Report the failed situations
+description: >
+  What a failed `cargo test` log says, where a reader looks first: each failed test as an error
+  annotation on the run and as a section of the job summary, with the panic and what the test
+  printed. Run it with `if: failure()` after the steps that tee their output into `log`.
+inputs:
+  log:
+    description: The file the `cargo test` steps of the job teed their output into.
+    default: situations.log
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        log='${{ inputs.log }}'
+        if [ ! -s "$log" ]; then
+          echo "no $log: the job failed before a test ran" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # Colour codes and carriage returns are the terminal's, not the report's.
+        sed -e 's/\x1b\[[0-9;]*m//g' -e 's/\r$//' "$log" > report.log
+        awk -v summary="$GITHUB_STEP_SUMMARY" '
+          function flush() {
+            if (name == "") return
+            # An annotation is one line: its line breaks are escaped, as the runner asks.
+            gsub(/%/, "%25", first); gsub(/\n/, "%0A", first)
+            printf "::error title=%s::%s\n", name, first
+            printf "### `%s`\n\n```\n%s```\n\n", name, body >> summary
+            failed++
+            name = ""
+          }
+          /^---- .* stdout ----$/ {
+            flush()
+            name = $0; sub(/^---- /, "", name); sub(/ stdout ----$/, "", name)
+            body = ""; first = ""; panic = 0
+            next
+          }
+          # The block of a failed test ends at the list of names that closes the binary.
+          name != "" && /^failures:$/ { flush(); next }
+          name != "" {
+            body = body $0 "\n"
+            if ($0 ~ /panicked at /) { panic = 1; first = $0; next }
+            if (panic && panic < 12 && $0 !~ /^note: run with/ && $0 != "") { first = first "\n" $0; panic++ }
+            next
+          }
+          / has been running for over / { slow = slow "- " $0 "\n" }
+          /^ +Running / { binary = $2 }
+          /^test result: / { results = results "- `" binary "`: " substr($0, 14) "\n" }
+          /^error: test failed, to rerun pass/ { rerun = rerun "- " $0 "\n" }
+          END {
+            flush()
+            if (!failed) printf "No failed test in the log: the step failed outside one. Read its last lines.\n\n" >> summary
+            if (rerun != "") printf "### To run again\n\n%s\n", rerun >> summary
+            if (slow != "") printf "### Slow\n\n%s\n", slow >> summary
+            if (results != "") printf "### Every binary\n\n%s\n", results >> summary
+          }
+        ' report.log

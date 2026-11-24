@@ -1,7 +1,7 @@
 //! ToJson — a table becomes JSON text. A table is an object, an array a list, a string a string.
 
 use goofi_core::{Data, Meta, SlotType, Value};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct ToJson;
@@ -72,6 +72,7 @@ impl Writer {
     fn value(&self, d: &Data, depth: usize, out: &mut String) -> NodeResult {
         match d.value() {
             Value::Texture(_) => return Err("texture submissions cannot be written as JSON".into()),
+            Value::Functional(_) => return Err("a functional cannot be written as JSON".into()),
             Value::Str(s) => quote(s, out),
             Value::Array(a) => {
                 let values: Vec<f32> = a
@@ -131,20 +132,22 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "json",
         name: "indent",
-        spec: ParamSpec::Int { default: 0, min: 0, max: 8, options: &[0, 2, 4] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], face: Face::Plain },
         expression: None,
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "json",
         name: "decimals",
-        spec: ParamSpec::Int { default: -1, min: -1, max: 17, options: &[] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

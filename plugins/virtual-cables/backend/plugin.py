@@ -1,6 +1,7 @@
 """Virtual audio cables: PipeWire null sinks that carry goofi's audio to and from other software.
 
-A cable is one `pw-cli -m create-node` child. PipeWire owns a created node for as long as the
+goofi reaches a cable through PipeWire's PulseAudio server: the sink is the output device, and
+its monitor is the input device. A cable is one `pw-cli -m create-node` child. PipeWire owns a created node for as long as the
 client that made it lives, so the cable's life is the child's: `remove` kills it, and so does
 `on_stop`. The service dying takes every child with it (PDEATHSIG), so a crash leaves nothing.
 Windows and macOS have no public API that creates a virtual device; there the panel says so.
@@ -19,8 +20,8 @@ from pathlib import Path
 
 from goofi_plugin import plugin
 
-# The host label cpal gives PipeWire devices; goofi stores a device as `<host>: <description>`.
-HOST = "PipeWire"
+# The host label cpal gives PulseAudio devices; goofi stores a device as `<host>: <description>`.
+HOST = "PulseAudio"
 NODE_PREFIX = "goofi-cable-"
 POSITIONS = {1: "MONO", 2: "FL FR", 4: "FL FR RL RR", 6: "FL FR FC LFE RL RR", 8: "FL FR FC LFE RL RR SL SR"}
 MAX_CHANNELS = 64
@@ -37,7 +38,12 @@ class Cable:
     stderr: list[str] = field(default_factory=list)
 
     def describe(self) -> dict:
-        return {"name": self.name, "channels": self.channels, "device": f"{HOST}: {self.name}"}
+        return {
+            "name": self.name,
+            "channels": self.channels,
+            "output": f"{HOST}: {self.name}",
+            "input": f"{HOST}: Monitor of {self.name}",
+        }
 
 
 @dataclass
@@ -72,6 +78,9 @@ def unsupported() -> str | None:
     core = os.environ.get("PIPEWIRE_REMOTE", "pipewire-0")
     if not runtime or not (Path(runtime) / core).exists():
         return "PipeWire is not running for this user"
+    pulse = os.environ.get("PULSE_SERVER", "").removeprefix("unix:") or str(Path(runtime) / "pulse" / "native")
+    if not Path(pulse).exists():
+        return "PipeWire's PulseAudio server is not running (pipewire-pulse)"
     return None
 
 
@@ -220,7 +229,7 @@ async def route(ctx, args: Route) -> dict:
         targets = [args.node]
     else:
         raise ValueError(f"`{dropped.get('name', args.node)}` is {kind}, not an AudioIn or AudioOut")
-    device = cable.describe()["device"]
+    device = cable.describe()["input" if kind == "audio:AudioIn" else "output"]
     steps = [{"op": "node param edit", "payload": {"node": uid, "param": "audio/device", "value": device}} for uid in targets]
     await ctx.call("compound", {"ops": steps})
     return {"device": device, "nodes": targets, "direction": "in" if kind == "audio:AudioIn" else "out"}

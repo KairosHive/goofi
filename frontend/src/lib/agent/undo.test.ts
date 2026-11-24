@@ -3,28 +3,26 @@ import { commands } from './commands';
 import { query } from './query';
 import { FakeControl } from '$lib/test/fakeControl';
 import { GraphStore } from '$lib/stores/graph.svelte';
-import { history, type Action, type NavContext } from '$lib/stores/history.svelte';
-
-const ctx: NavContext = { activeWorkspaceId: 'w', activePanelId: null, enteredPath: {}, selection: {} };
-const mk = (label: string): Action => ({ kind: 'graph_cmd', label, domain: 'graph', context: ctx });
+import { history } from '$lib/stores/history.svelte';
 
 describe('agent surface — undo/redo', () => {
+	let g: GraphStore;
 	beforeEach(() => {
 		history().reset();
 		const fc = new FakeControl();
-		history().configureDeps(() => ({ control: fc, graph: new GraphStore(fc) }));
+		g = new GraphStore(fc);
+		history().configure(() => fc, () => g);
 	});
 
-	it('query.canUndo / canRedo / historyLength reflect the history store', () => {
+	it('query.canUndo / canRedo / undoLabel reflect the manager', async () => {
 		expect(query.canUndo()).toBe(false);
-		history().record(mk('A'));
+		await g.removeNode('a');
 		expect(query.canUndo()).toBe(true);
-		expect(query.historyLength()).toBe(1);
-		expect(query.undoLabel()).toBe('A');
+		expect(query.undoLabel()).toBe('node remove');
 	});
 
-	it('commands.undo / redo drive the history store', async () => {
-		history().record(mk('A'));
+	it('commands.undo / redo reach the manager', async () => {
+		await g.removeNode('a');
 		await commands.undo();
 		expect(query.canUndo()).toBe(false);
 		expect(query.canRedo()).toBe(true);

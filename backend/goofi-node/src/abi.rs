@@ -5,10 +5,11 @@
 use std::ffi::{c_char, c_void, CString};
 use std::sync::OnceLock;
 
-/// The `goofi_version` answer: the version the loader refuses a mismatch against. Every crate
-/// inherits the workspace's, so this is the one number the whole boundary is built at.
-pub fn version() -> *const c_char {
-    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+/// The `goofi_version` answer: the version and the hash of the SDK sources the artifact was built
+/// against, which the loader refuses a mismatch of. Every crate inherits the workspace's version.
+pub fn version(sdk: &'static str) -> *const c_char {
+    static VERSION: OnceLock<CString> = OnceLock::new();
+    VERSION.get_or_init(|| CString::new(format!("{}+{sdk}", env!("CARGO_PKG_VERSION"))).expect("no NUL in a hash")).as_ptr()
 }
 
 /// The `goofi_describe` answer, once per library: the probe schema every out-of-crate node
@@ -36,6 +37,29 @@ impl Bytes {
         match self.len {
             0 => &[],
             n => std::slice::from_raw_parts(self.ptr, n),
+        }
+    }
+}
+
+/// A request as the boundary spells it: byte runs read as one, so a frame's samples cross by
+/// reference rather than being copied into a request around them.
+#[repr(C)]
+pub struct Segments {
+    pub ptr: *const Bytes,
+    pub len: usize,
+}
+
+impl Segments {
+    pub fn of(runs: &[Bytes]) -> Segments {
+        Segments { ptr: runs.as_ptr(), len: runs.len() }
+    }
+
+    /// # Safety
+    /// `ptr` addresses `len` [`Bytes`], each addressing memory that outlives the slices.
+    pub unsafe fn as_slices<'a>(&self) -> Vec<&'a [u8]> {
+        match self.len {
+            0 => Vec::new(),
+            n => std::slice::from_raw_parts(self.ptr, n).iter().map(|b| b.as_slice()).collect(),
         }
     }
 }

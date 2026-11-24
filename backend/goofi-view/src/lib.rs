@@ -2,7 +2,7 @@
 //! wants reduced, and N specs merge into ONE plan per frame.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The Data kind a viewer draws; the tags are goofi-core's wire dtype tags, restated to keep
 /// this crate free of that dependency.
@@ -56,74 +56,59 @@ pub struct DimConstraint {
     pub n: usize,
 }
 
-/// The per-axis reduction kernel a viewer asks for on a drawable axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReduceMethod {
-    Envelope,
-    Subsample,
-    Area,
-}
-
-/// Which kernels the admitted viewers asked for on ONE axis. A set, not a running pairwise
-/// merge, so the fold cannot depend on the order the specs arrive in.
-#[derive(Clone, Copy, Default)]
-struct MethodSet {
-    envelope: bool,
-    subsample: bool,
-    area: bool,
-}
-
-impl MethodSet {
-    fn add(&mut self, m: ReduceMethod) {
-        match m {
-            ReduceMethod::Envelope => self.envelope = true,
-            ReduceMethod::Subsample => self.subsample = true,
-            ReduceMethod::Area => self.area = true,
-        }
-    }
-
-    /// The ONE method that must serve every subscriber; a cross-family conflict degrades to
-    /// Subsample, the only reduction both an image and a line viewer can draw.
-    fn resolve(self) -> ReduceMethod {
-        if self.area {
-            if self.envelope || self.subsample {
-                ReduceMethod::Subsample
-            } else {
-                ReduceMethod::Area
-            }
-        } else if self.envelope {
-            ReduceMethod::Envelope
-        } else {
-            ReduceMethod::Subsample
-        }
-    }
-}
-
-/// Desired reduction of one axis to `max` BINS via `method`; `Envelope` emits a (min, max) pair
-/// per bin, so it returns `2 * max` values.
+/// What a viewer wants of one axis: at most `max` entries, subsampled, or the axis whole. A dim
+/// it names neither way it has no opinion on; the fold reads nothing into the silence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AxisReduce {
     pub dim: i32,
-    pub max: usize,
-    pub method: ReduceMethod,
+    pub max: Ask,
 }
 
-/// The bins an axis is capped to for a viewer that has declared nothing; Subsample because it is
-/// the one kernel every viewer family can draw.
+/// One axis's ask, on the wire a count or the word `whole`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    Cap(usize),
+    Whole,
+}
+
+impl Serialize for Ask {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Ask::Cap(n) => s.serialize_u64(*n as u64),
+            Ask::Whole => s.serialize_str("whole"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Ask {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Cap(usize),
+            Word(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Cap(n) => Ok(Ask::Cap(n)),
+            Raw::Word(w) if w == "whole" => Ok(Ask::Whole),
+            Raw::Word(w) => Err(serde::de::Error::custom(format!("an axis ask is a count or `whole`, not `{w}`"))),
+        }
+    }
+}
+
+/// The entries an axis is capped to for a viewer that has declared nothing.
 pub const UNDECLARED_MAX: usize = 512;
 
-/// The most elements an undeclared preview carries over ALL its axes — a 512² image — so a frame
-/// with many axes cannot cost the stream's whole rate through the two the cap misses.
+/// The most elements an undeclared preview carries over ALL its axes — 512² — so a frame with
+/// many axes cannot cost the stream's whole rate through the two the cap misses.
 pub const UNDECLARED_BUDGET: usize = UNDECLARED_MAX * UNDECLARED_MAX;
 
-/// What a producer is asked to fit its readback into for a reader that declared nothing: ONE
-/// texel, the cheapest frame that is still a frame. No pixels were asked for, so the metadata is
-/// the whole product.
-pub const UNDECLARED_BOX: (u32, u32) = (1, 1);
+/// What a producer is asked for by readers that declared nothing: ONE texel, the cheapest frame
+/// that is still a frame, because the metadata is the whole product.
+pub const UNDECLARED_WANT: ViewWant = ViewWant { size: (1, 1), depth: Depth::F32 };
 
-/// The sample depth a viewer can draw, narrowest first: 8-bit texels are all an image shows, a
-/// half float is more than a plot's pixel resolves, and f32 is the wire itself.
+/// The sample depth a reader takes, narrowest first: 8-bit texels, a half float, or the f32 the
+/// wire itself carries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Depth {
@@ -147,6 +132,10 @@ pub struct ViewSpec {
     /// Desired per-axis reductions.
     #[serde(default)]
     pub reduce: Vec<AxisReduce>,
+    /// Its caps are ONE box: the dims it caps shrink by one shared factor, so their ratio holds.
+    /// Without it each cap stands alone.
+    #[serde(default)]
+    pub aspect: bool,
     /// The depth this viewer can draw. One stream serves every viewer, so it is as narrow as
     /// the widest admitted ask.
     #[serde(default)]
@@ -157,8 +146,6 @@ pub struct ViewSpec {
 pub trait Reducible {
     /// 0=array, 1=string, 2=table (matches the wire dtype tag).
     fn dtype_tag(&self) -> u8;
-    /// Number of dimensions (0 for a non-array payload).
-    fn ndim(&self) -> usize;
     /// The shape (empty for a non-array payload).
     fn shape(&self) -> &[usize];
 }
@@ -178,7 +165,7 @@ impl ViewSpec {
         if frame.dtype_tag() != ViewDtype::Array.tag() {
             return true;
         }
-        let ndim = frame.ndim();
+        let ndim = frame.shape().len();
         for &(cmp, n) in &self.ndim {
             if !cmp.holds(ndim, n) {
                 return false;
@@ -201,7 +188,6 @@ impl ViewSpec {
 pub struct PlannedAxis {
     pub dim: usize,
     pub max: usize,
-    pub method: ReduceMethod,
 }
 
 /// The merged reduction plan for ONE frame. Empty axes ⇒ passthrough (no reduction).
@@ -213,14 +199,18 @@ pub struct MergedViewSpec {
 }
 
 /// Merge N viewers' specs into ONE concrete plan for THIS frame: specs that do not admit the
-/// frame drop out, and each canonical dim folds to `max(max)` plus the union of the kernels.
+/// frame drop out, and each canonical dim folds to `max(max)`.
 pub fn plan<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> MergedViewSpec {
     // Nothing here can draw this frame, so nothing here has asked for it: the undeclared preview
     // stands in, exactly as it does for a reader that declared nothing at all.
-    let (mut axes, depth) =
-        fold_axes(specs, frame).unwrap_or_else(|| (undeclared_axes(frame.shape()), Depth::F32));
-    aspect_preserve_area(&mut axes, frame.shape());
-    MergedViewSpec { axes, depth }
+    let Some(fold) = fold_axes(specs, frame) else {
+        return MergedViewSpec { axes: undeclared_axes(frame.shape()), depth: Depth::F32 };
+    };
+    let mut axes = fold.axes;
+    if fold.aspect {
+        aspect_preserve(&mut axes, frame.shape());
+    }
+    MergedViewSpec { axes, depth: fold.depth }
 }
 
 /// The preview for a reader that declared nothing, never the full frame: every axis capped at
@@ -238,19 +228,29 @@ pub fn undeclared_axes(shape: &[usize]) -> Vec<PlannedAxis> {
         .zip(caps)
         .enumerate()
         .filter(|(_, (&n, cap))| *cap < n)
-        .map(|(dim, (_, max))| PlannedAxis { dim, max, method: ReduceMethod::Subsample })
+        .map(|(dim, (_, max))| PlannedAxis { dim, max })
         .collect()
 }
 
-/// Every admitted viewer's asks, folded per dim: `max(max)` and the union of the kernels. What a
-/// frame is then actually reduced to is [`plan`]'s business — this is the ask alone. `None` where
-/// NOTHING admits the frame: no viewer here can draw it, so none of them has asked for anything.
-fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Vec<PlannedAxis>, Depth)> {
-    let ndim = frame.ndim();
+/// What the admitted specs asked of a frame, folded: the axes, the depth they all take, and
+/// whether an `aspect` spec is among the cappers, so the caps shrink as one box.
+struct Fold {
+    axes: Vec<PlannedAxis>,
+    depth: Depth,
+    aspect: bool,
+}
+
+/// Every admitted viewer's asks, folded per dim to `max(max)`. A dim an admitted viewer asks
+/// whole is not reduced for anyone. `None` where NOTHING admits the frame: no viewer here can
+/// draw it, so none of them has asked for anything.
+fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<Fold> {
+    let ndim = frame.shape().len();
     let mut order: Vec<usize> = Vec::new(); // first-seen dim order → stable output
-    let mut folded: HashMap<usize, (usize, MethodSet)> = HashMap::new();
+    let mut folded: HashMap<usize, usize> = HashMap::new();
+    let mut whole: HashSet<usize> = HashSet::new();
     let mut admitted = 0usize;
     let mut depth = Depth::U8;
+    let mut aspect = false;
     for spec in specs {
         if !spec.admits(frame) {
             continue;
@@ -261,50 +261,48 @@ fn fold_axes<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<(Ve
             let Some(d) = canon_dim(r.dim, ndim) else {
                 continue;
             };
+            let Ask::Cap(max) = r.max else {
+                whole.insert(d);
+                continue;
+            };
+            aspect |= spec.aspect;
             let entry = folded.entry(d).or_insert_with(|| {
                 order.push(d);
-                (0, MethodSet::default())
+                0
             });
-            entry.0 = entry.0.max(r.max);
-            entry.1.add(r.method);
+            *entry = (*entry).max(max);
         }
     }
-    let axes: Vec<PlannedAxis> = order
-        .iter()
-        .map(|&d| {
-            let (mx, set) = folded[&d];
-            PlannedAxis { dim: d, max: mx, method: set.resolve() }
-        })
-        .collect();
-    (admitted > 0).then_some((axes, depth))
+    let axes: Vec<PlannedAxis> =
+        order.iter().filter(|d| !whole.contains(d)).map(|&d| PlannedAxis { dim: d, max: folded[&d] }).collect();
+    (admitted > 0).then_some(Fold { axes, depth, aspect })
 }
 
 /// What a slot's readers want of its frames: the box to fit the readback into, and the sample
-/// width they draw. A producer that can make exactly this spends nothing downstream — no
-/// reduction, and no quantization either.
+/// width they draw. A producer that makes exactly this spends nothing downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewWant {
     pub size: (u32, u32),
     pub depth: Depth,
 }
 
-/// The box every admitted viewer would reduce both image axes to with an area kernel — the size
-/// a PRODUCER could render instead, making the reduction downstream free — and the depth every
-/// one of them draws. This is what the viewers ASKED for, not the fit for one frame, so it does
-/// not move when the producer answers it. `None` unless both axes resolve to an area kernel: a
-/// plan that subsamples means something else, and a producer must not answer it with an average.
-pub fn image_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<ViewWant> {
+/// The box asked for on dims 0 and 1 while an `aspect` spec is among the cappers — the size a
+/// PRODUCER could render instead — and the depth every admitted spec takes. `None` otherwise.
+pub fn asked_box<R: Reducible + ?Sized>(specs: &[ViewSpec], frame: &R) -> Option<ViewWant> {
     // Nothing admits it, so nobody here is drawing it — and a frame nobody draws needs no pixels.
-    let Some((axes, depth)) = fold_axes(specs, frame) else {
-        return Some(ViewWant { size: UNDECLARED_BOX, depth: Depth::F32 });
+    let Some(fold) = fold_axes(specs, frame) else {
+        return Some(UNDECLARED_WANT);
     };
-    let axis = |d: usize| axes.iter().find(|a| a.dim == d).filter(|a| a.method == ReduceMethod::Area);
+    if !fold.aspect {
+        return None;
+    }
+    let axis = |d: usize| fold.axes.iter().find(|a| a.dim == d);
     let (h, w) = (axis(0)?, axis(1)?);
-    Some(ViewWant { size: (w.max.clamp(1, u32::MAX as usize) as u32, h.max.clamp(1, u32::MAX as usize) as u32), depth })
+    Some(ViewWant { size: (w.max.clamp(1, u32::MAX as usize) as u32, h.max.clamp(1, u32::MAX as usize) as u32), depth: fold.depth })
 }
 
 /// `src` scaled into `box_` with its aspect kept, never enlarged — the one place that rule is
-/// stated, so a producer answering [`image_box`] lands exactly where the reduction expected.
+/// stated, so a producer answering [`asked_box`] lands exactly where the reduction expected.
 pub fn fit(src: (u32, u32), box_: (u32, u32)) -> (u32, u32) {
     let factor = shrink_factor([(box_.0 as usize, src.0 as usize), (box_.1 as usize, src.1 as usize)]);
     if factor >= 1.0 {
@@ -326,19 +324,17 @@ fn shrink_factor(pairs: impl IntoIterator<Item = (usize, usize)>) -> f64 {
     }
 }
 
-/// Scale every `Area` axis by one shared factor, so a non-square image keeps its aspect ratio.
-fn aspect_preserve_area(axes: &mut [PlannedAxis], shape: &[usize]) {
-    let area: Vec<usize> = (0..axes.len())
-        .filter(|&i| axes[i].method == ReduceMethod::Area && axes[i].dim < shape.len())
-        .collect();
-    if area.len() < 2 {
+/// Scale every capped axis by one shared factor, so the ratio between them holds.
+fn aspect_preserve(axes: &mut [PlannedAxis], shape: &[usize]) {
+    let capped: Vec<usize> = (0..axes.len()).filter(|&i| axes[i].dim < shape.len()).collect();
+    if capped.len() < 2 {
         return;
     }
-    let factor = shrink_factor(area.iter().map(|&i| (axes[i].max, shape[axes[i].dim])));
+    let factor = shrink_factor(capped.iter().map(|&i| (axes[i].max, shape[axes[i].dim])));
     if factor >= 1.0 {
         return;
     }
-    for &i in &area {
+    for &i in &capped {
         axes[i].max = ((shape[axes[i].dim] as f64 * factor).round() as usize).max(1);
     }
 }

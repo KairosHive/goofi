@@ -64,17 +64,17 @@ class ScaleForaging(goofi.Node):
     }
     PARAMS = {
         "foraging": {
-            "threshold": goofi.FloatParam(50.0, 0.0, 100.0, doc="How close a candidate must be to be taken, 0..100."),
+            "threshold": goofi.NumParam(50.0, 0.0, 100.0, doc="How close a candidate must be to be taken, 0..100."),
             "direction": goofi.StringParam(
                 "similar",
                 ["similar", "different"],
                 doc="Whether a candidate is taken for clearing the threshold or for falling below it.",
             ),
-            "rate": goofi.FloatParam(2.0, 0.0, 600.0, doc="The least time in seconds between two changes."),
+            "rate": goofi.NumParam(2.0, 0.0, 600.0, doc="The least time in seconds between two changes."),
             "metric": goofi.StringParam(
                 "dyad", ["dyad", "cents"], doc="How two degrees are compared: harmonically, or by pitch distance."
             ),
-            "tolerance": goofi.FloatParam(
+            "tolerance": goofi.NumParam(
                 100.0, 1.0, 1200.0, doc="cents: how far apart two degrees may sit before they score nothing. 100 is a semitone."
             ),
             "hold": goofi.BoolParam(False, doc="Freeze the scale being played, whatever arrives."),

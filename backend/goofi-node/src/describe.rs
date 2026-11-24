@@ -60,20 +60,18 @@ fn sdk_engine(source: &str) -> Option<String> {
     })
 }
 
-/// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
-/// stamp a rescan diffs.
-/// How many files in `dir` name a node by extension: what a scan of the folder reads.
+/// How many files in `dir` name a node: what a scan of the folder reads.
 pub fn node_file_count(dir: &Path) -> usize {
-    std::fs::read_dir(dir).map_or(0, |rd| {
-        rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "py" || x == "wgsl" || x == "rs")).count()
-    })
+    std::fs::read_dir(dir).map_or(0, |rd| rd.flatten().filter(|e| type_name_of(&e.path()).is_some()).count())
 }
 
+/// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
+/// stamp a rescan diffs.
 pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crate::Stamp>)> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
         Err(e) => {
-            goofi_core::log::record(goofi_core::log::Source::component("library"), goofi_core::log::Level::Error, None, format!("failed to read {}: {e}", dir.display()));
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("library"), goofi_supervisor::log::Level::Error, None, format!("failed to read {}: {e}", dir.display()));
             return Vec::new();
         }
     };
@@ -105,9 +103,33 @@ fn camel(stem: &str) -> String {
         .collect()
 }
 
-/// Parse the introspection JSON.
+/// Parse the introspection JSON. A `params` entry may be a SECTION rather than a param: it names
+/// its members' group, and with `repeat` it is a list, declared once and stored per slot. A
+/// param of kind `color` is a four-dimensional `num` from 0 to 1, white unless it says; one of kind
+/// `envelope` is a `num` of four ADSR values, its times up to `max` (10 unless it says).
 pub fn parse_introspection(json: &str) -> Result<probe::Introspection, String> {
-    serde_json::from_str(json).map_err(|e| e.to_string())
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if let Some(entries) = value.get_mut("params").and_then(|p| p.as_array_mut()) {
+        let mut flat = crate::sections::expand(std::mem::take(entries))?;
+        for p in flat.iter_mut() {
+            let (face, max, born) = match p.get("kind").and_then(|k| k.as_str()) {
+                Some("color") => ("color", 1.0, [1.0, 1.0, 1.0, 1.0]),
+                Some("envelope") => ("envelope", 10.0, goofi_core::ENVELOPE_BORN),
+                _ => continue,
+            };
+            p["kind"] = serde_json::json!("num");
+            p["face"] = serde_json::json!(face);
+            p["min"] = serde_json::json!(0.0);
+            if p.get("max").is_none() || face == "color" {
+                p["max"] = serde_json::json!(max);
+            }
+            if p.get("default").is_none() {
+                p["default"] = serde_json::json!(born);
+            }
+        }
+        *entries = flat;
+    }
+    serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
 /// A manifest as the probe schema — the one description every out-of-crate node answers, as JSON.
@@ -149,13 +171,22 @@ pub fn describe(
                 doc: p.doc.map(str::to_string),
                 expression: p.expression.map(|e| e.source.to_string()),
                 section: p.section,
-                show: p.show.map(|s| probe::Show {
+                show: p.show.iter().map(|s| probe::Show {
                     param: s.param.to_string(),
                     any_of: s.any_of.iter().map(|v| v.to_string()).collect(),
+                }).collect(),
+                role: p.role.map(|r| match r {
+                    crate::Role::Count { section, widget } => probe::Role::Count { section: section.to_string(), widget },
+                    crate::Role::Member { section, base, slot } => {
+                        probe::Role::Member { section: section.to_string(), base: base.to_string(), slot }
+                    }
+                    crate::Role::Feed { slot, group } => probe::Role::Feed { slot: slot.to_string(), group: group.to_string() },
+                    crate::Role::Held => probe::Role::Held,
                 }),
                 spec: match p.spec {
-                    ParamSpec::Int { default, min, max, options } => probe::ParamSpec::Int { default, min, max, options: options.to_vec() },
-                    ParamSpec::Float { default, min, max } => probe::ParamSpec::Float { default, min, max },
+                    ParamSpec::Num { default, min, max, int, options, face } => {
+                        probe::ParamSpec::Num { default: default.to_vec(), min, max, int, options: options.to_vec(), face }
+                    }
                     ParamSpec::Bool { default } => probe::ParamSpec::Bool { default },
                     ParamSpec::Str { default, options, refresh } => probe::ParamSpec::Str {
                         default: default.to_string(),
@@ -172,7 +203,7 @@ pub fn describe(
 
 /// The first slot name the name rule refuses, phrased for the palette — a reference spells
 /// `node.slot` and an expression reads a slot as an attribute, so a bad name never registers.
-pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
+fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
     intro
         .inputs
         .iter()
@@ -186,15 +217,23 @@ pub fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
 /// node cannot PRODUCE another engine's kind, so a file declaring one is in the wrong folder. An
 /// engine-local kind on an INPUT is a crossing, and every engine routes a foreign arrival as a
 /// frame off the wire — which is what lets a crossing declare the plane it crosses FROM.
-pub fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
+fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
     intro.outputs.iter().find_map(|s| {
         let kind = goofi_core::SlotType::from_name(&s.kind).filter(|k| Some(*k) != own)?;
         Some(format!("output `{}` is {}", s.name, kind.engine_local()?))
     })
 }
 
+/// [`leak_manifest`] of an introspection whose slot names are legal and whose outputs are `own`'s.
+pub fn manifest_of(type_name: &str, intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Result<&'static NodeManifest, String> {
+    if let Some(reason) = illegal_slot(intro).or_else(|| foreign_output(intro, own)) {
+        return Err(reason);
+    }
+    leak_manifest(type_name.to_string(), intro)
+}
+
 /// The first param declaration the inspector cannot draw, phrased for the palette: a name declared
-/// twice in a group, or a `show` whose controller is missing, has no fixed values, or loops.
+/// twice in a group, or a `show` rule whose controller is missing, has no fixed values, or loops.
 pub fn illegal_param(params: &[ParamDecl]) -> Option<String> {
     let find = |group: &str, name: &str| params.iter().find(|d| d.group == group && d.name == name);
     params.iter().enumerate().find_map(|(i, d)| {
@@ -202,29 +241,36 @@ pub fn illegal_param(params: &[ParamDecl]) -> Option<String> {
         if params[..i].iter().any(|e| e.group == d.group && e.name == d.name) {
             return Some(format!("{at} is declared twice"));
         }
-        let show = d.show?;
-        let (group, name) = show.controller(d.group);
-        let Some(controller) = find(group, name) else {
-            return Some(format!("{at} shows by `{}`, which this node does not declare", show.param));
-        };
-        let Some(choices) = choices(controller.spec) else {
-            return Some(format!("{at} shows by `{}`, which has no fixed set of values", show.param));
-        };
-        if show.any_of.is_empty() {
-            return Some(format!("{at} shows for no value of `{}`", show.param));
-        }
-        if let Some(v) = show.any_of.iter().find(|v| !choices.iter().any(|c| c == *v)) {
-            return Some(format!("{at} shows for `{v}`, which `{}` does not offer: {}", show.param, choices.join(", ")));
-        }
-        let mut cur = d;
-        for _ in 0..params.len() {
-            let Some(s) = cur.show else { break };
-            let (g, n) = s.controller(cur.group);
-            if (g, n) == (d.group, d.name) {
-                return Some(format!("{at} shows by a chain of params that leads back to it"));
+        for show in d.show {
+            let (group, name) = show.controller(d.group);
+            let Some(controller) = find(group, name) else {
+                return Some(format!("{at} shows by `{}`, which this node does not declare", show.param));
+            };
+            let Some(choices) = choices(controller.spec) else {
+                return Some(format!("{at} shows by `{}`, which has no fixed set of values", show.param));
+            };
+            if show.any_of.is_empty() {
+                return Some(format!("{at} shows for no value of `{}`", show.param));
             }
-            let Some(next) = find(g, n) else { break };
-            cur = next;
+            if let Some(v) = show.any_of.iter().find(|v| !choices.iter().any(|c| c == *v)) {
+                return Some(format!("{at} shows for `{v}`, which `{}` does not offer: {}", show.param, choices.join(", ")));
+            }
+        }
+        // Every chain of controllers out of `d`, walked to its end or back to `d`.
+        let mut frontier = vec![(d, 0usize)];
+        while let Some((cur, depth)) = frontier.pop() {
+            if depth > params.len() {
+                break;
+            }
+            for s in cur.show {
+                let (g, n) = s.controller(cur.group);
+                if (g, n) == (d.group, d.name) {
+                    return Some(format!("{at} shows by a chain of params that leads back to it"));
+                }
+                if let Some(next) = find(g, n) {
+                    frontier.push((next, depth + 1));
+                }
+            }
         }
         None
     })
@@ -236,7 +282,7 @@ fn choices(spec: ParamSpec) -> Option<Vec<String>> {
         ParamSpec::Str { options, refresh: false, .. } if !options.is_empty() => {
             Some(options.iter().map(|o| o.to_string()).collect())
         }
-        ParamSpec::Int { options, .. } if !options.is_empty() => Some(options.iter().map(i64::to_string).collect()),
+        ParamSpec::Num { int: true, options, .. } if !options.is_empty() => Some(options.iter().map(i64::to_string).collect()),
         ParamSpec::Bool { .. } => Some(vec!["true".into(), "false".into()]),
         _ => None,
     }
@@ -247,12 +293,31 @@ fn leak_str(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
-/// Build a `'static NodeManifest` from an introspection; a tag outside the vocabulary or an
-/// [`illegal_param`] refuses it.
+/// The one copy of a manifest per type and declaration: a rescan that reads the same declaration
+/// again is handed the copy already leaked, and a changed one gets a new copy beside it.
+pub fn interned(type_name: &str, digest: u64, build: impl FnOnce() -> NodeManifest) -> &'static NodeManifest {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static INTERNED: OnceLock<Mutex<HashMap<(String, u64), &'static NodeManifest>>> = OnceLock::new();
+    let mut held = INTERNED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    held.entry((type_name.to_string(), digest)).or_insert_with(|| Box::leak(Box::new(build())))
+}
+
+/// A digest of what a manifest is made of, for [`interned`].
+pub fn digest_of(what: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    what.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The `'static NodeManifest` of an introspection, interned by type and declaration; a tag
+/// outside the vocabulary or an [`illegal_param`] refuses it.
 pub fn leak_manifest(
     type_name: String,
     intro: &probe::Introspection,
 ) -> Result<&'static NodeManifest, String> {
+    let digest = digest_of(&serde_json::to_string(intro).map_err(|e| e.to_string())?);
     let tags = intro
         .tags
         .iter()
@@ -282,7 +347,7 @@ pub fn leak_manifest(
         return Err(reason);
     }
 
-    Ok(Box::leak(Box::new(NodeManifest {
+    Ok(interned(&type_name, digest, || NodeManifest {
         type_name: leak_str(&type_name),
         tags: Box::leak(tags.into_boxed_slice()),
         doc: leak_str(&intro.doc),
@@ -290,17 +355,19 @@ pub fn leak_manifest(
         outputs: Box::leak(outputs.into_boxed_slice()),
         params: Box::leak(params.into_boxed_slice()),
         producer: intro.producer,
-    })))
+    }))
 }
 
 fn param_decl(p: &probe::Param) -> ParamDecl {
     let spec = match &p.spec {
-        probe::ParamSpec::Int { default, min, max, options } => {
-            ParamSpec::Int { default: *default, min: *min, max: *max, options: Box::leak(options.clone().into_boxed_slice()) }
-        }
-        probe::ParamSpec::Float { default, min, max } => {
-            ParamSpec::Float { default: *default, min: *min, max: *max }
-        }
+        probe::ParamSpec::Num { default, min, max, int, options, face } => ParamSpec::Num {
+            default: Box::leak(default.clone().into_boxed_slice()),
+            min: *min,
+            max: *max,
+            int: *int,
+            options: Box::leak(options.clone().into_boxed_slice()),
+            face: *face,
+        },
         probe::ParamSpec::Bool { default } => ParamSpec::Bool { default: *default },
         probe::ParamSpec::Str { default, options, refresh } => {
             let opts: Vec<&'static str> = options.iter().map(|s| leak_str(s)).collect();
@@ -319,13 +386,26 @@ fn param_decl(p: &probe::Param) -> ParamDecl {
         expression: p.expression.as_deref().map(|src| crate::ExprDecl {
             source: leak_str(src),
             mode: crate::ExprMode::On,
-            trigger: false,
         }),
         doc: p.doc.as_deref().map(leak_str),
         section: p.section,
-        show: p.show.as_ref().map(|s| crate::Show {
-            param: leak_str(&s.param),
-            any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
+        show: Box::leak(
+            p.show
+                .iter()
+                .map(|s| crate::Show {
+                    param: leak_str(&s.param),
+                    any_of: Box::leak(s.any_of.iter().map(|v| leak_str(v)).collect::<Vec<_>>().into_boxed_slice()),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        role: p.role.as_ref().map(|r| match r {
+            probe::Role::Count { section, widget } => crate::Role::Count { section: leak_str(section), widget: *widget },
+            probe::Role::Member { section, base, slot } => {
+                crate::Role::Member { section: leak_str(section), base: leak_str(base), slot: *slot }
+            }
+            probe::Role::Feed { slot, group } => crate::Role::Feed { slot: leak_str(slot), group: leak_str(group) },
+            probe::Role::Held => crate::Role::Held,
         }),
     }
 }

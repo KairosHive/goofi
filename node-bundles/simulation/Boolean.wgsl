@@ -4,7 +4,7 @@
   "inputs": [{"name": "state", "kind": "ARRAY"}],
   "state": ["history"],
   "params": [
-    {"group": "diagram", "name": "speed", "kind": "int", "default": 1, "min": 1, "max": 16},
+    {"group": "diagram", "name": "speed", "kind": "num", "int": true, "default": 1, "min": 1, "max": 16},
     {"group": "diagram", "name": "changes", "kind": "bool", "default": true} ] }
 */
 

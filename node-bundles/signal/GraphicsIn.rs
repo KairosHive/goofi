@@ -2,9 +2,9 @@
 //! nothing else in the patch asks for pixels, so the whole render lands here: `size` is what
 //! keeps a 4K frame from becoming four million numbers the rest of the patch has to carry.
 
-use goofi_core::reduce::{note_reduced, origin_of, reduce_axis, ReduceMethod};
+use goofi_core::reduce::{note_reduced, origin_of, reduce_axis};
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// Rec. 709 luminance, over whatever of R, G and B the frame has.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
@@ -44,8 +44,8 @@ impl Node for GraphicsIn {
         for dim in [0, 1] {
             let was = shape[dim];
             let bytes = reduced.as_deref().unwrap_or(a.as_bytes());
-            let Some(cut) = reduce_axis(bytes, &shape, dim, size, ReduceMethod::Area) else { continue };
-            noted.push((dim, origin_of(d.meta(), dim, was), ReduceMethod::Area));
+            let Some(cut) = reduce_axis(bytes, &shape, dim, size) else { continue };
+            noted.push((dim, origin_of(d.meta(), dim, was)));
             (reduced, shape[dim]) = (Some(cut.bytes), cut.new_len);
         }
 
@@ -102,19 +102,21 @@ static PARAMS: &[ParamDecl] = &[
              down the frame or across it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "graphics",
         name: "size",
-        spec: ParamSpec::Int { default: 256, min: 0, max: 16384, options: &[] },
+        spec: ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "The most texels either picture axis keeps, averaged into blocks. Zero takes the \
              frame as it was rendered, which is every texel of it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] =

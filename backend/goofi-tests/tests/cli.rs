@@ -4,7 +4,7 @@
 //! binary's argv-to-process path is e2e's.
 
 use goofi_client as client;
-use goofi_core::session;
+use goofi_supervisor::session;
 use goofi_tests::Goofi;
 
 fn lines(cmds: &[&str]) -> Vec<String> {
@@ -23,13 +23,13 @@ fn the_serve_command_line_reads_its_flags_and_names_what_it_refuses() {
     let parse = |args: &[&str]| goofi_cli::parse_args(args.iter().map(|s| s.to_string()));
     let bare = parse(&[]).expect("no arguments is a valid invocation");
     assert_eq!((bare.port, bare.bind.as_str()), (None, "127.0.0.1"), "the port is the doors' to decide");
-    let cli = parse(&["--port", "9001", "--extra-nodes", "theirs", "--bind", "a", "--list-nodes",
+    let cli = parse(&["--port", "9001", "--extra-nodes", "theirs", "--bind", "a",
                       "--extra-nodes", "mine", "--bind", "0.0.0.0", "--load", "patch.gfi"])
         .expect("a well-formed invocation");
     assert_eq!((cli.port, cli.bind.as_str(), cli.load.as_deref()), (Some(9001), "0.0.0.0", Some("patch.gfi")),
                "a repeated --bind replaces");
     assert_eq!(cli.extra_nodes, ["theirs", "mine"], "…while --extra-nodes adds");
-    assert!(cli.list_nodes && !cli.help);
+    assert!(!cli.boot_only && !cli.help, "the boot-only door is the environment's, never a flag");
     for flag in ["--port", "--bind", "--extra-nodes", "--load"] {
         let err = parse(&[flag]).expect_err(&format!("`{flag}` alone must not be ignored"));
         assert!(err.contains(flag), "the message names the flag: {err}");
@@ -61,29 +61,30 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let base = g.serve().await;
     let url = format!("http://{}", base.trim_start_matches("ws://"));
     let _sole = goofi_tests::sole_session();
-    let id = goofi_transport::session().to_string();
-    goofi_transport::record_url(&url);
+    let id = goofi_tests::session_id();
+    goofi_tests::session().0.lock().record_url(&url);
 
     // A record nobody holds is DEAD: not listed, and left for the server's sweep; the held one
     // is listed. Records are named per process: another run of this suite shares the listing.
     let gone = format!("long_gone_{}", std::process::id());
     let dead = session::system_dir(&gone);
     std::fs::create_dir_all(&dead).unwrap();
-    std::fs::File::create(dead.join("alive.lock")).unwrap();
     std::fs::write(dead.join("session.json"), format!(r#"{{"id":"{gone}","url":"http://127.0.0.1:1"}}"#)).unwrap();
     let rows = client::list();
     assert!(rows.iter().any(|s| s.id == id && s.url == url), "{rows:?}");
     assert!(rows.iter().all(|s| s.id != gone) && dead.exists(), "a list reads only: {rows:?}");
-    goofi_transport::sweep_dead();
+    goofi_supervisor::session::sweep_dead();
     assert!(!dead.exists(), "the sweep removes it; the live one stays");
 
     // The listing is machine-wide, so only named rows are asserted. A second held session makes
     // the bare resolution ambiguous, and it says so by naming both.
-    let busy = format!("busy_peer_{}", std::process::id());
-    let peer = session::hold(&busy).unwrap();
+    let peer = session::Session::hold().unwrap();
+    let busy = peer.id().to_string();
     peer.record_url("http://127.0.0.1:1");
     let listed = |who: &str| client::list().iter().any(|s| s.id == who);
     assert!(listed(&busy) && listed(&id), "both alive: {:?}", client::list());
+    session::sweep_dead();
+    assert!(listed(&busy) && listed(&id), "cleanup keeps both published sessions: {:?}", client::list());
     let why = client::resolve_target().unwrap_err();
     assert!(why.contains("several") && why.contains(&busy) && why.contains(&id), "{why}");
     // GOOFI_SESSION breaks the tie — and one naming NOTHING is refused by pointing at
@@ -115,7 +116,7 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     // The reserved client set is pinned AS the list, and help teaches the door words.
     assert_eq!(
         goofi_bridge::ops::RESERVED,
-        ["serve", "help", "session list", "agent term", "completions"]
+        ["help", "session list", "agent term", "completions"]
     );
     let top = ok(&url, "default", "help");
     assert!(top.contains("session list") && top.contains("node"), "{top}");
@@ -123,6 +124,36 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     assert!(group.contains("node param edit"), "a group listing: {group}");
     let err = client::exec(&url, &lines(&["frobnicate"]), None).unwrap_err();
     assert!(err.contains("unknown op"), "{err}");
+
+    // A refusal teaches in the reader's style: compact is one line, why then what answers it;
+    // human parts them and lays the answer out as help does — the op's usage row, or the group's
+    // table under the words that matched. Only a batch names the command index.
+    let compact = client::exec(&url, &lines(&["node edit"]), None).unwrap_err();
+    assert_eq!(compact.lines().count(), 1, "{compact}");
+    assert!(compact.starts_with("node edit: `--node` is required — `node edit` takes: <node>") && !compact.contains("command 0"), "{compact}");
+    let human = client::exec_styled(&url, &lines(&["node edit"]), None, true, 100, false).unwrap_err();
+    assert!(human.starts_with("node edit: `--node` is required\n\n  node edit  <node> --name <string>"), "{human}");
+    let human = client::exec_styled(&url, &lines(&["node"]), None, true, 100, false).unwrap_err();
+    assert!(human.starts_with("unknown op `node`\n\nnode — one node instance") && human.lines().any(|l| l.starts_with("  node param edit  ")),
+            "the group under the word, as a table: {human}");
+    // Color is the terminal's alone, asked for by the shell: the why is painted first of all, the
+    // op's name and its arguments each in their role, and nothing is painted unless asked.
+    let painted = client::exec_styled(&url, &lines(&["node edit"]), None, true, 100, true).unwrap_err();
+    assert!(painted.starts_with("\x1b[1m\x1b[31mnode edit: `--node` is required\x1b[0m\n\n  \x1b[36mnode edit\x1b[0m  \x1b[2m<node>"), "{painted:?}");
+    assert!(!human.contains('\x1b'), "{human:?}");
+    let batch = client::exec(&url, &lines(&["node add --type LFO", "node edit"]), None).unwrap_err();
+    assert!(batch.starts_with("command 1: node edit:"), "{batch}");
+    // …and a catalog answers a table for a person, a status its values then its lists as tables,
+    // where a pipe gets the JSON it parses; a nested shape (`op list`'s typed args) stays JSON.
+    let human = |cmd: &str| client::exec_styled(&url, &lines(&[cmd]), None, true, 120, false).unwrap()[0]["text"].as_str().unwrap().to_string();
+    let types = human("library list");
+    let mut rows = types.lines();
+    assert_eq!(rows.next(), Some("types"), "{types}");
+    assert!(rows.next().is_some_and(|h| h.starts_with("type") && h.ends_with("doc")), "a header row: {types}");
+    assert!(types.lines().any(|l| l.starts_with("signal:LFO ")), "{types}");
+    let status = human("session status");
+    assert!(status.lines().any(|l| l.starts_with("dirty  ")) && status.lines().any(|l| l.starts_with("instance_id  ")), "{status}");
+    assert!(human("op list").starts_with("ops\n  ["), "typed args nest too deep for a table");
 
     // Completion is a vocabulary read: every candidate is `word<TAB>doc`, and the walk follows
     // the phrase tree — groups with their own doc line, then an op's flags.
@@ -138,14 +169,19 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
             "an op completes its flags, typed and marked: {flags}");
     assert!(complete("node ad").lines().all(|l| l.starts_with("ad")),
             "a partial word filters");
+    // A group word alone runs its `list`, but a word typed under it is still an op name: the
+    // console's Tab on `log li` lands `list`, and `log ` offers every op of the group.
+    assert!(complete("log li").lines().any(|l| l.starts_with("list\t")), "{}", complete("log li"));
+    let under = complete("log ");
+    assert!(under.lines().any(|l| l.starts_with("list\t")) && under.lines().any(|l| l.starts_with("write\t")), "{under}");
 
     // A param edit lands on the graph, and a multi-line batch is ONE step in ITS actor's stack.
     let born: serde_json::Value =
         serde_json::from_str(&ok(&url, "shell_a", "node add --type LFO --name osc")).unwrap();
     let uid = born["uid"].as_str().unwrap().to_string();
-    ok(&url, "shell_a", &format!("node param edit {uid} output/sfreq --value 99"));
+    ok(&url, "shell_a", &format!("node param edit {uid} lfo/sfreq --value 99"));
     assert_eq!(
-        g.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 99.0,
+        g.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 99.0,
         "the edit reached the graph"
     );
     // …and completion turns LIVE: a `uid` position offers the patch's own nodes, by the NAME a
@@ -155,9 +191,9 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
             "a uid position completes from the graph");
     // A node reference is the uid OR the unique name — resolved server-side, in the one
     // namespace nd() reads, so every transport takes both and the endpoint's node half follows.
-    ok(&url, "names", "node param edit osc output/sfreq --value 55");
+    ok(&url, "names", "node param edit osc lfo/sfreq --value 55");
     assert_eq!(
-        g.doc()["nodes"][&uid]["params"]["output"]["sfreq"]["value"], 55.0,
+        g.doc()["nodes"][&uid]["params"]["lfo"]["sfreq"]["value"], 55.0,
         "the name reached the same node"
     );
     let why = client::exec(&url, &lines(&["node state nosuch"]), None).unwrap_err();
@@ -173,15 +209,18 @@ async fn a_shell_finds_its_server_and_drives_the_whole_vocabulary_through_exec()
     let gone: serde_json::Value =
         serde_json::from_str(&ok(&url, "names", "link remove osc/out win/input")).unwrap();
     assert_eq!(gone["removed"], true, "the named wire was there to remove");
-    // Another actor's undo takes back ITS work, never shell_a's; bare shells share `default`.
+    // One history for every shell: an undo takes back the last write whoever made it, and the
+    // batch is one step of it.
     let d: serde_json::Value = serde_json::from_str(&ok(&url, "default", "node add --type Buffer")).unwrap();
     ok(&url, "default", "undo");
-    assert!(g.doc()["nodes"][d["uid"].as_str().unwrap()].is_null(), "default undid its own");
+    assert!(g.doc()["nodes"][d["uid"].as_str().unwrap()].is_null(), "the undo took back the last add");
     assert_eq!(g.doc()["nodes"].as_object().unwrap().len(), 3, "shell_a's three still stand");
-    ok(&url, "shell_a", "undo");
+    ok(&url, "shell_a", "undo"); // the named wire's removal
+    ok(&url, "shell_a", "undo"); // the named wire
+    ok(&url, "shell_a", "undo"); // the batch, as one step
     assert_eq!(
         g.doc()["nodes"].as_object().unwrap().len(), 1,
-        "one undo took back the whole batch, in shell_a's stack"
+        "one undo took back the whole batch"
     );
 
     // `--raw` round-trips: the entry's rendered form IS the NPY bytes, ready for a pipe.

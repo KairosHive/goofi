@@ -1,26 +1,32 @@
 /* goofi
-{ "doc": "a signal frame as a texture\nThe door in from the signal plane. `signal/mode` says what the frame becomes: its own texels — [N] is one row, [H, W] is gray, [H, W, C] keeps the channels it has — or the line plot or the trajectory a viewer draws of it, on transparent ground so it composites. A texel is the value on the range, through the colormap where the frame has one channel. A [C, N] frame is C series; a trajectory pairs the channels, one against the other. Set common/width and height, or the texture is the frame's own size.",
+{ "doc": "a signal frame as a texture\nThe door in from the signal plane. `signal/mode` says what the frame becomes: its own texels — [N] is one row, [H, W] is gray, [H, W, C] keeps the channels it has — or the line plot, the trajectory or the topomap a viewer draws of it, on transparent ground so it composites. A texel is the value on the range, through the colormap where the frame has one channel. A [C, N] frame is C series, each in the colormap at its share of the range; a trajectory pairs the channels, one against the other; a topomap places each channel by its name on the 10-20 head, and reads the last sample of a [C, N] frame. The `custom` colormap is your own stops: each a place from 0 to 1, a colour whose alpha thins what it covers, and the blend to the next stop. Set common/width and height, or the texture is the frame's own size.",
   "tags": ["image", "generator"],
   "inputs": [{"name": "input", "kind": "ARRAY"}],
   "params": [
     {"group": "signal", "name": "mode", "kind": "str", "default": "texture",
-     "options": ["texture", "line", "trajectory"]},
+     "options": ["texture", "line", "trajectory", "topomap"]},
     {"group": "signal", "name": "colormap", "kind": "str", "default": "viridis",
-     "options": ["viridis", "magma", "plasma", "gray", "jet", "coolwarm"],
-     "show": {"param": "mode", "any_of": ["texture"]}},
+     "options": ["viridis", "magma", "plasma", "gray", "jet", "coolwarm", "custom"]},
+    {"group": "signal", "section": "stops", "widget": "colormap", "doc": "the stops of the custom colormap",
+     "repeat": {"min": 2, "max": 16, "default": 2},
+     "show": {"param": "colormap", "any_of": ["custom"]}},
     {"group": "signal", "name": "autoscale", "kind": "bool", "default": true},
-    {"group": "signal", "name": "min", "kind": "float", "default": -1.0, "min": -10.0, "max": 10.0,
+    {"group": "signal", "name": "min", "kind": "num", "default": -1.0, "min": -10.0, "max": 10.0,
      "show": {"param": "autoscale", "any_of": ["false"]}},
-    {"group": "signal", "name": "max", "kind": "float", "default": 1.0, "min": -10.0, "max": 10.0,
+    {"group": "signal", "name": "max", "kind": "num", "default": 1.0, "min": -10.0, "max": 10.0,
      "show": {"param": "autoscale", "any_of": ["false"]}},
     {"group": "signal", "name": "log_x", "kind": "bool", "default": false,
      "show": {"param": "mode", "any_of": ["line"]}},
     {"group": "signal", "name": "log_y", "kind": "bool", "default": false,
      "show": {"param": "mode", "any_of": ["line", "trajectory"]}},
-    {"group": "signal", "name": "points", "kind": "float", "default": 0.0, "min": 0.0, "max": 12.0,
+    {"group": "signal", "name": "points", "kind": "num", "default": 0.0, "min": 0.0, "max": 12.0,
      "show": {"param": "mode", "any_of": ["line", "trajectory"]}},
-    {"group": "signal", "name": "thickness", "kind": "float", "default": 1.5, "min": 0.5, "max": 8.0,
-     "show": {"param": "mode", "any_of": ["line", "trajectory"]}} ] }
+    {"group": "signal", "name": "thickness", "kind": "num", "default": 1.5, "min": 0.5, "max": 8.0,
+     "show": {"param": "mode", "any_of": ["line", "trajectory"]}},
+    {"group": "signal", "name": "contours", "kind": "bool", "default": false,
+     "show": {"param": "mode", "any_of": ["topomap"]}},
+    {"group": "signal", "name": "electrodes", "kind": "bool", "default": true,
+     "show": {"param": "mode", "any_of": ["topomap"]}} ] }
 */
 
 // Half a path's width, and the dot that says where a trajectory is now.
@@ -30,19 +36,45 @@ const HEAD: f32 = 2.5;
 const MAX_FOLD: i32 = 48;
 const MAX_WALK: i32 = 192;
 const MAX_PAIRS: i32 = 8;
+// The viewers' head: its radius in the layout's unit square, the reach of one channel's value in
+// the same units, the electrode dot and the bands a contoured field is posterized into.
+const HEAD_RADIUS: f32 = 0.45;
+const REACH: f32 = 0.1;
+const MAX_CHANNELS: i32 = 256;
+const DOT: f32 = 2.0;
+const BANDS: f32 = 10.0;
+const HEAD_INK: vec3f = vec3f(0.773, 0.784, 0.839);
+const ELECTRODE_INK: vec3f = vec3f(0.055, 0.063, 0.078);
 
-/// The colours a series is drawn in, in the viewers' own order.
-fn series(k: i32) -> vec3f {
-    switch (k % 8) {
-        case 1: { return vec3f(0.710, 0.549, 1.000); }
-        case 2: { return vec3f(0.365, 0.816, 0.604); }
-        case 3: { return vec3f(1.000, 0.718, 0.380); }
-        case 4: { return vec3f(1.000, 0.478, 0.635); }
-        case 5: { return vec3f(0.604, 0.639, 0.702); }
-        case 6: { return vec3f(0.773, 0.784, 0.839); }
-        case 7: { return vec3f(0.431, 0.463, 0.525); }
-        default: { return vec3f(0.478, 0.718, 1.000); }
+/// The colour series `k` of `n` is drawn in: the colormap at the middle of its share of the range,
+/// so one series takes the map's centre and more spread evenly, never on its two ends.
+fn series(k: i32, n: i32) -> vec4f {
+    return colormap(p.colormap, (f32(k) + 0.5) / f32(max(n, 1)));
+}
+
+/// The custom colormap: the stops in their order, the first at or past `t` ending the segment it
+/// is in, blended from the one before as that stop's `blend` says; past both ends the end holds.
+fn custom(t: f32) -> vec4f {
+    let n = max(p.stops, 1);
+    var rgba = p.colour[n - 1];
+    for (var i = 0; i < n; i = i + 1) {
+        if (t <= p.at[i]) {
+            if (i == 0) {
+                rgba = p.colour[0];
+            } else {
+                let span = max(p.at[i] - p.at[i - 1], 1e-6);
+                var f = (t - p.at[i - 1]) / span;
+                switch (p.blend[i - 1]) {
+                    case 1u: { f = smoothstep(0.0, 1.0, f); }
+                    case 2u: { f = 0.0; }
+                    default: {}
+                }
+                rgba = mix(p.colour[i - 1], p.colour[i], f);
+            }
+            break;
+        }
     }
+    return rgba;
 }
 
 /// The stops of colormap `k`, in the viewers' menu order, and how many of them are set.
@@ -66,17 +98,23 @@ fn stop_count(k: u32) -> i32 {
     }
 }
 
-/// Where `t` of the unit range falls on colormap `k`: the viewers' own LUT, interpolated.
-fn colormap(k: u32, t: f32) -> vec3f {
+/// Where `t` of the unit range falls on colormap `k`: the viewers' own LUT, interpolated, opaque;
+/// or the custom stops, whose alpha is their own.
+fn colormap(k: u32, t: f32) -> vec4f {
+    if (k == 6u) {
+        return custom(clamp(t, 0.0, 1.0));
+    }
     var s = stops(k);
     let n = stop_count(k);
     let x = clamp(t, 0.0, 1.0) * f32(n - 1);
     let i = min(i32(floor(x)), n - 2);
-    return mix(s[i], s[i + 1], x - f32(i));
+    return vec4f(mix(s[i], s[i + 1], x - f32(i)), 1.0);
 }
 
-fn ink(under: vec4f, colour: vec3f, cover: f32) -> vec4f {
-    return vec4f(mix(under.rgb, colour, cover), max(under.a, cover));
+/// `colour` over `under`, covering `cover` of the texel thinned by the colour's own alpha.
+fn ink(under: vec4f, colour: vec4f, cover: f32) -> vec4f {
+    let c = cover * colour.a;
+    return vec4f(mix(under.rgb, colour.rgb, c), max(under.a, c));
 }
 
 /// Sample `i` of channel `c`, as the upload left it.
@@ -92,12 +130,13 @@ fn ordinate(v: f32) -> f32 {
     return v;
 }
 
-/// The range a value is read against: the data's own, or the one asked for.
+/// The range a value is read against: the data's own, or the one asked for, over the scale the
+/// texels are carried at.
 fn window() -> vec2f {
     if (p.autoscale != 0u) {
         return vec2f(p.input_lo, p.input_hi);
     }
-    return vec2f(p.min, p.max);
+    return vec2f(p.min, p.max) / p.input_scale;
 }
 
 /// The range the drawing maps onto the frame. A log axis takes a positive window, and a
@@ -215,6 +254,78 @@ fn trajectory_pair(here: vec2f, pair: int_pair, n: i32, sp: vec2f, budget: i32) 
     return max(path, head);
 }
 
+/// How many channels a topomap has, and the value it reads for channel `c`: the sample of a
+/// one-row frame, or the last sample of a [C, N] frame's row.
+fn channel_count(dims: vec2i) -> i32 {
+    if (dims.y > 1) { return dims.y; }
+    return dims.x;
+}
+
+fn channel_value(c: i32, dims: vec2i) -> f32 {
+    if (dims.y > 1) { return at(dims.x - 1, c); }
+    return at(c, 0);
+}
+
+/// Channel `c`'s place on the head, and whether its name is on the layout.
+fn electrode(c: i32) -> vec3f {
+    if (c >= i32(textureDimensions(input_layout).x)) { return vec3f(0.0); }
+    return textureLoad(input_layout, vec2i(c, 0), 0).xyz;
+}
+
+/// A stroke's cover of `here`, in px.
+fn stroke(here: vec2f, a: vec2f, b: vec2f, width: f32) -> f32 {
+    return clamp(width * 0.5 + 0.5 - sqrt(to_segment(here, a, b)), 0.0, 1.0);
+}
+
+/// The head as the brain viewer draws it: the named channels' values spread over the disc, each
+/// weighted by its nearness — the viewers solve a thin-plate spline, which a texel cannot — through
+/// the colormap, under the outline, the nose and the electrode dots. Nothing without three named
+/// channels, as the viewer.
+fn topomap(uv: vec2f, dims: vec2i) -> vec4f {
+    let here = uv * resolution;
+    let side = min(resolution.x, resolution.y);
+    let centre = resolution * 0.5;
+    let q = (here - centre) / side + 0.5;
+    let radius = side * HEAD_RADIUS;
+    let n = min(channel_count(dims), MAX_CHANNELS);
+    var weight = 0.0;
+    var sum = 0.0;
+    var known = 0;
+    var dot_cover = 0.0;
+    for (var c = 0; c < n; c = c + 1) {
+        let e = electrode(c);
+        if (e.z < 0.5) { continue; }
+        known = known + 1;
+        let d = q - e.xy;
+        let w = exp(-dot(d, d) / (2.0 * REACH * REACH));
+        weight = weight + w;
+        sum = sum + w * channel_value(c, dims);
+        if (p.electrodes != 0u) {
+            dot_cover = max(dot_cover, clamp(DOT + 0.5 - distance(here, centre + (e.xy - 0.5) * side), 0.0, 1.0));
+        }
+    }
+    if (known < 3) {
+        return vec4f(0.0);
+    }
+    var out = vec4f(0.0);
+    let inside = radius + 0.5 - distance(here, centre);
+    if (inside > 0.0) {
+        let w = window();
+        var t = (sum / max(weight, 1e-12) - w.x) / max(w.y - w.x, 1e-12);
+        if (p.contours != 0u) {
+            t = floor(t * BANDS + 0.5) / BANDS;
+        }
+        let c = colormap(p.colormap, t);
+        out = vec4f(c.rgb, clamp(inside, 0.0, 1.0) * c.a);
+    }
+    let ring = clamp(1.25 - abs(distance(here, centre) - radius), 0.0, 1.0);
+    let top = centre - vec2f(0.0, radius);
+    let tip = top - vec2f(0.0, 10.0);
+    let nose = max(stroke(here, top - vec2f(8.0, 0.0), tip, 1.5), stroke(here, tip, top + vec2f(8.0, 0.0), 1.5));
+    out = ink(out, vec4f(HEAD_INK, 1.0), max(ring, nose));
+    return ink(out, vec4f(ELECTRODE_INK, 1.0), dot_cover);
+}
+
 /// The frame's own texels, each read against the range: a one-channel value through the colormap,
 /// a colour frame's channels as they are, and its alpha untouched.
 fn texel(uv: vec2f) -> vec4f {
@@ -222,7 +333,8 @@ fn texel(uv: vec2f) -> vec4f {
     let w = window();
     let n = (v.rgb - w.x) / max(w.y - w.x, 1e-12);
     if (p.input_channels < 2.5) {
-        return vec4f(colormap(p.colormap, n.r), v.a);
+        let c = colormap(p.colormap, n.r);
+        return vec4f(c.rgb, v.a * c.a);
     }
     return vec4f(clamp(n, vec3f(0.0), vec3f(1.0)), v.a);
 }
@@ -236,11 +348,14 @@ fn shade(uv: vec2f) -> vec4f {
     if (p.mode == 0u) {
         return texel(uv);
     }
+    if (p.mode == 3u) {
+        return topomap(uv, dims);
+    }
     let sp = span();
     var out = vec4f(0.0);
     if (p.mode == 1u) {
         for (var c = 0; c < dims.y; c = c + 1) {
-            out = ink(out, series(c), line_channel(uv, c, dims.x, sp));
+            out = ink(out, series(c, dims.y), line_channel(uv, c, dims.x, sp));
         }
         return out;
     }
@@ -260,7 +375,7 @@ fn shade(uv: vec2f) -> vec4f {
     for (var i = 0; i < dims.y; i = i + 1) {
         for (var j = i + 1; j < dims.y; j = j + 1) {
             if (k < pairs) {
-                out = ink(out, series(k), trajectory_pair(here, int_pair(i, j), dims.x, sp, budget));
+                out = ink(out, series(k, pairs), trajectory_pair(here, int_pair(i, j), dims.x, sp, budget));
             }
             k = k + 1;
         }

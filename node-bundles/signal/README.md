@@ -13,3 +13,30 @@ Connect `FmSignal.out` to `Buffer`, then `Psd` or `Peaks`.
 The source retains its oscillator phases between blocks. It emits the samples
 for the elapsed time, independent of the node update rate. This is a signal
 array; use an audio-engine bridge when an audio stream is needed.
+
+## Morph
+
+One frame picked along the frames wired into `input`, which must share a shape: `position`
+counts in frames and loops, so 1.5 is halfway from the second to the third. `linear` mixes the
+two nearest; `spline` runs one closed Catmull-Rom curve through all of them, which passes through
+every frame and stops at none. The node runs on its own clock, so an expression on `position`
+glides between held frames — the token grids of `DINO` nodes, say, on their way to `DinoDecode` —
+and it sends nothing while neither the frames nor the point move, the frames told apart by their
+senders' stamps.
+
+## RandomMap
+
+Map any number of inputs to `map.outputs` values through a seeded random matrix.
+Every input is flattened and joined; the matrix is scaled so its largest singular
+value is 1, and rebuilt when `map.seed`, the output count or the input size changes.
+
+## ArrayPlayback, StringPlayback, TablePlayback
+
+Play back a stream that goofi recorded: `playback.file` is the `.npy`, `.txt` or `.csv` file in a
+recording folder. The `.jsonl` sidecar beside it gives each frame's instant, shape and meta, so
+the frames leave as they were recorded, one frame per run in order. `common.max_frequency` must
+stay above the recorded frame rate. `playback.loop` starts over at the end.
+
+Without a sidecar, an array takes its frame shape and `sfreq` from the folder's `manifest.json`,
+else one sample per `fallback.channels` at `fallback.sfreq`. A text plays a line per
+`fallback.sfreq` second. A CSV row carries its own instant.

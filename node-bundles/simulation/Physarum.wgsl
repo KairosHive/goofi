@@ -7,9 +7,9 @@
   "params": [
     {"group": "mould", "name": "palette", "kind": "str", "default": "amber",
      "options": ["amber", "ice", "mono"]},
-    {"group": "mould", "name": "gain", "kind": "float", "default": 1.0, "min": 0.05, "max": 20.0},
-    {"group": "mould", "name": "gamma", "kind": "float", "default": 0.6, "min": 0.1, "max": 4.0},
-    {"group": "mould", "name": "agents", "kind": "float", "default": 0.0, "min": 0.0, "max": 8.0} ] }
+    {"group": "mould", "name": "gain", "kind": "num", "default": 1.0, "min": 0.05, "max": 20.0},
+    {"group": "mould", "name": "gamma", "kind": "num", "default": 0.6, "min": 0.1, "max": 4.0},
+    {"group": "mould", "name": "agents", "kind": "num", "default": 0.0, "min": 0.0, "max": 8.0} ] }
 */
 
 const MAX_AGENTS: i32 = 512;

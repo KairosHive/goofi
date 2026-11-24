@@ -1,14 +1,9 @@
-<!-- Field — the labelled-control frame: a real `<label>` for=-linked to the first live control
-     (see field.ts), plus an `adornment` that is a SIBLING of the label, never inside it. The row
-     wraps on its OWN width rather than on a breakpoint, so one field per line is the resting
-     shape and the label steps above the value only where the two cannot share a line.
-     Given `onExpand`, the label is a disclosure summary instead: a caret plus a press target the
-     whole name wide, for a row that reveals more beneath itself. `row` keeps the label and the
-     control on one line whatever the width, for a narrow menu of short controls. -->
+<!-- Field — a `<label>` linked to the first live control (see field.ts), with a sibling `adornment`.
+     The row wraps on its own width; `onExpand` makes the label a disclosure summary.
+     `--field-label-min` is the least width the label keeps, for a column too narrow for the default. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { Icon } from 'panelty';
 	import { provideFieldControlId } from './field';
 
 	let {
@@ -28,7 +23,7 @@
 		doc?: string;
 		/** Trailing control affordance. */
 		adornment?: Snippet;
-		/** Whether what this row reveals is open; drawn on the caret, and announced. */
+		/** Whether what this row reveals is open; announced, and the hover is the one affordance. */
 		expanded?: boolean;
 		/** Extend the disclosure target to its positioned parent with isolated stacking. */
 		stretchSummary?: boolean;
@@ -45,8 +40,20 @@
 
 <div {...rest} class={`ui-field ${klass}`.trim()} class:row title={doc ?? rest.title}>
 	{#if onExpand}
-		<button type="button" class="ui-field-label ui-field-summary" class:stretched={stretchSummary} aria-expanded={expanded} onclick={onExpand}>
-			<span class="ui-field-caret" class:open={expanded}><Icon name="chevron-right" /></span>{label}
+		<!-- Out of the tab order and never the focus: a press opens the row and hands the focus to the
+		     control it names, as a label does, so the row's shortcuts act on that control. -->
+		<button
+			type="button"
+			class="ui-field-label ui-field-summary"
+			class:stretched={stretchSummary}
+			aria-expanded={expanded}
+			tabindex="-1"
+			onclick={() => {
+				onExpand?.();
+				if (controlId) document.getElementById(controlId)?.focus();
+			}}
+		>
+			{label}
 		</button>
 	{:else}
 		<label class="ui-field-label" for={controlId}>{label}</label>
@@ -69,17 +76,18 @@
 		min-width: 0;
 		font-size: var(--fs-small);
 	}
+	/* A row is two cells of its parent's grid, so the rows of one menu share their columns. */
 	.ui-field.row {
-		flex-wrap: nowrap;
-		justify-content: space-between;
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
 	}
-	.ui-field.row .ui-field-value {
-		flex: 0 1 auto;
+	.ui-field.row .ui-field-control {
 		justify-content: flex-end;
 	}
 	.ui-field-label {
 		flex: 0 1 auto;
-		min-width: 4rem;
+		min-width: var(--field-label-min, 4rem);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -99,7 +107,6 @@
 		text-align: left;
 	}
 	.ui-field-summary:not(.stretched):focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 		border-radius: var(--radius-sm);
 	}
@@ -124,20 +131,8 @@
 		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 	}
-	.ui-field-caret {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		font-size: var(--fs-micro);
-		color: var(--text-muted);
-		transition: transform var(--dur-slow) var(--ease);
-	}
-	.ui-field-caret.open {
-		transform: rotate(90deg);
-	}
-	/* ONE flex item, so a field too narrow for a single line drops the whole value under the label
-	   instead of orphaning the adornment on a line of its own. Its basis IS the wrap threshold, and
-	   it sits ABOVE the stack threshold below so the two stages cannot both leave a control squeezed. */
+	/* ONE flex item, so a narrow field drops the whole value under the label. Its basis is the wrap
+	   threshold, above the stack threshold below, so the two stages cannot both squeeze a control. */
 	.ui-field-value {
 		flex: 1 1 18rem;
 		min-width: 0;

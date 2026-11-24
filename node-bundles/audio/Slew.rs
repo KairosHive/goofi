@@ -1,24 +1,26 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     RISE = ParamDecl {
         group: "slew",
         name: "rise",
-        spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds to climb one unit"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     FALL = ParamDecl {
         group: "slew",
         name: "fall",
-        spec: ParamSpec::Float { default: 0.01, min: 0.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("seconds to fall one unit"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 

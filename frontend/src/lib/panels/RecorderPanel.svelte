@@ -1,18 +1,17 @@
 <!-- Recorder panel — the name, the root and the start/stop of one recording, over the streams that
      are armed. What is armed lives in the document; the session lives in `record status`. -->
 <script lang="ts">
-	import { ContextMenu, type MenuItem, type PanelProps } from 'panelty';
+	import { type MenuItem, type PanelProps } from 'panelty';
 	import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-	import type { DropPoint } from '$lib/stores/ui.svelte';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { history } from '$lib/stores/history.svelte';
-	import { ui } from '$lib/stores/ui.svelte';
-	import { Bar, Button, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput } from '$lib/ui';
+	import { dropTarget, DropHint, type Point } from '$lib/drag';
+	import { byName } from './nodeChoices';
+	import { Bar, Button, EmptyState, Field, Icon, IconButton, ScrollArea, Select, StatusDot, TextInput, under, ContextMenu } from '$lib/ui';
 
 	const { panelId }: PanelProps = $props();
 
 	const g = graph();
-	const uiStore = ui();
 
 	// The next start's arguments, not a copy of backend state: empty is what makes the backend
 	// fall back to the `record.*` variables.
@@ -20,12 +19,10 @@
 	let root = $state('');
 	let failure = $state<string | null>(null);
 
-	const dragActive = $derived(uiStore.nodeDrag !== null);
-	const over = $derived(uiStore.nodeDragTarget === panelId);
 	const rec = $derived(g.record);
 
-	let nodeMenu = $state<DropPoint | null>(null);
-	let slotMenu = $state<{ uid: string; at: DropPoint; slots: string[]; selected: string[] } | null>(null);
+	let nodeMenu = $state<Point | null>(null);
+	let slotMenu = $state<{ uid: string; at: Point; slots: string[]; selected: string[] } | null>(null);
 	const qualityLabels = { small: 'Smaller file', high: 'High', very_high: 'Very high' };
 
 	function armSlots(uid: string, slots: string[]): void {
@@ -33,13 +30,13 @@
 		if (!node || slots.length === 0) return;
 		failure = null;
 		void history()
-			.transaction(`Arm ${node.name}`, async () => {
-				for (const slot of slots) await g.armSlot(uid, slot);
+			.transaction(`Arm ${node.name}`, async (step) => {
+				for (const slot of slots) await g.armSlot(uid, slot, step);
 			})
 			.catch((e: unknown) => (failure = String(e)));
 	}
 
-	function chooseSlots(uid: string, at: DropPoint): void {
+	function chooseSlots(uid: string, at: Point): void {
 		const slots = Object.keys(g.nodeById(uid)?.output_slots ?? {});
 		if (slots.length === 1) armSlots(uid, slots);
 		else if (slots.length > 1) slotMenu = { uid, at, slots, selected: [...slots] };
@@ -53,7 +50,7 @@
 
 	const nodeItems = $derived(g.nodes
 		.filter((node) => Object.keys(node.output_slots ?? {}).length > 0)
-		.toSorted((a, b) => a.name.localeCompare(b.name))
+		.toSorted(byName)
 		.map((node): MenuItem => ({
 			label: node.name,
 			action: () => { if (nodeMenu) chooseSlots(node.uid, nodeMenu); }
@@ -81,7 +78,6 @@
 		];
 	});
 
-	$effect(() => uiStore.onNodeDrop(panelId, (uid, _zone, at) => chooseSlots(uid, at)));
 
 	type Row = {
 		uid: string;
@@ -94,6 +90,8 @@
 		/** Dropping NOW: the count moved on the last report, which the cumulative one cannot say. */
 		losing: boolean;
 		fill: number;
+		/** Why the stream has no file: what the recorder could not open or write. */
+		error?: string;
 	};
 
 	const rows = $derived.by((): Row[] =>
@@ -112,18 +110,13 @@
 				frames: st?.frames ?? 0,
 				dropped: st?.dropped ?? 0,
 				losing: g.dropping.has(`${st?.node ?? label}/${a.slot}`),
-				fill: st?.fill ?? 0
+				fill: st?.fill ?? 0,
+				error: st?.error
 			};
 		})
 	);
 
 	const dropping = $derived(rows.some((r) => r.losing));
-
-	function clock(seconds: number | null): string {
-		const t = Math.max(0, Math.floor(seconds ?? 0));
-		const m = Math.floor(t / 60);
-		return `${String(m).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
-	}
 
 	function toggle(): void {
 		failure = null;
@@ -132,16 +125,24 @@
 	}
 </script>
 
-<div class="recorder" data-testid="recorder-panel">
+{#if g.demo}
+	<div class="recorder" data-testid="recorder-panel">
+		<EmptyState>
+			{#snippet title()}Recording is off in this demo{/snippet}
+			{#snippet hint()}A public goofi writes no files. Run goofi locally to record.{/snippet}
+		</EmptyState>
+	</div>
+{:else}
+<div class="recorder" data-testid="recorder-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source, at }) => chooseSlots(source.key, at) }}>
 	<Bar>
 		{#snippet start()}
 			<StatusDot
-				tone={rec.running ? (dropping ? 'warn' : 'ok') : 'error'}
+				tone={rec.running ? (dropping ? 'warning' : 'success') : 'danger'}
 				size="sm"
 				pulse={rec.running}
 				title={rec.running ? 'A recording runs' : 'No recording runs'}
 			/>
-			<span class="elapsed" data-testid="recorder-elapsed">{clock(rec.elapsed)}</span>
+			<span class="elapsed" data-testid="recorder-elapsed">{g.recordClock}</span>
 		{/snippet}
 		{#snippet end()}
 			<Button
@@ -159,10 +160,7 @@
 
 	<div class="add-node">
 		<Button size="sm" disabled={nodeItems.length === 0} data-testid="recorder-add-node"
-			onclick={(event) => {
-				const box = event.currentTarget.getBoundingClientRect();
-				nodeMenu = { x: box.left, y: box.bottom };
-			}}
+			onclick={(event) => (nodeMenu = under(event))}
 		><Icon name="plus" />Add node<Icon name="chevron-down" /></Button>
 	</div>
 
@@ -189,23 +187,27 @@
 		<div class="folder" data-testid="recorder-folder" title={rec.folder}>{rec.folder}</div>
 	{/if}
 	{#if failure ?? rec.error}
-		<div class="failure" data-testid="recorder-error">{failure ?? rec.error}</div>
+		<div class="error-text failure" data-testid="recorder-error">{failure ?? rec.error}</div>
 	{/if}
 
 	<ScrollArea>
 		{#if rows.length === 0}
-			<p class="hint">No slot is armed. Add a node above or drag one here to record its output slots.</p>
+			<EmptyState>
+				{#snippet hint()}No slot is armed. Add a node above or drag one here to record its output slots.{/snippet}
+			</EmptyState>
 		{:else}
 			<ul class="streams">
 				{#each rows as r (r.uid + '/' + r.slot)}
 					<li class="row" data-testid="recorder-stream" data-output={`${r.uid}/${r.slot}`}>
 						<div class="stream-status">
 							<StatusDot
-								tone={r.losing ? 'warn' : 'ok'}
+								tone={r.error ? 'danger' : r.losing ? 'warning' : 'success'}
 								size="sm"
-								title={r.losing
-									? `Dropping frames — ${r.dropped} lost`
-									: `${r.dropped} frames lost`}
+								title={r.error
+									? `Not recorded: ${r.error}`
+									: r.losing
+										? `Dropping frames — ${r.dropped} lost`
+										: `${r.dropped} frames lost`}
 							/>
 							<span class="who">
 								<span class="name">{r.label}/{r.slot}</span>
@@ -241,10 +243,9 @@
 		{/if}
 	</ScrollArea>
 
-	{#if dragActive}
-		<div class="node-drop-hint" class:active={over} data-testid="node-drop-hint"></div>
-	{/if}
+	<DropHint id={panelId} />
 </div>
+{/if}
 
 {#if nodeMenu}
 	<ContextMenu x={nodeMenu.x} y={nodeMenu.y} items={nodeItems} onClose={() => (nodeMenu = null)} />
@@ -261,7 +262,8 @@
 		height: 100%;
 		min-height: 0;
 	}
-	.elapsed {
+	.elapsed,
+	.num {
 		font-family: var(--font-mono);
 		font-size: var(--fs-small);
 		color: var(--text-muted);
@@ -288,15 +290,6 @@
 	.folder {
 		color: var(--text-muted);
 		font-family: var(--font-mono);
-	}
-	.failure {
-		color: var(--danger);
-	}
-	.hint {
-		margin: 0;
-		padding: var(--space-6) var(--space-3);
-		text-align: center;
-		color: var(--text-muted);
 	}
 	.streams {
 		list-style: none;
@@ -327,8 +320,6 @@
 		gap: var(--space-2);
 		min-height: var(--hit);
 		padding-left: var(--space-2);
-		border-radius: var(--radius-sm);
-		background: var(--surface-2);
 	}
 	.who {
 		flex: 1 1 auto;
@@ -345,12 +336,6 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--font-mono);
-	}
-	.num {
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
-		font-variant-numeric: tabular-nums;
-		color: var(--text-muted);
 	}
 	.drops.bad {
 		color: var(--warning);

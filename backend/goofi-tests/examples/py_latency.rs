@@ -3,7 +3,6 @@
 //!     cargo run -p goofi-tests --features embed --example py_latency --release
 use std::time::{Duration, Instant};
 
-use goofi_core::variables::VariableValue;
 use goofi_core::Param;
 use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
@@ -35,10 +34,10 @@ static PY_MANIFEST: NodeManifest = NodeManifest {
 };
 
 fn build(n: usize, src: &'static str, len: i64) -> (Graph, Vec<OutputProbe>) {
-    let mut g = goofi_bridge::fresh_graph(Some(goofi_bridge::Clock::External), goofi_bridge::RenderClock::External);
+    let (mut g, _) = goofi_bridge::fresh_graph(goofi_tests::hub(), Some(goofi_bridge::Clock::External), goofi_bridge::Clock::External).unwrap();
     goofi_tests::fixtures::register(&mut g);
-    // Every producer's rate cap is `variables.system.default_ufreq`; the patch default measures 30 Hz.
-    g.apply_variable_change("system.default_ufreq", Some(VariableValue::Float(1e6)), None, None).unwrap();
+    // Every producer's rate cap is `vars.signal.default_ufreq`; the patch default measures 30 Hz.
+    g.apply_variable_change("signal.default_ufreq", Some(goofi_core::Data::number(1e6)), None, None).unwrap();
     goofi_bridge::register_dyn_type(&mut g, 
         &PY_MANIFEST,
         Box::new(move |_| Box::new(PyNode::from_source(src, vec![("data", false)], vec!["out"]).unwrap()) as Box<dyn Node>),
@@ -50,7 +49,8 @@ fn build(n: usize, src: &'static str, len: i64) -> (Graph, Vec<OutputProbe>) {
     let mut probes = Vec::new();
     for _ in 0..n {
         let py = g.add_node("PyNode", None).unwrap();
-        probes.push(OutputProbe::open(&g, py, "out"));
+        g.settle();
+        probes.push(OutputProbe::open(&goofi_tests::hub(), &g, py, "out"));
         g.add_link(osc, "out", py, "data").unwrap();
     }
     (g, probes)

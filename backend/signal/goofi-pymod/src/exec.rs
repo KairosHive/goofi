@@ -15,10 +15,17 @@ use crate::data::{any_to_core, array_to_f32, dict_to_meta, Data};
 /// its own directly and pymod needs no dependency on goofi-node.
 pub type Groups = IndexMap<String, IndexMap<String, Param>>;
 
-/// Apply the live params, then call `node.setup()`.
-pub fn run_setup(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) -> PyResult<()> {
+/// Apply the live params and the clock, then call `node.setup()`.
+pub fn run_setup(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups, now: f64) -> PyResult<()> {
     apply_params(py, instance, params)?;
+    stamp(instance, now)?;
     instance.call_method0("setup")?;
+    Ok(())
+}
+
+/// Set `self.now` for the call about to run.
+fn stamp(instance: &Bound<'_, PyAny>, now: f64) -> PyResult<()> {
+    instance.cast::<crate::node::Node>()?.borrow_mut().now = now;
     Ok(())
 }
 
@@ -77,6 +84,12 @@ pub enum SlotIn<'a> {
     Multi(Vec<(&'a str, &'a CoreData)>),
 }
 
+/// Outputs and input clears from a successful process call.
+pub struct Ran {
+    pub outputs: Vec<(String, CoreData)>,
+    pub clear_inputs: Vec<String>,
+}
+
 /// Apply the live params, call `node.process(**inputs)`, and marshal the return into per-slot
 /// `Data`. `inputs` names every DECLARED slot in order; `out_slots` names the slot a bare
 /// (non-dict) return goes to.
@@ -87,16 +100,21 @@ pub fn run_process(
     inputs: &[(&str, SlotIn<'_>)],
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
-) -> PyResult<goofi_codec::ProcessOutput> {
+    now: f64,
+) -> PyResult<Ran> {
     let node = instance.cast::<crate::node::Node>()?;
-    node.borrow_mut().clear_inputs = Some(Vec::new());
+    {
+        let mut node = node.borrow_mut();
+        node.clear_inputs = Some(Vec::new());
+        node.now = now;
+    }
     let result = process_outputs(py, instance, params, inputs, out_slots, warned);
     let clear_inputs = node.borrow_mut().clear_inputs.take().unwrap_or_default();
     let outputs = result?;
     if let Some(name) = clear_inputs.iter().find(|name| !inputs.iter().any(|(slot, _)| slot == name)) {
         return Err(pyo3::exceptions::PyValueError::new_err(format!("no input slot `{name}`")));
     }
-    Ok(goofi_codec::ProcessOutput { outputs, clear_inputs })
+    Ok(Ran { outputs, clear_inputs })
 }
 
 fn process_outputs(
@@ -169,10 +187,16 @@ fn apply_params(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) ->
     Ok(())
 }
 
-fn param_to_py<'py>(py: Python<'py>, p: &Param) -> PyResult<Bound<'py, PyAny>> {
+/// A `Param` as a native Python scalar.
+pub fn param_to_py<'py>(py: Python<'py>, p: &Param) -> PyResult<Bound<'py, PyAny>> {
     Ok(match p {
-        Param::Float { value, .. } => value.into_bound_py_any(py)?,
-        Param::Int { value, .. } => value.into_bound_py_any(py)?,
+        // A one-dimensional number is a bare `float` or `int`; a vector is a list of them.
+        Param::Num { value, int, .. } => match (value.as_slice(), int) {
+            ([v], true) => (v.round() as i64).into_bound_py_any(py)?,
+            ([v], false) => v.into_bound_py_any(py)?,
+            (vs, true) => vs.iter().map(|v| v.round() as i64).collect::<Vec<i64>>().into_bound_py_any(py)?,
+            (vs, false) => vs.to_vec().into_bound_py_any(py)?,
+        },
         Param::Bool { value } => value.into_bound_py_any(py)?,
         Param::Str { value, .. } => value.into_bound_py_any(py)?,
         Param::Pulse => py.None().into_bound(py),

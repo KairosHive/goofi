@@ -2,16 +2,18 @@
 resolver = "2"
 members = [
     # First, because it is what makes the rest buildable: `cargo run -p goofi-init` provisions the
-    # interpreters pyo3 links against. It depends on nothing, so it can never trigger that build.
+    # interpreters pyo3 links against. It links no Python, so it can never trigger that build.
     "backend/goofi-init",
+    "backend/goofi-supervisor",
+    "backend/goofi-screen",
     "backend/goofi-core",
     "backend/goofi-host-sdk",
-    "backend/goofi-host",
     "backend/graphics/goofi-graphics-sdk",
     "backend/goofi-codec",
     "backend/goofi-node",
     "backend/goofi-transport",
-    "backend/goofi-control",
+    "backend/goofi-agent",
+    "backend/goofi-runtime",
     "backend/goofi-window",
     "backend/goofi-build",
     "backend/goofi-graph",
@@ -46,9 +48,11 @@ codegen-units = 1
 # target 24 GB, and CI ran out of disk. Workspace crates keep line tables; dependencies carry none.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
 
 # A test target is a small crate against the big ones; its incremental cache is all cost.
 [profile.test]

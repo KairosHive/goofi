@@ -8,7 +8,7 @@ fn main() {
             log(args.get(1));
             goofi_audio::vst3::scan_main(&args[1..])
         }
-        Some("host") => goofi_signal::hosted::host_main(&args[1..]),
+        Some("host") => goofi_runtime::hosted::host_main(&args[1..]),
         _ => 2,
     };
     std::process::exit(code);

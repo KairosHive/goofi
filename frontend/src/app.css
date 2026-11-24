@@ -52,7 +52,6 @@
 	--text-dim: #9a9a9a;
 	--text-muted: #7a7a7a;
 	--accent: #50d0a0;
-	--accent-strong: #3fb88a;
 	/* A grass-green shifted off the mint --accent (D-M1) so "healthy/OK" reads distinct from
 	   "selected/accent" where they meet (a selected+healthy node's ring vs its health dot).
 	   Kept above the 3:1 floor on --surface-4; --success-fill color-mixes from it. */
@@ -61,6 +60,11 @@
 	--danger: #f06080;
 	--info: #6ab0ff;
 	--accent-fill: color-mix(in srgb, var(--accent) 18%, transparent);
+	/* The accent held back: a mark that says a state and does not call for the eye, as the fold
+	   of a range bar past an end of its axis, the still part of a spinner's ring, the fill of a
+	   picked note under its accent outline, and the ring line of the active panel and of linked
+	   content (see the ring convention below). Stronger than --accent-fill, which is a ground. */
+	--accent-muted: color-mix(in srgb, var(--accent) 40%, transparent);
 	--danger-fill: color-mix(in srgb, var(--danger) 16%, transparent);
 	--info-fill: color-mix(in srgb, var(--info) 16%, transparent);
 	--success-fill: color-mix(in srgb, var(--success) 16%, transparent);
@@ -70,9 +74,6 @@
 	   and --surface-3 (a panel header), so any absolute rung is invisible on one of them and DARKER
 	   than another. Translucent, so it lifts whatever it happens to sit on, by construction. */
 	--hover-fill: color-mix(in srgb, var(--text) 8%, transparent);
-	/* The active-panel / linked-content ring line (see the ring convention below). One token, so
-	   the panel frame and the panels that ring their own content cannot drift apart. */
-	--ring-accent: color-mix(in srgb, var(--accent) 45%, transparent);
 	/* Ink that sits ON a filled semantic surface (accent menu-hover, danger banner/toast, and the
 	   filled `$lib/ui` primitives). ONE answer, deliberately: both semantic fills are light enough
 	   that near-black is the legible ink (10.13:1 on --accent, 6.24:1 on --danger), and white on
@@ -96,6 +97,7 @@
 	--fs-body: 0.92rem;
 	--fs-strong: 1rem;
 	--fs-title: 1.15rem;
+	--fs-display: 1.5rem;
 	/* Chrome text — the header bar's one text size, --fs-small snapped to whole CSS pixels.
 	   The fluid html clamp makes the rem sizes fractional (0.82rem ≈ 11.48px), and a bar
 	   full of separately-laid-out text elements snaps each fractional baseline to the device
@@ -135,8 +137,13 @@
 	/* The keyboard focus ring (meaning #2 below). Width and ink are the ring; the OFFSET is not,
 	   and stays per-site — it says how far the ring sits off this particular box, which only that
 	   box knows. Named because the ring is restated by every primitive that needs its own offset,
-	   and five hand-written copies of one line is five chances for them to disagree. */
+	   and five hand-written copies of one line is five chances for them to disagree. The offset
+	   named below is the one the app-wide rule gives a control that states none. */
 	--focus-width: 2px;
+	/* The gap between a control and its focus ring, and how far the ring reaches past the control
+	   with it: the room a box that holds controls edge to edge keeps for the ring. */
+	--focus-offset: 1px;
+	--focus-reach: calc(var(--focus-width) + var(--focus-offset));
 	--focus-ink: var(--accent);
 
 	/* Hit-target geometry — documentary fine-pointer defaults. The touch floor only applies under
@@ -226,7 +233,6 @@
 	   inspector — the layout owns the panel, not its contents. */
 	--z-side-panel: 50; /* auto selection inspector overlay (panel content) */
 	--z-chrome: 55; /* splitters + panel corner grips (layout mechanics) */
-	--z-chip: 60; /* floating error chip */
 	--z-menu: 100; /* context menus */
 	--z-addmenu: 110; /* node-editor add-node menu + its capture overlay */
 	--z-drag-ghost: 150; /* live split/join preview while corner-dragging */
@@ -262,9 +268,10 @@
 	   day either side moved.
 	   --------------------------------------------------------------------------------------------- */
 	--panelty-accent: var(--accent);
-	--panelty-accent-strong: var(--accent-strong);
+	/* No stronger accent here: a filled accent button is the accent under the pointer too. */
+	--panelty-accent-strong: var(--accent);
 	--panelty-accent-fill: var(--accent-fill);
-	--panelty-ring-accent: var(--ring-accent);
+	--panelty-ring-accent: var(--accent-muted);
 	--panelty-on-accent: var(--on-accent);
 	--panelty-danger: var(--danger);
 	--panelty-danger-fill: var(--danger-fill);
@@ -386,6 +393,12 @@ textarea {
 	   select's hover, say) — focus is not one of them; see the ring below. */
 	transition: border-color var(--dur-fast) var(--ease);
 }
+input:disabled,
+select:disabled,
+textarea:disabled {
+	opacity: var(--disabled-opacity);
+	cursor: not-allowed;
+}
 
 /* Keyboard focus is visible app-wide (accent = state, meaning #2). Applies only to keyboard
    focus, so mouse clicks stay quiet. Components must not `outline: none` without this fallback.
@@ -395,7 +408,7 @@ textarea {
    for one state. */
 :focus-visible {
 	outline: var(--focus-width) solid var(--focus-ink);
-	outline-offset: 1px;
+	outline-offset: var(--focus-offset);
 }
 
 /* Ring convention (for P's Panel/Node): the active-panel / selected-node ring MUST paint ABOVE the
@@ -405,7 +418,7 @@ textarea {
    a higher stacking level) when the ring frames a sub-region, or `outline: 1px solid; outline-offset:
    -1px` on the framed element when it frames the whole box — outlines are painted last in their
    stacking context, so they need no pseudo-element, no z-index and no containing block. The colour
-   is --ring-accent (--accent = state, meaning #1). */
+   is --accent-muted (--accent = state, meaning #1). */
 
 ::-webkit-scrollbar {
 	width: 10px;
@@ -430,22 +443,65 @@ textarea {
 	scrollbar-color: var(--surface-3) transparent;
 }
 
-/* The dashed frame marking a panel as a node drop target while a node is dragged out of an
-   editor; it fills in when the cursor is over that panel. Global for the same reason as the
-   scrollbar skin above: it is ONE affordance worn by two panels (NodeLinkedPanel, serving
-   Parameters/Viewer/Metadata, and ConsolePanel's node filter), and it was byte-identical in both
-   — including the markup line — until this rule replaced the pair. The host must be positioned. */
-.node-drop-hint {
-	position: absolute;
-	inset: 4px;
-	pointer-events: none;
-	border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-	border-radius: var(--radius-sm);
-	z-index: var(--z-drag-ghost);
+/* A panel's root: a column the full height of its host, sized by container queries, whose
+   ScrollArea takes what the bar leaves. */
+.panel-wrap {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	container-type: inline-size;
 }
-.node-drop-hint.active {
-	border-style: solid;
-	background: color-mix(in srgb, var(--accent) 16%, transparent);
+
+/* The tone pill's type and tone vocabulary: Badge, Chip, Segmented and StatusDot share them. */
+.pill-type {
+	font-family: var(--font-sans);
+	font-size: var(--fs-micro);
+	font-weight: 600;
+	line-height: 1;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.t-accent { --tone: var(--accent); --tone-fill: var(--accent-fill); }
+.t-success { --tone: var(--success); --tone-fill: var(--success-fill); }
+.t-warning { --tone: var(--warning); --tone-fill: var(--warning-fill); }
+.t-danger { --tone: var(--danger); --tone-fill: var(--danger-fill); }
+
+/* The rotating caret of Field, Disclosure and MetadataField; global so the three cannot drift. */
+.disclosure-caret {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	font-size: var(--fs-micro);
+	color: var(--text-muted);
+	transition: transform var(--dur-slow) var(--ease);
+}
+.disclosure-caret.open {
+	transform: rotate(90deg);
+}
+
+/* While something is dragged, a disabled control is no surface: the browser dispatches no mouse
+   event to one, so a release over it would never reach the drag that let go. */
+html[data-drag] :disabled {
+	pointer-events: none;
+}
+/* A ChoiceGrid launcher that fills its panel. `--bg`, not `--surface-1`: a tile is
+   `--surface-1` and carries its separation by that step. */
+.launcher {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	height: 100%;
+	min-height: 0;
+	background: var(--bg);
+}
+/* Inline alert text in a panel. */
+.error-text {
+	margin: 0;
+	color: var(--danger);
+	font-size: var(--fs-small);
+	overflow-wrap: anywhere;
 }
 /* Both axes: the two horizontal wearers (the tab strip, the panel-header control strip) need the
    height, and it is inert for the vertical ones, which pin `overflow-x: hidden`. */
@@ -482,47 +538,6 @@ textarea {
 }
 .svelte-flow__controls-button:hover {
 	background: var(--surface-3) !important;
-}
-/* Connectors — "magnet" pills: a small dtype-coloured capsule sitting on the
-   node border, inside an oversized transparent hit-area so cables are easy to
-   grab. Colour comes from --dtype, set on the handle (or inherited) by the node
-   / slot; the visible pill is a ::before so there's no extra DOM per handle.
-   The `min-width/min-height: 0` below defeats the coarse floor on purpose, and
-   R kept it that way: handles tile the node edge at the --node-u pitch, so a
-   --hit target centred on one would reach over its neighbours and answer their
-   taps (see GoofiNode's `.ports` note). Frozen canvas geometry; pinch-zoom is
-   the door touch has here. */
-.svelte-flow__handle {
-	width: 22px;
-	height: 20px;
-	min-width: 0;
-	min-height: 0;
-	background: transparent;
-	border: 0;
-	border-radius: 0;
-}
-.svelte-flow__handle::before {
-	content: '';
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	transform: translate(-50%, -50%);
-	width: 14px;
-	height: 9px;
-	border-radius: 999px;
-	background: var(--dtype, var(--border-strong));
-	box-shadow: 0 0 0 2px var(--surface-1);
-	transition:
-		width var(--dur-fast) var(--ease),
-		height var(--dur-fast) var(--ease),
-		box-shadow var(--dur-fast) var(--ease);
-}
-.svelte-flow__handle:hover::before {
-	width: 16px;
-	height: 11px;
-	box-shadow:
-		0 0 0 2px var(--surface-1),
-		0 0 8px var(--dtype, var(--accent));
 }
 .svelte-flow__edge-path {
 	stroke: var(--border-strong);

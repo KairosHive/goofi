@@ -18,19 +18,9 @@
 		}));
 </script>
 
-<div class="empty" data-testid="empty-panel">
+<div class="launcher" data-testid="empty-panel">
 	<EmptyState>
 		{#snippet title()}Choose panel content{/snippet}
 		<ChoiceGrid {choices} />
 	</EmptyState>
 </div>
-
-<style>
-	.empty {
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		height: 100%;
-		background: var(--bg);
-	}
-</style>

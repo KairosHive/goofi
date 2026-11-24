@@ -3,7 +3,7 @@
 //! state but the input's past.
 
 use goofi_core::{stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct FreqShift {
@@ -97,14 +97,15 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "freq_shift",
         name: "frequency",
-        spec: ParamSpec::Float { default: 0.0, min: -5000.0, max: 5000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some(
             "How far to move the signal, in Hz, up for a positive number and down for a negative \
              one. Unlike a pitch change, the speed of the signal does not change with it.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -116,7 +117,8 @@ static PARAMS: &[ParamDecl] = &[
              which is the harsher, older sound.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "freq_shift",
@@ -125,7 +127,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past and start the shift's own phase again."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -32,14 +32,14 @@ const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18",
 /// batch rule.
 const DESCRIPTION: &str = "\
 Drive goofi with command lines. Each entry in `commands` is one op: `<op> [--arg value …]`, with \
-bash's own quoting rules. Call `op list` first — it answers every op with its arguments and its \
-kind; `<op> --help` then explains the one you picked. A bool arg is `--x` or `--no-x`; a list arg \
+bash's own quoting rules. Call `guide get orientation` first — it says how goofi is driven — \
+then `op list`, which answers every op with its arguments and its kind; `<op> --help` explains \
+the one you picked. A bool arg is `--x` or `--no-x`; a list arg \
 repeats its flag; a `json` arg takes one JSON string.\n\n\
 The reply is every command's result, in order, as one JSON list. SEVERAL commands execute as \
 one batch and ONE undo step: a step is a read or an undoable write — an effect runs alone — and \
 a refused step takes the whole batch back. To wire nodes made in the same batch, choose their \
-uids yourself with `node add --member_uid`. `actor` names your undo stack; calls that share it \
-share undo.";
+uids yourself with `node add --member_uid`. `actor` names you, for the context a step keeps.";
 
 /// The tool list: the one tool.
 fn tools() -> Vec<Value> {
@@ -56,7 +56,7 @@ fn tools() -> Vec<Value> {
                 },
                 "actor": {
                     "type": "string",
-                    "description": "The undo stack these commands land in (default \"mcp\").",
+                    "description": "Who is calling, for the context a step keeps (default \"mcp\").",
                 },
             },
             "required": ["commands"],
@@ -81,20 +81,25 @@ fn call_tool(state: &AppState, params: &Value) -> Value {
     if name != "goofi_exec" {
         return tool_result(format!("unknown tool `{name}` — this server has one: goofi_exec"), true);
     }
-    let Some(lines) = params
-        .get("arguments")
-        .and_then(|a| a.get("commands"))
-        .and_then(|c| c.as_array())
-        .map(|c| c.iter().map(|l| l.as_str().unwrap_or_default().to_string()).collect::<Vec<_>>())
-        .filter(|c: &Vec<String>| !c.is_empty())
-    else {
+    let lines = phrase::command_lines(&params["arguments"]);
+    if lines.is_empty() {
         return tool_result("goofi_exec: `commands` is a non-empty list of command lines".into(), true);
-    };
+    }
     match phrase::exec_lines(state, &lines, actor) {
         // ONE shape whatever the count — the list of results, in order — so no data is
         // reachable at one arity and paraphrased at another.
-        Ok(results) => tool_result(phrase::pretty(&Value::Array(results)), false),
-        Err(e) => tool_result(e, true),
+        Ok(results) => {
+            // Help is prose for the reader; every other result stays the data it is.
+            let results: Vec<Value> = results
+                .into_iter()
+                .map(|r| match r.get("help").is_some() {
+                    true => Value::String(phrase::render(&r, &crate::text::Style::COMPACT)),
+                    false => r,
+                })
+                .collect();
+            tool_result(phrase::pretty(&Value::Array(results)), false)
+        }
+        Err(e) => tool_result(e.render(&crate::text::Style::COMPACT), true),
     }
 }
 
@@ -110,12 +115,8 @@ fn rpc_error(id: Value, code: i64, message: String) -> Response {
 /// The central MCP endpoint — the address an external agent connects to. Registered with `post`,
 /// so axum answers the retired GET stream and DELETE teardown with the 405 the spec asks for.
 pub async fn endpoint(State(state): State<AppState>, body: String) -> Response {
-    serve(&state, &body).await
-}
-
-/// One JSON-RPC request.
-async fn serve(state: &AppState, body: &str) -> Response {
-    let req: Value = match serde_json::from_str(body) {
+    let state = &state;
+    let req: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => return rpc_error(Value::Null, -32700, format!("parse error: {e}")),
     };
@@ -142,15 +143,13 @@ async fn serve(state: &AppState, body: &str) -> Response {
                 },
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "goofi", "version": env!("CARGO_PKG_VERSION") },
-                // No `instructions`: the orientation is `AGENTS.md` in the harness's cwd.
+                // No `instructions`: the orientation is `guide get orientation`, one call away.
             }),
         ),
         "tools/list" => ok(id, json!({ "tools": tools() })),
         "tools/call" => {
-            // Off the async workers, as `/exec` is: a batch can hold the graph lock for seconds.
-            let state = state.clone();
-            let ran = tokio::task::spawn_blocking(move || call_tool(&state, &params)).await;
-            ok(id, ran.unwrap_or_else(|e| tool_result(format!("the exec task died: {e}"), true)))
+            let ran = crate::blocking(state, move |state| Ok(call_tool(state, &params))).await;
+            ok(id, ran.unwrap_or_else(|e| tool_result(e, true)))
         }
         "ping" => ok(id, json!({})),
         method => rpc_error(id, -32601, format!("unknown method `{method}`")),

@@ -17,6 +17,7 @@
 		disabled = false,
 		density = 'comfortable',
 		class: klass = '',
+		'aria-label': name,
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		value: string;
@@ -43,9 +44,11 @@
 </script>
 
 <div {...rest} class={`ui-select ${density === 'chrome' ? 'd-chrome ' : ''}${klass}`.trim()}>
+	<!-- The accessible name is the control's, not its wrapper's: a second dropdown of one field has none else. -->
 	<select
 		id={fieldId}
 		class="ui-select-input"
+		aria-label={name}
 		{value}
 		disabled={disabled || refreshing}
 		onchange={(e) => onChange((e.currentTarget as HTMLSelectElement).value)}
@@ -85,10 +88,6 @@
 		min-width: 0;
 		color: var(--text);
 	}
-	.ui-select-input:disabled {
-		opacity: var(--disabled-opacity);
-		cursor: default;
-	}
 	.ui-select.d-chrome,
 	.ui-select.d-chrome .ui-select-input {
 		flex: 0 0 auto;
@@ -117,15 +116,13 @@
 			border-color: var(--accent);
 		}
 	}
-	/* Chrome density is ONE control at every pointer: the node header's kind picker and the panel
-	   strip's read the same, so the coarse floor and the 16px focus-zoom size are not restated. */
 	/* A bare ring, not the ⟳ icon: a circle rotates dead-centred where the glyph wobbles. */
 	.ui-select-spinner {
 		width: 0.85em;
 		height: 0.85em;
 		border-radius: 50%;
 		box-sizing: border-box;
-		border: 1.5px solid color-mix(in srgb, var(--accent) 40%, transparent);
+		border: 1.5px solid var(--accent-muted);
 		border-top-color: var(--accent);
 		animation: ui-select-spin 0.8s linear infinite;
 	}

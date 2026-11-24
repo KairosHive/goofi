@@ -43,9 +43,9 @@ class RhythmPlayer(goofi.Node):
     }
     PARAMS = {
         "player": {
-            "bpm": goofi.FloatParam(120.0, 1.0, 600.0, doc="Beats a minute."),
-            "stepsPerBeat": goofi.FloatParam(4.0, 0.25, 16.0, doc="Grid positions to a beat. 4 is sixteenths."),
-            "length": goofi.FloatParam(0.5, 0.01, 1.0, doc="How much of a step the gate stays high for."),
+            "bpm": goofi.NumParam(120.0, 1.0, 600.0, doc="Beats a minute."),
+            "stepsPerBeat": goofi.NumParam(4.0, 0.25, 16.0, doc="Grid positions to a beat. 4 is sixteenths."),
+            "length": goofi.NumParam(0.5, 0.01, 1.0, doc="How much of a step the gate stays high for."),
             "running": goofi.BoolParam(True, doc="Off holds the position and drops every gate."),
             "restart": goofi.PulseParam(doc="Return to the start of the grid."),
         }

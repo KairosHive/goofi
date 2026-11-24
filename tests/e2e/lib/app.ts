@@ -15,11 +15,11 @@ export async function appReady(page: Page): Promise<void> {
 	});
 }
 
-/** Resolve once the app is fully live AND the shared backend is pristine — the readiness gate
- * every spec waits on before driving the façade. */
+/** Resolve once the app is fully live AND the shared backend holds a pristine patch again — the
+ * readiness gate every spec waits on before driving the façade. */
 export async function waitForApp(page: Page): Promise<void> {
 	await appReady(page);
-	await expectPristineWorkspace(page);
+	await handBack(page);
 }
 
 /**
@@ -27,72 +27,32 @@ export async function waitForApp(page: Page): Promise<void> {
  * product spec runs before it touches anything.
  *
  * One backend serves every spec on this worker (`globalSetup.ts` spawns one per worker slot, and
- * `fullyParallel: false` keeps a worker's files running one after another) while AppShell pushes the
- * layout into the RUNNING PATCH on a 400ms debounce that can outlive the page. So a spec that splits
- * a panel or adds a tab and leaves early persists that arrangement, `hello` echoes it, and every
- * later spec on that worker boots into it. This suite has been bitten by it four times, and
- * every time the red landed on an innocent file measuring geometry — never on the file that leaked.
+ * `fullyParallel: false` keeps a worker's files running one after another), and the patch is
+ * MANAGER state: a node, a variable group, a named save path or a panel type a spec leaves behind
+ * outlives its page and reaches every later spec on the worker through `hello`. The suite was
+ * red five times over such leaks, each time on an innocent file.
  *
- * Asserting it at ENTRY is what changes that: the failure names the cause, in the first spec after
- * the leak, instead of surfacing as a wrong bounding box in another project. A handful of reads
- * against an already-loaded page; nothing to do in the normal case. A spec that means to leave the
- * arrangement changed does not exist — the rule is that it hands the workspace back in a `finally`.
- *
- * What it deliberately does NOT check is the DIRTY flag. Editing anything sets it, so asserting it
- * clean would force a patch reset into all 37 specs that touch the graph — and a universal reset
- * would take the node guard above with it, since a reset can never leave a node behind to find.
- * The five variables below are all leaks a spec chooses to make; `unsaved_changes` is a byproduct of
- * doing any work at all.
+ * So every spec starts from the empty patch, which is one manager transaction (`session new`),
+ * and then reads back that the workspace is the one a fresh boot shows: one tab, one panel of the
+ * default type, no nodes, no name. A spec still hands back what it changed in a `finally`; this
+ * is what makes an order of specs, or a spec that died mid-walk, not matter.
  */
-export async function expectPristineWorkspace(page: Page): Promise<void> {
-	await expect(
-		page.getByTestId('workspace-tabs').locator('.ui-tab'),
-		'a previous spec left an extra workspace tab behind — hand it back in a `finally`'
-	).toHaveCount(1);
-	await expect(
-		page.locator('.panel'),
-		'a previous spec left a split panel behind — hand it back in a `finally`'
-	).toHaveCount(1);
-	// The third leakable global: GRAPH NODES. A leaked node is worse than a leaked panel — every
-	// later page renders its viewer and subscribes its stream, so it surfaced as an fps reading
-	// no single viewer could produce (viewer-fps-cap read 364 against a 30 cap: a dozen leaked
-	// viewers summed), red on the innocent file as ever. Unlike its two siblings this is an
-	// ABSENCE, and the leaked nodes arrive on the binary CRDT channel a beat after the JSON
-	// `hello` that `appReady` gates on — a count read in that gap sees an empty replica and the
-	// guard becomes a coin flip. `docSynced` is the positive signal that the replica has pulled;
-	// only after it does an empty node list mean an empty graph. Read from the store (synchronous
-	// with the doc), naming the leaked nodes so the red points at what was left, not just that
-	// something was.
+async function handBack(page: Page): Promise<void> {
+	await resetPatch(page);
+	await expect(page.getByTestId('workspace-tabs').locator('.ui-tab'), 'one workspace tab').toHaveCount(1);
+	await expect(page.locator('.panel'), 'one panel').toHaveCount(1);
+	// The replica pulls the new document a beat after the op answers: `docSynced` is the positive
+	// signal that it did, and only after it does an empty node list mean an empty graph.
 	await page.waitForFunction(() => (window as any).goofi.query.docSynced());
-	const leaked = await page.evaluate(() =>
-		(window as any).goofi.query.graph().nodes.map((n: { type: string; uid: string }) => `${n.type}(${n.uid})`)
-	);
-	expect(leaked, 'a previous spec left graph nodes behind — remove them in a `finally`').toEqual([]);
-	// The fourth leakable global, and the newest: the SAVE PATH. It is manager-owned since W, so it
-	// outlives the page that wrote it and reaches every later spec through `hello` — and a named
-	// patch changes what the app DOES, not just what it shows: `AppShell.triggerSave` overwrites
-	// silently instead of opening the file browser. That is what took eleven specs red the first
-	// time, none of them about saving. Unlike the dirty flag (a benign byproduct of any spec that
-	// edits anything), naming the patch is always deliberate — so it is always someone's `finally`
-	// to undo, with `resetPatch`.
-	const savePath = await page.evaluate(() => (window as any).goofi.query.graph().savePath);
-	expect(
-		savePath,
-		'a previous spec left the patch NAMED — hand it back with `resetPatch` in a `finally`'
-	).toBe(null);
-	// The fifth, and the one that reads as no leak at all: the panel's TYPE. A control panel mounts
-	// no node editor, so nothing subscribes and `integrity`'s streaming poll times out 30s later.
 	await expect
-		.poll(() => page.evaluate(() => (window as any).goofi.query.panels()[0]?.type), {
-			message: 'a previous spec left the panel on another type — `restorePanelType` in a `finally`'
-		})
+		.poll(() => page.evaluate(() => (window as any).goofi.query.panels()[0]?.type), { message: 'the panel is the default type' })
 		.toBe(DEFAULT_PANEL_TYPE);
 }
 
 /**
  * Hand the shared backend back an empty, unnamed, clean patch — one manager transaction (`new`).
  *
- * The `finally` half of the save-path contract `expectPristineWorkspace` enforces at the other end,
+ * The `finally` half of the save-path contract `waitForApp` hands back at the other end,
  * and the successor to the `loadText(<the file we just saved>)` trick five specs used to play: a
  * `.gfi` is a zip archive now, so the façade carries no content-load door left to abuse for a reset.
  */
@@ -108,7 +68,7 @@ export async function resetPatch(page: Page): Promise<void> {
 
 /** Hand back a tab the spec added: close the last one. The close IS the command — there is no
  * debounced push to outwait any more — so the arrangement the manager keeps is pristine as soon as
- * the tab strip says so. The `finally` half of the contract `expectPristineWorkspace` enforces at
+ * the tab strip says so. The `finally` half of the contract `waitForApp` hands back at
  * the other end. */
 export async function closeAddedTab(page: Page): Promise<void> {
 	const tabs = page.getByTestId('workspace-tabs');
@@ -159,7 +119,7 @@ export async function releasePointer(page: Page): Promise<void> {
  * Put the sole panel back on the node editor. A panel's type is a field in the RUNNING PATCH like
  * a split or a tab, so a spec that switches it and leaves early hands every later spec on that
  * worker a page with no canvas on it — and the red lands on whichever project measures a viewer
- * next. The `finally` half of the contract `expectPristineWorkspace` enforces at the other end.
+ * next. The `finally` half of the contract `waitForApp` hands back at the other end.
  */
 export async function restorePanelType(page: Page): Promise<void> {
 	await page.evaluate((type) => {

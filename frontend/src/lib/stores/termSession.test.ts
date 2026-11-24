@@ -121,6 +121,19 @@ const el = (name: string): HTMLElement => new FakeEl(name) as unknown as HTMLEle
 const sock = (): FakeSocket => FakeSocket.all[FakeSocket.all.length - 1];
 
 describe('the terminal store', () => {
+	it('keeps what is typed during the handshake, and sends it the instant the socket opens', () => {
+		const s = mod.termSession('abc', () => term);
+		s.attach(el('panel-1'));
+		term.type('ls');
+		term.type('\r');
+		expect(sock().sent, 'a connecting socket carries nothing yet').toEqual([]);
+		sock().open();
+		const bytes = sock().sent.filter((d): d is Uint8Array => d instanceof Uint8Array).map((d) => new TextDecoder().decode(d));
+		expect(bytes, 'typed before the open, out in order after it').toEqual(['ls', '\r']);
+		term.type('x');
+		expect(sock().sent.length, 'and an open socket carries a key at once').toBe(bytes.length + sock().control().length + 1);
+	});
+
 	it('keeps ONE Terminal per instance, so a panel can close and reopen without losing it', () => {
 		const first = mod.termSession('abc', () => term);
 		sock().open();

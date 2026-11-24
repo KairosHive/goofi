@@ -8,8 +8,8 @@
   "params": [
     {"group": "raster", "name": "layers", "kind": "str", "default": "both",
      "options": ["both", "spikes", "potentials"]},
-    {"group": "raster", "name": "speed", "kind": "int", "default": 1, "min": 1, "max": 16},
-    {"group": "raster", "name": "gain", "kind": "float", "default": 1.0, "min": 0.05, "max": 8.0} ] }
+    {"group": "raster", "name": "speed", "kind": "num", "int": true, "default": 1, "min": 1, "max": 16},
+    {"group": "raster", "name": "gain", "kind": "num", "default": 1.0, "min": 0.05, "max": 8.0} ] }
 */
 
 // A band may cover twenty thousand neurons and a block a thousand steps, so each fold walks at

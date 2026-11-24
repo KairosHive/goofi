@@ -71,26 +71,85 @@ pub struct Param {
     /// The index of the param's section inside its group; the inspector draws a line between two.
     #[serde(default)]
     pub section: u8,
+    /// The rules that must all hold for the inspector to show the param; one rule may stand bare.
+    #[serde(default, deserialize_with = "one_or_many_shows", skip_serializing_if = "Vec::is_empty")]
+    pub show: Vec<Show>,
+    /// The part the param plays in a declared section; `None` for a row of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show: Option<Show>,
+    pub role: Option<Role>,
     #[serde(flatten)]
     pub spec: ParamSpec,
 }
 
-/// The inspector shows a param only while `param` (`name` in the same group, or `group.name`)
-/// holds one of `any_of`, compared as text.
+/// A param's place in a section of its group: the count a list section is repeated by, or a
+/// member of a section — of one `slot` of a list, where `base` is its name inside the section.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "as", rename_all = "lowercase")]
+pub enum Role {
+    Count {
+        section: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        widget: Option<Widget>,
+    },
+    Member {
+        section: String,
+        base: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<u32>,
+    },
+    /// A string param naming a variable whose wire feeds the input `slot`.
+    Feed { slot: String, group: String },
+    /// A value the node's own saved state holds: shown in the document, left out of a patch.
+    Held,
+}
+
+/// What a list section is to its reader, drawn as one widget over every slot: a colormap, whose
+/// slots are a stop's `at`, `colour` and the `blend` to the next stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Widget {
+    Colormap,
+}
+
+/// One rule of a param's `show`: it holds while `param` (`name` in the same group, or
+/// `group.name`) holds one of `any_of`, compared as text, or is itself hidden.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Show {
     pub param: String,
     pub any_of: Vec<String>,
 }
 
+/// A rule on its own or a list of them, both read as the list.
+fn one_or_many_shows<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Show>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(Show),
+        Many(Vec<Show>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
+}
+
 /// The kind-specific fields, tagged by `kind` — exhaustive, so neither side has an unknown kind.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ParamSpec {
-    Int { default: i64, min: i64, max: i64, #[serde(default)] options: Vec<i64> },
-    Float { default: f64, min: f64, max: f64 },
+    /// A number, or a vector of them: `default` is one value or one per dimension.
+    Num {
+        #[serde(deserialize_with = "one_or_many")]
+        default: Vec<f64>,
+        min: f64,
+        max: f64,
+        #[serde(default)]
+        int: bool,
+        #[serde(default)]
+        options: Vec<i64>,
+        #[serde(default)]
+        face: crate::Face,
+    },
     Bool { default: bool },
     Str {
         default: String,
@@ -100,4 +159,18 @@ pub enum ParamSpec {
         refresh: bool,
     },
     Pulse {},
+}
+
+/// A number on its own or a list of them, both read as the list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(f64),
+        Many(Vec<f64>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(v) => vec![v],
+        OneOrMany::Many(v) => v,
+    })
 }

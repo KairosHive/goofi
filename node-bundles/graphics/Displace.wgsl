@@ -3,7 +3,7 @@
   "tags": ["image", "transform"],
   "inputs": [{"name": "input", "kind": "TEXTURE"}, {"name": "map", "kind": "TEXTURE"}],
   "params": [
-    {"group": "displace", "name": "amount", "kind": "float", "default": 0.1, "min": -1.0, "max": 1.0} ] }
+    {"group": "displace", "name": "amount", "kind": "num", "default": 0.1, "min": -1.0, "max": 1.0} ] }
 */
 fn shade(uv: vec2f) -> vec4f {
     let m = textureSample(map, samp, uv).rg - vec2f(0.5);

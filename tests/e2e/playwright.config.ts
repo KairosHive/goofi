@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -31,6 +31,14 @@ const INTEGRITY = /integrity\.spec\.ts$/;
 /** What a wait may take: paid only by a failure, so a busy runner never reaches it. */
 export const WAIT = 60_000;
 
+/** Both suites report alike. On CI each failure is also an annotation on the run, read without
+ *  opening a log. */
+export const REPORTER: ReporterDescription[] = [
+	['list'],
+	['html', { open: 'never' }],
+	...(process.env.CI ? [['github'] as ReporterDescription] : [])
+];
+
 export default defineConfig({
 	testDir: './tests',
 	// A worker owns its backend alone, so the specs that share one are the ones that landed on the
@@ -40,7 +48,7 @@ export default defineConfig({
 	globalSetup: './globalSetup.ts',
 	forbidOnly: !!process.env.CI,
 	retries: 0,
-	reporter: [['list'], ['html', { open: 'never' }]],
+	reporter: REPORTER,
 	// Every test here is a SESSION — one boot, then a long ordered walk — so the budget is a
 	// session's, not an assertion's.
 	timeout: 5 * WAIT,
@@ -49,16 +57,18 @@ export default defineConfig({
 		baseURL: BASE_URL,
 		actionTimeout: WAIT,
 		headless: true,
-		trace: 'on-first-retry'
+		// Kept for a failed test alone: with no retries, a trace on the first retry is never written,
+		// and a failure seen once on CI needs its socket frames and screenshots to be read at all.
+		trace: 'retain-on-failure'
 	},
-	// The suite is four situations, and the projects are the geometries they are asked in. Only the
+	// The projects are the geometries the specs are asked in. Only the
 	// integrity sweep is asked more than once: it is the responsive test, and re-asking it is what
 	// makes it one.
 	projects: [
 		{ name: 'desktop', testIgnore: /touch\.spec\.ts$/ },
 		{
 			name: 'phone',
-			testMatch: /(touch|integrity)\.spec\.ts$/,
+			testMatch: /(touch|integrity|machine|timeline)\.spec\.ts$/,
 			use: { ...devices['Pixel 7'] }
 		},
 		{

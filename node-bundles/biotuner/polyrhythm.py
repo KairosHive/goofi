@@ -73,9 +73,9 @@ class Polyrhythm(goofi.Node):
             "method": goofi.StringParam(
                 "euclid", ["euclid", "iso", "harmonic"], doc="How each degree becomes a cycle."
             ),
-            "maxDenom": goofi.IntParam(16, 2, 64, doc="euclid, iso: largest denominator a ratio may be approximated by."),
-            "harmonics": goofi.IntParam(4, 1, 16, doc="harmonic: how many harmonics each degree contributes."),
-            "cycleCap": goofi.IntParam(64, 4, 2048, doc="Longest grid allowed. The denominator drops until it fits."),
+            "maxDenom": goofi.NumParam(16, 2, 64, int=True, doc="euclid, iso: largest denominator a ratio may be approximated by."),
+            "harmonics": goofi.NumParam(4, 1, 16, int=True, doc="harmonic: how many harmonics each degree contributes."),
+            "cycleCap": goofi.NumParam(64, 4, 2048, int=True, doc="Longest grid allowed. The denominator drops until it fits."),
         }
     }
 

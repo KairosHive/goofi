@@ -27,7 +27,7 @@ class FractalDimension(goofi.Node):
                 ["petrosian", "katz", "higuchi"],
                 doc="Petrosian counts turns, Katz measures path length, Higuchi reads several scales.",
             ),
-            "kmax": goofi.IntParam(10, 2, 100, doc="Higuchi only: the coarsest scale read."),
+            "kmax": goofi.NumParam(10, 2, 100, int=True, doc="Higuchi only: the coarsest scale read."),
         }
     }
 

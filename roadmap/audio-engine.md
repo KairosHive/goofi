@@ -1,28 +1,25 @@
 # Audio engine
 
-The structural redesign is `backend-architecture.md`.
 The audio node contract is `sdk/README.md` and the code.
 
 ## Remaining
 
 - **Process isolation for native plugin processing.** Only the VST3 scan runs in a child
-  (`goofi vst3-scan`); `vst3/node.rs` calls the processor on the device thread, so a plugin that
+  (`goofi vst3-scan`); `vst3/node.rs` calls the processor on the device thread or one of its
+  render helpers (`pool.rs`), so a plugin that
   crashes at `setupProcessing` or its first block, or a CPU-limit signal under the RTKit fallback,
   takes the server with it. Keep the device callback bounded, with a defined fallback for late
   worker output. Measure the added buffering latency and deadline misses under CPU load before
   choosing the worker scheduling and buffer policy. Remove the `audio_thread_priority` git patch
   (`dav0dea`, `goofi-direct-first`, `Cargo.toml [patch.crates-io]`) when upstream provides
   direct-first Linux promotion.
-- **A buffer size request.** goofi asks for none (no `BufferSize` in `goofi-audio`); the host
-  default costs 2 s of buffer on pipewire-pulse. `Fixed(1024)` would make it ~43 ms end to end.
-  Provable only from outside the process, by recording the sink back: `session status` reports
-  what goofi did, not what was heard, and this host never surfaces the server's underflow.
-- **A device switch, a rate change and a stream loss run only under `Clock::Device`**, which only
-  `goofi-cli` constructs; every test uses `Clock::External`. A rate change and a stream loss
+- **A device switch, a rate change and a stream loss run only under `Clock::Internal`**, which only
+  `goofi-cli` constructs for audio; every test boots audio under `Clock::External`. A rate change and a stream loss
   (`DeviceNotAvailable` in the error callback) are unexercised. Windows and macOS callbacks are
   unmeasured, as is RT priority against the control thread's graph lock under a knob drag.
 - **A machine with no output device** faults every `AudioOut` and renders nothing. A real-time
-  self-clock for a device-less machine is open; graphics' `RenderClock::Timer` is the precedent.
+  self-clock for a device-less machine is open; the graphics ticker thread under `Clock::Internal`
+  (`goofi-graphics/src/lib.rs`) is the precedent.
 - **The `codes` mutex** (`goofi-python/src/inproc/expr.rs`, `Mutex<HashMap>`) is taken on every
   evaluation from every node thread. It wants to be read-mostly (written only on compile and
   release). Settle it with a threaded measurement before promising a high expression rate; a
@@ -31,6 +28,23 @@ The audio node contract is `sdk/README.md` and the code.
   `numpy` is imported on every array conversion, and `PyBytes::new` copies an array an
   `Arc<[u8]>` could alias.
 - **The OS mixer labels goofi `cpal-pulseaudio-<pid>`**; cpal exposes no way to set it. Upstream.
+- **The pure-Rust PulseAudio client is a poor fit for a short period** (the default is now 256
+  frames; a patch may store 128). Its reactor thread
+  pinned a core on a live patch (2026-10-10; the profile was not readable, so the cost inside it
+  is unknown), and the server's underflow events never reach cpal's error callback: `late` in
+  `session status` is goofi's own count. A native PipeWire or ALSA output path removes both.
+- **A plugin's own threads run as the plugin asks.** Measured 2026-10-11 on `examples/laser.gfi`
+  with Vital's editor open: its OpenGL renderer runs `SCHED_RR` 50 at 85–95% of a core, `JUCE
+  Timer` at `RR` 69, its gdbus/gmain/firebase threads at `RR` 50. The callback and the pool now
+  run at `RR` 80 on the performance cores (`rt.rs`), above all of them; the `late` count with the
+  editor open is unmeasured since. The PipeWire client's data-loop thread inside goofi still runs
+  at `TS`: a native PipeWire output path would give it the callback's priority.
+- **Two heavy plugins at 128 frames exceed the period on a power-limited laptop.** 2026-10-15:
+  under a build beside a browser the i9-13900HX held every core at ~2 GHz and Vital cost 1657 and
+  858 µs per 64-frame block (750 and 400 µs on the quiet machine), 100% late on P-cores at `RR` 80.
+  Seating cannot buy back a halved clock; the patch's answer is `audio.buffer_size` 256. Open:
+  whether `late` should raise a status the UI shows, with the per-node costs `session status`
+  already carries.
 - **`MidiIn` reads notes, bend and the sustain pedal** (`nodes/midi_in.rs`). Other CCs and
   aftertouch are absent, and a note-on for a held note moves its voice's velocity, not its
   envelope. A note lands at block start, up to 1.3 ms late; sample-accurate placement needs the
@@ -50,20 +64,22 @@ The audio node contract is `sdk/README.md` and the code.
   exists until a node needs one.
 - **Drift between two devices** for `AudioIn`, and between hosts in one patch (a WASAPI capture
   beside an ASIO output is allowed): measure before any correction is built.
-- **A canvas affordance for references**: nothing draws a reference on the canvas.
 - **Watchdog tuning.** `OVERRUNS = 8` blocks over `BUDGET` (`runtime.rs`); a node that runs at
-  exactly the budget flaps in and out; neither number has been tuned on a device.
-- **The shipped set, the owner's to settle.** Shipped today: `AudioIn`, `AudioOut`,
-  `AudioPlayback`, `MidiIn`, `SignalIn`, plus VST3. Candidates: `LFO` (or `Osc` at a low pitch?),
-  `Clock` (or `Osc` square?), `Seq`, `HzToOct`, `MidiCC` (one CC number per node, one output;
-  decided, deferred), `Sampler` (needs the resource door). `Mix` and `Offset`/`Scale` look
-  redundant while the jack sums and a reference replaces a literal. Whether `Limiter` belongs at
-  the jack, since `Filter` at a high `q` peaks at `q` times its input. The rule is orthogonality:
-  each node proves a seam or closes a gap nothing else composes to.
+  exactly the budget flaps in and out; `BUDGET` rests on one plugin measurement; `OVERRUNS` is untuned.
+- **The shipped set, the owner's to settle.** Builtins: `AudioIn`, `AudioOut`, `AudioPlayback`,
+  `MidiIn`, plus VST3; `node-bundles/audio` adds `Osc`, `Noise`, `Env`, `Filter`, `BandFilter`,
+  `BandFollow`, `FreqShift`, `Delay`, `Feedback`, `Reverb`, `Gain`, `Slew`, `Limiter`, `Mixdown`,
+  `Quantize`, `SignalIn`, `GraphicsIn`. Candidates: `Clock` (or `Osc` square?), `Seq`, `HzToOct`,
+  `MidiCC` (one CC number per node, one output; decided, deferred), `Sampler` (needs the resource
+  door). An LFO is `Osc` below 0 V. `Offset`/`Scale` look redundant while the jack sums and a
+  reference replaces a literal. The rule is orthogonality: each node proves a seam or closes a gap
+  nothing else composes to.
 - **VST3 residuals**: bus arrangements are the plugin's defaults (`vst3/node.rs` `arrange`), never
   the patch's choice; output parameter changes and output events are not read
-  (`outputParameterChanges`, `outputEvents` are null). A bundle replaced in place keeps its old
-  code until goofi restarts (`dlopen` answers one handle per path; `vst3/module.rs`); the scan
+  (`outputParameterChanges`, `outputEvents` are null). A plugin that moves its own values without
+  `performEdit` or `restartComponent(kParamValuesChanged)` leaves the document showing the old
+  ones until the next load; its blob, which a save stores, is right. A bundle replaced in place keeps its old
+  code until goofi restarts (`goofi_build::library` and `vst3/module.rs` keep one handle per path); the scan
   cache is never pruned; a class the host cannot describe is dropped without a row, and a bundle
   that yields none greys under its file name. Not yet proven on a real JUCE editor on Windows or
   macOS.

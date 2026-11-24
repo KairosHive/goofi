@@ -1,5 +1,5 @@
 import type { FullConfig } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { BASE_PORT, BIN, HOMES, LOG_DIR, REPO_ROOT, WAIT, homeOf } from './playwright.config';
@@ -10,16 +10,16 @@ type Backend = { child: ChildProcess; port: number; log: string };
  * One PREBUILT backend per worker slot, on `BASE_PORT + slot`.
  *
  * This replaces `webServer`, which can only ever spawn one — and one backend is why the suite ran
- * `workers: 1`. A single backend is shared variable state (`expectPristineWorkspace` and the save-path
+ * `workers: 1`. A single backend is shared variable state (`waitForApp`, which hands back the patch, and the save-path
  * guard in `lib/app.ts` are written against exactly that), so a second worker against it trips them:
  * measured, `--workers=4` on the shared backend failed 132 of 343. A backend per SLOT keeps the
  * contract intact rather than weakening it — a worker still owns its backend alone, so every
  * intra-worker ordering assumption survives; only a cross-worker one would not, and the suite has none.
  *
- * There is deliberately NO `/dev/shm/iox2*` sweep here. Unlinking a same-user tmpfs file never
- * fails, so a JS sweep cannot tell a corpse from a LIVE sibling's segment — it once severed a
- * running dev server's wires, silently, killing every wire made after it. The fleet's own boots
- * reclaim what the last run's SIGKILL left, through iceoryx2, which knows dead from alive.
+ * There is deliberately NO `/dev/shm` sweep here. Unlinking a same-user tmpfs file never fails,
+ * so a JS sweep cannot tell a corpse from a LIVE sibling's segment — it once severed a running
+ * dev server's wires, silently. The fleet's own boots reclaim what the last run's SIGKILL left,
+ * through the session sweep, which reads the lock that says a session is dead.
  *
  * Backend stdout also moves here: `webServer: { stdout: 'pipe' }` interleaved it into the report;
  * N of those would be unreadable even if Playwright offered it. Each backend gets its own log file
@@ -33,18 +33,14 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 	// config land in its own, never in the runner's real home. Its TEMP lives inside it too, so
 	// a mount a killed backend left is wiped with the home rather than offered as a recovery.
 	fs.rmSync(HOMES, { recursive: true, force: true });
+	for (let slot = 0; slot < config.workers; slot++) makeHome(slot);
+	// The node library is built ONCE, by a boot that serves nothing, before the fleet boots
+	// against it: N backends indexing a cold cache at once outlast the boot deadline together.
+	const warm = spawnSync(BIN, [], { cwd: REPO_ROOT, env: { ...envOf(0), GOOFI_BOOT_ONLY: '1' }, encoding: 'utf8' });
+	if (warm.status !== 0)
+		throw new Error(`goofi could not boot its node library:\n${(warm.stdout + warm.stderr).slice(-800)}`);
 	const fleet: Backend[] = [];
 	for (let slot = 0; slot < config.workers; slot++) {
-		const home = homeOf(slot);
-		const tmp = path.join(home, 'tmp');
-		fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
-		fs.mkdirSync(tmp, { recursive: true });
-		// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
-		// own seeding is absent-only, so this file stands.
-		fs.writeFileSync(
-			path.join(home, '.goofi', 'config.toml'),
-			'[[agents]]\nname = "_sh"\ncommand = "sh"\n'
-		);
 		const port = BASE_PORT + slot;
 		const log = path.join(LOG_DIR, `backend-${slot}.log`);
 		const fd = fs.openSync(log, 'w');
@@ -52,23 +48,9 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 		// runner's process group, so a Ctrl-C reaches it even before `reap` gets its turn.
 		// `--debug` opens `/dev/*`, which the integrity sweep drives: the gallery is a real route of
 		// the shipped app, reachable only when it is asked for.
-		// SHELL pinned to one known POSIX shell: the `_sh` config command is POSIX text, and the
-		// product runs it under the user's own login shell.
 		const child = spawn(BIN, ['--bind', '127.0.0.1', '--port', String(port), '--debug'], {
 			cwd: REPO_ROOT,
-			// The node build cache is pinned OUTSIDE the wiped home, and shared with `goofi-tests`.
-			// Left inside it, every run rebuilds every shipped node from scratch — which outlasts
-			// the boot deadline below, and the SIGKILL that follows means the build never
-			// finishes, so no later run is any faster either.
-			env: {
-				...process.env,
-				GOOFI_HOME: home,
-				TMPDIR: tmp,
-				TMP: tmp,
-				TEMP: tmp,
-				GOOFI_BUILD_DIR: process.env.GOOFI_BUILD_DIR ?? path.join(REPO_ROOT, 'target', 'goofi-build'),
-				SHELL: '/bin/sh'
-			},
+			env: envOf(slot),
 			stdio: ['ignore', fd, fd]
 		});
 		fs.closeSync(fd);
@@ -103,6 +85,34 @@ export default async function spawnFleet(config: FullConfig): Promise<() => Prom
 	}
 	console.log(`  ${fleet.length} backend(s) on :${BASE_PORT}-${BASE_PORT + fleet.length - 1} · logs in ${LOG_DIR}`);
 	return reap;
+}
+
+/** One slot's home: its own `.goofi` and TEMP, and the `_sh` agent entry the specs drive. */
+function makeHome(slot: number): void {
+	const home = homeOf(slot);
+	fs.mkdirSync(path.join(home, '.goofi'), { recursive: true });
+	fs.mkdirSync(path.join(home, 'tmp'), { recursive: true });
+	// `_sh` is a CONFIG entry a test writes, exactly as a user's own entry would be; the servers'
+	// own seeding is absent-only, so this file stands.
+	fs.writeFileSync(path.join(home, '.goofi', 'config.toml'), '[[agents]]\nname = "_sh"\ncommand = "sh"\n');
+}
+
+/**
+ * A backend's environment: its slot's home and TEMP. The runtime is inherited, so a run shares
+ * the build caches with `goofi-tests` and never rebuilds a shipped node. SHELL is one known POSIX
+ * shell: the `_sh` command is POSIX text, and the product runs it under the user's own login shell.
+ */
+function envOf(slot: number): NodeJS.ProcessEnv {
+	const home = homeOf(slot);
+	const tmp = path.join(home, 'tmp');
+	return {
+		...process.env,
+		GOOFI_HOME: home,
+		TMPDIR: tmp,
+		TMP: tmp,
+		TEMP: tmp,
+		SHELL: '/bin/sh'
+	};
 }
 
 /**

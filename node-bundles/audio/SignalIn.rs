@@ -1,8 +1,8 @@
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
 
-const WAVEFORM: Option<Show> = Some(Show { param: "mode", any_of: &["waveform"] });
-const OSCILLATOR: Option<Show> = Some(Show { param: "mode", any_of: &["oscillator"] });
+const WAVEFORM: &[Show] = &[Show { param: "mode", any_of: &["waveform"] }];
+const OSCILLATOR: &[Show] = &[Show { param: "mode", any_of: &["oscillator"] }];
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
@@ -12,7 +12,8 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     PITCH = ParamDecl {
         group: "signal",
@@ -22,6 +23,7 @@ goofi_audio_sdk::params! {
         doc: Some("what a column's pitch is: cycles a second, or volts per octave with 0 V at C4"),
         section: 0,
         show: OSCILLATOR,
+        role: None,
     },
     MIX = ParamDecl {
         group: "signal",
@@ -31,33 +33,77 @@ goofi_audio_sdk::params! {
         doc: Some("the rows of a [C, T] frame played together as one channel, their mean, rather than one channel each"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
     LOW = ParamDecl {
         group: "signal",
         name: "low",
-        spec: ParamSpec::Float { default: -1.0, min: -10.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[-1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the input value that is full scale low, -1 on the audio plane"),
         section: 0,
         show: WAVEFORM,
+        role: None,
     },
     HIGH = ParamDecl {
         group: "signal",
         name: "high",
-        spec: ParamSpec::Float { default: 1.0, min: -10.0, max: 10.0 },
+        spec: ParamSpec::Num { default: &[1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the input value that is full scale high, 1 on the audio plane"),
         section: 0,
         show: WAVEFORM,
+        role: None,
+    },
+    SPEED = ParamDecl {
+        group: "signal",
+        name: "speed",
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: Some("frame samples played per audio sample: 1 is one for one, 2 twice as fast"),
+        section: 1,
+        show: WAVEFORM,
+        role: None,
+    },
+    RESAMPLE = ParamDecl {
+        group: "signal",
+        name: "resample",
+        spec: ParamSpec::Str { default: "linear", options: cross::RESAMPLE, refresh: false },
+        expression: None,
+        doc: Some("how samples between a frame's own are made: a line, the nearest, or a cubic through four"),
+        section: 1,
+        show: WAVEFORM,
+        role: None,
+    },
+    MORPH = ParamDecl {
+        group: "signal",
+        name: "morph",
+        spec: ParamSpec::Bool { default: true },
+        expression: None,
+        doc: Some("glide from the previous frame to a new one over the time between their arrivals"),
+        section: 2,
+        show: WAVEFORM,
+        role: None,
     },
     SMOOTHING = ParamDecl {
         group: "signal",
         name: "smoothing",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 1.0 },
+        spec: ParamSpec::Num { default: &[50.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain },
         expression: None,
-        doc: Some("seconds a new frame crossfades in over"),
-        section: 0,
+        doc: Some("audio samples on each side of the loop point that blend across it, 0 for none"),
+        section: 3,
         show: WAVEFORM,
+        role: None,
+    },
+    SIGMA = ParamDecl {
+        group: "signal",
+        name: "sigma",
+        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 3.0, int: false, options: &[], face: Face::Plain },
+        expression: None,
+        doc: Some("the width of the smoothing's gaussian falloff, as a share of `smoothing`"),
+        section: 3,
+        show: WAVEFORM,
+        role: None,
     },
 }
 
@@ -68,14 +114,14 @@ static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }
 static MANIFEST: Manifest = Manifest {
     tags: &[Tag::Control],
     doc: "A signal frame crossing into the audio plane.\n\
-          As a `waveform`, a `[C, T]` frame with `sfreq` enters as `C` audio channels, resampled \
-          to the rate; one with no `sfreq` enters one sample per sample. The newest frame loops \
-          until the next one takes over at its end, so frames on time play back to back and a \
-          late one never leaves a gap. With `mix`, the `C` rows play together as one channel, \
-          their mean. `low..high` are the values that are full scale, and `smoothing` crossfades \
-          one frame into the next. As an `oscillator`, an `[n]` frame is n sines at those \
-          pitches, Hz or volts per octave by `pitch`, and a `[2, n]` frame n sines at row 0 with \
-          row 1 as their phase in radians; their mean is one channel.",
+          As a `waveform`, a `[C, T]` frame enters as `C` audio channels, `speed` frame samples \
+          to an audio sample. The newest frame loops until the next one takes over at its end, so \
+          frames on time play back to back and a late one never leaves a gap; with `morph`, it \
+          takes over as it arrives and the loop glides into it. `smoothing` blends the loop's two ends \
+          where they meet. With `mix`, the `C` rows play together as one channel, their mean. \
+          `low..high` are the values that are full scale. As an `oscillator`, an `[n]` frame is \
+          n sines at those pitches, Hz or volts per octave by `pitch`, and a `[2, n]` frame n \
+          sines at row 0 with row 1 as their phase in radians; their mean is one channel.",
     inputs: INS,
     outputs: OUTS,
     params: PARAMS,
@@ -87,7 +133,7 @@ struct SignalIn;
 impl AudioNode for SignalIn {
     fn prepare(&mut self, _rate: f64) {}
 
-    /// The engine plays the frames by `mode` and `smoothing`; what reaches here is already sound.
+    /// The engine plays the frames by the `signal` params; what reaches here is already sound.
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];
         let out = &mut b.outs[0];

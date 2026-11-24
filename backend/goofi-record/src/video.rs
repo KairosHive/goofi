@@ -1,20 +1,19 @@
-//! A video stream: the frames one armed graphics slot renders, encoded, and the sidecar of
-//! instants that makes the video alignable frame by frame with every other stream.
-//!
-//! [`Video`] is the stream and knows no codec: a queue the engine hands frames to, the sidecar
-//! every stream has, and the counters. Everything a codec needs is behind [`Encoder`], and `Ffmpeg` is the
-//! one implementation of it.
+//! A video stream: the frames one armed graphics slot renders, encoded. Everything a codec needs
+//! is behind [`Encoder`], and `Ffmpeg` is the one implementation of it; [`Video`] is the format
+//! the stream writes through and knows no codec.
 
-use std::io::{Read, Write};
-use goofi_core::record::VideoQuality;
-use std::path::{Path, PathBuf};
-use goofi_core::child::{Child, Out};
-use std::process::{ChildStdin, Command};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{ChildStdin, Command};
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use goofi_core::record::{Frame, VideoQuality};
+use goofi_supervisor::child::{Child, Out};
+use goofi_supervisor::sync::Mutex;
+
+use crate::stream::{Added, Format};
 
 /// One video file being written. A frame is `width * height` tight-packed texels of four 8-bit
 /// unsigned RGBA channels, row 0 the top — the graphics engine's readback exactly as
@@ -41,7 +40,7 @@ pub struct FfmpegEncoders;
 
 impl Encoders for FfmpegEncoders {
     fn probe(&self) -> Result<(), String> {
-        goofi_core::child::output("ffmpeg probe", Command::new("ffmpeg").arg("-version"), Duration::from_secs(10))
+        goofi_supervisor::child::output("ffmpeg probe", ffmpeg_bare().arg("-version"), Duration::from_secs(10))
             .map_err(|_| MISSING.to_string())
             .and_then(|out| if out.status.success() { Ok(()) } else { Err(MISSING.to_string()) })
     }
@@ -77,7 +76,7 @@ struct Ffmpeg {
     fps: f64,
     quality: VideoQuality,
     closed: bool,
-    stderr: Option<goofi_core::worker::Worker<String>>,
+    stderr: Option<goofi_supervisor::worker::Worker<String>>,
 }
 
 /// Settings shared by the trial encode and the recording.
@@ -164,24 +163,23 @@ impl Preset {
         )]);
         self.output(&mut command, fps, quality);
         // A trial that fails is the expected answer for most candidates, not something to log.
-        let mut child = goofi_core::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
+        let mut child = goofi_supervisor::child::run(format!("ffmpeg trial {}", self.codec), command.args(["-frames:v", "1", "-f", "null", "-"]))
+            .windowless()
             .stdout(Out::Null)
             .stderr(Out::Null)
             .spawn()
             .map_err(|e| format!("{MISSING} ({e})"))?;
-        Ok(child.wait_within(Duration::from_secs(5)).map_err(|e| e.to_string())?
-            .is_some_and(|status| status.success()))
+        Ok(child.wait_within(Duration::from_secs(5)).is_some_and(|status| status.success()))
     }
 }
 
+/// The `ffmpeg` the layout names, with no arguments yet.
+fn ffmpeg_bare() -> Command {
+    goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Ffmpeg)
+}
+
 fn ffmpeg() -> Command {
-    let mut command = Command::new("ffmpeg");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut command = ffmpeg_bare();
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     command
 }
@@ -194,7 +192,7 @@ impl Ffmpeg {
     /// Select and start the encoder on the writer thread, without blocking the graphics clock.
     fn start(&mut self) -> Result<(), String> {
         let candidates = Preset::candidates();
-        let known = WORKING.lock().expect("the working presets").get(&self.size).copied();
+        let known = WORKING.lock().get(&self.size).copied();
         let index = match known {
             Some(i) if i < candidates.len() => i,
             _ => {
@@ -206,7 +204,7 @@ impl Ffmpeg {
                     }
                 }
                 let i = found.ok_or("FFmpeg has no working H.264 encoder for this frame size; install an FFmpeg build with libx264 or a supported hardware encoder")?;
-                WORKING.lock().expect("the working presets").insert(self.size, i);
+                WORKING.lock().insert(self.size, i);
                 i
             }
         };
@@ -218,14 +216,15 @@ impl Ffmpeg {
             .args(["-i", "-"]);
         preset.output(&mut command, self.fps, self.quality);
         // stderr is read by the owner: an encoder's last words are the error the recording reports.
-        let mut child = goofi_core::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
+        let mut child = goofi_supervisor::child::run(format!("ffmpeg {}", self.file.display()), command.arg(&self.file))
+            .windowless()
             .stdin_piped()
             .stdout(Out::Null)
             .stderr(Out::Pipe)
             .spawn()
             .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
-        let errors = goofi_core::worker::thread("goofi-record-errors").spawn(move || {
+        let errors = goofi_supervisor::worker::thread("goofi-record-errors").spawn(move || {
             let mut message = Vec::new();
             let mut buffer = [0u8; 1024];
             while let Ok(n) = stderr.read(&mut buffer) {
@@ -288,173 +287,39 @@ impl Drop for Ffmpeg {
     }
 }
 
-/// How many frames may wait for the encoder. The engine renders in real time and an HD frame is
-/// 8 MB, so a deeper queue only postpones the same loss and hides it behind memory.
-const QUEUE: usize = 2;
-
-const FLUSH_EVERY: Duration = Duration::from_secs(1);
-
-type Job = (Vec<u8>, f64);
-
-/// Reuse completed frame buffers to limit allocations.
-type Free = Arc<Mutex<Vec<Vec<u8>>>>;
-
+/// One video file, written as a [`Format`]: the frames one armed graphics slot read back, each
+/// handed to the encoder as it comes. The worker that writes it is this stream's own thread, so
+/// an encoder that is slow costs this stream its queue's depth and nobody else anything.
 pub struct Video {
-    frames: Option<SyncSender<Job>>,
-    writer: Option<goofi_core::worker::Worker>,
-    counts: Counts,
-    free: Free,
+    encoder: Box<dyn Encoder>,
+    encoded: u64,
 }
 
 impl Video {
-    /// Open the encoder handle and sidecar. Encoding starts on the writer thread.
-    pub fn spawn(
-        encoders: &dyn Encoders,
-        folder: &Path,
-        file: &str,
-        size: (u32, u32),
-        fps: f64,
-        quality: VideoQuality,
-    ) -> Result<Video, String> {
-        let out = folder.join(file);
-        let encoder = encoders.open(&out, size, fps, quality)?;
-        let beside = crate::beside::Beside::create(&out)?;
-        let (tx, rx) = sync_channel(QUEUE);
-        let counts = Counts::default();
-        let free = Free::default();
-        let writer = {
-            let (counts, free) = (counts.clone(), free.clone());
-            goofi_core::worker::thread("goofi-record-video")
-                .spawn(move || encode(rx, encoder, beside, &counts, &free))
-                .map_err(|e| e.to_string())?
-        };
-        Ok(Video { frames: Some(tx), writer: Some(writer), counts, free })
-    }
-
-    /// Hand one readback to the encoder, with the patch instant it was rendered at. `false` is a
-    /// frame the encoder could not keep up with, or a dead encoder — a drop, never a stall.
-    pub fn push(&self, texels: &[u8], at: f64) -> bool {
-        let Some(tx) = &self.frames else { return false };
-        if self.counts.dead.load(Ordering::Relaxed) {
-            return false;
-        }
-        if self.counts.queued.load(Ordering::Relaxed) >= QUEUE as u64 {
-            return false;
-        }
-        let mut buffer = self.free.lock().expect("the free frames").pop().unwrap_or_default();
-        buffer.clear();
-        buffer.extend_from_slice(texels);
-        self.counts.queued.fetch_add(1, Ordering::Relaxed);
-        match tx.try_send((buffer, at)) {
-            Ok(()) => true,
-            Err(TrySendError::Full((buffer, _))) => {
-                self.counts.queued.fetch_sub(1, Ordering::Relaxed);
-                give_back(&self.free, buffer);
-                false
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.counts.queued.fetch_sub(1, Ordering::Relaxed);
-                false
-            }
-        }
-    }
-
-    /// Frames the encoder took, which is what the manifest counts — never what was handed over.
-    pub fn encoded(&self) -> u64 {
-        self.counts.encoded.load(Ordering::Relaxed)
-    }
-
-    /// Frames accepted and then lost, which an encoder that died mid-write costs, and a frame
-    /// the sidecar could not account for.
-    pub fn lost(&self) -> u64 {
-        self.counts.lost.load(Ordering::Relaxed)
-    }
-
-    /// How full the queue into the encoder is, which is this stream's whole buffer health.
-    pub fn fill(&self) -> f32 {
-        self.counts.queued.load(Ordering::Relaxed) as f32 / QUEUE as f32
-    }
-
-    /// Close the queue and wait for the writer, which is what finishes the file. Idempotent.
-    pub fn finish(&mut self) -> Result<(), String> {
-        drop(self.frames.take());
-        if let Some(writer) = self.writer.take() {
-            let _ = writer.join();
-        }
-        match self.counts.error.lock().expect("the encoder's error").take() {
-            Some(why) => Err(why),
-            None => Ok(()),
-        }
+    pub fn open(encoders: &dyn Encoders, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Video, String> {
+        Ok(Video { encoder: encoders.open(file, size, fps, quality)?, encoded: 0 })
     }
 }
 
-impl Drop for Video {
-    fn drop(&mut self) {
-        let _ = self.finish();
+impl Format for Video {
+    fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
+        let Frame::Texels(t) = frame else { return Err("the frame is not the shape this stream holds".into()) };
+        self.encoder.write(&t.rgba)?;
+        self.encoded += 1;
+        Ok(Added::Rows(1))
     }
-}
 
-#[derive(Clone, Default)]
-struct Counts {
-    encoded: Arc<AtomicU64>,
-    lost: Arc<AtomicU64>,
-    dead: Arc<AtomicBool>,
-    queued: Arc<AtomicU64>,
-    error: Arc<Mutex<Option<String>>>,
-}
+    /// Frames the encoder took, which is what the manifest counts.
+    fn frames(&self) -> u64 {
+        self.encoded
+    }
 
-fn give_back(free: &Free, buffer: Vec<u8>) {
-    let mut free = free.lock().expect("the free frames");
-    if free.len() < QUEUE {
-        free.push(buffer);
+    /// An encoder reaches its disk on its own; the container is complete only at the finish.
+    fn sync(&mut self) -> Result<(), String> {
+        Ok(())
     }
-}
 
-/// The one thread that touches the encoder: the render thread hands frames over and never waits
-/// on a disk. Its buffers go back to `free` as the queue drains.
-fn encode(
-    rx: Receiver<Job>,
-    mut encoder: Box<dyn Encoder>,
-    mut beside: crate::beside::Beside,
-    counts: &Counts,
-    free: &Free,
-) {
-    let mut flushed = Instant::now();
-    // The FIRST error is what killed the stream; `finish` on a dead encoder only says so again.
-    let died = |counts: &Counts, why: String| {
-        counts.dead.store(true, Ordering::Relaxed);
-        counts.error.lock().expect("the encoder's error").get_or_insert(why);
-    };
-    for (buffer, at) in rx.iter() {
-        counts.queued.fetch_sub(1, Ordering::Relaxed);
-        if let Err(why) = encoder.write(&buffer) {
-            counts.lost.fetch_add(1, Ordering::Relaxed);
-            died(counts, why);
-            break;
-        }
-        // A frame the sidecar could not account for is a frame nothing can align, so it is LOST
-        // rather than counted — the container holds it and the manifest says it was not kept.
-        if let Err(e) = beside.line(at, crate::beside::Extent::Rows(1), None) {
-            counts.lost.fetch_add(1, Ordering::Relaxed);
-            died(counts, e);
-            break;
-        }
-        counts.encoded.fetch_add(1, Ordering::Relaxed);
-        give_back(free, buffer);
-        if flushed.elapsed() >= FLUSH_EVERY {
-            let _ = beside.sync();
-            flushed = Instant::now();
-        }
-    }
-    // A dead encoder still owes its counters: what the queue holds is LOST, never forgotten, or
-    // `fill` reads a queue that never empties.
-    for (buffer, _) in rx.try_iter() {
-        counts.queued.fetch_sub(1, Ordering::Relaxed);
-        counts.lost.fetch_add(1, Ordering::Relaxed);
-        give_back(free, buffer);
-    }
-    let _ = beside.sync();
-    if let Err(why) = encoder.finish() {
-        died(counts, why);
+    fn finish(&mut self) -> Result<(), String> {
+        self.encoder.finish()
     }
 }

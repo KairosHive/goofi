@@ -1,7 +1,7 @@
 //! Meta — write the rate or the labels a frame carries, for a source that does not know its own.
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Meta;
@@ -43,11 +43,12 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "meta",
         name: "sfreq",
-        spec: ParamSpec::Float { default: 0.0, min: 0.0, max: 100_000.0 },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "meta",
@@ -59,16 +60,18 @@ static PARAMS: &[ParamDecl] = &[
              Empty keeps the labels the frame arrived with.",
         ),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "meta",
         name: "axis",
-        spec: ParamSpec::Int { default: 0, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

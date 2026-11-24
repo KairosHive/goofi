@@ -17,8 +17,6 @@ export interface AnchorNode {
 	y: number;
 	/** Input slot ids, in declaration order. */
 	slots: string[];
-	/** Which of them are MULTI (list) slots. */
-	multi: ReadonlySet<string>;
 }
 
 /** How close the pointer must come, in SCREEN px, for an input to name itself: one coarse `--hit`.
@@ -32,7 +30,7 @@ export function inputAnchors(
 ): SlotAnchor[] {
 	const out: SlotAnchor[] = [];
 	for (const n of nodes) {
-		for (const p of inputPorts(n.slots, (slot) => n.multi.has(slot)))
+		for (const p of inputPorts(n.slots))
 			out.push({ key: key(n.uid, p.slot), x: n.x, y: n.y + p.top });
 	}
 	return out;

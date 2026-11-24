@@ -1,22 +1,27 @@
 <!-- RecoverDialog — the offer a manager makes at the start: what an earlier goofi left unsaved.
-     Each row opens its autosave; its × removes it. Dismissing keeps every recovery on disk. -->
+     Each row opens its autosave; its × removes it, Remove all removes every one. Skipping keeps
+     every recovery on disk. The list keeps its height as rows go, so the next × lands under a
+     finger that stays put, and a row leaves on the click, so a repeat never asks twice. -->
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { getControl, type Recovery } from '$lib/api/control';
+	import { patchName } from '$lib/api/patchFile';
 	import { graph } from '$lib/stores/graph.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { Button, ConfirmDialog, Icon, IconButton } from '$lib/ui';
 
 	const g = graph();
+	const ctl = getControl();
+	let recoveries = $state<Recovery[]>([]);
 	let dismissed = $state(false);
-	const open = $derived(!dismissed && g.recoveries.length > 0);
-	let later = $state<HTMLElement | null>(null);
+	const open = $derived(!dismissed && recoveries.length > 0);
+	let skip = $state<HTMLElement | null>(null);
 
-	// A modal focuses its first control, which would be the first patch in the list; the safe
-	// answer takes it instead, once the dialog is open — an `autofocus` fires at mount, when it
-	// is still closed.
+	// A modal focuses its first control (a patch row); the safe answer takes focus instead, once
+	// open, since an `autofocus` fires at mount while the dialog is still closed.
 	$effect(() => {
 		if (!open) return;
-		void tick().then(() => later?.querySelector('button')?.focus());
+		void tick().then(() => skip?.querySelector('button')?.focus());
 	});
 
 	// Once per SERVER session, on the startup hook: a page that stayed open across a restart is
@@ -24,12 +29,11 @@
 	$effect(() => {
 		if (g.sessionEpoch === 0 || g.demo) return;
 		dismissed = false;
-		void g.refreshRecoveries().catch((e) => notify().failure('Recover', e));
+		ctl.call<{ recoveries: Recovery[] }>('session recoverable', {}).then(
+			(r) => (recoveries = r.recoveries),
+			(e) => notify().failure('Recover', e)
+		);
 	});
-
-	function name(home: string | null): string {
-		return home ? (home.split('/').pop() ?? home) : 'Unsaved patch';
-	}
 
 	function when(at: number | null): string {
 		if (at === null) return '';
@@ -40,37 +44,56 @@
 		return new Date(at * 1000).toLocaleString();
 	}
 
+	/** Take a row out of the list; the row comes back when the call it stood for is refused. */
+	function take(workspace: string): Recovery | undefined {
+		const row = recoveries.find((r) => r.workspace === workspace);
+		recoveries = recoveries.filter((r) => r.workspace !== workspace);
+		return row;
+	}
+
+	function restore(row: Recovery | undefined): void {
+		if (row) recoveries = [...recoveries, row];
+	}
+
 	async function recover(workspace: string): Promise<void> {
+		const row = take(workspace);
 		try {
-			await g.recover(workspace);
+			await ctl.call('session recover', { workspace });
 			dismissed = true;
 		} catch (e) {
+			restore(row);
 			notify().failure('Recover', e);
 		}
 	}
 
 	async function discard(workspace: string): Promise<void> {
+		const row = take(workspace);
 		try {
-			await g.discardRecovery(workspace);
+			await ctl.call('session discard', { workspace });
 		} catch (e) {
+			restore(row);
 			notify().failure('Discard', e);
 		}
+	}
+
+	function discardAll(): void {
+		for (const r of recoveries) void discard(r.workspace);
 	}
 </script>
 
 <ConfirmDialog
 	{open}
 	question="Recover unsaved work?"
-	detail="A goofi that did not shut down cleanly left these patches behind. Open one to continue from its last autosave, or remove it."
+	detail="A goofi that did not shut down cleanly left these patches behind. Open one to continue from its last autosave, or remove it. Skipping keeps them for next time."
 	onClose={() => (dismissed = true)}
 	data-testid="recover-dialog"
 >
 	{#snippet body()}
 		<ul class="rows">
-			{#each g.recoveries as r (r.workspace)}
+			{#each recoveries as r (r.workspace)}
 				<li class="row" data-testid="recover-entry">
 					<button class="entry" title={r.home ?? undefined} onclick={() => recover(r.workspace)}>
-						<span class="nm">{name(r.home)}</span>
+						<span class="nm">{r.home ? patchName(r.home) : 'Unsaved patch'}</span>
 						<span class="at">{when(r.at)}</span>
 					</button>
 					<IconButton
@@ -84,7 +107,8 @@
 			{/each}
 		</ul>
 	{/snippet}
-	<span bind:this={later}><Button variant="ghost" onclick={() => (dismissed = true)}>Later</Button></span>
+	<Button variant="danger" data-testid="recover-discard-all" onclick={discardAll}>Remove all</Button>
+	<span bind:this={skip}><Button data-testid="recover-skip" onclick={() => (dismissed = true)}>Skip</Button></span>
 </ConfirmDialog>
 
 <style>
@@ -95,10 +119,13 @@
 		gap: var(--space-2);
 		margin: var(--space-6) 0 0;
 		padding: 0;
-		max-height: 40dvh;
+		/* A fixed size: the answers stay where they are as rows go, whatever the names. */
+		width: min(80vw, 28rem);
+		height: min(16rem, 40dvh);
 		overflow-y: auto;
 	}
 	.row {
+		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
@@ -107,7 +134,6 @@
 		background: var(--surface-3);
 	}
 	.entry {
-		font: inherit;
 		display: flex;
 		align-items: baseline;
 		gap: var(--space-4);
@@ -119,7 +145,6 @@
 		border-radius: var(--radius-sm);
 		color: var(--text);
 		padding: var(--space-3) var(--space-4);
-		cursor: pointer;
 	}
 	.row:hover {
 		background: var(--surface-4);

@@ -66,7 +66,7 @@ fn refreshed(g: &Goofi, ev: &mut goofi_tests::Events, uid: Uid, group: &str, nam
         let p = ev.next("state_update");
         (p["node"] == hex(uid) && p["refreshed_params"] == j!([[group, name]])).then_some(p)
     });
-    p["params"][group][name]["options"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    p["options"][group][name].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
 }
 
 /// A constant one: an envelope gated open with no attack, which sustains at one for as long as
@@ -128,7 +128,7 @@ fn near(a: usize, b: usize) -> bool {
 #[test]
 fn a_patch_sounds_under_the_external_clock() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: the palette lists the audio engine's types, and a chain of three sounds at once.
     let types = g.call("library list", j!({}));
@@ -142,13 +142,18 @@ fn a_patch_sounds_under_the_external_clock() {
                        "audio:BioFilter", "audio:Delay", "audio:Env", "audio:Feedback",
                        "audio:Filter", "audio:FreqShift", "audio:Gain", "audio:GraphicsIn", "audio:Limiter",
                        "audio:MidiIn",
-                       "audio:Mixdown", "audio:Noise", "audio:Osc", "audio:Quantize", "audio:Reverb",
-                       "audio:SignalIn", "audio:Slew"]);
+                       "audio:Mixdown", "audio:Noise", "audio:Null", "audio:Osc", "audio:Quantize", "audio:Reverb",
+                       "audio:SignalIn", "audio:Slew", "audio:Variable"]);
     let osc = g.add("Osc");
     let gain = g.add("Gain");
     let out = g.add("AudioOut");
     g.link(osc, "out", gain, "input");
     g.link(gain, "out", out, "input");
+    // A node is made on a thread of its own and lands at a settle: the chain sounds once each
+    // reports ready, and never a block before.
+    for node in [osc, gain, out] {
+        g.ready(node);
+    }
     let (a, channels) = drive(&g, TENTH);
     assert_eq!(channels, 1, "a mono chain is heard in mono");
     assert!((peak(&a) - 1.0).abs() < 0.01, "a full-scale sine: peak {}", peak(&a));
@@ -161,12 +166,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(osc, "osc", "pitch", 1.75);
     sounds(&g, "an octave up, 880 Hz", |x| near(crossings(x), 176));
 
-    // Step: a param referencing an audio output is a plan edge at audio rate — the gain reads
+    // Step: a bare expression over an audio output is a plan edge at audio rate — the gain reads
     // the oscillator itself, so the output is its square: never negative, full scale.
     let osc_name = g.doc()["nodes"][hex(osc)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(gain), "param": "gain/gain", "reference": format!("{osc_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(gain), "param": "gain/gain", "expression": format!("nd('{osc_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     let (d, _) = drive(&g, TENTH);
@@ -180,11 +185,11 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("node param edit", j!({ "node": hex(gain), "param": "gain/gain", "value": 0.5, "mode": "constant" }));
     sounds(&g, "sine plus one, halved, on a half offset", |x| (peak(x) - 1.0).abs() < 0.01 && (mean(x) - 0.5).abs() < 0.02);
 
-    // Step: a reference the graph refuses is never a plan edge: a Str param cannot read an audio
+    // Step: a bare read the graph refuses is never a plan edge: a Str param cannot read an audio
     // output, the record keeps the literal, and the sound is unchanged.
     let refused = g.call(
         "node param edit",
-        j!({ "node": hex(osc), "param": "osc/waveform", "reference": format!("{osc_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(osc), "param": "osc/waveform", "expression": format!("nd('{osc_name}')") }),
     );
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("AUDIO") && e.contains("STRING")), "{refused}");
     let (e2, _) = drive(&g, TENTH);
@@ -211,6 +216,9 @@ fn a_patch_sounds_under_the_external_clock() {
     let slew = g.add("Slew");
     g.set_param(slew, "slew", "rise", 1.0);
     g.set_param(slew, "slew", "fall", 1.0);
+    // The slopes land BEFORE the square reaches the node: at a second each way, a symmetric
+    // square cannot move the held value, so wherever the fast defaults left it, it would stay.
+    goofi_tests::applied(&g);
     g.link(square, "out", slew, "input");
     heard(&g, slew, "a full-scale square rate-limited to a hundredth", |x| peak(x) > 0.0 && peak(x) < 0.01);
     for uid in [square, filter, slew] {
@@ -241,6 +249,11 @@ fn a_patch_sounds_under_the_external_clock() {
     // A shifter leaves a little of the other sideband behind, so the count is close, not exact.
     heard(&g, shift, "the same tone moved up two hundred hertz", |x| per_tenth(x).abs_diff(128) <= 6);
 
+    // A null passes the tone through whole: a fixed point to name, nothing changed.
+    let fixed = g.add("audio:Null");
+    g.link(tone, "out", fixed, "input");
+    heard(&g, fixed, "the same A4 through a null", |x| near(per_tenth(x), 88) && (peak(x) - 1.0).abs() < 0.01);
+
     // A limiter is a promise about the ceiling, so it is given far more than it can pass.
     let loud = g.add("Gain");
     g.set_param(loud, "gain", "gain", 8.0);
@@ -260,6 +273,28 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(peak(&quiet), 0.0, "nothing arrives before the delay is up");
     g.set_param(delay, "delay", "time", 0.01);
     heard(&g, delay, "…and the echo once the delay is short", |x| peak(x) > 0.5);
+    // A delay told in beats reads the patch's tempo: two beats at 60 are two seconds, so a new
+    // delay is silent for the second and a half driven here, where at the tempo a patch opens
+    // with, 120, it would sound after one.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
+    let synced = g.add("audio:Delay");
+    g.set_param(synced, "delay", "mix", 1.0);
+    g.set_param(synced, "delay", "unit", "beats");
+    g.set_param(synced, "delay", "beats", 2.0);
+    goofi_tests::applied(&g);
+    g.link(tone, "out", synced, "input");
+    let echo = g.probe(synced, "out");
+    for tenth in 0..15 {
+        drive(&g, TENTH);
+        assert!(echo.latest().is_none_or(|d| peak(&f32s(&d)) == 0.0), "two beats are not up after {tenth} tenths");
+    }
+    heard(&g, synced, "…the echo after its two beats", |x| peak(x) > 0.5);
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
+    // A note division is beats too: a sixteenth of a beat is short, and the echo is there at once.
+    g.set_param(synced, "delay", "unit", "division");
+    g.set_param(synced, "delay", "division", "1/16");
+    heard(&g, synced, "…and after a sixteenth", |x| peak(x) > 0.5);
+    g.call("node remove", j!({ "node": hex(synced) }));
 
     let reverb = g.add("audio:Reverb");
     g.set_param(reverb, "reverb", "mix", 1.0);
@@ -323,8 +358,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: the slab grows past its first 64 slots without losing an instance — the 65th node's
     // wire lands in the sum and every earlier one keeps running.
     let many: Vec<Uid> = (0..64).map(|_| held_one(&g)).collect();
-    let stillborn: Vec<String> = many.iter().filter_map(|u| g.error(*u)).collect();
-    assert!(stillborn.is_empty(), "every one of them starts: {stillborn:?}");
+    // Every one of them starts: a birth that failed instead fails here, wearing its error.
+    audio_ready(&g);
     g.link(*many.last().unwrap(), "out", gain, "input");
     goofi_tests::applied(&g);
     let (grown, _) = drive(&g, TENTH);
@@ -344,6 +379,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let (silent, _) = drive(&g, TENTH);
     assert_eq!(peak(&silent), 0.0, "nothing feeds the gain");
     assert_eq!(g.call("undo", j!({}))["changed"], true);
+    g.ready(osc);
     let (back, _) = drive(&g, TENTH);
     assert!((peak(&back) - 0.5).abs() < 0.01 && near(crossings(&back), 176), "undo restored the 880 Hz oscillator: peak {} crossings {}", peak(&back), crossings(&back));
 
@@ -361,6 +397,9 @@ fn a_patch_sounds_under_the_external_clock() {
     g.link(osc3, "out", gain3, "input");
     g.link(gain3, "out", out, "input");
     g.link(gain3, "out", out2, "input");
+    for node in [out2, osc3, gain3] {
+        g.ready(node);
+    }
     let (both, _) = drive(&g, TENTH);
     assert!((peak(&both) - 2.0).abs() < 0.02 && near(crossings(&both), 88), "two outputs sum: peak {} crossings {}", peak(&both), crossings(&both));
     g.set_param(out2, "audio", "gain", 0.5);
@@ -377,12 +416,14 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: a WAV file plays back at the engine's rate, as wide as it is. The file changes tone
     // halfway, so WHERE playback starts is audible: it plays from the head, skips, runs out,
     // loops, and resets — and a name that is not there says so.
-    let sweep = goofi_core::home::recordings().join("sweep.wav");
+    let sweep = goofi_supervisor::layout::recordings().join("sweep.wav");
     write_wav(&sweep, 48_000, &sweep_samples());
     let player = g.add("AudioPlayback");
     g.call("link remove", j!({ "from": ep(hex(gain3), "out"), "to": ep(hex(out), "input") }));
     g.link(player, "out", out, "input");
     g.set_param(player, "play", "file", "sweep");
+    // Looping is the default; this step is about what a take does without it.
+    g.set_param(player, "play", "loop", false);
     sounds(&g, "the take plays back from its head", |x| near(crossings(x), 88) && peak(x) > 0.5);
     sounds(&g, "…and reaches the octave it was recorded into", |x| near(crossings(x), 176));
     g.set_param(player, "play", "position", 0.05);
@@ -412,28 +453,29 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(status["audio"]["rate"], 48000.0, "{status}");
     assert!(status["audio"]["device"].is_null(), "no device under the external clock: {status}");
     assert!(status["audio"]["channels"].as_u64().is_some_and(|c| c >= 1), "{status}");
-    assert_eq!((status["audio"]["callbacks"].as_u64(), status["audio"]["xruns"].as_u64()), (Some(0), Some(0)), "{status}");
+    assert_eq!((status["audio"]["callbacks"].as_u64(), status["audio"]["xruns"].as_u64(), status["audio"]["contended"].as_u64()),
+               (Some(0), Some(0), Some(0)), "{status}");
 
     // Step: the engine PUBLISHES what it decided into `system.*`, off the same read the status
     // answers from — so the two cannot drift, and an expression in any engine reads the rate with
     // no door of its own. It is goofi's to say: a hand edit is refused, and no patch carries it.
     let listed = g.call("variable list", j!({}))["variables"].as_array().unwrap().clone();
     let variable = |name: &str| listed.iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} is seeded")).clone();
-    assert_eq!(variable("system.audio_rate")["value"], status["audio"]["rate"], "the rate the engine published");
-    assert_eq!(variable("system.audio_channels")["value"], status["audio"]["channels"], "the channels it published");
-    assert_eq!(variable("system.audio_device")["value"], j!(""), "no device under the external clock");
-    assert_eq!(variable("system.audio_driver")["value"], j!(""), "and no ASIO driver holds this process");
+    assert_eq!(variable("audio.rate")["value"].as_f64(), status["audio"]["rate"].as_f64(), "the rate the engine published");
+    assert_eq!(variable("audio.channels")["value"].as_f64(), status["audio"]["channels"].as_f64(), "the channels it published");
+    assert_eq!(variable("audio.device")["value"], j!(""), "no device under the external clock");
+    assert_eq!(variable("audio.driver")["value"], j!(""), "and no ASIO driver holds this process");
     // The APIs this build carries are published too, and every device a refresh offers is prefixed
     // with one of them — the name IS the host choice, so a name from an API outside the list would
     // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
-    let hosts = variable("system.audio_hosts")["value"].as_str().unwrap_or_default().to_string();
+    let hosts = variable("audio.hosts")["value"].as_str().unwrap_or_default().to_string();
     assert!(!hosts.is_empty(), "a build carries at least one audio host");
     for name in devices.iter().filter(|n| *n != "default") {
         assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
                 "`{name}` names an audio host outside `{hosts}`");
     }
-    assert_eq!(variable("system.audio_rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
-    let why = g.refuse("variable entry edit", j!({ "name": "system.audio_rate", "value": 22_050.0 }));
+    assert_eq!(variable("audio.rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
+    let why = g.refuse("variable entry edit", j!({ "name": "audio.rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
     assert!(!g.call("session manifest", j!({}))["yaml"].as_str().unwrap().contains("audio_rate"),
             "and a patch never carries it");
@@ -473,7 +515,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let midi_name = g.doc()["nodes"][hex(midi)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(voices), "param": "env/gate", "reference": format!("{midi_name}.gate"), "mode": "reference" }),
+        j!({ "node": hex(voices), "param": "env/gate", "expression": format!("nd('{midi_name}').out.gate") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     g.link(voices, "out", out, "input");
@@ -524,6 +566,50 @@ fn a_patch_sounds_under_the_external_clock() {
             });
         }
     }
+    // Step: a note track of the timeline is a port too. A node that joins takes the note the
+    // position is in; a pause releases it and a resume strikes it again; of two notes of one pitch
+    // that overlap, the end of the first leaves the second sounding; a removed track ends its notes.
+    // At a tempo of 60 a track's beat is a second.
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 60.0 }));
+    g.call("timeline track add", j!({ "kind": "note", "name": "keys" }));
+    let note = |at: f64, length: f64, pitch: u8| j!({ "at": at, "length": length, "pitch": pitch, "velocity": 100.0 / 127.0 });
+    g.call("timeline track edit", j!({ "track": "keys", "notes": [note(0.0, 1000.0, 69), note(500.0, 1e6, 69), note(550.0, 150.0, 60), note(1400.0, 1e6, 72)] }));
+    g.call("clock set", j!({ "playing": true, "time": 10.0 }));
+    assert_eq!(refreshed(&g, &mut ev, midi, "midi", "port").last().map(String::as_str), Some("timeline: keys"), "a note track is listed as a port");
+    g.set_param(midi, "midi", "port", "timeline: keys");
+    let pitch = g.probe(midi, "pitch");
+    // The pitches of the voices that sound, in volts per octave, lowest first.
+    let sounds_at = |g: &Goofi, what: &str, want: &[f32]| {
+        g.until(what, |g| {
+            let (x, channels) = drive(g, TENTH);
+            let d = pitch.latest().filter(|d| channels == 3 && shape(d)[0] == 3)?;
+            let mut heard: Vec<f32> = (0..3).filter(|c| x[x.len() - 3 + c] > 0.99).map(|c| f32s(&d)[c * shape(&d)[1]]).collect();
+            heard.sort_by(f32::total_cmp);
+            (heard.len() == want.len() && heard.iter().zip(want).all(|(h, w)| (h - w).abs() < 1e-3) && (!want.is_empty() || peak(&x[x.len() - 3..]) == 0.0)).then_some(())
+        })
+    };
+    sounds_at(&g, "the track's A4 to take a voice", &[0.75]);
+    g.call("clock set", j!({ "playing": false }));
+    sounds_at(&g, "a pause to release the voice", &[]);
+    g.call("clock set", j!({ "playing": true }));
+    sounds_at(&g, "a resume to strike A4 again", &[0.75]);
+    // A loop the note covers: each restart of the position strikes the note again, and a note
+    // struck again takes the next voice.
+    let voice = |g: &Goofi| {
+        let (x, channels) = drive(g, TENTH);
+        (0..3).find(|c| channels == 3 && x[x.len() - 3 + c] > 0.99)
+    };
+    g.call("clock set", j!({ "section": [10.0, 10.3] }));
+    let first = g.until("the note to sound in the loop", voice);
+    g.until("the loop's restart to strike the note again", |g| voice(g).filter(|v| *v != first));
+    g.call("clock set", j!({ "section": [0.0, 0.0] }));
+    g.call("clock set", j!({ "time": 600.0 }));
+    sounds_at(&g, "C4 beside the two A4s that overlap", &[0.0, 0.75]);
+    g.call("clock set", j!({ "time": 1500.0 }));
+    sounds_at(&g, "the second A4 to sound on past the end of the first, beside C5", &[0.75, 1.0]);
+    g.call("timeline track remove", j!({ "track": "keys" }));
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 120.0 }));
+    sounds_at(&g, "a removed track to end its notes", &[]);
     g.call("node remove", j!({ "node": hex(voices) }));
     g.call("node remove", j!({ "node": hex(midi) }));
 
@@ -552,35 +638,111 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(source, "constant", "value", 0.75);
     sounds(&g, "the gain to follow its source", |x| (peak(x) - 0.75).abs() < 0.01);
 
+    // Step: a COMPUTED expression is the worker's result, a block in the plan arena one block
+    // behind, and it HOLDS while the evaluator is away: the audio thread never waits for Python.
+    let evaluator = Arc::new(FirstVar::default());
+    g.graph().set_evaluator(evaluator.clone());
+    let bound = g.call(
+        "node param edit",
+        j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{source_name}') * 1") }),
+    );
+    assert!(bound["error"].is_null(), "{bound}");
+    g.set_param(source, "constant", "value", 0.5);
+    sounds(&g, "the computed gain to land", |x| (peak(x) - 0.5).abs() < 0.01);
+    evaluator.latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    g.set_param(source, "constant", "value", 1.0);
+    assert!(
+        g.stays(|g| {
+            let (x, _) = drive(g, TENTH);
+            (peak(&x) - 0.5).abs() < 0.01
+        }),
+        "a stalled evaluator holds the last block"
+    );
+    evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
+    sounds(&g, "…and the result lands once it is back", |x| (peak(x) - 1.0).abs() < 0.01);
+
+    // Step: a param bound to a machine attribute in flight holds a FUNCTIONAL, and the control half
+    // renders it as a ramp through the block boundaries ahead: the gain climbs block by block from
+    // the level it left toward the target, never past it, and holds the target once the flight ends.
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    for (op, payload) in [
+        ("machine add", j!({ "name": "amp" })),
+        ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "low", "values": { "level": 0.25 } })),
+        ("machine state add", j!({ "machine": "amp", "name": "high", "values": { "level": 1.0 } })),
+        ("machine transition add", j!({ "machine": "amp", "from": "low", "to": "high", "duration": 0.5 })),
+        ("machine state edit", j!({ "machine": "amp", "name": "low", "noop": 1.0, "weights": { "t1": 0.0 } })),
+        ("machine playhead add", j!({ "machine": "amp", "name": "h", "start": "low" })),
+    ] {
+        g.call(op, payload);
+    }
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level" }));
+    sounds(&g, "the gain at the start state's level", |x| (peak(x) - 0.25).abs() < 0.01);
+    // The blocks driven so far put the external clock's time far from the patch's; a device's
+    // would be in step. The next block is now, then the blocks rendered keep pace with the ticks.
+    goofi_tests::align(&g);
+    g.call("machine fire", j!({ "machine": "amp", "playhead": "h", "transition": "t1" }));
+    let mut peaks: Vec<f32> = Vec::new();
+    g.until("the flight to reach the target", |g| {
+        goofi_tests::applied(g);
+        let (x, chans) = drive(g, 8 * 64);
+        peaks.push(peak(&x[x.len() - 64 * chans as usize..]));
+        ((peaks.last().unwrap() - 1.0).abs() < 0.002).then_some(())
+    });
+    assert!(peaks.windows(2).all(|w| w[1] >= w[0] - 1e-4), "the gain climbs block by block: {peaks:?}");
+    assert!(peaks.iter().all(|p| *p <= 1.0 + 1e-4), "never past the target: {peaks:?}");
+    assert!(peaks.iter().any(|p| *p > 0.3 && *p < 0.95), "the ramp was heard on the way: {peaks:?}");
+    assert!(g.stays(|g| (peak(&drive(g, TENTH).0) - 1.0).abs() < 0.002), "the target holds once the flight ends");
+
+    // Step: a load over the patch rebirths every node at its uid, and the outgoing half may be
+    // mid-evaluation when the load releases its handles: what it says once it is back is the
+    // corpse's, never the newborn's. The newborn, bound to the same text, reads clean.
+    let evaluator = Arc::new(FirstVar::default());
+    g.graph().set_evaluator(evaluator.clone());
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level * 1" }));
+    g.until("the computed gain to land", |g| g.error(gain3).is_none().then_some(()));
+    let keep = tempfile::tempdir().unwrap();
+    let target = keep.path().join("bound.gfi");
+    g.call("session save", j!({ "path": target.to_string_lossy() }));
+    let stalled = |e: &FirstVar| e.entered.load(std::sync::atomic::Ordering::Relaxed) > e.evals.load(std::sync::atomic::Ordering::Relaxed);
+    evaluator.latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    g.until("the half to stall in the evaluator", |_| stalled(&evaluator).then_some(()));
+    g.call("session load", j!({ "path": target.to_string_lossy() }));
+    evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
+    g.until("the stalled evaluation to answer", |_| (!stalled(&evaluator)).then_some(()));
+    assert!(g.stays(|g| g.error(gain3).is_none()), "the corpse's answer is not the newborn's: {:?}", g.error(gain3));
+    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level" }));
+    g.until("the gain back on the playhead", |g| g.error(gain3).is_none().then_some(()));
+
     // Step: a binding that evaluates to NaN is a binding error like any other — the param names
     // it and the node reads silence — because a NaN is not a value a plan can carry.
     let poison = g.add("_TestConst");
     let poison_name = g.doc()["nodes"][hex(poison)]["name"].as_str().unwrap().to_string();
     g.set_param(poison, "constant", "nan", true);
-    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "reference": format!("{poison_name}.out"), "mode": "reference" }));
+    g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{poison_name}')") }));
     let why = g.until("the NaN to be refused", |g| g.error(gain3));
     assert!(why.contains("evaluated to NaN"), "{why}");
     sounds(&g, "silence where the NaN would have played", |x| x.iter().all(|v| v.is_finite()) && peak(x) == 0.0);
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 1.0, "mode": "constant" }));
     g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
 
-    // Step: a reference the control half cannot copy is a binding error on the node; back on a
-    // constant, the literal lands and the error clears.
+    // Step: a bare read of a frame wider than one reads its first element, no error; back on a
+    // constant, the literal lands.
     g.set_param(source, "constant", "length", 4);
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(gain3), "param": "gain/gain", "reference": format!("{source_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(gain3), "param": "gain/gain", "expression": format!("nd('{source_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
-    let why = g.until("the binding error to reach the node", |g| g.error(gain3));
-    assert!(why.contains("one element"), "{why}");
+    assert!(g.stays(|g| g.error(gain3).is_none()), "a wide frame reads whole");
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 0.5, "mode": "constant" }));
     sounds(&g, "the literal to land", |x| (peak(x) - 0.5).abs() < 0.01);
-    g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
 
     // Step: a plan swap keeps every instance — the oscillator's phase runs on across it.
     let (a, _) = drive(&g, TENTH);
     let spare = g.add("Gain");
+    g.ready(spare);
     let (b, _) = drive(&g, TENTH);
     assert!((b[0] - a[a.len() - 1]).abs() < 0.1, "no jump at the swap: {} then {}", a[a.len() - 1], b[0]);
     g.call("node remove", j!({ "node": hex(spare) }));
@@ -596,8 +758,14 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(shape(&block)[1] >= 64 && shape(&block)[1].is_multiple_of(64), "whole blocks: {:?}", shape(&block));
     assert_eq!(block.meta().sfreq(), Some(48_000.0));
     assert!(crossings(&f32s(&block)) > 0 && peak(&f32s(&block)) <= 1.0, "the sine, as it sounds");
+    // A signal Buffer fills from the tap through `signal:AudioIn`; the bare cable across the
+    // plane is refused, since a crossing is a node that declares the foreign kind, never a wire.
     let buffer = g.add("Buffer");
-    g.link(osc3, "out", buffer, "input");
+    let bare = g.try_call("link add", j!({ "from": ep(hex(osc3), "out"), "to": ep(hex(buffer), "input") }));
+    assert!(bare.as_ref().is_err_and(|e| e.contains("different data types")), "{bare:?}");
+    let framed = g.add("signal:AudioIn");
+    g.link(osc3, "out", framed, "input");
+    g.link(framed, "out", buffer, "input");
     let buffered = g.probe(buffer, "out");
     let filled = g.until("the buffer to fill from the tap", |g| {
         drive(g, TENTH);
@@ -613,10 +781,8 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // …and `signal:AudioIn` is what gives that stream a framing the clock does not decide: a tap
     // hands over whatever the last blocks held, and a window is the length the analysis asked for.
-    let framed = g.add("signal:AudioIn");
     g.set_param(framed, "audio", "mode", "window");
     g.set_param(framed, "audio", "size", 512);
-    g.link(osc3, "out", framed, "input");
     let framing = g.probe(framed, "out");
     let window = g.until("a fixed-length window off the tap", |g| {
         drive(g, TENTH);
@@ -639,14 +805,17 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!((mean(&rms) - 0.707).abs() < 0.02, "and they average it: {}", mean(&rms));
     g.call("node remove", j!({ "node": hex(framed) }));
 
-    // Step: the in-order crossing — a signal ramp at 256 Hz enters through `SignalIn`, resampled
-    // to the rate: it rises from zero, a tenth of a second is a twentieth of it, and the next
-    // tenth continues where this one stopped.
+    // Step: the in-order crossing — a ramp of two seconds of audio samples enters through
+    // `SignalIn` one for one: it rises from zero, a tenth of a second is a twentieth of it, and
+    // the next tenth continues where this one stopped.
     g.set_param(gain3, "gain", "gain", 0.0);
     sounds(&g, "the gain to close", |x| peak(x) == 0.0);
     g.call("node remove", j!({ "node": hex(buffer) }));
     let ramp = g.add("_TestRamp");
+    g.set_param(ramp, "ramp", "length", 96_000);
     let signal_in = g.add("audio:SignalIn");
+    g.set_param(signal_in, "signal", "smoothing", 0);
+    g.set_param(signal_in, "signal", "morph", false);
     g.link(ramp, "out", signal_in, "input");
     g.link(signal_in, "out", out, "input");
     let first = g.until("the ramp to enter", |g| {
@@ -662,23 +831,54 @@ fn a_patch_sounds_under_the_external_clock() {
     let span = second[second.len() - 1] - second[0];
     assert!((span - 0.05).abs() < 0.002, "a whole tenth is a twentieth of the ramp: {span}");
 
+    // …and the crossing's rings, grown past their seed for a frame this long, do not outlive the
+    // node: deleted and undone, it hears the ramp again through the rings its new half was born with.
+    g.call("node remove", j!({ "node": hex(signal_in) }));
+    assert_eq!(g.call("undo", j!({}))["changed"], true);
+    sounds(&g, "the ramp entering the undone crossing", |x| peak(x) > 0.0);
+
     // …and a frame shorter than the wait for the next one loops rather than holding its last
-    // sample: sixty samples at 6 kHz are 480 at the rate, the whole ramp every 480.
-    g.set_param(ramp, "ramp", "sfreq", 6000.0);
+    // sample: sixty samples at an eighth of the speed are 480 audio samples, the ramp every 480.
+    g.set_param(signal_in, "signal", "speed", 0.125);
     g.set_param(ramp, "ramp", "length", 60);
     sounds(&g, "a short frame looping until the next", |x| {
         let tail = &x[x.len() - 960..];
         let periodic = tail.iter().zip(&tail[480..]).all(|(a, b)| (a - b).abs() < 1e-4);
         periodic && tail.iter().any(|v| *v < 0.05) && tail.iter().any(|v| *v > 0.95)
     });
-    g.set_param(ramp, "ramp", "sfreq", 256.0);
-    g.set_param(ramp, "ramp", "length", 512);
 
-    // Step: `smoothing` crossfades one frame into the next: a held quarter becomes a held 1 over
-    // a twentieth of a second, which is 2400 samples at the rate however late the frame arrived.
+    // …and a frame that would last longer than any ring is minted for — fifty thousand samples at
+    // a tenth of the speed — is refused on `mode` and names its length, the process alive.
+    g.set_param(ramp, "ramp", "length", 50_000);
+    g.set_param(signal_in, "signal", "speed", 0.1);
+    g.until("a frame of half a million audio samples refused", |g| {
+        drive(g, TENTH);
+        g.error(signal_in).filter(|e| e.contains("50000 samples at speed 0.1") && e.contains("too long"))
+    });
+    g.set_param(signal_in, "signal", "speed", 1.0);
+    g.until("a frame that plays clears the refusal", |g| {
+        drive(g, TENTH);
+        g.error(signal_in).is_none().then_some(())
+    });
+
+    // Step: `smoothing` blends the loop's two ends where they meet: a looped ramp from 0 to 1 loses
+    // its fall back to 0, both ends their mean, and still climbs between them.
+    g.set_param(ramp, "ramp", "length", 480);
+    sounds(&g, "the ramp jumping at its loop point", |x| x.windows(2).any(|w| w[0] - w[1] > 0.9));
+    g.set_param(signal_in, "signal", "smoothing", 100);
+    g.set_param(signal_in, "signal", "sigma", 0.3);
+    sounds(&g, "the smoothing closing the jump", |x| {
+        let tail = &x[x.len() - 960..];
+        let steepest = tail.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        steepest < 0.02 && tail.iter().any(|v| *v < 0.2) && tail.iter().any(|v| *v > 0.8)
+    });
+    g.set_param(signal_in, "signal", "smoothing", 0);
+
+    // Step: with `morph`, a new frame is glided into over the time between arrivals: a held
+    // quarter rises to a held 1 through the levels between, never in one step.
     g.call("node remove", j!({ "node": hex(ramp) }));
     let level = g.add("_TestConst");
-    g.set_param(signal_in, "signal", "smoothing", 0.05);
+    g.set_param(signal_in, "signal", "morph", true);
     g.link(level, "out", signal_in, "input");
     g.set_param(level, "constant", "value", 0.25);
     sounds(&g, "the held quarter", |x| x.iter().all(|v| *v == 0.25));
@@ -687,13 +887,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.until("the morph to reach one", |g| {
         let (x, _) = drive(g, TENTH);
         morph.extend_from_slice(&x);
-        ((x[x.len() - 1] - 1.0).abs() < 1e-6).then_some(())
+        ((x[x.len() - 1] - 1.0).abs() < 1e-4).then_some(())
     });
-    assert!(morph.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the crossfade only rises");
-    // 0.3 to 0.95 is 0.65 of the 0.75 it climbs: 2080 of the 2400 samples.
+    assert!(morph.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the morph only rises");
     let between = morph.iter().filter(|v| (0.3..0.95).contains(*v)).count();
-    assert!((2000..2160).contains(&between), "it takes 2400 samples, not one: {between} between");
-    g.set_param(signal_in, "signal", "smoothing", 0.0);
+    assert!(between > 100, "it glides through the levels between: {between} samples there");
+    g.set_param(signal_in, "signal", "morph", false);
     g.call("node remove", j!({ "node": hex(level) }));
 
     // Step: as an `oscillator`, each column of an [n] or [2, n] frame is a sine at that many Hz,
@@ -803,9 +1002,10 @@ fn a_patch_sounds_under_the_external_clock() {
     let gate_name = g.doc()["nodes"][hex(gate)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(env), "param": "env/gate", "reference": format!("{gate_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(env), "param": "env/gate", "expression": format!("nd('{gate_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
+    audio_ready(&g);
     let (shut, _) = drive(&g, TENTH);
     assert_eq!(peak(&shut), 0.0, "a low gate is silence");
     g.set_param(gate, "constant", "value", 1.0);
@@ -842,7 +1042,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let in4_name = g.doc()["nodes"][hex(in4)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(env), "param": "env/gate", "reference": format!("{in4_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(env), "param": "env/gate", "expression": format!("nd('{in4_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     g.until("four voices, one shut", |g| {
@@ -895,12 +1095,12 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("node remove", j!({ "node": hex(fiftieth) }));
     // The params beside `mode` show only for a waveform; an oscillator has none.
     let signal = &g.call("library get", j!({ "type": "audio:SignalIn" }))["params"]["signal"];
-    let waveform = j!({ "group": "signal", "name": "mode", "any_of": ["waveform"] });
-    for name in ["mix", "low", "high", "smoothing"] {
+    let waveform = j!([{ "group": "signal", "name": "mode", "any_of": ["waveform"] }]);
+    for name in ["mix", "low", "high", "speed", "resample", "morph", "smoothing", "sigma"] {
         assert_eq!(signal[name]["show"], waveform, "{name}");
     }
-    assert_eq!(signal["pitch"]["show"], j!({ "group": "signal", "name": "mode", "any_of": ["oscillator"] }));
-    assert_eq!(signal["mode"]["show"], j!(null));
+    assert_eq!(signal["pitch"]["show"], j!([{ "group": "signal", "name": "mode", "any_of": ["oscillator"] }]));
+    assert_eq!(signal["mode"]["show"], j!([]));
     for uid in [in2, ramp2] {
         g.call("node remove", j!({ "node": hex(uid) }));
     }
@@ -926,6 +1126,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let fb2 = g.add("audio:Feedback");
     g.link(fb2, "out", fb2, "input");
     g.link(fb2, "out", out, "input");
+    g.ready(fb2);
     let (still, _) = drive(&g, TENTH);
     assert!((mean(&still[still.len() - 480..]) - 1.0).abs() < 0.01, "it holds its zero: {}", mean(&still[still.len() - 480..]));
     g.call("node remove", j!({ "node": hex(fb2) }));
@@ -941,8 +1142,8 @@ fn a_patch_sounds_under_the_external_clock() {
         "use goofi_audio_sdk::goofi_core::SlotType;\n\
          use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec};\n\
          goofi_audio_sdk::params! {\n    \
-         ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: None },\n    \
-         POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: None },\n\
+         ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: &[], role: None },\n    \
+         POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: &[], role: None },\n\
          }\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"a quarter, a panic, or a NaN\", inputs: &[], outputs: OUTS, params: PARAMS };\n\
@@ -982,7 +1183,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // so the scheduler's noise can neither take the node nor hide an overrun.
     let cost = |g: &Goofi, ms: u64| {
         let ms = std::time::Duration::from_millis(ms);
-        goofi_bridge::audio_engine(&mut g.state.graph.lock().unwrap()).state_cost(trap, Some(ms));
+        assert!(goofi_bridge::audio_engine(&mut g.graph()).state_cost(trap, Some(ms)), "the trap is in the plan");
     };
     cost(&g, 2);
     for _ in 0..4 {
@@ -1067,9 +1268,12 @@ fn a_patch_sounds_under_the_external_clock() {
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Ticks"]));
     let ticks = g.add("Ticks");
+    g.ready(ticks);
     // Any frame after a tenth says it. NOT the first sample of a running count: a control tick
     // landing mid-drive splits the tenth into two frames, and the one-deep probe keeps the LAST.
+    // Driven once the node is on the audio thread again: a restart or a load births it anew.
     let born_at = |g: &Goofi, uid: Uid, what: &str| -> f32 {
+        g.ready(uid);
         let probe = g.probe(uid, "out");
         drive(g, TENTH);
         g.until(what, |_| probe.latest().and_then(|d| f32s(&d).first().copied()))
@@ -1159,7 +1363,7 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(synth["tags"], j!(["generator"]), "`Instrument` in its subcategories: {synth}");
     let schema = plugin["params"].clone();
     assert_eq!(schema["plugin"]["shape"]["options"], j!(["soft", "mid", "hard"]), "{schema}");
-    assert_eq!(schema["plugin"]["steps"]["vmax"], j!(200), "{schema}");
+    assert_eq!(schema["plugin"]["steps"]["vmax"].as_f64(), Some(200.0), "{schema}");
     assert!(schema["plugin"]["meter"].is_null(), "a read-only parameter is omitted: {schema}");
     let src = g.add("Osc");
     g.link(src, "out", plug, "input");
@@ -1169,6 +1373,19 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("link remove", j!({ "from": ep(hex(src), "out"), "to": ep(hex(plug), "input") }));
     g.set_param(plug, "voice", "gate", true);
     heard(&g, plug, "a C4 from a rising gate at pitch zero", |x| (peak(x) - 0.5).abs() < 0.02 && near(per_tenth(x), 52));
+    // A variable cabled into the plugin's `voice` input through a Variable node: a `[2, 1]` frame
+    // is two channels, the pitch and the velocity of one voice, and it sounds the A4 it names.
+    // The param-driven voice is let go first: a voice held is not asked its pitch again.
+    g.set_param(plug, "voice", "gate", false);
+    heard(&g, plug, "the voice let go before the cable", |x| peak(x) < 1e-3);
+    g.call("variable entry add", j!({ "name": "desk.voice", "value": [[0.75], [1.0]] }));
+    let var = g.add("audio:Variable");
+    g.set_param(var, "variable", "group", "desk");
+    g.set_param(var, "variable", "element", "voice");
+    g.link(var, "out", plug, "voice");
+    heard(&g, plug, "an A4 from the variable on the voice cable", |x| near(per_tenth(x), 88));
+    g.call("link remove", j!({ "from": ep(hex(var), "out"), "to": ep(hex(plug), "voice") }));
+    g.call("node remove", j!({ "node": hex(var) }));
 
     // The note is the round and the residual is carried beside it: C7 and 40 cents reads 428
     // crossings a tenth where the round alone reads 418, so a dropped residual fails here.
@@ -1226,21 +1443,42 @@ fn a_patch_sounds_under_the_external_clock() {
     g.call("library refresh", j!({}));
     assert_eq!(scanned(), 4, "a binary whose bytes moved is scanned again");
 
-    // The plugin's state is its own blob, and the record is its params: the fixture latches the
-    // first time `shape` reaches its last step and halves its tone for ever after, which no param
-    // can say. Latched, then set back, saved and reopened: `shape` is the record's `soft` and the
-    // tone is still the latched one, so the blob came back and the record went on top of it.
+    // A module that aborts at process exit unless the host exited it, as Cardinal's does: the
+    // scanner exits it. Its names begin with a digit, so its vendor leads them.
+    bundled("Strict", built("strict"));
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Goofi1Strict", "audio:Goofi1StrictSynth"]));
+    assert_eq!(listed("audio:Goofi1Strict")["available"], true, "{}", listed("audio:Goofi1Strict"));
+
+    // The plugin's state is its own blob, the one place its values are stored: the fixture latches
+    // the first time `shape` reaches its last step and halves its tone for ever after, which no
+    // param can say. Latched, then set to `mid`, saved and reopened: the patch stores no plugin
+    // value, the tone is still the latched one, and the document reads `mid` back off the plugin.
+    let plugin_values = |g: &Goofi| {
+        let params = g.doc()["nodes"][hex(plug)]["params"]["plugin"].clone();
+        let shape = params["shape"]["value"].as_str().unwrap_or_default().to_string();
+        (params["gain"]["value"].as_f64(), shape, params["steps"]["value"].as_f64())
+    };
+    let stored = |what: &str| {
+        let dest = keep.path().join(what);
+        let manifest = goofi_graph::archive::read_gfi(&target, &dest).unwrap();
+        let archive = goofi_graph::doc::Archive::parse(&manifest).unwrap();
+        archive.patch.nodes[&hex(plug)].params.get("plugin").cloned()
+    };
     g.call("link remove", j!({ "from": ep(hex(src), "out"), "to": ep(hex(plug), "input") }));
     g.set_param(plug, "voice", "gate", true);
     heard(&g, plug, "the tone before the latch", |x| (peak(x) - 0.5).abs() < 0.02);
     g.set_param(plug, "plugin", "shape", "hard");
     heard(&g, plug, "the latched tone", |x| (peak(x) - 0.25).abs() < 0.02);
-    g.set_param(plug, "plugin", "shape", "soft");
+    g.set_param(plug, "plugin", "shape", "mid");
+    heard(&g, plug, "the latch holds past the shape", |x| (peak(x) - 0.25).abs() < 0.02);
     g.call("session save", j!({ "path": target.to_string_lossy() }));
+    assert_eq!(stored("latched"), None, "the blob holds the plugin's values, and the patch none");
     let carried = Goofi::new();
     carried.call("session load", j!({ "path": target.to_string_lossy() }));
-    assert_eq!(carried.doc()["nodes"][hex(plug)]["params"]["plugin"]["shape"]["value"], j!("soft"));
+    carried.until("the plugin's own shape to reach the document", |g| (plugin_values(g).1 == "mid").then_some(()));
+    assert_eq!(plugin_values(&carried).0, Some(0.5), "the gain the blob holds");
     heard(&carried, plug, "the archive carried the blob", |x| (peak(x) - 0.25).abs() < 0.02 && near(per_tenth(x), 52));
+    assert_eq!(carried.call("session status", j!({}))["dirty"], false, "what a load restores is no change");
     drop(carried);
 
     // Step: a plugin's own editor is a window on the machine goofi runs on, off the LIVE
@@ -1259,6 +1497,21 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(g.call("node editor", j!({ "node": hex(plug), "show": false }))["changed"], true);
     assert_eq!(g.call("node editor", j!({ "node": hex(plug), "show": false }))["changed"], false, "already closed");
     assert_eq!(g.call("node editor", j!({ "node": hex(plug) }))["changed"], true, "opens again");
+
+    // The fixture's later views are a preset browser: a preset moves every value in both halves
+    // and tells the host only that they moved. The document reads them back, the patch stores
+    // none, and a reload plays the preset — so nothing goofi holds was sent over the blob.
+    let preset = (Some(0.75), "mid".to_string(), Some(50.0));
+    g.until("the preset's values to reach the document", |g| (plugin_values(g) == preset).then_some(()));
+    heard(&g, plug, "the preset's gain", |x| (peak(x) - 0.75).abs() < 0.02);
+    g.call("session save", j!({ "path": target.to_string_lossy() }));
+    assert_eq!(stored("preset"), None, "the preset is the blob's alone");
+    let reloaded = Goofi::new();
+    reloaded.call("session load", j!({ "path": target.to_string_lossy() }));
+    reloaded.until("the reloaded preset to reach the document", |g| (plugin_values(g) == preset).then_some(()));
+    heard(&reloaded, plug, "the reloaded preset's gain", |x| (peak(x) - 0.75).abs() < 0.02);
+    assert_eq!(reloaded.call("session status", j!({}))["dirty"], false, "a reload is no change");
+    drop(reloaded);
     g.call("node remove", j!({ "node": hex(plug) }));
     assert!(g.refuse("node editor", j!({ "node": hex(plug) })).contains("no such node"), "the window went with the node");
 }
@@ -1275,6 +1528,22 @@ fn loudest(levels: &[f32]) -> usize {
     (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
 }
 
+/// Every audio node in the patch reported ready: each is made on a thread of its own and lands
+/// at a settle, so a block driven before that renders without it.
+fn audio_ready(g: &Goofi) {
+    let doc = g.doc();
+    let audio: Vec<Uid> = doc["nodes"]
+        .as_object()
+        .expect("the nodes")
+        .iter()
+        .filter(|(_, node)| node["type"].as_str().is_some_and(|t| t.starts_with("audio:")))
+        .filter_map(|(hex, _)| Uid::from_hex(hex))
+        .collect();
+    for uid in audio {
+        g.ready(uid);
+    }
+}
+
 /// A node's own output once the shape behind it has stopped moving, heard through an `AudioOut`
 /// of its own so the reading is the block `drive` renders rather than a tap's. The params last set
 /// reach the engine a control hop later, on wall time, so that hop is waited out first; a
@@ -1283,6 +1552,7 @@ fn loudest(levels: &[f32]) -> usize {
 fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
     let out = g.add("AudioOut");
     g.link(uid, "out", out, "input");
+    audio_ready(g);
     goofi_tests::applied(g);
     for _ in 0..5 {
         drive(g, TENTH);
@@ -1294,10 +1564,65 @@ fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
     heard
 }
 
+/// A param that moves is heard as a glide across the block, never as a step at its edge: the
+/// edge is a click. A level through `SignalIn` under a gain shows the move whole.
+#[test]
+fn a_moving_param_glides_across_the_block() {
+    let g = Goofi::new();
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
+    let level = g.add("_TestConst");
+    g.set_param(level, "constant", "value", 1.0);
+    let dc = g.add("audio:SignalIn");
+    let fader = g.add("Gain");
+    let out = g.add("AudioOut");
+    g.link(level, "out", dc, "input");
+    g.link(dc, "out", fader, "input");
+    g.link(fader, "out", out, "input");
+    g.until("the level to enter", |g| {
+        let (x, _) = drive(g, TENTH);
+        x.iter().all(|v| (v - 1.0).abs() < 1e-3).then_some(())
+    });
+    // The steepest slope a glide of three quarters allows: the whole move across one block. Read
+    // across the tenths' seams too, where a step that landed on a drive's first block would hide.
+    let slope = 0.75 / goofi_audio_sdk::BLOCK as f32 + 1e-4;
+    let mut tail = 1.0f32;
+    let mut steepest = |x: &[f32]| {
+        let s = std::iter::once(tail).chain(x.iter().copied()).collect::<Vec<f32>>();
+        tail = x[x.len() - 1];
+        s.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max)
+    };
+
+    // Step: a constant edit.
+    for (what, target) in [("a quarter", 0.25f32), ("and back", 1.0)] {
+        g.set_param(fader, "gain", "gain", target as f64);
+        goofi_tests::applied(&g);
+        let (x, _) = drive(&g, TENTH);
+        assert!((x[x.len() - 1] - target).abs() < 1e-3, "{what}: the move lands within the tenth: {}", x[x.len() - 1]);
+        let jump = steepest(&x);
+        assert!(jump <= slope, "{what}: no sample jumps: {jump} per sample");
+    }
+
+    // Step: a computed value takes the same glide.
+    let knob = g.add("_TestConst");
+    let knob_name = g.doc()["nodes"][hex(knob)]["name"].as_str().unwrap().to_string();
+    g.set_param(knob, "constant", "value", 1.0);
+    g.call("node param edit", j!({ "node": hex(fader), "param": "gain/gain", "expression": format!("nd('{knob_name}')") }));
+    assert!(g.stays(|g| g.error(fader).is_none()), "the knob binds");
+    g.set_param(knob, "constant", "value", 0.25);
+    let mut jump = 0f32;
+    g.until("the computed move to be heard", |g| {
+        goofi_tests::applied(g);
+        let (x, _) = drive(g, TENTH);
+        jump = jump.max(steepest(&x));
+        ((x[x.len() - 1] - 0.25).abs() < 1e-3).then_some(())
+    });
+    assert!(jump <= slope, "a computed value: no sample jumps: {jump} per sample");
+}
+
 #[test]
 fn one_signal_speaks_through_another_band_by_band() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     // Step: with nothing behind `gains` every band is open, so a tone through the bank is still
     // that tone, at that pitch — louder, because neighbouring bands overlap and add.
@@ -1377,7 +1702,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let follow_name = g.doc()["nodes"][hex(follow)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
-        j!({ "node": hex(bank), "param": "band/gains", "reference": format!("{follow_name}.out"), "mode": "reference" }),
+        j!({ "node": hex(bank), "param": "band/gains", "expression": format!("nd('{follow_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
 
@@ -1437,11 +1762,12 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(half, "out", voices, "input");
     let heard_voices = g.probe(voices, "out");
     // `drive` moves the audio clock alone; the signal plane runs on wall time, so this waits on it.
-    let pitches = g.until("four voices to cross into the audio plane", |g| {
+    // On the VALUES, not the width: the output is four channels wide from the re-plan the first
+    // frame asks for, and that frame enters the ring minted for it a control tick later.
+    g.until("C4, F#4, C5 and F#5 to cross into the audio plane in volts", |g| {
         drive(g, TENTH);
-        shape_held(&heard_voices).filter(|v| v.len() == 4)
+        shape_held(&heard_voices).filter(|v| *v == [0.0, 0.5, 1.0, 1.5])
     });
-    assert_eq!(pitches, vec![0.0, 0.5, 1.0, 1.5], "C4, F#4, C5 and F#5 in volts");
 
     let tone = g.add("Osc");
     let chord_bank = g.add("BandFilter");
@@ -1453,7 +1779,7 @@ fn one_signal_speaks_through_another_band_by_band() {
     let bound = g.call(
         "node param edit",
         j!({ "node": hex(chord_bank), "param": "band/pitch",
-             "reference": format!("{voices_name}.out"), "mode": "reference" }),
+             "expression": format!("nd('{voices_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
 
@@ -1487,16 +1813,15 @@ fn one_signal_speaks_through_another_band_by_band() {
     g.link(chord, "out", shut, "input");
     g.link(shut, "out", gates, "input");
     let heard_gates = g.probe(gates, "out");
-    let levels = g.until("a gate per voice, the first one shut", |g| {
+    g.until("a gate per voice: one voice let go, three held", |g| {
         drive(g, TENTH);
-        shape_held(&heard_gates).filter(|v| v.len() == 4)
+        shape_held(&heard_gates).filter(|v| *v == [0.0, 1.0, 1.0, 1.0])
     });
-    assert_eq!(levels, vec![0.0, 1.0, 1.0, 1.0], "one voice let go, three held");
     let gates_name = g.doc()["nodes"][hex(gates)]["name"].as_str().unwrap().to_string();
     let bound = g.call(
         "node param edit",
         j!({ "node": hex(chord_bank), "param": "band/gate",
-             "reference": format!("{gates_name}.out"), "mode": "reference" }),
+             "expression": format!("nd('{gates_name}')") }),
     );
     assert!(bound["error"].is_null(), "{bound}");
     let released = settled(&g, chord_bank, "and the same partial once that voice is let go");
@@ -1524,7 +1849,7 @@ fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
 #[test]
 fn an_audio_out_lands_on_the_channels_it_names() {
     let g = Goofi::new();
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(FirstVar::default()));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
 
     let osc = g.add("Osc");
     let out = g.add("AudioOut");
@@ -1605,3 +1930,86 @@ fn wide(g: &Goofi, what: &str, channels: u16) -> Vec<f32> {
         (c == channels).then_some(x)
     })
 }
+
+#[test]
+fn nodes_that_do_not_feed_each_other_render_at_once() {
+    // Two instances of one authored node share its library, so a counter there is a rendezvous:
+    // each waits inside `process` for the other to arrive in the same block. Rendered one after
+    // the other, the first waits out its bound alone and says 0; rendered at once, both say 1.
+    let g = Goofi::new();
+    assert!(std::thread::available_parallelism().is_ok_and(|n| n.get() > 1), "this machine has one core");
+    let dir = g.state.mount().join("nodes_audio");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Meet.rs"),
+        "use goofi_audio_sdk::goofi_core::SlotType;\n\
+         use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl};\n\
+         use std::sync::atomic::{AtomicU64, Ordering};\n\
+         static ARRIVED: AtomicU64 = AtomicU64::new(0);\n\
+         static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
+         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"waits in each block for a second of its kind\", inputs: &[], outputs: OUTS, params: &[] };\n\
+         #[derive(Default)]\nstruct Meet;\n\
+         impl AudioNode for Meet {\n    \
+         fn prepare(&mut self, _rate: f64) {}\n    \
+         fn process(&mut self, b: &mut Block<'_>) {\n        \
+         let mine = ARRIVED.fetch_add(1, Ordering::SeqCst) + 1;\n        \
+         let pair = mine.div_ceil(2) * 2;\n        \
+         let bound = std::time::Instant::now() + std::time::Duration::from_millis(100);\n        \
+         while ARRIVED.load(Ordering::SeqCst) < pair && std::time::Instant::now() < bound { std::hint::spin_loop(); }\n        \
+         let met = ARRIVED.load(Ordering::SeqCst) >= pair;\n        \
+         if !met { ARRIVED.fetch_add(1, Ordering::SeqCst); }\n        \
+         b.outs[0].chan_mut(0).fill(if met { 1.0 } else { 0.0 });\n    \
+         }\n}\n\
+         goofi_audio_sdk::export!(Meet, MANIFEST);\n",
+    )
+    .unwrap();
+    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Meet"]));
+    let out = g.add("AudioOut");
+    // The wait is the rendezvous, not the node's cost: a helper the scheduler seats late keeps
+    // its partner waiting past the budget, and eight such blocks are an overrun fault that takes
+    // both out for good. Their cost is stated to the watchdog, so a late block is only a tenth
+    // that is asked again.
+    for _ in 0..2 {
+        let meet = g.add("Meet");
+        g.link(meet, "out", out, "input");
+        g.ready(meet);
+        g.until("the watchdog to take a rendezvous for free", |g| {
+            goofi_bridge::audio_engine(&mut g.graph()).state_cost(meet, Some(std::time::Duration::ZERO)).then_some(())
+        });
+    }
+    sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
+    // The helpers sit on the performance cores where the machine has a slower kind too: the
+    // scheduler put a helper on an efficiency core, where a plugin rendered late every period.
+    seated_on_performance_cores();
+}
+
+/// Every pool helper's seat is the performance cores, or the process's own seat where every core
+/// is the same kind. Thread names in `/proc` are cut at fifteen characters.
+#[cfg(target_os = "linux")]
+fn seated_on_performance_cores() {
+    let cpus_of = |status: &str| -> Vec<usize> {
+        let list = status.lines().find_map(|l| l.strip_prefix("Cpus_allowed_list:\t")).unwrap_or_default();
+        list.split(',')
+            .flat_map(|part| match part.split_once('-') {
+                Some((lo, hi)) => (lo.parse().unwrap()..=hi.parse().unwrap()).collect::<Vec<usize>>(),
+                None => part.trim().parse().ok().into_iter().collect(),
+            })
+            .collect()
+    };
+    let own = cpus_of(&std::fs::read_to_string("/proc/self/status").unwrap());
+    let want = goofi_audio::performance_cores().unwrap_or(own);
+    let mut helpers = 0;
+    for entry in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
+        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
+        let name = status.lines().find_map(|l| l.strip_prefix("Name:\t")).unwrap_or_default();
+        if !name.starts_with("goofi-audio-poo") {
+            continue;
+        }
+        helpers += 1;
+        assert_eq!(cpus_of(&status), want, "{name} sits on the performance cores");
+    }
+    assert!(helpers > 0, "the pool's helpers are threads of this process");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn seated_on_performance_cores() {}

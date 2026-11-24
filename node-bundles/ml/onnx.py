@@ -59,7 +59,7 @@ class Onnx(goofi.Node):
             ),
         },
         "common": {
-            "max_frequency": goofi.FloatParam(
+            "max_frequency": goofi.NumParam(
                 30.0, 0.1, 240.0, doc="Rate cap: a model is asked for no more answers than a viewer draws."
             ),
         },

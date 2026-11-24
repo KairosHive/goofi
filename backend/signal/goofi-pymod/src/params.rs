@@ -52,9 +52,9 @@ impl InputSlot {
     }
 }
 
-/// `show=("mode", ["iir", "fir"])`: the inspector shows the param only while the param `mode`
-/// (or `group.mode`) holds one of the values, compared as text.
-pub type Show = Option<(String, Vec<String>)>;
+/// `show=("mode", ["iir", "fir"])`, or a list of such rules that must all hold: the inspector
+/// shows the param only while the param `mode` (or `group.mode`) holds one of the values.
+pub type Show = Vec<(String, Vec<String>)>;
 
 /// A `show=` value as Python writes it: `True` and `4` compare as `"true"` and `"4"`.
 #[derive(FromPyObject)]
@@ -64,27 +64,56 @@ enum ShowValue {
     Str(String),
 }
 
-type ShowArg = Option<(String, Vec<ShowValue>)>;
+#[derive(FromPyObject)]
+enum ShowArg {
+    One((String, Vec<ShowValue>)),
+    Many(Vec<(String, Vec<ShowValue>)>),
+}
 
-fn show_text(show: ShowArg) -> Show {
+fn show_text(show: Option<ShowArg>) -> Show {
     let text = |v: ShowValue| match v {
         ShowValue::Bool(b) => b.to_string(),
         ShowValue::Int(i) => i.to_string(),
         ShowValue::Str(s) => s,
     };
-    show.map(|(param, values)| (param, values.into_iter().map(text).collect()))
+    let rules = match show {
+        None => Vec::new(),
+        Some(ShowArg::One(rule)) => vec![rule],
+        Some(ShowArg::Many(rules)) => rules,
+    };
+    rules.into_iter().map(|(param, values)| (param, values.into_iter().map(text).collect())).collect()
 }
 
+/// A number as Python writes it: one, or one per dimension.
+#[derive(FromPyObject)]
+pub enum NumDefault {
+    One(f64),
+    Many(Vec<f64>),
+}
+
+impl NumDefault {
+    fn values(self) -> Vec<f64> {
+        match self {
+            NumDefault::One(v) => vec![v],
+            NumDefault::Many(v) => v,
+        }
+    }
+}
+
+/// `goofi.NumParam(default, min, max, int=False, options=None, …)` — a number, or with a sequence
+/// as `default` a vector of them, inside bounds they all share. `int=True` rounds every value.
 #[pyclass]
-pub struct IntParam {
+pub struct NumParam {
     #[pyo3(get)]
-    pub default: i64,
+    pub default: Vec<f64>,
+    #[pyo3(get)]
+    pub min: f64,
+    #[pyo3(get)]
+    pub max: f64,
+    #[pyo3(get)]
+    pub int: bool,
     #[pyo3(get)]
     pub options: Vec<i64>,
-    #[pyo3(get)]
-    pub min: i64,
-    #[pyo3(get)]
-    pub max: i64,
     #[pyo3(get)]
     pub doc: Option<String>,
     #[pyo3(get)]
@@ -94,20 +123,52 @@ pub struct IntParam {
 }
 
 #[pymethods]
-impl IntParam {
+impl NumParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None, options=Vec::new(), show=None))]
-    fn new(default: i64, min: i64, max: i64, doc: Option<String>, expression: Option<String>, options: Vec<i64>, show: ShowArg) -> IntParam {
-        IntParam { default, min, max, doc, expression, options, show: show_text(show) }
+    #[pyo3(signature = (default, min, max, int=false, options=Vec::new(), doc=None, expression=None, show=None))]
+    // The arguments ARE the Python signature, each a keyword an author writes.
+    #[allow(clippy::too_many_arguments)]
+    fn new(default: NumDefault, min: f64, max: f64, int: bool, options: Vec<i64>, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<NumParam> {
+        let default = default.values();
+        if default.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err("a NumParam default is a number or a sequence of them"));
+        }
+        Ok(NumParam { default, min, max, int, options, doc, expression, show: show_text(show) })
     }
 }
 
+/// `goofi.ColorParam(default=(1, 1, 1, 1), …)` — an RGBA colour: a four-dimensional number from
+/// 0 to 1 that the inspector picks.
 #[pyclass]
-pub struct FloatParam {
+pub struct ColorParam {
     #[pyo3(get)]
-    pub default: f64,
+    pub default: Vec<f64>,
     #[pyo3(get)]
-    pub min: f64,
+    pub doc: Option<String>,
+    #[pyo3(get)]
+    pub expression: Option<String>,
+    #[pyo3(get)]
+    pub show: Show,
+}
+
+#[pymethods]
+impl ColorParam {
+    #[new]
+    #[pyo3(signature = (default=vec![1.0, 1.0, 1.0, 1.0], doc=None, expression=None, show=None))]
+    fn new(default: Vec<f64>, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<ColorParam> {
+        if default.len() != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("a ColorParam default is four numbers, RGBA"));
+        }
+        Ok(ColorParam { default, doc, expression, show: show_text(show) })
+    }
+}
+
+/// `goofi.EnvelopeParam(default=(0.01, 0.1, 1.0, 0.3), max=10.0, …)` — an ADSR envelope: attack,
+/// decay and release in seconds up to `max`, sustain in 0..1, drawn with four knobs.
+#[pyclass]
+pub struct EnvelopeParam {
+    #[pyo3(get)]
+    pub default: Vec<f64>,
     #[pyo3(get)]
     pub max: f64,
     #[pyo3(get)]
@@ -119,11 +180,14 @@ pub struct FloatParam {
 }
 
 #[pymethods]
-impl FloatParam {
+impl EnvelopeParam {
     #[new]
-    #[pyo3(signature = (default, min, max, doc=None, expression=None, show=None))]
-    fn new(default: f64, min: f64, max: f64, doc: Option<String>, expression: Option<String>, show: ShowArg) -> FloatParam {
-        FloatParam { default, min, max, doc, expression, show: show_text(show) }
+    #[pyo3(signature = (default=goofi_core::ENVELOPE_BORN.to_vec(), max=10.0, doc=None, expression=None, show=None))]
+    fn new(default: Vec<f64>, max: f64, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> PyResult<EnvelopeParam> {
+        if default.len() != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err("an EnvelopeParam default is four numbers, ADSR"));
+        }
+        Ok(EnvelopeParam { default, max, doc, expression, show: show_text(show) })
     }
 }
 
@@ -143,7 +207,7 @@ pub struct BoolParam {
 impl BoolParam {
     #[new]
     #[pyo3(signature = (default, doc=None, expression=None, show=None))]
-    fn new(default: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> BoolParam {
+    fn new(default: bool, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> BoolParam {
         BoolParam { default, doc, expression, show: show_text(show) }
     }
 }
@@ -168,7 +232,7 @@ pub struct StringParam {
 impl StringParam {
     #[new]
     #[pyo3(signature = (default, options=None, refresh=false, doc=None, expression=None, show=None))]
-    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>, show: ShowArg) -> StringParam {
+    fn new(default: String, options: Option<Vec<String>>, refresh: bool, doc: Option<String>, expression: Option<String>, show: Option<ShowArg>) -> StringParam {
         StringParam { default, options: options.unwrap_or_default(), refresh, doc, expression, show: show_text(show) }
     }
 }
@@ -186,7 +250,7 @@ pub struct PulseParam {
 impl PulseParam {
     #[new]
     #[pyo3(signature = (doc=None, show=None))]
-    fn new(doc: Option<String>, show: ShowArg) -> PulseParam {
+    fn new(doc: Option<String>, show: Option<ShowArg>) -> PulseParam {
         PulseParam { doc, show: show_text(show) }
     }
 }

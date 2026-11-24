@@ -1,8 +1,9 @@
 //! GPU texture allocation, upload, state, and readback resources shared by every graphics stage.
-use crate::gpu::{Gpu, Want, padded_row, target};
+use crate::gpu::{Gpu, Want, padded_row};
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use goofi_supervisor::sync::Stack;
 /// One texture the engine owns, with the size it was made for.
 pub(crate) struct Target {
     pub(crate) texture: wgpu::Texture,
@@ -10,13 +11,37 @@ pub(crate) struct Target {
     pub(crate) size: (u32, u32),
 }
 
+impl Target {
+    /// A texture the engine renders into and reads back from, with its view.
+    fn new(gpu: &Gpu, label: &str, size: (u32, u32), format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> Target {
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+        Target { view: texture.create_view(&Default::default()), texture, size }
+    }
+}
+
 /// One frame on its way off the GPU: the texture the blit converts into and the buffer the copy
-/// lands in.
+/// lands in. Boxed, so it moves between the ring and its reader as one pointer.
+/// A slot's buffer is on the device, or being copied.
+pub(crate) const PENDING: u8 = 0;
+/// The map callback found the bytes there.
+pub(crate) const READY: u8 = 1;
+/// The map callback was refused: the slot is free again, and the stage wears the refusal.
+pub(crate) const FAILED: u8 = 2;
+
 pub(crate) struct Slot {
     pub(crate) texture: Target,
     pub(crate) buffer: wgpu::Buffer,
-    /// The map callback's: set once the bytes are there.
-    pub(crate) ready: Arc<AtomicBool>,
+    /// The map callback's word: [`PENDING`] until it runs, then [`READY`] or [`FAILED`].
+    pub(crate) ready: Arc<AtomicU8>,
     /// Patch seconds at the tick that DREW this frame. A readback is taken one or two ticks later,
     /// so an instant read where it is TAKEN is a tick period late against every other engine.
     pub(crate) at: f64,
@@ -30,24 +55,84 @@ pub(crate) struct Shrunk {
     pub(crate) to: (u32, u32),
 }
 
+/// Where a reader puts a slot once it is done with it: the ring takes them all back at the top
+/// of a tick. Shared by the ring and every slot out with a reader, so a ring remade while a
+/// slot is out does not lose it — the slot comes home to a pile nobody drains, and is freed with it.
+pub(crate) type Returns = Arc<Stack<Box<Slot>>>;
+
+/// One finished readback, on its way to the reader that asked for it, with the GPU buffer still
+/// mapped. The reader copies the rows out on ITS thread, and dropping this unmaps the buffer and
+/// gives the slot back to the ring: the render thread moves a pointer per frame and copies nothing.
+pub(crate) struct Readback {
+    slot: Option<Box<Slot>>,
+    returns: Returns,
+    pub(crate) want: Want,
+    pub(crate) shrunk: Shrunk,
+    /// Patch seconds at the tick that drew the frame.
+    pub(crate) at: f64,
+    /// The recording's number for this frame, counted where it was handed over so a frame the
+    /// reader let go leaves a gap the recorder counts; zero for a frame nobody records.
+    pub(crate) index: u64,
+    /// The clock's pace when the frame was drawn: what a recording is stamped with.
+    pub(crate) sfreq: f64,
+}
+
+impl Readback {
+    /// The frame's size, in texels.
+    pub(crate) fn size(&self) -> (u32, u32) {
+        self.shrunk.to
+    }
+
+    /// The frame's rows appended to `bytes`, tight, and whether it holds one.
+    pub(crate) fn rows_into(&self, bytes: &mut Vec<u8>) -> bool {
+        let Some(slot) = &self.slot else { return false };
+        rows_into(bytes, &slot.buffer, slot.texture.size, self.want)
+    }
+}
+
+impl Drop for Readback {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot.take() {
+            slot.buffer.unmap();
+            slot.ready.store(PENDING, Ordering::Relaxed);
+            self.returns.push(slot);
+        }
+    }
+}
+
 /// The frames one reader has in flight. A copy started in one tick is taken a tick or two later,
 /// so the render thread never waits on the device; a slot's LIST is its whole state, so there is
 /// no flag to keep in step.
 pub(crate) struct Ring {
     /// Nothing of theirs is on the device, so these are what a new copy goes into.
-    pub(crate) free: Vec<Slot>,
+    pub(crate) free: VecDeque<Box<Slot>>,
     /// A copy is on the device or mapped, oldest first — so frames leave in the order asked for.
-    pub(crate) flight: VecDeque<Slot>,
-    /// What the last frames were copied into, handed back by whoever finished with them.
-    pub(crate) spare: Spare,
+    pub(crate) flight: VecDeque<Box<Slot>>,
+    /// Where a reader puts a slot it has finished with.
+    returns: Returns,
     /// The destination size the pass reads, on the device.
     pub(crate) out_size: wgpu::Buffer,
     /// The source and target this ring was built for; a move in either remakes it.
     pub(crate) shrunk: Shrunk,
 }
 
+impl Ring {
+    /// Every slot the readers gave back since the last tick, free again.
+    pub(crate) fn reclaim(&mut self) {
+        self.free.extend(self.returns.drain());
+    }
+
+    /// Hand `slot`, finished, to a reader: the mapped buffer travels with it.
+    pub(crate) fn hand(&self, slot: Box<Slot>, want: Want, index: u64, sfreq: f64) -> Readback {
+        let at = slot.at;
+        Readback { slot: Some(slot), returns: self.returns.clone(), want, shrunk: self.shrunk, at, index, sfreq }
+    }
+}
+
 /// One node's GPU state, kept across plans so a topology edit costs no allocation.
 pub(crate) struct State {
+    /// What a host producer last made, as the render thread took it off its cell.
+    pub(crate) produced: Option<crate::producer::Produced>,
     pub(crate) submitted: Option<u64>,
     pub(crate) out: Option<Target>,
     /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
@@ -58,9 +143,13 @@ pub(crate) struct State {
     /// How many times this node has rendered since those buffers were made — zero is a fresh
     /// state, which is how a body knows to seed itself.
     pub(crate) count: u32,
+    /// Readbacks taken for the recording, numbered from one.
+    pub(crate) recorded: u64,
     pub(crate) uploads: Vec<Option<Target>>,
-    /// The range each upload spanned, in the uniform's own order.
-    pub(crate) ranges: Vec<[f32; 3]>,
+    /// Beside each upload, the head layout of its channels; `None` binds the blank texel.
+    pub(crate) layouts: Vec<Option<Target>>,
+    /// The range, channel count and scale of each upload, in the uniform's own order.
+    pub(crate) ranges: Vec<[f32; 4]>,
     pub(crate) time: wgpu::Buffer,
     pub(crate) frame: wgpu::Buffer,
     pub(crate) resolution: wgpu::Buffer,
@@ -78,40 +167,39 @@ impl State {
             })
         };
         State {
+            produced: None,
             submitted: None,
             out: None,
             reads: [None, None, None, None],
             buffers: Vec::new(),
             count: 0,
+            recorded: 0,
             uploads: Vec::new(),
+            layouts: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),
             resolution: uniform("resolution", 8),
             ranges: Vec::new(),
-            params: (params > 0).then(|| uniform("params", params as u64)),
+            // Storage, not uniform: a list is an array of scalars, which a uniform cannot hold
+            // without a 16-byte stride.
+            params: (params > 0).then(|| {
+                gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("params"),
+                    size: params as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            }),
         }
     }
 }
-/// Buffers a reader has finished with, kept for the next frame. A fresh 30 MB allocation costs
-/// four times the copy into it, because the kernel must zero every page.
-pub(crate) type Spare = Arc<Mutex<Vec<Vec<u8>>>>;
-
-/// Two is every buffer this path can have in hand at once; a third would only be held.
-pub(crate) fn give_back(spare: &Spare, buffer: Vec<u8>) {
-    let mut held = spare.lock().expect("the spare");
-    if held.len() < 2 {
-        held.push(buffer);
-    }
-}
-
-/// The mapped rows into `bytes` as one tight frame, the 256-byte padding each row carries
-/// dropped, and whether it holds one.
-pub(crate) fn rows_into(bytes: &mut Vec<u8>, buffer: &wgpu::Buffer, (w, h): (u32, u32), want: Want) -> bool {
+/// The mapped rows appended to `bytes` as one tight frame, the 256-byte padding each row carries
+/// dropped, and whether it holds one. Appended, so a reader writes them where its frame wants
+/// them — after a header, into a buffer it keeps — and copies them once.
+fn rows_into(bytes: &mut Vec<u8>, buffer: &wgpu::Buffer, (w, h): (u32, u32), want: Want) -> bool {
     let Ok(mapped) = buffer.slice(..).get_mapped_range() else { return false };
     let row = (w * want.texel()) as usize;
     let pitch = padded_row(w, want.texel()) as usize;
-    // Appended, never zero-filled first: a tap's buffer is fresh every frame.
-    bytes.clear();
     bytes.reserve(row * h as usize);
     for y in 0..h as usize {
         match mapped.get(y * pitch..y * pitch + row) {
@@ -128,20 +216,19 @@ impl Ring {
         let slots = (0..want.depth())
             .map(|_| {
                 let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
-                let texture = target(gpu, "readback", size, want.format(), usage);
-                let view = texture.create_view(&Default::default());
+                let texture = Target::new(gpu, "readback", size, want.format(), usage);
                 let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("readback"),
                     size: u64::from(padded_row(size.0, want.texel())) * u64::from(size.1),
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                Slot {
-                    texture: Target { texture, view, size },
+                Box::new(Slot {
+                    texture,
                     buffer,
-                    ready: Arc::new(AtomicBool::new(false)),
+                    ready: Arc::new(AtomicU8::new(PENDING)),
                     at: 0.0,
-                }
+                })
             })
             .collect();
         let out_size = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -152,7 +239,7 @@ impl Ring {
         });
         let bytes = [(size.0 as f32).to_le_bytes(), (size.1 as f32).to_le_bytes()].concat();
         gpu.queue.write_buffer(&out_size, 0, &bytes);
-        Ring { free: slots, flight: VecDeque::new(), spare: Spare::default(), out_size, shrunk }
+        Ring { free: slots, flight: VecDeque::new(), returns: Returns::default(), out_size, shrunk }
     }
 }
 
@@ -189,14 +276,8 @@ impl State {
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST;
-            let texture = target(gpu, "out", size, crate::gpu::FORMAT, usage);
-            let view = texture.create_view(&Default::default());
-            self.out = Some(Target { texture, view, size });
-            let fresh = || {
-                let texture = target(gpu, "state", size, crate::gpu::FORMAT, usage);
-                let view = texture.create_view(&Default::default());
-                Target { texture, view, size }
-            };
+            self.out = Some(Target::new(gpu, "out", size, crate::gpu::FORMAT, usage));
+            let fresh = || Target::new(gpu, "state", size, crate::gpu::FORMAT, usage);
             self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
             self.count = 0;
             self.submitted = None;
@@ -217,7 +298,7 @@ impl State {
     pub(crate) fn submit_upload(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, up: &Upload) {
         let out = self.out.as_ref().expect("output allocated");
         if out.size == (up.width, up.height) {
-            write_upload(gpu, &out.texture, up);
+            write_texels(gpu, &out.texture, out.size, &up.texels);
         } else {
             self.upload(gpu, 0, up);
             gpu.resize(
@@ -233,20 +314,28 @@ impl State {
     pub(crate) fn upload(&mut self, gpu: &Gpu, k: usize, up: &Upload) {
         if self.uploads.len() <= k {
             self.uploads.resize_with(k + 1, || None);
+            self.layouts.resize_with(k + 1, || None);
         }
         if self.ranges.len() <= k {
-            self.ranges.resize(k + 1, [0.0, 1.0, 1.0]);
+            self.ranges.resize(k + 1, [0.0, 1.0, 1.0, 1.0]);
         }
-        self.ranges[k] = [up.lo, up.hi, up.channels as f32];
+        self.ranges[k] = [up.lo, up.hi, up.channels as f32, up.scale];
+        let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let size = (up.width, up.height);
         if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
-            let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
-            let texture = target(gpu, "upload", size, crate::gpu::FORMAT, usage);
-            let view = texture.create_view(&Default::default());
-            self.uploads[k] = Some(Target { texture, view, size });
+            self.uploads[k] = Some(Target::new(gpu, "upload", size, crate::gpu::FORMAT, usage));
         }
-        let held = self.uploads[k].as_ref().expect("just made");
-        write_upload(gpu, &held.texture, up);
+        write_texels(gpu, &self.uploads[k].as_ref().expect("just made").texture, size, &up.texels);
+        match &up.layout {
+            Some((n, texels)) => {
+                let size = (*n, 1);
+                if self.layouts[k].as_ref().is_none_or(|t| t.size != size) {
+                    self.layouts[k] = Some(Target::new(gpu, "layout", size, crate::gpu::FORMAT, usage));
+                }
+                write_texels(gpu, &self.layouts[k].as_ref().expect("just made").texture, size, texels);
+            }
+            None => self.layouts[k] = None,
+        }
     }
 
     pub(crate) fn group0(&self, gpu: &Gpu) -> wgpu::BindGroup {
@@ -267,12 +356,13 @@ impl State {
     }
 }
 
-fn write_upload(gpu: &Gpu, texture: &wgpu::Texture, up: &Upload) {
+/// RGBA16F texels, `size` of them, into a texture of that size.
+fn write_texels(gpu: &Gpu, texture: &wgpu::Texture, size: (u32, u32), texels: &[u8]) {
     gpu.queue.write_texture(
         texture.as_image_copy(),
-        &up.texels,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(up.width * 8), rows_per_image: None },
-        wgpu::Extent3d { width: up.width, height: up.height, depth_or_array_layers: 1 },
+        texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.0 * 8), rows_per_image: None },
+        wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
     );
 }
 
@@ -280,15 +370,20 @@ use goofi_core::{Data, Value};
 /// One arrival as the render thread takes it: `width * height * 4` f16 texels, row 0 the top,
 /// and the range the frame's own values spanned — what a body needs to draw the frame to scale,
 /// and the one thing a shader cannot work out for itself without reading every texel at every
-/// texel.
+/// texel. The values and the range are both over `scale`, so a frame past the half floats fits.
 pub struct Upload {
     pub width: u32,
     pub height: u32,
     pub texels: Vec<u8>,
     pub lo: f32,
     pub hi: f32,
+    /// The power of two the values are divided by: 1 for a frame the half floats hold as it is.
+    pub scale: f32,
     /// How many channels the frame had, which the texels alone cannot say: gray fills three.
     pub channels: u32,
+    /// Where each channel of the first axis sits on the 10-20 head, by its name: a `[N, 1]`
+    /// texture of `(x, y, known, 0)`, or `None` for a frame whose channels have no names.
+    pub layout: Option<(u32, Vec<u8>)>,
 }
 
 impl Upload {
@@ -312,12 +407,13 @@ impl Upload {
                 }
             }
         }
-        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, channels: channels as u32 }
+        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, scale: 1.0, channels: channels as u32, layout: None }
     }
 
     /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
-    /// the channels it has, with alpha 1 where it has none.
-    pub fn of(frame: &Data) -> Option<Upload> {
+    /// the channels it has, with alpha 1 where it has none. The alpha is an opacity and stays as
+    /// it is; the values are over the scale that brings the frame's largest under 2^15.
+    pub fn of(frame: &Data, mut texels: Vec<u8>) -> Option<Upload> {
         let Value::Array(a) = frame.value() else { return None };
         let (h, w, c) = match *a.shape() {
             [n] => (1, n, 1),
@@ -330,28 +426,31 @@ impl Upload {
         if h == 0 || w == 0 || h > crate::plan::MAX_SIZE as usize || w > crate::plan::MAX_SIZE as usize {
             return None;
         }
-        let x: Vec<f32> =
-            a.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().expect("four bytes"))).collect();
+        let x: Vec<f32> = a.values().collect();
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
         for v in x.iter().filter(|v| v.is_finite()) {
             lo = lo.min(*v);
             hi = hi.max(*v);
         }
-        let mut texels = Vec::with_capacity(h * w * 8);
+        let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
+        let scale = 2f32.powi((lo.abs().max(hi.abs()).log2().floor() - 14.0).max(0.0) as i32);
+        let over = |v: f32| v / scale;
+        texels.clear();
+        texels.reserve(h * w * 8);
         for i in 0..h * w {
             let s = &x[i * c..(i + 1) * c];
             let rgba = match c {
-                1 => [s[0], s[0], s[0], 1.0],
-                2 => [s[0], s[0], s[0], s[1]],
-                3 => [s[0], s[1], s[2], 1.0],
-                _ => [s[0], s[1], s[2], s[3]],
+                1 => [over(s[0]), over(s[0]), over(s[0]), 1.0],
+                2 => [over(s[0]), over(s[0]), over(s[0]), s[1]],
+                3 => [over(s[0]), over(s[1]), over(s[2]), 1.0],
+                _ => [over(s[0]), over(s[1]), over(s[2]), s[3]],
             };
             texels.extend(
                 rgba.iter()
                     .flat_map(|v| half::f16::from_f32(if v.is_finite() { *v } else { 0.0 }).to_bits().to_le_bytes()),
             );
         }
-        let (lo, hi) = if lo.is_finite() { (lo, hi) } else { (0.0, 1.0) };
-        Some(Upload { width: w as u32, height: h as u32, texels, lo, hi, channels: c as u32 })
+        let layout = crate::montage::layout_of(frame);
+        Some(Upload { width: w as u32, height: h as u32, texels, lo: over(lo), hi: over(hi), scale, channels: c as u32, layout })
     }
 }

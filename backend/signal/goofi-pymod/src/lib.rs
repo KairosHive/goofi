@@ -4,6 +4,7 @@
 // An empty crate under no features, so the default python-free workspace build stays green.
 #![cfg(any(feature = "extension-module", feature = "host"))]
 
+mod agent;
 mod data;
 mod texture;
 pub mod exec;
@@ -15,7 +16,7 @@ mod params;
 mod serve;
 mod stream;
 
-pub use data::Data;
+pub use data::{numpy_f32, Data};
 
 use pyo3::prelude::*;
 
@@ -25,14 +26,16 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let source = std::ffi::CString::new(include_str!("geometry.py"))?;
     let geometry = PyModule::from_code(m.py(), source.as_c_str(), c"goofi.geometry", c"goofi.geometry")?;
     m.add_submodule(&geometry)?;
+    m.add_submodule(&agent::module(m.py())?)?;
     m.add_class::<data::Data>()?;
     m.add_class::<data::Ndims>()?;
     m.add_class::<node::Node>()?;
     m.add_class::<params::DataType>()?;
     m.add_class::<texture::Texture>()?;
     m.add_class::<params::InputSlot>()?;
-    m.add_class::<params::IntParam>()?;
-    m.add_class::<params::FloatParam>()?;
+    m.add_class::<params::NumParam>()?;
+    m.add_class::<params::ColorParam>()?;
+    m.add_class::<params::EnvelopeParam>()?;
     m.add_class::<params::BoolParam>()?;
     m.add_class::<params::StringParam>()?;
     m.add_class::<params::PulseParam>()?;

@@ -2,31 +2,16 @@
  * The browser replica of goofi's control-plane document, as `goofi_bridge::projection` builds it.
  * Every reader is total: an absent or wrongly-typed leaf answers a default rather than throwing.
  */
-import { EMPTY_PANEL_TYPE, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
-import { ROOT_ID } from '$lib/editor/subpatchScene';
-import { PARAM_MODES, VIDEO_QUALITIES, type VideoQuality, type ParamMode } from '$lib/api/types';
+import { EMPTY_PANEL_TYPE, OWN_GROUPS, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
+import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
+import type { Link, Literal, Lock, Machine } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
+import { obj, type Obj } from './ops';
 
 export type Doc = Record<string, unknown>;
 
 export function emptyDoc(): Doc {
-	return { nodes: {}, links: [], variables: {}, arrangement: {} };
-}
-
-export interface NodeView {
-	uid: string;
-	type: string;
-	name: string;
-	pos: [number, number];
-	/** The scope this record is drawn in; `ROOT_ID` when it names none. */
-	scope: string;
-}
-
-export interface LinkView {
-	node_out: string;
-	slot_out: string;
-	node_in: string;
-	slot_in: string;
+	return { nodes: {}, links: {}, variables: {}, machines: {}, arrangement: {} };
 }
 
 /** What a sub-patch facade exposes, derived from the records that name it. */
@@ -37,9 +22,6 @@ export interface FacadeFace {
 	memberCount: number;
 }
 
-type Obj = Record<string, unknown>;
-
-const obj = (v: unknown): Obj => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
 const str = (m: Obj | undefined, key: string): string => {
 	const v = m?.[key];
 	return typeof v === 'string' ? v : '';
@@ -51,43 +33,6 @@ const optStr = (m: Obj | undefined, key: string): string | undefined => {
 
 export function nodesMap(doc: Doc): Record<string, Obj> {
 	return obj(doc.nodes) as Record<string, Obj>;
-}
-
-export function linksArray(doc: Doc): Obj[] {
-	return Array.isArray(doc.links) ? (doc.links as Obj[]) : [];
-}
-
-/** The scope a record names, or `'__root__'`. The doc omits the key at the top level, because a
- * merge patch spends `null` on "delete this key" and could not tell that from a move out. */
-function scopeOf(rec: Obj | undefined): string {
-	return optStr(rec, 'scope') ?? ROOT_ID;
-}
-
-function variablesMap(doc: Doc): Record<string, Obj> {
-	return obj(doc.variables) as Record<string, Obj>;
-}
-
-function pos2(m: Obj | undefined): [number, number] {
-	const p = obj(m?.pos);
-	const n = (k: string) => (typeof p[k] === 'number' ? (p[k] as number) : 0);
-	return [n('x'), n('y')];
-}
-
-export function nodeView(doc: Doc, uid: string): NodeView | null {
-	const n = nodesMap(doc)[uid];
-	if (!n) return null;
-	return { uid, type: str(n, 'type'), name: str(n, 'name'), pos: pos2(n), scope: scopeOf(n) };
-}
-
-/** Every record the canvas draws: leaf, sub-patch facade and boundary port alike, in one list,
- * because the document carries them in one map and they are one kind of thing to the editor. */
-export function nodeViews(doc: Doc): NodeView[] {
-	const out: NodeView[] = [];
-	for (const uid of Object.keys(nodesMap(doc))) {
-		const v = nodeView(doc, uid);
-		if (v) out.push(v);
-	}
-	return out;
 }
 
 /** Each facade's face, keyed by its uid: a PORT is the facade's slot, keyed by the port's stable
@@ -113,112 +58,6 @@ export function facadeFaces(doc: Doc): Map<string, FacadeFace> {
 	return out;
 }
 
-/** A param's source record as the document carries it: the mode, and the texts it retains. */
-export interface ParamSource {
-	mode: ParamMode;
-	expr?: string;
-	ref?: string;
-	triggers?: boolean;
-}
-
-export type DocParamLeaves = Record<
-	string,
-	Record<string, { value?: number | string | boolean; source?: ParamSource }>
->;
-
-export function docParams(doc: Doc, uid: string): DocParamLeaves {
-	const out: DocParamLeaves = {};
-	const params = obj(nodesMap(doc)[uid]?.params);
-	for (const [group, g] of Object.entries(params)) {
-		out[group] = {};
-		for (const [name, raw] of Object.entries(obj(g))) {
-			const entry = obj(raw);
-			const leaf: DocParamLeaves[string][string] = {};
-			const v = entry.value;
-			if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') leaf.value = v;
-			if (typeof entry.mode === 'string' && (PARAM_MODES as readonly string[]).includes(entry.mode)) {
-				const source: ParamSource = { mode: entry.mode as ParamMode };
-				if (typeof entry.expr === 'string') source.expr = entry.expr;
-				if (typeof entry.ref === 'string') source.ref = entry.ref;
-				if (entry.triggers === true) source.triggers = true;
-				leaf.source = source;
-			}
-			out[group][name] = leaf;
-		}
-	}
-	return out;
-}
-
-/** The param entry, get-or-inserted, or `undefined` when the node is absent — never mint a phantom node. */
-function paramEntry(doc: Doc, uid: string, group: string, name: string): Obj | undefined {
-	const node = nodesMap(doc)[uid];
-	if (!node) return undefined;
-	const into = (parent: Obj, key: string): Obj => {
-		if (!parent[key] || typeof parent[key] !== 'object') parent[key] = {};
-		return parent[key] as Obj;
-	};
-	return into(into(into(node, 'params'), group), name);
-}
-
-/** Write a param value — a test-seed double, because the replica is READ-ONLY in production. */
-export function setParamValue(
-	doc: Doc,
-	uid: string,
-	group: string,
-	name: string,
-	value: number | string | boolean
-): boolean {
-	const entry = paramEntry(doc, uid, group, name);
-	if (!entry) return false;
-	entry.value = value;
-	return true;
-}
-
-/** Write (or, with `null`, clear) a param's source record — a test-seed double, as [`setParamValue`] is. */
-export function setParamSource(
-	doc: Doc,
-	uid: string,
-	group: string,
-	name: string,
-	source: ParamSource | null
-): boolean {
-	const entry = paramEntry(doc, uid, group, name);
-	if (!entry) return false;
-	delete entry.mode;
-	delete entry.expr;
-	delete entry.ref;
-	delete entry.triggers;
-	if (source) {
-		entry.mode = source.mode;
-		if (source.expr !== undefined) entry.expr = source.expr;
-		if (source.ref !== undefined) entry.ref = source.ref;
-		if (source.triggers) entry.triggers = true;
-	}
-	return true;
-}
-
-/** A node's touched-filter zero points (`{"group/name": {value, mode, …}}`), or `undefined`. */
-export function baselineJson(doc: Doc, uid: string): unknown {
-	const v = nodesMap(doc)[uid]?.baseline;
-	if (typeof v !== 'string') return undefined;
-	try {
-		return JSON.parse(v);
-	} catch {
-		return undefined;
-	}
-}
-
-/** A node's opaque per-slot viewer blob (`{slot: {collapsed, kind, settings}}`), or `undefined`. */
-export function viewersJson(doc: Doc, uid: string): unknown {
-	const v = nodesMap(doc)[uid]?.viewers;
-	if (typeof v !== 'string') return undefined;
-	try {
-		return JSON.parse(v);
-	} catch {
-		return undefined;
-	}
-}
-
 /** Every armed output slot, node by node, in the order the document holds them. */
 export function recordedSlots(doc: Doc): { uid: string; slot: string; quality: VideoQuality }[] {
 	const out: { uid: string; slot: string; quality: VideoQuality }[] = [];
@@ -235,17 +74,15 @@ export function recordedSlots(doc: Doc): { uid: string; slot: string; quality: V
 	return out;
 }
 
-export function linkViews(doc: Doc): LinkView[] {
-	return linksArray(doc).map((m) => ({
+/** The links in connection order — a keyed map, so a wire made or cut is one key's delta. */
+export function linkViews(doc: Doc): Link[] {
+	return (Object.values(obj(doc.links)) as Obj[]).map((m) => ({
 		node_out: str(m, 'node_out'),
 		slot_out: str(m, 'slot_out'),
 		node_in: str(m, 'node_in'),
 		slot_in: str(m, 'slot_in')
 	}));
 }
-
-/** A variable's declared scalar type — it disambiguates float↔int after JS's number normalization. */
-export type VariableType = 'float' | 'int' | 'bool' | 'string';
 
 /** A control element's widget, its range and its place in the panel's grid. */
 export interface ControlView {
@@ -263,41 +100,21 @@ export interface ControlView {
 }
 
 /** What holds a variable or a group: `config` its name, widget and membership, `value` its value. */
-export interface LockView {
-	config: boolean;
-	value: boolean;
-}
-
-/** What a variable follows: one producer output, and the number it reads out of a wide frame. */
-export interface SourceView {
-	reference: string;
-	index?: number;
-	/** Why the source delivers nothing: the node or the output it names is not there. */
-	error?: string;
-}
+export type LockView = Lock;
 
 export interface VariableView {
 	/** The full `group.element` — what an expression spells and every op names. */
 	name: string;
 	group: string;
 	element: string;
-	value: number | string | boolean;
-	type: VariableType;
 	/** Present when this variable is a control-panel element. */
 	control?: ControlView;
-	/** Present when the manager writes this variable from a producer; nobody else may set it. */
-	source?: SourceView;
+	/** Present when the manager COMPUTES this variable; nobody else may set it. */
+	expression?: string;
+	/** Why the expression delivers nothing: its node or output is gone, or it does not compile. */
+	error?: string;
 	/** The variable's OWN lock; its group's reaches it too — see `effectiveLock`. */
 	lock: LockView;
-}
-
-function sourceOf(raw: unknown): SourceView | undefined {
-	const s = obj(raw);
-	if (typeof s.reference !== 'string') return undefined;
-	const view: SourceView = { reference: s.reference };
-	if (typeof s.index === 'number') view.index = s.index;
-	if (typeof s.error === 'string') view.error = s.error;
-	return view;
 }
 
 function lockOf(raw: unknown): LockView {
@@ -305,10 +122,59 @@ function lockOf(raw: unknown): LockView {
 	return { config: l.config === true, value: l.value === true };
 }
 
-/** Explicit groups and their built-in flags, by name. */
+/** Explicit groups and their built-in flags, by name: an owned group — a device's, a machine's
+ *  playhead, a track's — is locked whole. */
 export function variableGroupLocks(doc: Doc): Record<string, LockView> {
 	const out: Record<string, LockView> = {};
-	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) out[group] = lockOf(obj(rec).lock);
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
+		const r = obj(rec);
+		out[group] = r.owner ? { config: true, value: true } : lockOf(r.lock);
+	}
+	return out;
+}
+
+/** Every group an owner of `kind` holds, by name, with what names the owner: a MIDI device's
+ * port (the bus MIDI learn listens to), a machine's id (the group is a playhead's), a track's id. */
+export function ownedGroups(doc: Doc, kind: 'midi' | 'machine' | 'track'): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [group, rec] of Object.entries(obj(doc.variable_groups))) {
+		const by = obj(obj(rec).owner)[kind];
+		if (typeof by === 'string') out[group] = by;
+	}
+	return out;
+}
+
+/** The groups a control panel may draw, in document order: every plain group — not a device's,
+ * not a playhead's, not goofi's own — and every group a control panel names, held or not. */
+export function controlGroups(doc: Doc): string[] {
+	const owned = new Set<string>([...OWN_GROUPS, ...Object.entries(obj(doc.variable_groups)).filter(([, r]) => obj(r).owner).map(([g]) => g)]);
+	const out = new Set<string>();
+	for (const group of Object.keys(obj(doc.variable_groups))) if (!owned.has(group)) out.add(group);
+	for (const name of Object.keys(obj(doc.variables))) {
+		const dot = name.indexOf('.');
+		if (dot > 0 && !owned.has(name.slice(0, dot))) out.add(name.slice(0, dot));
+	}
+	const walk = (n: LayoutNode): void => {
+		if (n.kind === 'split') n.children.forEach(walk);
+		else if (n.panelType === 'control' && typeof obj(n.state).group === 'string') out.add(obj(n.state).group as string);
+	};
+	for (const tab of arrangementTabs(doc)) walk(tab.root);
+	return [...out];
+}
+
+/** Every state machine, by id. The wire leaves an empty map out; a view always has the four. */
+export function machineViews(doc: Doc): Record<string, Machine> {
+	const out: Record<string, Machine> = {};
+	for (const [id, raw] of Object.entries(obj(doc.machines))) {
+		const m = obj(raw) as Pick<Machine, 'name'> & Partial<Machine>;
+		out[id] = {
+			...m,
+			attributes: m.attributes ?? {},
+			states: m.states ?? {},
+			transitions: m.transitions ?? {},
+			playheads: m.playheads ?? {}
+		};
+	}
 	return out;
 }
 
@@ -320,26 +186,20 @@ export function effectiveLock(gv: VariableView, group: LockView | undefined): Lo
 /** All variables, in the document's key order (system-first, then user in creation order). */
 export function variableViews(doc: Doc): VariableView[] {
 	const out: VariableView[] = [];
-	for (const [name, raw] of Object.entries(variablesMap(doc))) {
+	for (const [name, raw] of Object.entries(obj(doc.variables))) {
 		const g = obj(raw);
-		const value = g.value;
-		const type = g.type;
 		const dot = name.indexOf('.');
-		if (
-			dot > 0 &&
-			(typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') &&
-			(type === 'float' || type === 'int' || type === 'bool' || type === 'string')
-		) {
-			out.push({
+		if (dot > 0) {
+			const view: VariableView = {
 				name,
 				group: name.slice(0, dot),
 				element: name.slice(dot + 1),
-				value,
-				type,
 				control: (g.control as ControlView | undefined) ?? undefined,
-				source: sourceOf(g.source),
 				lock: lockOf(g.lock)
-			});
+			};
+			if (typeof g.expression === 'string') view.expression = g.expression;
+			if (typeof g.error === 'string') view.error = g.error;
+			out.push(view);
 		}
 	}
 	return out;
@@ -371,7 +231,7 @@ function layoutNode(raw: unknown, root: boolean): { node: LayoutNode; size: numb
 	const size = root ? 1 : typeof n.size === 'number' ? n.size : 0;
 	if (n.kind === 'panel') {
 		return {
-			node: { kind: 'panel', id, panelType: optStr(n, 'panel_type') ?? EMPTY_PANEL_TYPE, state: panelState(n.state) },
+			node: { kind: 'panel', id, panelType: optStr(n, 'panel_type') ?? EMPTY_PANEL_TYPE, state: n.state ?? undefined },
 			size
 		};
 	}
@@ -389,17 +249,6 @@ function layoutNode(raw: unknown, root: boolean): { node: LayoutNode; size: numb
 		node: { kind: 'split', id, direction: n.axis === 'column' ? 'column' : 'row', children, sizes },
 		size
 	};
-}
-
-/** A panel's opaque bag, out of its JSON string leaf — a string, because a null leaf would make the merge patch ambiguous. */
-function panelState(raw: unknown): unknown {
-	if (typeof raw !== 'string') return undefined;
-	try {
-		const v: unknown = JSON.parse(raw);
-		return v === null ? undefined : v;
-	} catch {
-		return undefined;
-	}
 }
 
 /** The tab strip as the panel system draws it; a tab whose root will not parse is dropped. */
@@ -425,15 +274,14 @@ const RESERVED = new Set(
 	 while with yield`.split(/\s+/)
 );
 
-/** Whether `name` is legal in the ONE expression namespace — the exact mirror of the Rust
- * `is_valid_identifier`. Every name an expression can spell is held to it, because an expression
- * reads one as an ATTRIBUTE: `variables.gain`, and a sub-patch's slot in `nd('chain').drain`. */
+/** Whether `name` is legal in the ONE expression namespace, as the Rust `is_valid_identifier` says.
+ * An expression reads every name as an ATTRIBUTE: `vars.desk.gain`, `nd('chain').drain`. */
 export function isValidIdentifier(name: string): boolean {
 	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name);
 }
 
 /** The NODE name rule, the mirror of the Rust `is_valid_name`: a letter then letters or digits, not
- * a keyword — a reference spells `node.slot`, so no underscore either. Variables keep the rule above. */
+ * a keyword. Variables keep the rule above. */
 export function isValidName(name: string): boolean {
 	return /^[A-Za-z][A-Za-z0-9]*$/.test(name) && !RESERVED.has(name);
 }

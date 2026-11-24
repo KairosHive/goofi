@@ -2,14 +2,15 @@
 //! every message is a pointer move, every port is a view into the arena the plan laid out.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
 use goofi_node::{NodeManifest, ParamSpec, Uid};
 
-use crate::plan::{Plan, Source, SILENCE};
+use crate::plan::{Plan, Source, Stage, SILENCE};
 
 /// Blocks in a row a node may exceed its budget before it leaves the plan.
 pub const OVERRUNS: u8 = 8;
@@ -39,8 +40,12 @@ pub struct Slot {
     pub node: Box<dyn AudioNode>,
     /// The scalar per param, `f64` bits, written by the node's control half.
     pub params: Arc<[AtomicU64]>,
+    /// Per param, the ramp a functional binding is rendered by, in place of the scalar.
+    pub ramps: Arc<[Ramps]>,
     /// One per Array input, in declaration order.
     pub inboxes: Vec<Frames>,
+    /// The computed params' results, a chunk each: `param`, `channels`, `len`, then the samples.
+    pub blocks: rtrb::Consumer<f32>,
     /// One per output: what the control half publishes to whoever subscribes.
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
@@ -51,6 +56,86 @@ pub struct Slot {
     pub overruns: u8,
     /// What the watchdog takes one `process` to cost in place of the wall time it took, when stated.
     pub cost: Option<Duration>,
+    /// What every `process` so far cost, read off the control thread for `session status`.
+    pub spent: Arc<Spent>,
+    /// What this block's run found wrong, for the audio thread to send once the level is done.
+    pub fault: Option<Fault>,
+}
+
+/// A node's render cost, summed and maxed over its blocks: the audio thread adds, the status reads.
+#[derive(Default)]
+pub struct Spent {
+    pub blocks: AtomicU64,
+    pub nanos: AtomicU64,
+    pub max_nanos: AtomicU64,
+}
+
+impl Spent {
+    fn add(&self, took: Duration) {
+        let ns = took.as_nanos() as u64;
+        self.blocks.fetch_add(1, Ordering::Relaxed);
+        self.nanos.fetch_add(ns, Ordering::Relaxed);
+        self.max_nanos.fetch_max(ns, Ordering::Relaxed);
+    }
+}
+
+/// How many block boundaries a ramp carries: 16 blocks is 21 ms at 48 kHz, past the control
+/// half's tick, so a late tick holds the last point rather than tearing.
+pub const POINTS: usize = 17;
+
+/// One param's breakpoints: the value at the start of each of `POINTS` blocks from `first`. The
+/// callback ramps linearly across a block between two and holds the last past them.
+struct Points {
+    first: AtomicU64,
+    values: [AtomicU32; POINTS],
+}
+
+/// A param's ramp, double-buffered: the control half writes the back page and flips; the callback
+/// reads the front, which the writer leaves alone until its next tick.
+pub struct Ramps {
+    active: AtomicBool,
+    front: AtomicUsize,
+    pages: [Points; 2],
+}
+
+impl Default for Ramps {
+    fn default() -> Ramps {
+        let page = || Points { first: AtomicU64::new(0), values: std::array::from_fn(|_| AtomicU32::new(0)) };
+        Ramps { active: AtomicBool::new(false), front: AtomicUsize::new(0), pages: [page(), page()] }
+    }
+}
+
+impl Ramps {
+    /// The points from block `first` on, then the ramp is live.
+    pub fn set(&self, first: u64, values: &[f32; POINTS]) {
+        let back = 1 - self.front.load(Ordering::Acquire);
+        let page = &self.pages[back];
+        page.first.store(first, Ordering::Relaxed);
+        for (cell, v) in page.values.iter().zip(values) {
+            cell.store(v.to_bits(), Ordering::Relaxed);
+        }
+        self.front.store(back, Ordering::Release);
+        self.active.store(true, Ordering::Release);
+    }
+
+    pub fn clear(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    /// Block `n` into `region` from the points: false when no ramp is live, so the scalar fills.
+    pub fn fill(&self, n: u64, region: &mut [f32]) -> bool {
+        if !self.active.load(Ordering::Acquire) {
+            return false;
+        }
+        let page = &self.pages[self.front.load(Ordering::Acquire)];
+        let at = |i: usize| f32::from_bits(page.values[i.min(POINTS - 1)].load(Ordering::Relaxed));
+        let i = n.saturating_sub(page.first.load(Ordering::Relaxed)) as usize;
+        let (from, to) = if n < page.first.load(Ordering::Relaxed) || i + 1 >= POINTS { (at(i), at(i)) } else { (at(i), at(i + 1)) };
+        for (k, x) in region.iter_mut().enumerate() {
+            *x = from + (to - from) * k as f32 / BLOCK as f32;
+        }
+        true
+    }
 }
 
 /// The audio thread's end of a device's or a file's feed: chunks of interleaved samples, each
@@ -123,6 +208,68 @@ impl Inbox {
 
 /// Drop all but the newest `keep` (at most `QUEUED`) chunks queued `from` samples on; answers
 /// whether any went.
+/// A param's own region and its channel count: what a glide reads across blocks and plans.
+fn param_region(src: &Source) -> Option<(usize, usize)> {
+    match src {
+        Source::Scalar { at, .. } => Some((*at, 1)),
+        Source::Block { at, channels, .. } => Some((*at, *channels as usize)),
+        _ => None,
+    }
+}
+
+/// A param region's next block toward `to`: from the sample the last block ended on, linearly to
+/// `to` at this block's end, so a move is never a step at a block edge. A `step` kind lands on that
+/// same last sample, so a gate rises where the pitch beside it has arrived.
+fn glide(region: &mut [f32], to: f32, step: bool) {
+    let from = region[BLOCK - 1];
+    if from == to {
+        region.fill(to);
+    } else if step {
+        region[..BLOCK - 1].fill(from);
+        region[BLOCK - 1] = to;
+    } else {
+        for (k, x) in region.iter_mut().enumerate() {
+            *x = from + (to - from) * (k + 1) as f32 / BLOCK as f32;
+        }
+    }
+}
+
+/// Every computed result that landed since the last block, each into its param's region: a block
+/// is copied, a shorter result is glided to its last sample, a narrower one repeats its last
+/// channel. A param with no result this block keeps the region as it was — the hold.
+/// # Safety
+/// As [`run_stage`]: the stage's block regions are its own.
+unsafe fn take_blocks(ring: &mut rtrb::Consumer<f32>, stage: &Stage, arena: Arena) {
+    while let Ok(head) = ring.read_chunk(3) {
+        let (a, b) = head.as_slices();
+        let at = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+        let (param, chans, len) = (at(0) as usize, at(1) as usize, at(2) as usize);
+        head.commit_all();
+        let Ok(body) = ring.read_chunk(chans * len) else { break };
+        let region = stage.params.iter().find_map(|s| match s {
+            Source::Block { at, channels, param: p, step } if *p == param => Some((*at, *channels as usize, *step)),
+            _ => None,
+        });
+        if let (Some((at, channels, step)), true) = (region, chans * len > 0) {
+            let (a, b) = body.as_slices();
+            let sample = |i: usize| if i < a.len() { a[i] } else { b[i - a.len()] };
+            let region = carve(arena, &[(at, channels * BLOCK)]).take(0);
+            for c in 0..channels {
+                let from = c.min(chans - 1) * len;
+                let lane = &mut region[c * BLOCK..(c + 1) * BLOCK];
+                if len >= BLOCK {
+                    for (i, x) in lane.iter_mut().enumerate() {
+                        *x = sample(from + i);
+                    }
+                } else {
+                    glide(lane, sample(from + len - 1), step);
+                }
+            }
+        }
+        body.commit_all();
+    }
+}
+
 fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool {
     let Ok(readable) = ring.read_chunk(ring.slots()) else { return false };
     let (a, b) = readable.as_slices();
@@ -145,19 +292,41 @@ fn keep_newest(ring: &mut rtrb::Consumer<f32>, from: usize, keep: usize) -> bool
 #[derive(Clone, Copy, Default)]
 pub struct Playback {
     mode: Option<usize>,
-    smoothing: Option<usize>,
     mix: Option<usize>,
     low: Option<usize>,
     high: Option<usize>,
     pitch: Option<usize>,
+    speed: Option<usize>,
+    resample: Option<usize>,
+    morph: Option<usize>,
+    smoothing: Option<usize>,
+    sigma: Option<usize>,
+}
+
+/// How the samples between a frame's own are made: the nearest one, a line, or a Catmull-Rom
+/// cubic through four, in the order of [`cross::RESAMPLE`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Resample {
+    Linear,
+    Nearest,
+    Cubic,
 }
 
 /// How a frame enters the crossing: as pitches for sines, in Hz or in volts per octave, or as a
-/// waveform with its rows mixed to one channel or not, and `range` the values that are full scale.
+/// waveform with its rows mixed to one channel or not, `range` the values that are full scale,
+/// read `step` frame samples per audio sample.
 #[derive(Clone, Copy)]
 pub enum Entry {
     Pitches { volts: bool },
-    Waveform { mix: bool, range: Option<(f32, f32)> },
+    Waveform { mix: bool, range: Option<(f32, f32)>, step: f64, resample: Resample },
+}
+
+/// How the loop in hand plays: glided from the frame before it, and blended across its seam.
+#[derive(Clone, Copy)]
+struct Shape {
+    morph: bool,
+    smoothing: usize,
+    sigma: f32,
 }
 
 impl Playback {
@@ -167,11 +336,15 @@ impl Playback {
         let beside = |name: &str| mode.and_then(|m| params.iter().position(|d| d.group == params[m].group && d.name == name));
         Playback {
             mode,
-            smoothing: beside("smoothing"),
             mix: beside("mix"),
             low: beside("low"),
             high: beside("high"),
             pitch: beside("pitch"),
+            speed: beside("speed"),
+            resample: beside("resample"),
+            morph: beside("morph"),
+            smoothing: beside("smoothing"),
+            sigma: beside("sigma"),
         }
     }
 
@@ -192,11 +365,26 @@ impl Playback {
             return Entry::Pitches { volts: Self::read(params, self.pitch, 0.0) >= 0.5 };
         }
         let range = (Self::read(params, self.low, -1.0) as f32, Self::read(params, self.high, 1.0) as f32);
-        Entry::Waveform { mix: Self::read(params, self.mix, 0.0) >= 0.5, range: Some(range) }
+        let speed = Self::read(params, self.speed, 1.0);
+        let resample = match Self::read(params, self.resample, 0.0).round() as i64 {
+            1 => Resample::Nearest,
+            2 => Resample::Cubic,
+            _ => Resample::Linear,
+        };
+        Entry::Waveform {
+            mix: Self::read(params, self.mix, 0.0) >= 0.5,
+            range: Some(range),
+            step: if speed.is_finite() && speed > 0.0 { speed } else { 1.0 },
+            resample,
+        }
     }
 
-    fn smoothing(&self, params: &[AtomicU64]) -> f64 {
-        Self::read(params, self.smoothing, 0.0).max(0.0)
+    fn shape(&self, params: &[AtomicU64]) -> Shape {
+        Shape {
+            morph: Self::read(params, self.morph, 0.0) >= 0.5,
+            smoothing: Self::read(params, self.smoothing, 0.0).max(0.0) as usize,
+            sigma: Self::read(params, self.sigma, 1.0).max(f64::MIN_POSITIVE) as f32,
+        }
     }
 }
 
@@ -214,11 +402,12 @@ impl Voice {
         Voice { buf: Vec::with_capacity(capacity), chans: 0, len: 0, pos: 0 }
     }
 
-    fn sample(&self, c: usize) -> f32 {
+    /// Channel `c` at sample `i`; one channel serves every channel, a missing one is silence.
+    fn at(&self, c: usize, i: usize) -> f32 {
         match (self.chans, c) {
             (0, _) => 0.0,
-            (1, _) => self.buf[self.pos],
-            (n, c) if c < n => self.buf[self.pos * n + c],
+            (1, _) => self.buf[i],
+            (n, c) if c < n => self.buf[i * n + c],
             _ => 0.0,
         }
     }
@@ -255,8 +444,12 @@ pub struct Frames {
     pub rate: f64,
     now: Voice,
     next: Voice,
-    /// Samples into the crossfade from `now` to `next`, of how many; `(0, 0)` while none runs.
-    fade: (usize, usize),
+    /// What played when `now` arrived, which a morph glides away from; empty when none runs.
+    prev: Voice,
+    spare: Voice,
+    /// Audio samples since `now` arrived, and between its arrival and the one before.
+    since: usize,
+    interval: usize,
     oscillating: bool,
     /// Per sine, one for every value a frame can hold: its phasor.
     re: Vec<f32>,
@@ -273,7 +466,10 @@ impl Frames {
             rate,
             now: Voice::new(capacity),
             next: Voice::new(capacity),
-            fade: (0, 0),
+            prev: Voice::new(capacity),
+            spare: Voice::new(capacity),
+            since: 0,
+            interval: 0,
             oscillating: false,
             re: Vec::with_capacity(capacity),
             im: Vec::with_capacity(capacity),
@@ -289,7 +485,8 @@ impl Frames {
     }
 
     fn forget(&mut self) {
-        (self.now.len, self.now.chans, self.now.pos, self.fade) = (0, 0, 0, (0, 0));
+        (self.now.len, self.now.chans, self.now.pos) = (0, 0, 0);
+        (self.prev.len, self.interval) = (0, 0);
     }
 
     pub fn fill(&mut self, out: &mut PortMut<'_>, params: &[AtomicU64]) {
@@ -301,40 +498,85 @@ impl Frames {
         }
         match oscillator {
             true => self.oscillate(out),
-            false => self.loop_frames(out, (self.playback.smoothing(params) * self.rate) as usize),
+            false => self.loop_frames(out, self.playback.shape(params)),
         }
     }
 
-    /// A new frame takes over at the loop's end, so frames on time play back to back; with
-    /// smoothing it is crossfaded in as it arrives, the old one looping underneath.
-    fn loop_frames(&mut self, out: &mut PortMut<'_>, smoothing: usize) {
-        keep_newest(&mut self.ring, 0, if smoothing > 0 { 1 } else { QUEUED });
+    /// How far the morph has come from `prev` to `now`: the share of one arrival interval.
+    fn progress(&self) -> f32 {
+        match self.prev.len > 0 && self.interval > 0 {
+            true => (self.since as f32 / self.interval as f32).min(1.0),
+            false => 1.0,
+        }
+    }
+
+    /// Channel `c` of the morph at sample `i` of `now`; `prev` is read at the same place in its loop.
+    fn morphed(&self, c: usize, i: usize, a: f32) -> f32 {
+        let v = self.now.at(c, i);
+        match a < 1.0 {
+            true => v * a + self.prev.at(c, i * self.prev.len / self.now.len) * (1.0 - a),
+            false => v,
+        }
+    }
+
+    /// A new frame takes over at the loop's end, so frames on time play back to back. With
+    /// `morph` it takes over as it arrives and is glided into from what played, over the time
+    /// between the last two arrivals. Then the loop's two ends meet across its seam.
+    fn loop_frames(&mut self, out: &mut PortMut<'_>, shape: Shape) {
+        keep_newest(&mut self.ring, 0, if shape.morph { 1 } else { QUEUED });
+        if !shape.morph {
+            self.prev.len = 0;
+        }
         let channels = out.channels() as usize;
         for i in 0..BLOCK {
-            if self.fade.1 == 0 && (self.now.pos == 0 || smoothing > 0) && self.next.take(&mut self.ring) {
-                match self.now.len == 0 || smoothing == 0 || self.next.chans != self.now.chans {
-                    true => std::mem::swap(&mut self.now, &mut self.next),
-                    false => self.fade = (0, smoothing),
-                }
+            if (self.now.pos == 0 || shape.morph) && self.next.take(&mut self.ring) {
+                self.arrive(shape.morph);
             }
-            let a = if self.fade.1 > 0 { self.fade.0 as f32 / self.fade.1 as f32 } else { 0.0 };
+            let (len, at) = (self.now.len, self.now.pos);
+            let a = self.progress();
+            // The seam: at the loop point both ends are their mean, and the far end's share falls
+            // off as a gaussian over `smoothing` samples on either side, `sigma` wide in those.
+            let d = if len > 0 { at.min(len - 1 - at) } else { 0 };
+            let n = shape.smoothing.min(len / 2);
+            let x = d as f32 / (n as f32 * shape.sigma);
+            let k = if d < n { 0.5 * (-0.5 * x * x).exp() } else { 0.0 };
             for c in 0..channels {
-                let mixed = match self.fade.1 {
-                    0 => self.now.sample(c),
-                    _ => self.now.sample(c) * (1.0 - a) + self.next.sample(c) * a,
+                out.chan_mut(c)[i] = match (len, k > 0.0) {
+                    (0, _) => 0.0,
+                    (_, false) => self.morphed(c, at, a),
+                    (_, true) => self.morphed(c, at, a) * (1.0 - k) + self.morphed(c, len - 1 - at, a) * k,
                 };
-                out.chan_mut(c)[i] = mixed;
             }
             self.now.advance();
-            if self.fade.1 > 0 {
-                self.next.advance();
-                self.fade.0 += 1;
-                if self.fade.0 >= self.fade.1 {
-                    std::mem::swap(&mut self.now, &mut self.next);
-                    self.fade = (0, 0);
-                }
+            self.since = self.since.saturating_add(1);
+            if self.prev.len > 0 && a >= 1.0 {
+                self.prev.len = 0;
             }
         }
+    }
+
+    /// `next` becomes the frame in hand. A morph keeps what was heard as it arrived, the glide in
+    /// progress included, and carries the loop's place over as the same share of the new length.
+    fn arrive(&mut self, morph: bool) {
+        let glide = morph && self.now.len > 0 && self.next.chans == self.now.chans;
+        if glide {
+            let a = self.progress();
+            let (chans, len) = (self.now.chans, self.now.len);
+            self.spare.buf.clear();
+            for i in 0..len {
+                for c in 0..chans {
+                    self.spare.buf.push(self.morphed(c, i, a));
+                }
+            }
+            (self.spare.chans, self.spare.len) = (chans, len);
+            std::mem::swap(&mut self.prev, &mut self.spare);
+            self.next.pos = self.now.pos * self.next.len / len;
+            self.interval = self.since;
+        } else {
+            (self.prev.len, self.interval) = (0, 0);
+        }
+        self.since = 0;
+        std::mem::swap(&mut self.now, &mut self.next);
     }
 
     /// One sine per column of the newest frame, `[n]` pitches in Hz or `[2, n]` pitches over
@@ -405,11 +647,11 @@ pub struct Anchor {
     /// What the audio thread stamps into every block; a new tie is a new epoch.
     epoch: AtomicU64,
     ties: Mutex<Vec<(u64, Tie)>>,
-    time: Arc<goofi_core::time::Time>,
+    time: Arc<goofi_supervisor::timing::Time>,
 }
 
 impl Anchor {
-    pub fn new(time: Arc<goofi_core::time::Time>) -> Anchor {
+    pub fn new(time: Arc<goofi_supervisor::timing::Time>) -> Anchor {
         let tie = Tie { at: 0, time: time.now(), rate: crate::RATE };
         Anchor {
             blocks: AtomicU64::new(0),
@@ -419,16 +661,12 @@ impl Anchor {
         }
     }
 
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Tie)>> {
-        self.ties.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Tie the clock to the block that will be rendered NEXT. The caller holds the runtime lock, so
     /// no block is rendered between reading the count and reading the clock.
     pub fn tie(&self, time: f64, rate: f64) {
         let tie = Tie { at: self.blocks.load(Ordering::Relaxed), time, rate };
         let epoch = self.epoch.load(Ordering::Relaxed) + 1;
-        let mut ties = self.held();
+        let mut ties = self.ties.lock();
         ties.push((epoch, tie));
         if ties.len() > TIES {
             ties.remove(0);
@@ -445,7 +683,7 @@ impl Anchor {
     /// was rendered under, never whichever is newest. An epoch older than what is held falls to the
     /// oldest, which is a block that outlived eight device changes in a one-second ring.
     pub fn seconds(&self, n: u64, epoch: u64) -> f64 {
-        let ties = self.held();
+        let ties = self.ties.lock();
         let tie = ties.iter().find(|(e, _)| *e == epoch).or_else(|| ties.first()).map(|(_, t)| *t);
         let Some(tie) = tie else { return 0.0 };
         tie.time + (n as f64 - tie.at as f64) * BLOCK as f64 / tie.rate
@@ -480,7 +718,10 @@ pub enum Msg {
     Rings { idx: usize, serial: u64, rings: Rings },
     Plan { plan: Plan, arena: Vec<f32> },
     Grow(Vec<Option<Slot>>),
-    RecordBoundary { window: Arc<goofi_core::record::FrameWindow>, begin: bool, done: Arc<AtomicBool> },
+    /// The occupant's state, saved on this thread and answered as [`Retired::Saved`]: the
+    /// control half never takes this thread's lock under a live clock, so the box it cannot
+    /// reach is read where it lives.
+    Save { idx: usize, serial: u64 },
 }
 
 /// Why a node left the plan.
@@ -498,20 +739,14 @@ pub struct Rings {
     pub recs: Vec<(usize, rtrb::Producer<f32>)>,
 }
 
-impl Rings {
-    pub fn is_empty(&self) -> bool {
-        self.inboxes.is_empty() && self.taps.is_empty() && self.recs.is_empty()
-    }
-}
-
 /// What comes back to be dropped off the audio thread — and what it put out of the plan.
 pub enum Retired {
     Slot(Slot),
     Rings(Rings),
     Plan(Plan, Vec<f32>),
     Slab(Vec<Option<Slot>>),
-    RecordBoundary(Arc<goofi_core::record::FrameWindow>, Arc<AtomicBool>),
     Faulted { uid: Uid, serial: u64, fault: Fault },
+    Saved { uid: Uid, type_name: &'static str, bytes: Vec<u8> },
 }
 
 pub struct Runtime {
@@ -528,6 +763,11 @@ pub struct Runtime {
     pub budget: Duration,
     /// The block count, and its one tie to the clock.
     pub anchor: Arc<Anchor>,
+    /// The helpers a level's stages run on beside the audio thread.
+    pub pool: crate::pool::Pool,
+    /// Rung once something is on the outbox: what the control half parks on for an answer, so it
+    /// waits on this thread's block and never holds its lock.
+    pub returned: Arc<goofi_supervisor::timing::Event>,
 }
 
 impl Runtime {
@@ -542,6 +782,8 @@ impl Runtime {
             device: None,
             budget: Duration::from_secs_f64(BLOCK as f64 / crate::RATE) * BUDGET,
             anchor,
+            pool: crate::pool::Pool::new(),
+            returned: Arc::new(goofi_supervisor::timing::Event::new()),
         }
     }
 
@@ -565,21 +807,17 @@ impl Runtime {
         self.fifo.drain(..out.len());
     }
 
-    fn apply(&mut self, msg: Msg) {
+    /// One message, and whether it put anything on the outbox.
+    fn apply(&mut self, msg: Msg) -> bool {
         let retired = match msg {
-            Msg::RecordBoundary { window, begin, done } => {
-                let block = self.anchor.blocks.load(Ordering::Relaxed);
-                if begin { window.begin(block); } else { window.finish(block); }
-                done.store(true, Ordering::Release);
-                Some(Retired::RecordBoundary(window, done))
-            }
             Msg::Insert { idx, slot } => self.slab[idx].replace(slot).map(Retired::Slot),
             Msg::Remove(idx) => self.slab[idx].take().map(Retired::Slot),
             Msg::Rings { idx, serial, mut rings } => {
                 // Swapped in place, the old ends going back; rings for a slot that left go back whole.
+                // An inbox swaps its ring alone: the frame in hand and its morph play on.
                 if let Some(slot) = self.slab[idx].as_mut().filter(|s| s.serial == serial) {
                     for (i, frames) in &mut rings.inboxes {
-                        std::mem::swap(&mut slot.inboxes[*i], frames);
+                        std::mem::swap(&mut slot.inboxes[*i].ring, &mut frames.ring);
                     }
                     for (i, tap) in &mut rings.taps {
                         std::mem::swap(&mut slot.taps[*i], tap);
@@ -590,7 +828,26 @@ impl Runtime {
                 }
                 Some(Retired::Rings(rings))
             }
-            Msg::Plan { plan, arena } => {
+            Msg::Plan { plan, mut arena } => {
+                // A param region the new plan keeps starts where the old one ended, and a fresh
+                // one at its param's value: a swap or a birth is not a move the glide should read.
+                for stage in &plan.stages {
+                    let was = self.plan.stages.iter().find(|s| s.idx == stage.idx && s.serial == stage.serial);
+                    let slot = self.slab[stage.idx].as_ref().filter(|s| s.serial == stage.serial);
+                    for (i, new) in stage.params.iter().enumerate() {
+                        let Some((to, tc)) = param_region(new) else { continue };
+                        match was.and_then(|w| param_region(&w.params[i])) {
+                            Some((from, fc)) => {
+                                let n = tc.min(fc) * BLOCK;
+                                arena[to..to + n].copy_from_slice(&self.arena[from..from + n]);
+                            }
+                            None => {
+                                let v = slot.map_or(0.0, |s| f64::from_bits(s.params[i].load(Ordering::Relaxed)) as f32);
+                                arena[to..to + tc * BLOCK].fill(v);
+                            }
+                        }
+                    }
+                }
                 let old = std::mem::replace(&mut self.plan, plan);
                 let old_arena = std::mem::replace(&mut self.arena, arena);
                 // An inbox the new plan no longer reads is flushed, or what its last producer
@@ -613,137 +870,56 @@ impl Runtime {
                 }
                 Some(Retired::Slab(std::mem::replace(&mut self.slab, bigger)))
             }
+            Msg::Save { idx, serial } => self.slab[idx]
+                .as_ref()
+                .filter(|s| s.serial == serial)
+                .map(|s| Retired::Saved { uid: s.uid, type_name: s.type_name, bytes: s.node.save() }),
         };
-        if let Some(r) = retired {
-            let _ = self.outbox.push(r);
+        match retired {
+            Some(r) => self.outbox.push(r).is_ok(),
+            None => false,
         }
     }
 
-    /// Take every message the control half sent; a pointer move each.
+    /// Take every message the control half sent; a pointer move each. What came back is
+    /// announced once, after the last.
     pub fn apply_pending(&mut self) {
+        let mut answered = false;
         while let Ok(msg) = self.inbox.pop() {
-            self.apply(msg);
+            answered |= self.apply(msg);
+        }
+        if answered {
+            self.returned.ring(0);
         }
     }
 
-    /// One block: drain the inbox, run every stage in plan order, append the output to the fifo.
-    /// A stage whose index another occupant took since the plan was compiled waits for its own.
+    /// One block: drain the inbox, run the plan level by level, each level's stages at once on
+    /// the pool, and append the output to the fifo.
     pub fn render_block(&mut self) {
         self.apply_pending();
         let n = self.anchor.blocks.load(Ordering::Relaxed);
         let epoch = self.anchor.epoch();
         let width = self.channels() as usize;
-        let budget = self.budget;
-        let arena: &mut [f32] = &mut self.arena;
-        for stage in &self.plan.stages {
-            let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
-            for src in stage.params.iter().chain(&stage.ins) {
-                match src {
-                    Source::Scalar { at, param } => {
-                        let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
-                        let region = carve(arena, &[(*at, BLOCK)]).take(0);
-                        if region[0] != v {
-                            region.fill(v);
-                        }
-                    }
-                    Source::Sum { at, channels, parts } => {
-                        let mut carved = carve(arena, &[(*at, *channels as usize * BLOCK)]);
-                        let dst = carved.take(0);
-                        dst.fill(0.0);
-                        for (part, pc) in parts {
-                            let src = Port::new(carved.read(*part, *pc as usize * BLOCK), *pc, true);
-                            for c in 0..*channels as usize {
-                                let from = src.chan(c);
-                                for i in 0..BLOCK {
-                                    dst[c * BLOCK + i] += from[i];
-                                }
-                            }
-                        }
-                    }
-                    Source::Inbox { at, channels, inbox } => {
-                        let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
-                        slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
-                    }
-                    Source::Silence | Source::Region { .. } => {}
+        let arena = Arena::of(&mut self.arena);
+        let slab = self.slab.as_mut_ptr();
+        let mut from = 0;
+        for &to in &self.plan.levels {
+            let level = Level { stages: &self.plan.stages[from..to], slab, arena, n, epoch, budget: self.budget };
+            self.pool.run(&level, to - from);
+            // Pushed here, by the one thread that owns the outbox. Dead only once the fault is on
+            // its way: a full outbox means it faults again next block.
+            for stage in &self.plan.stages[from..to] {
+                let Some(slot) = self.slab[stage.idx].as_mut().filter(|s| s.serial == stage.serial) else { continue };
+                if let Some(fault) = slot.fault.take() {
+                    slot.dead = self.outbox.push(Retired::Faulted { uid: slot.uid, serial: slot.serial, fault }).is_ok();
                 }
             }
-            // The stage writes its outputs and its scalar strip; everything else it reads.
-            let mut wants = [(0, 0); MAX_PORTS + 1];
-            for (k, (at, channels)) in stage.outs.iter().enumerate() {
-                wants[k] = (*at, *channels as usize * BLOCK);
-            }
-            wants[stage.outs.len()] = (stage.scalars_at, stage.params.len());
-            let (ran, started) = {
-                let mut carved = carve(arena, &wants[..stage.outs.len() + 1]);
-                // Every param's one value for this block, settled after the sources above, so a
-                // control rate param reaches the node without costing a port.
-                let scalars = carved.take(stage.outs.len());
-                for (i, src) in stage.params.iter().enumerate() {
-                    scalars[i] = carved.first(src);
-                }
-                let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
-                    Some(s) => carved.port(s),
-                    None => Port::new(&[], 0, false),
-                });
-                let params: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.params.get(i).filter(|_| i < stage.audio_params) {
-                    Some(s) => carved.port(s),
-                    None => Port::new(&[], 0, false),
-                });
-                let mut outs: [PortMut<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.outs.get(i) {
-                    Some((_, channels)) => PortMut::new(carved.take(i), *channels),
-                    None => PortMut::new(&mut [], 0),
-                });
-                let mut block = Block {
-                    ins: &ins[..stage.ins.len()],
-                    outs: &mut outs[..stage.outs.len()],
-                    params: &params[..stage.audio_params],
-                    scalars,
-                };
-                let started = Instant::now();
-                (if slot.dead { None } else { Some(catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)))) }, started)
-            };
-            // The outputs again, now the node is done with them: judged, silenced if need be, published.
-            let mut outs = carve(arena, &wants[..stage.outs.len()]);
-            let fault = match ran {
-                None => None,
-                Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
-                Some(Ok(())) if outs.writes[..stage.outs.len()].iter().flatten().any(|o| o.iter().any(|v| !v.is_finite())) => {
-                    Some(Fault::NotANumber)
-                }
-                Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
-                    slot.overruns = slot.overruns.saturating_add(1);
-                    (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
-                }
-                Some(Ok(())) => {
-                    slot.overruns = 0;
-                    None
-                }
-            };
-            // Dead only once the fault is on its way: a full outbox means it faults again next block.
-            let faulted = fault.is_some();
-            if let Some(fault) = fault {
-                slot.dead = self.outbox.push(Retired::Faulted { uid: slot.uid, serial: slot.serial, fault }).is_ok();
-            }
-            for (k, (_, channels)) in stage.outs.iter().enumerate() {
-                let out = outs.take(k);
-                if slot.dead || faulted {
-                    out.fill(0.0);
-                }
-                if let Some(tap) = slot.taps.get_mut(k) {
-                    publish(tap, &[*channels as f32], out);
-                }
-                if let Some(rec) = slot.recs.get_mut(k) {
-                    // A block that does not fit is simply not there: its NUMBER is the gap the
-                    // recorder counts, so nothing here has to remember that it was lost.
-                    let (lo, hi) = number_out(n);
-                    let head = [*channels as f32, lo, hi, epoch as f32];
-                    publish(rec, &head, out);
-                }
-            }
+            from = to;
         }
         let (at, channels) = self.plan.output;
         {
-            let mut carved = carve(arena, &[(at, channels as usize * BLOCK)]);
+            // SAFETY: every level is done, so this thread alone touches the arena.
+            let mut carved = unsafe { carve(arena, &[(at, channels as usize * BLOCK)]) };
             let dst = carved.take(0);
             dst.fill(0.0);
             for (input, gain, sel) in &self.plan.sinks {
@@ -780,7 +956,7 @@ impl Runtime {
             }
         }
         self.anchor.blocks.store(n + 1, Ordering::Relaxed);
-        let out = Port::new(&arena[at..at + channels as usize * BLOCK], channels, true);
+        let out = Port::new(&self.arena[at..at + channels as usize * BLOCK], channels, true);
         for i in 0..BLOCK {
             for c in 0..width {
                 self.fifo.push(out.chan(c)[i]);
@@ -789,79 +965,243 @@ impl Runtime {
     }
 }
 
+/// One level of the plan, as the pool runs it: item `i` is stage `i`.
+struct Level<'a> {
+    stages: &'a [Stage],
+    slab: *mut Option<Slot>,
+    arena: Arena,
+    n: u64,
+    epoch: u64,
+    budget: Duration,
+}
+
+// SAFETY: items reach disjoint slots and disjoint arena regions; see `Level::run`.
+unsafe impl Sync for Level<'_> {}
+
+impl crate::pool::Work for Level<'_> {
+    fn run(&self, item: usize) {
+        let stage = &self.stages[item];
+        // SAFETY: a plan holds one stage per slab index, so no two items reach one slot, and the
+        // slab is not resized while a block renders.
+        let Some(slot) = (unsafe { (*self.slab.add(stage.idx)).as_mut() }).filter(|s| s.serial == stage.serial) else { return };
+        // SAFETY: a stage writes only regions the plan gave it alone, and reads only regions that
+        // an earlier level wrote, so nothing it touches is written by another item of this level.
+        unsafe { run_stage(stage, slot, self.arena, self.n, self.epoch, self.budget) }
+    }
+}
+
+/// One stage for one block: its sources filled, its node run, its outputs judged and published.
+/// A fault is left on the slot for the audio thread to send.
+///
+/// # Safety
+/// No other thread may touch this stage's write regions, or write the regions it reads.
+unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch: u64, budget: Duration) {
+    take_blocks(&mut slot.blocks, stage, arena);
+    for src in stage.params.iter().chain(&stage.ins) {
+        match src {
+            Source::Scalar { at, param, step } => {
+                let region = carve(arena, &[(*at, BLOCK)]).take(0);
+                if slot.ramps[*param].fill(n, region) {
+                    continue;
+                }
+                let v = f64::from_bits(slot.params[*param].load(Ordering::Relaxed)) as f32;
+                if region[0] != v || region[BLOCK - 1] != v {
+                    glide(region, v, *step);
+                }
+            }
+            Source::Sum { at, channels, parts } => {
+                let mut carved = carve(arena, &[(*at, *channels as usize * BLOCK)]);
+                let dst = carved.take(0);
+                dst.fill(0.0);
+                for (part, pc) in parts {
+                    let src = Port::new(carved.read(*part, *pc as usize * BLOCK), *pc, true);
+                    for c in 0..*channels as usize {
+                        let from = src.chan(c);
+                        for i in 0..BLOCK {
+                            dst[c * BLOCK + i] += from[i];
+                        }
+                    }
+                }
+            }
+            Source::Inbox { at, channels, inbox } => {
+                let region = carve(arena, &[(*at, *channels as usize * BLOCK)]).take(0);
+                slot.inboxes[*inbox].fill(&mut PortMut::new(region, *channels), &slot.params);
+            }
+            Source::Silence | Source::Region { .. } | Source::Block { .. } => {}
+        }
+    }
+    // The stage writes its outputs and its scalar strip; everything else it reads.
+    let mut wants = [(0, 0); MAX_PORTS + 1];
+    for (k, (at, channels)) in stage.outs.iter().enumerate() {
+        wants[k] = (*at, *channels as usize * BLOCK);
+    }
+    wants[stage.outs.len()] = (stage.scalars_at, stage.params.len());
+    let (ran, started) = {
+        let mut carved = carve(arena, &wants[..stage.outs.len() + 1]);
+        // Every param's one value for this block, settled after the sources above, so a
+        // control rate param reaches the node without costing a port.
+        let scalars = carved.take(stage.outs.len());
+        for (i, src) in stage.params.iter().enumerate() {
+            scalars[i] = carved.last(src);
+        }
+        let ins: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.ins.get(i) {
+            Some(s) => carved.port(s),
+            None => Port::new(&[], 0, false),
+        });
+        let params: [Port<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.params.get(i).filter(|_| i < stage.audio_params) {
+            Some(s) => carved.port(s),
+            None => Port::new(&[], 0, false),
+        });
+        let mut outs: [PortMut<'_>; MAX_PORTS] = std::array::from_fn(|i| match stage.outs.get(i) {
+            Some((_, channels)) => PortMut::new(carved.take(i), *channels),
+            None => PortMut::new(&mut [], 0),
+        });
+        let mut block = Block {
+            ins: &ins[..stage.ins.len()],
+            outs: &mut outs[..stage.outs.len()],
+            params: &params[..stage.audio_params],
+            scalars,
+        };
+        let started = Instant::now();
+        (if slot.dead { None } else { Some(catch_unwind(AssertUnwindSafe(|| slot.node.process(&mut block)))) }, started)
+    };
+    // The outputs again, now the node is done with them: judged, silenced if need be, published.
+    let mut outs = carve(arena, &wants[..stage.outs.len()]);
+    if ran.is_some() {
+        slot.spent.add(started.elapsed());
+    }
+    let fault = match ran {
+        None => None,
+        Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
+        Some(Ok(())) if (0..stage.outs.len()).any(|k| outs.peek(k).iter().any(|v| !v.is_finite())) => Some(Fault::NotANumber),
+        Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
+            slot.overruns = slot.overruns.saturating_add(1);
+            (slot.overruns >= OVERRUNS).then_some(Fault::Overrun)
+        }
+        Some(Ok(())) => {
+            slot.overruns = 0;
+            None
+        }
+    };
+    let faulted = fault.is_some();
+    slot.fault = fault;
+    for (k, (_, channels)) in stage.outs.iter().enumerate() {
+        let out = outs.take(k);
+        if slot.dead || faulted {
+            out.fill(0.0);
+        }
+        if let Some(tap) = slot.taps.get_mut(k) {
+            publish(tap, &[*channels as f32], out);
+        }
+        if let Some(rec) = slot.recs.get_mut(k) {
+            // A block that does not fit is simply not there: its NUMBER is the gap the
+            // recorder counts, so nothing here has to remember that it was lost.
+            let (lo, hi) = number_out(n);
+            let head = [*channels as f32, lo, hi, epoch as f32];
+            publish(rec, &head, out);
+        }
+    }
+}
+
 /// What a read lands on when the plan put it inside a written region, which it never does.
 static QUIET: [f32; crate::plan::CEILING as usize * BLOCK] = [0.0; crate::plan::CEILING as usize * BLOCK];
 
-/// The arena carved for one pass: every region asked for as its own exclusive slice, answered
-/// in the order asked, and the gaps between them as the shared slices every read comes from.
-struct Carved<'a> {
-    writes: [Option<&'a mut [f32]>; MAX_PORTS + 1],
-    gaps: [Option<(usize, &'a [f32])>; MAX_PORTS + 2],
+/// The arena as the stages of a level share it: a stage writes only regions the plan gave it
+/// alone, and reads only what an earlier level wrote, so one arena serves several threads at once.
+#[derive(Clone, Copy)]
+struct Arena {
+    ptr: *mut f32,
+    len: usize,
 }
 
-/// Split `arena` at each wanted `(at, len)`, in address order. The plan lays regions out
-/// disjoint, which is what lets this hand out exclusive slices with no pointer arithmetic.
-fn carve<'a>(arena: &'a mut [f32], wants: &[(usize, usize)]) -> Carved<'a> {
-    let mut order = [(0, 0, 0); MAX_PORTS + 1];
-    for (i, (at, len)) in wants.iter().enumerate() {
-        order[i] = (*at, *len, i);
+// SAFETY: the arena outlives every block, and the plan's layout keeps concurrent slices disjoint.
+unsafe impl Send for Arena {}
+unsafe impl Sync for Arena {}
+
+impl Arena {
+    fn of(arena: &mut [f32]) -> Arena {
+        Arena { ptr: arena.as_mut_ptr(), len: arena.len() }
     }
-    let order = &mut order[..wants.len()];
-    order.sort_unstable();
-    let mut writes: [Option<&'a mut [f32]>; MAX_PORTS + 1] = std::array::from_fn(|_| None);
-    let mut gaps = [None; MAX_PORTS + 2];
-    let mut rest: &'a mut [f32] = arena;
-    let mut start = 0;
-    let mut g = 0;
-    for &(at, len, i) in order.iter() {
-        debug_assert!(at >= start && at + len <= start + rest.len(), "the plan lays regions out disjoint");
-        let (gap, tail) = rest.split_at_mut(at - start);
-        let (region, tail) = tail.split_at_mut(len);
-        let gap: &'a [f32] = gap;
-        gaps[g] = Some((start, gap));
-        g += 1;
-        writes[i] = Some(region);
-        rest = tail;
-        start = at + len;
+
+    /// # Safety
+    /// No thread writes `at..at + len` while the slice lives.
+    unsafe fn read<'a>(self, at: usize, len: usize) -> &'a [f32] {
+        if at + len > self.len {
+            debug_assert!(false, "a read past the arena");
+            return &QUIET[..len.min(QUIET.len())];
+        }
+        std::slice::from_raw_parts(self.ptr.add(at), len)
     }
-    let rest: &'a [f32] = rest;
-    gaps[g] = Some((start, rest));
-    Carved { writes, gaps }
+
+    /// # Safety
+    /// No other thread reads or writes `at..at + len` while the slice lives.
+    unsafe fn write<'a>(self, at: usize, len: usize) -> &'a mut [f32] {
+        assert!(at + len <= self.len, "a write past the arena");
+        std::slice::from_raw_parts_mut(self.ptr.add(at), len)
+    }
+}
+
+/// One pass over the arena: the regions it writes, each handed out once, and reads of any other.
+struct Carved<'a> {
+    arena: Arena,
+    wants: [(usize, usize); MAX_PORTS + 1],
+    count: usize,
+    taken: [bool; MAX_PORTS + 1],
+    _life: std::marker::PhantomData<&'a mut [f32]>,
+}
+
+/// Claim `wants` of `arena` for one pass.
+///
+/// # Safety
+/// The caller holds `wants` alone, and no thread writes what the pass reads.
+unsafe fn carve<'a>(arena: Arena, wants: &[(usize, usize)]) -> Carved<'a> {
+    let mut held = [(0, 0); MAX_PORTS + 1];
+    held[..wants.len()].copy_from_slice(wants);
+    Carved { arena, wants: held, count: wants.len(), taken: [false; MAX_PORTS + 1], _life: std::marker::PhantomData }
 }
 
 impl<'a> Carved<'a> {
     /// The `i`th wanted region, once.
     fn take(&mut self, i: usize) -> &'a mut [f32] {
-        self.writes[i].take().expect("a region is taken once")
+        assert!(!std::mem::replace(&mut self.taken[i], true), "a region is taken once");
+        let (at, len) = self.wants[i];
+        // SAFETY: `carve`'s caller holds it alone, and this hands it out once.
+        unsafe { self.arena.write(at, len) }
     }
 
-    /// `len` floats from `at`, which lie in one gap.
+    /// The `i`th wanted region, read once its writer is done with it.
+    fn peek(&self, i: usize) -> &[f32] {
+        let (at, len) = self.wants[i];
+        // SAFETY: held alone, and not taken: nothing writes it while this lives.
+        unsafe { self.arena.read(at, len) }
+    }
+
+    /// `len` floats from `at`, which lie outside every wanted region.
     fn read(&self, at: usize, len: usize) -> &'a [f32] {
-        for (start, gap) in self.gaps.iter().flatten() {
-            if at >= *start && at + len <= *start + gap.len() {
-                return &gap[at - start..at - start + len];
-            }
-        }
-        debug_assert!(false, "a read region lies inside a written one");
-        &QUIET[..len.min(QUIET.len())]
+        debug_assert!(
+            self.wants[..self.count].iter().all(|(w, l)| at + len <= *w || w + l <= at),
+            "a read region lies inside a written one"
+        );
+        // SAFETY: `carve`'s caller promised no thread writes what this pass reads.
+        unsafe { self.arena.read(at, len) }
     }
 
     fn port(&self, src: &Source) -> Port<'a> {
         match src {
             Source::Silence => Port::new(self.read(SILENCE, BLOCK), 1, false),
-            Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } => {
+            Source::Region { at, channels } | Source::Sum { at, channels, .. } | Source::Inbox { at, channels, .. } | Source::Block { at, channels, .. } => {
                 Port::new(self.read(*at, *channels as usize * BLOCK), *channels, true)
             }
             Source::Scalar { at, .. } => Port::new(self.read(*at, BLOCK), 1, true),
         }
     }
 
-    /// This block's one value for a param, whatever it is sourced from.
-    fn first(&self, src: &Source) -> f32 {
+    /// This block's one value for a param, whatever it is sourced from: where its glide lands.
+    fn last(&self, src: &Source) -> f32 {
         match src {
             Source::Silence => 0.0,
-            Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } => {
-                self.read(*at, BLOCK)[0]
+            Source::Region { at, .. } | Source::Sum { at, .. } | Source::Inbox { at, .. } | Source::Scalar { at, .. } | Source::Block { at, .. } => {
+                self.read(*at, BLOCK)[BLOCK - 1]
             }
         }
     }

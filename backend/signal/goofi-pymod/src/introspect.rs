@@ -2,11 +2,12 @@
 //! and return its declaration constants and GIL state as [`goofi_core::probe`] JSON.
 
 use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Show, Slot};
+use goofi_core::Face;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::loader::{find_node_class, module_from_path};
-use crate::params::{BoolParam, DataType, FloatParam, InputSlot, IntParam, PulseParam, StringParam};
+use crate::params::{BoolParam, ColorParam, DataType, EnvelopeParam, InputSlot, NumParam, PulseParam, StringParam};
 
 #[pyfunction]
 pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
@@ -95,8 +96,8 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
                 .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("group `{group}` has more than 256 sections")))?;
             for (name, descr) in names.cast::<PyDict>()?.iter() {
                 let (spec, doc, expression, show) = param_spec(&descr)?;
-                let show = show.map(|(param, any_of)| Show { param, any_of });
-                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, spec });
+                let show = show.into_iter().map(|(param, any_of)| Show { param, any_of }).collect();
+                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, role: None, spec });
             }
         }
     }
@@ -106,8 +107,9 @@ fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
 /// A param descriptor is exactly one of our pyclasses, extracted typed.
 #[derive(FromPyObject)]
 enum ParamDescr<'py> {
-    Int(Bound<'py, IntParam>),
-    Float(Bound<'py, FloatParam>),
+    Num(Bound<'py, NumParam>),
+    Color(Bound<'py, ColorParam>),
+    Envelope(Bound<'py, EnvelopeParam>),
     Bool(Bound<'py, BoolParam>),
     Str(Bound<'py, StringParam>),
     Pulse(Bound<'py, PulseParam>),
@@ -116,13 +118,32 @@ enum ParamDescr<'py> {
 /// The kind-specific spec plus the kind-independent `doc=`, `expression=` and `show=`.
 fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, Option<String>, crate::params::Show)> {
     Ok(match descr.extract::<ParamDescr>()? {
-        ParamDescr::Int(p) => {
+        ParamDescr::Num(p) => {
             let p = p.borrow();
-            (ParamSpec::Int { default: p.default, min: p.min, max: p.max, options: p.options.clone() }, p.doc.clone(), p.expression.clone(), p.show.clone())
+            (
+                ParamSpec::Num { default: p.default.clone(), min: p.min, max: p.max, int: p.int, options: p.options.clone(), face: Face::Plain },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
         }
-        ParamDescr::Float(p) => {
+        ParamDescr::Color(p) => {
             let p = p.borrow();
-            (ParamSpec::Float { default: p.default, min: p.min, max: p.max }, p.doc.clone(), p.expression.clone(), p.show.clone())
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: 1.0, int: false, options: Vec::new(), face: Face::Color },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Envelope(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: p.max, int: false, options: Vec::new(), face: Face::Envelope },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
         }
         ParamDescr::Bool(p) => {
             let p = p.borrow();

@@ -115,10 +115,6 @@ impl Reader {
         self.channels as u64 * self.kind.bytes() as u64
     }
 
-    pub fn at(&self) -> u64 {
-        self.frame
-    }
-
     pub fn seek(&mut self, frame: u64) -> Result<(), String> {
         let frame = frame.min(self.frames);
         self.file.seek(SeekFrom::Start(self.data_at + frame * self.block())).map_err(|e| why(&self.path, e))?;

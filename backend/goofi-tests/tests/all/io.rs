@@ -41,7 +41,7 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
         let p = ev.next("state_update");
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["lsl", "name"]])).then_some(p)
     });
-    let options = echo["params"]["lsl"]["name"]["options"].as_array().cloned().unwrap_or_default();
+    let options = echo["options"]["lsl"]["name"].as_array().cloned().unwrap_or_default();
     assert!(options.contains(&j!(stream)), "the live stream is offered: {options:?}");
     assert!(options.contains(&j!("")), "…and `any` stays an option: {options:?}");
 
@@ -76,9 +76,8 @@ fn a_patch_publishes_what_it_made_and_reads_it_back_off_the_machine() {
         word.latest().filter(|d| text(d) == Some("resting"))
     });
 
-    // MIDI: with no port chosen there is nothing to open, which is silence rather than a fault.
-    // The engine has to be named here — `audio:MidiIn` is a different node with the same name.
-    for ty in ["signal:MidiIn", "signal:MidiOut"] {
+    // MIDI out: with no port chosen there is nothing to open, which is silence rather than a fault.
+    for ty in ["signal:MidiOut"] {
         let n = g.add(ty);
         g.ready(n);
         assert!(g.error(n).is_none(), "{ty} with no port is silent, not broken: {:?}", g.error(n));

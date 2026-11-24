@@ -1,12 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
 	nodesMap,
-	nodeView,
-	nodeViews,
-	setParamSource,
 	linkViews,
 	facadeFaces,
-	docParams,
 	variableViews,
 	variableGroupLocks,
 	effectiveLock,
@@ -16,6 +12,7 @@ import {
 	arrangementTabs,
 	type Doc
 } from './graphDoc';
+import { liveNode, type ViewSources } from './liveNode.svelte';
 
 /** A document in the exact shape `goofi_bridge::projection` builds. */
 function seedDoc(): Doc {
@@ -24,43 +21,53 @@ function seedDoc(): Doc {
 			a: {
 				type: 'Oscillator',
 				name: 'osc0',
-				pos: { x: 10, y: 20 },
+				pos: [10, 20],
 				params: {
 					common: { max_frequency: { value: 30 } },
 					oscillator: {
-						waveform: { value: 'sine', mode: 'expression', expr: "nd('lfo')" }
+						waveform: { value: 'sine', mode: 'expression', expression: "nd('lfo')" }
 					}
 				}
 			},
 			b: { type: 'Buffer', name: 'buf0' }
 		},
-		links: [{ node_out: 'a', slot_out: 'out', node_in: 'b', slot_in: 'data' }],
+		links: { 'a.out>b.data': { node_out: 'a', slot_out: 'out', node_in: 'b', slot_in: 'data' } },
 		variables: {},
 		arrangement: {}
 	};
 }
 
+/** The production node reader, over `doc` alone: no catalog, face or runtime. */
+const live = (doc: Doc, uid: string) => {
+	const cx: ViewSources = { doc: () => doc, catalog: () => undefined, face: () => undefined, runtime: () => undefined };
+	return liveNode(uid, cx);
+};
+
 describe('graphDoc readers', () => {
 	it('reads node identity views', () => {
 		const doc = seedDoc();
-		expect(nodeView(doc, 'a')).toEqual({
+		expect(live(doc, 'a')).toMatchObject({
 			uid: 'a', type: 'Oscillator', name: 'osc0', pos: [10, 20], scope: '__root__'
 		});
 		// A node with no pos defaults to [0,0], and one naming no scope is at the top level.
-		expect(nodeView(doc, 'b')).toEqual({
+		expect(live(doc, 'b')).toMatchObject({
 			uid: 'b', type: 'Buffer', name: 'buf0', pos: [0, 0], scope: '__root__'
 		});
-		expect(nodeView(doc, 'missing')).toBeNull();
-		expect(nodeViews(doc).map((n) => n.uid)).toEqual(['a', 'b']);
+		expect(Object.keys(nodesMap(doc))).toEqual(['a', 'b']);
 	});
 
 	it('reads param values and expression sources', () => {
 		const doc = seedDoc();
-		expect(docParams(doc, 'a').common?.max_frequency?.value).toBe(30);
-		expect(docParams(doc, 'a').oscillator?.waveform?.value).toBe('sine');
-		expect(docParams(doc, 'a').common?.nope?.value).toBeUndefined();
-		expect(docParams(doc, 'a').oscillator?.waveform?.source?.expr).toBe("nd('lfo')");
-		expect(docParams(doc, 'a').common?.max_frequency?.source).toBeUndefined();
+		const p = live(doc, 'a').params;
+		expect(p.common?.max_frequency?.value).toBe(30);
+		expect(p.oscillator?.waveform?.value).toBe('sine');
+		expect(p.common?.nope?.value).toBeUndefined();
+		expect(p.oscillator?.waveform?.mode).toBe('expression');
+		expect(p.oscillator?.waveform?.expression).toBe("nd('lfo')");
+		expect(p.common?.max_frequency?.mode).toBe('constant');
+		expect(p.common?.max_frequency?.expression).toBeNull();
+		// A node with no params → empty.
+		expect(live(doc, 'b').params).toEqual({});
 	});
 
 	it('reads links', () => {
@@ -79,18 +86,18 @@ describe('graphDoc readers', () => {
 			nodes: {
 				...(base.nodes as Record<string, unknown>),
 				m1: { type: 'Buffer', name: 'm0', scope: 'i1' },
-				i1: { type: 'SubPatch', name: 'subpatch0', pos: { x: 5, y: 6 } },
-				p1: { type: 'OutArray', name: 'wave', pos: { x: 1, y: 2 }, scope: 'i1' }
+				i1: { type: 'SubPatch', name: 'subpatch0', pos: [5, 6] },
+				p1: { type: 'OutArray', name: 'wave', pos: [1, 2], scope: 'i1' }
 			},
-			links: [
-				...(base.links as unknown[]),
-				{ node_out: 'm1', slot_out: 'out', node_in: 'p1', slot_in: 'value' }
-			]
+			links: {
+				...(base.links as Record<string, unknown>),
+				'm1.out>p1.value': { node_out: 'm1', slot_out: 'out', node_in: 'p1', slot_in: 'value' }
+			}
 		};
 
 		// ONE list, because the document is one map: leaf, facade and port alike, each carrying the
 		// scope it is drawn in.
-		expect(nodeViews(doc).map((n) => [n.uid, n.scope])).toEqual([
+		expect(Object.keys(nodesMap(doc)).map((uid) => [uid, live(doc, uid).scope])).toEqual([
 			['a', '__root__'],
 			['b', '__root__'],
 			['m1', 'i1'],
@@ -108,26 +115,13 @@ describe('graphDoc readers', () => {
 		expect(facadeFaces(doc).has('a')).toBe(false);
 	});
 
-	it('reads a node param leaves (value + source record) via docParams', () => {
-		const doc = seedDoc();
-		const p = docParams(doc, 'a');
-		expect(p.common.max_frequency).toEqual({ value: 30 });
-		// waveform in seedDoc carries a value AND a source record.
-		expect(p.oscillator.waveform).toEqual({
-			value: 'sine',
-			source: { mode: 'expression', expr: "nd('lfo')" }
-		});
-		// A node with no params → empty.
-		expect(docParams(doc, 'b')).toEqual({});
-	});
-
 	it('an unwired port is a slot like any other — a facade with nothing behind it still has a face', () => {
 		// The unwired state is the test: a port with no link naming it is present, named and
 		// addressable, exactly as a leaf that was never connected is.
 		const doc: Doc = {
 			...seedDoc(),
 			nodes: { i1: { type: 'SubPatch', name: 's' }, p1: { type: 'InArray', name: 'a', scope: 'i1' } },
-			links: []
+			links: {}
 		};
 		expect(facadeFaces(doc).get('i1')).toEqual({
 			input_slots: { p1: 'ARRAY' },
@@ -147,67 +141,34 @@ describe('graphDoc readers', () => {
 	it('a wrongly-typed or absent root reads as empty rather than throwing', () => {
 		// The manager is the sole author, so this can only mean the two ends have drifted — and a
 		// half-drawn graph reports that better than a blank page does.
-		expect(nodeViews({})).toEqual([]);
-		expect(linkViews({ links: 'not an array' })).toEqual([]);
+		expect(nodesMap({})).toEqual({});
+		expect(linkViews({ links: 'not a map' })).toEqual([]);
 		expect(variableViews({ variables: null })).toEqual([]);
 		expect(facadeFaces({ nodes: 7 }).size).toBe(0);
 	});
 });
 
-describe('graphDoc.setParamSource — the test-seed source write', () => {
-	it('writes a record in place and docParams reads it back', () => {
-		const doc = seedDoc();
-		expect(
-			setParamSource(doc, 'a', 'common', 'max_frequency', { mode: 'reference', ref: 'f.out', triggers: true })
-		).toBe(true);
-		expect(docParams(doc, 'a').common?.max_frequency?.source).toEqual({
-			mode: 'reference',
-			ref: 'f.out',
-			triggers: true
-		});
-		// The committed value is untouched — only the binding was written.
-		expect(docParams(doc, 'a').common?.max_frequency?.value).toBe(30);
-	});
-
-	it('clears a record when passed null', () => {
-		const doc = seedDoc();
-		// `waveform` is seeded WITH a record in seedDoc.
-		expect(docParams(doc, 'a').oscillator?.waveform?.source).toBeDefined();
-		expect(setParamSource(doc, 'a', 'oscillator', 'waveform', null)).toBe(true);
-		expect(docParams(doc, 'a').oscillator?.waveform?.source).toBeUndefined();
-	});
-
-	it('no-ops (returns false) when the node is absent — never mint a phantom', () => {
-		const doc = seedDoc();
-		expect(setParamSource(doc, 'ghost', 'common', 'x', { mode: 'expression', expr: 'nd()' })).toBe(false);
-		expect(nodesMap(doc).ghost).toBeUndefined();
-	});
-});
-
 describe('graphDoc variables', () => {
-	it('reads variable views (system-first, typed, with the lock each carries)', () => {
+	it('reads variable views (system-first, with the lock each carries)', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'system.default_ufreq': { value: 30, type: 'float' },
-				'system.goofi_home': { value: '/home/u/.goofi', type: 'string', lock: { value: true } },
-				'patch.subject': { value: 'P07', type: 'string' },
+				'signal.default_ufreq': {},
+				'system.goofi_home': { lock: { value: true } },
+				'patch.subject': {},
 				'mixer.gain': {
-					value: 0.5,
-					type: 'float',
 					control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }
 				},
-				// Every variable is `group.element`; one without a group is malformed and is skipped,
-				// exactly as one with an unreadable type is.
-				loose: { value: 1, type: 'float' }
+				// Every variable is `group.element`; one without a group is malformed and is skipped.
+				loose: {}
 			}
 		};
 		const free = { config: false, value: false };
 		expect(variableViews(doc)).toEqual([
-			{ name: 'system.default_ufreq', group: 'system', element: 'default_ufreq', value: 30, type: 'float', control: undefined, lock: free },
-			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', value: '/home/u/.goofi', type: 'string', control: undefined, lock: { config: false, value: true } },
-			{ name: 'patch.subject', group: 'patch', element: 'subject', value: 'P07', type: 'string', control: undefined, lock: free },
-			{ name: 'mixer.gain', group: 'mixer', element: 'gain', value: 0.5, type: 'float', control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
+			{ name: 'signal.default_ufreq', group: 'signal', element: 'default_ufreq', control: undefined, lock: free },
+			{ name: 'system.goofi_home', group: 'system', element: 'goofi_home', control: undefined, lock: { config: false, value: true } },
+			{ name: 'patch.subject', group: 'patch', element: 'subject', control: undefined, lock: free },
+			{ name: 'mixer.gain', group: 'mixer', element: 'gain', control: { kind: 'knob', min: 0, max: 1, x: 2, y: 1, w: 2, h: 2 }, lock: free }
 		]);
 	});
 
@@ -215,9 +176,9 @@ describe('graphDoc variables', () => {
 		const doc: Doc = {
 			...seedDoc(),
 			variables: {
-				'mixer.gain': { value: 1, type: 'float' },
-				'patch.subject': { value: 'P07', type: 'string' },
-				'mixer.pan': { value: 0, type: 'float', lock: { value: true } }
+				'mixer.gain': { value: 1 },
+				'patch.subject': { value: 'P07' },
+				'mixer.pan': { value: 0, lock: { value: true } }
 			},
 			variable_groups: { system: { lock: { config: true } }, mixer: { lock: { config: true } } }
 		};
@@ -277,13 +238,13 @@ describe('graphDoc variables', () => {
 							id: 'split-4',
 							axis: 'column',
 							children: [
-								{ kind: 'panel', id: 'panel-2', size: 0.6, panel_type: 'node-editor', state: 'null' },
+								{ kind: 'panel', id: 'panel-2', size: 0.6, panel_type: 'node-editor', state: null },
 								{
 									kind: 'panel',
 									id: 'panel-3',
 									size: 0.4,
 									panel_type: 'viewer',
-									state: '{"node":"a1b2","kind":"line"}'
+									state: { node: 'a1b2', kind: 'line' }
 								}
 							]
 						}
@@ -312,9 +273,9 @@ describe('graphDoc variables', () => {
 	});
 
 	it('drops what it cannot draw instead of drawing a hole', () => {
-		// A tab whose root will not parse, a split with no children, a node with no id, and a state
-		// leaf that is not the JSON STRING the wire promises — each is a shape the manager never
-		// writes, and each would otherwise reach the renderer as a gap.
+		// A tab whose root will not parse, a split with no children and a node with no id are each
+		// a shape the manager never writes, and each would otherwise reach the renderer as a gap;
+		// a panel's state is whatever bag it holds.
 		const tab = (root: unknown): unknown => ({ id: 't', name: 'T', root });
 		expect(arrangementTabs({ arrangement: {} })).toEqual([]);
 		expect(arrangementTabs({ arrangement: { tabs: 'nope' } })).toEqual([]);
@@ -325,7 +286,7 @@ describe('graphDoc variables', () => {
 		expect(
 			arrangementTabs({ arrangement: { tabs: [tab({ kind: 'panel', id: 'p', state: { node: 'x' } })] } })
 		).toEqual([
-			{ id: 't', name: 'T', root: { kind: 'panel', id: 'p', panelType: 'empty', state: undefined } }
+			{ id: 't', name: 'T', root: { kind: 'panel', id: 'p', panelType: 'empty', state: { node: 'x' } } }
 		]);
 	});
 

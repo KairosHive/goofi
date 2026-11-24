@@ -3,15 +3,16 @@
 //! this mode withholds is the convenient doors.
 
 use goofi_bridge::phrase;
-use goofi_tests::{host, http, j, Client, Goofi};
+use goofi_tests::{host, http, j, render, Client, Goofi};
 
 /// Every op a demo drops, and the one it keeps because a visitor needs a reset.
-const DROPPED: [&str; 5] =
-    ["dir list", "agent list", "session save", "session load", "library save"];
+const DROPPED: [&str; 7] =
+    ["dir list", "agent list", "session save", "session load", "library save", "record arm", "record start"];
 
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
-    let full = Goofi::new();
+    // The full server is asked for `/mcp`, so the demo's absence below is the mode, not the default.
+    let full = Goofi::mcp();
     let mut g = Goofi::demo();
 
     // The rows are ABSENT, not filtered on read — the index, dispatch and the resolver agree,
@@ -35,12 +36,12 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     let why = g.refuse("agent list", j!({}));
     assert!(why.contains("unknown op"), "{why}");
     let words = vec!["agent".to_string(), "list".to_string()];
-    let Err(why) = phrase::resolve(&g.state.ops().iter().collect::<Vec<_>>(), &words) else { panic!("resolved on a demo") };
+    let Err(why) = phrase::resolve(&g.state.ops(), &words).map_err(|r| r.to_string()) else { panic!("resolved on a demo") };
     assert!(why.contains("does not serve the `agent` ops"), "{why}");
 
     // Completion follows the served set, so nothing offers a door that is not there.
     let offered = |g: &Goofi, word: &str| {
-        phrase::complete(&g.state.ops().iter().collect::<Vec<_>>(), None, "").iter().any(|(w, _)| w == word)
+        phrase::complete(&g.state.ops(), None, "").iter().any(|(w, _)| w == word)
     };
     for word in ["agent", "dir"] {
         assert!(offered(&full, word), "a full server offers `{word}`");
@@ -49,7 +50,7 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
 
     // No audio ENGINE, which is the one line that also empties the audio half of the catalog.
     let types = |g: &Goofi| -> Vec<String> {
-        goofi_bridge::catalog_type_names(&g.state.graph.lock().unwrap())
+        goofi_bridge::catalog_type_names(&g.graph())
     };
     assert!(types(&full).iter().any(|t| t.starts_with("audio:")), "a full server has audio nodes");
     assert!(
@@ -77,6 +78,27 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     assert_eq!(g.nodes().len(), 2, "a demo boots into the patch it was given");
     g.call("session new", j!({}));
     assert_eq!(g.nodes().len(), 2, "…and the visitor's reset restores it rather than emptying it");
+
+    // No screen: the steps that open a `Window` node's window on a full server open none on a
+    // demo, where the node stands as a pass-through.
+    let wired = |g: &Goofi| {
+        let (c, win) = (g.add("graphics:Constant"), g.add("graphics:Window"));
+        g.ready(c);
+        g.ready(win);
+        g.link(c, "out", win, "input");
+        win
+    };
+    let opened = |g: &Goofi, win| goofi_bridge::graphics_engine(&mut g.graph()).window_of(win);
+    let shown = wired(&full);
+    full.until("a full server opens the window", |full| {
+        render(full, 1);
+        opened(full, shown)
+    });
+    let win = wired(&g);
+    render(&g, 5);
+    assert!(opened(&g, win).is_none(), "a demo opens no window");
+    assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(0));
+    assert!(g.error(win).is_none(), "and the node is no fault");
 
     g.state.demo_base = Some("https://demo.example.com".into());
     let base = g.serve().await;

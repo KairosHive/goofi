@@ -2,15 +2,7 @@
 //! are ordinary node records in the graph's ONE map; membership is `scope_of`'s. What is left here
 //! is the vocabulary: which way a port faces, what a boundary type is called, and the one slot.
 
-use crate::Uid;
 use goofi_core::SlotType;
-
-/// What a stub points at: `(inner member uid, inner slot)`. `None` = UNWIRED. On a nested scope
-/// member the slot names that scope's own stub, spelled as its uid hex.
-pub type StubInner = Option<(Uid, String)>;
-
-/// One parent-scope stub and where it pointed — `(parent scope, stub, inner)`.
-pub type ParentStub = (Uid, Uid, StubInner);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dir {
@@ -27,7 +19,7 @@ impl Dir {
     }
 }
 
-/// The type name a sub-patch facade wears. Not in the palette — `group_nodes` is what makes one.
+/// The type name a sub-patch facade wears. Not in the palette: grouping makes one.
 pub const SCOPE_TYPE: &str = "SubPatch";
 
 /// The one slot a boundary port carries. An In port FEEDS a member, so it wears an output; an Out

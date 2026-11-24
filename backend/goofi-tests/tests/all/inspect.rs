@@ -6,7 +6,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use goofi_core::Param;
 use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 use serde_json::Value;
@@ -42,6 +41,9 @@ fn fixture() -> (Goofi, String) {
     g.call("link add", j!({ "from": ep(hex(osc), "out"), "to": ep(&scope, &bnd) }));
     // The fault is a REPORT — the graph does not hold it until the node has run and said so.
     g.until("the failing node's first fault", |g| g.error(boom));
+    // The buffer ran on a hole before its wire landed and reported that; the report clears on
+    // its next run, and the scope wears a fault until it has. Read the state reached.
+    g.until("the buffer's fault clears", |g| g.error(buf).is_none().then_some(()));
     (g, scope)
 }
 
@@ -74,11 +76,9 @@ names: a node's mermaid id is its name, which every op takes.
     assert_eq!(errs[0]["path"], "testfail0");
     assert_eq!(errs[0]["error"], "the sensor is unplugged");
     assert!(errs[0]["standing"].as_f64().is_some(), "and how long it has stood: {health}");
-    // What the process HOLDS: every running node has a port of its own, each one an entry in
+    // What the process HOLDS: every running node has a thread of its own, each one an entry in
     // the resource index a lease enters and leaves.
     let held = health["resources"].as_array().cloned().unwrap_or_default();
-    let ports = held.iter().filter(|r| r["kind"] == "port").count();
-    assert!(ports >= 3, "a port per running node, and the graph's own: {held:?}");
     let workers: Vec<&str> = held.iter().filter(|r| r["kind"] == "worker").filter_map(|r| r["name"].as_str()).collect();
     assert!(workers.iter().any(|n| n.starts_with("goofi-status-drain")), "the manager's own threads: {workers:?}");
     assert!(workers.iter().any(|n| n.to_lowercase().contains("lfo")), "each node's thread: {workers:?}");
@@ -141,22 +141,25 @@ fn inspect_patch_draws_only_the_edges_that_are_facts_at_this_level() {
 
 const BLEW_UP: &str = "the expression blew up";
 
-/// An evaluator that compiles anything and hands the target value back, or refuses while `broken`.
+/// An evaluator that compiles anything and hands the first variable back, or refuses while `broken`.
 struct Flaky {
     broken: Arc<AtomicBool>,
 }
 
 impl ExprEvaluator for Flaky {
     fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
-        Ok(Compiled { id: 1 })
+        Ok(Compiled { id: 1, code: Arc::from(&b""[..]) })
     }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<Param, ExprError> {
+    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
         if self.broken.load(Ordering::Relaxed) {
             return Err(BLEW_UP.into());
         }
-        Ok(ctx.target.clone())
+        goofi_tests::first_var(ctx)
     }
     fn release(&self, _id: BindingId) {}
+    fn run(&self, _code: &[u8], _ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
+        Err(ExprError("no functional here".into()))
+    }
 }
 
 #[test]
@@ -164,21 +167,21 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     let g = Goofi::new();
     let osc = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(osc), "param": "lfo/amplitude",
-                                   "expression": "variables.system.default_ufreq / 30" }));
+                                   "expression": "vars.signal.default_ufreq / 30" }));
     // A rate is MEASURED, so it needs two emits and a report across the status service.
     g.until("the LFO's measured rate", |g| {
-        g.state.graph.lock().unwrap().node_ufreq(osc)
+        g.graph().node_ufreq(osc)
     });
 
     let out = text(&g, "node state", j!({ "node": hex(osc) }));
     assert!(out.starts_with(&format!("lfo0: signal:LFO (uid {}, native, stage ready)", hex(osc))),
             "{out}");
     // The goldened inline param format, round-trippable into `node param edit`…
-    assert!(out.contains("  lfo.frequency = 1 (float 0..1000)"), "{out}");
+    assert!(out.contains("  lfo.frequency = 1 (num 0.1..100)"), "{out}");
     assert!(out.contains("  common.frequency_mode = \"updates-per-second\" (string one of [updates-per-second, "),
             "{out}");
     // …and into its expression half. This binding cannot compile (no evaluator here), shown inline.
-    assert!(out.contains("  lfo.amplitude = expr: variables.system.default_ufreq / 30 → 1 [error: "),
+    assert!(out.contains("  lfo.amplitude = expr: vars.signal.default_ufreq / 30 → 1 [error: "),
             "{out}");
     // The slot line never carries the frame: there is one door onto a node's data and it is `/data`.
     assert!(out.contains("  out: ARRAY — emitting at "), "the emitting line: {out}");
@@ -205,10 +208,10 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     // With an evaluator the error changes hands to the NODE. A node is handed one at BIRTH, so this
     // one is born after the injection.
     let broken = Arc::new(AtomicBool::new(true));
-    g.state.graph.lock().unwrap().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
+    g.graph().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
     let bound = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(bound), "param": "lfo/amplitude",
-                                   "expression": "variables.system.default_ufreq / 30" }));
+                                   "expression": "vars.signal.default_ufreq / 30" }));
     let live = g.until("the node's own evaluation error", |g| {
         Some(text(g, "node state", j!({ "node": hex(bound) }))).filter(|t| t.contains(BLEW_UP))
     });
@@ -226,12 +229,14 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
 #[test]
 fn list_variables_names_the_system_variables_an_expression_can_read() {
     let g = Goofi::new();
-    let first = g.call("variable list", j!({}))["variables"][0].clone();
-    assert_eq!(first["name"], "system.default_ufreq");
-    assert_eq!(first["type"], "float");
-    assert_eq!(first["value"], 30.0);
-    // What holds it is the system group's lock, answered on the entry as the lock in force.
-    assert_eq!(first["lock"], j!({ "config": true, "value": false }));
+    let listed = g.call("variable list", j!({}))["variables"].clone();
+    let ufreq = listed.as_array().unwrap().iter().find(|v| v["name"] == "signal.default_ufreq").expect("seeded").clone();
+    assert_eq!(ufreq["value"], 30);
+    // What holds it is its group's lock, answered on the entry as the lock in force.
+    assert_eq!(ufreq["lock"], j!({ "config": true, "value": false }));
+    // Goofi's own groups come first, in the order they are seeded: the machine's, then one per engine.
+    let groups: Vec<&str> = listed.as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().split('.').next().unwrap()).collect();
+    assert!(groups.starts_with(&["system", "system", "signal", "graphics", "graphics", "graphics", "audio"]), "{groups:?}");
 }
 
 #[test]

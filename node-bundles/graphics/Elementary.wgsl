@@ -3,10 +3,10 @@
   "tags": ["image", "generator", "simulation"],
   "state": ["rows"],
   "params": [
-    {"group": "elementary", "name": "rule", "kind": "int", "default": 30, "min": 0, "max": 255},
+    {"group": "elementary", "name": "rule", "kind": "num", "int": true, "default": 30, "min": 0, "max": 255},
     {"group": "elementary", "name": "start", "kind": "str", "default": "single", "options": ["single", "random"]},
-    {"group": "elementary", "name": "density", "kind": "float", "default": 0.5, "min": 0.0, "max": 1.0},
-    {"group": "elementary", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "elementary", "name": "density", "kind": "num", "default": 0.5, "min": 0.0, "max": 1.0},
+    {"group": "elementary", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 fn hash2(v: vec2f) -> f32 {
     let q = vec2u(vec2i(v) + 65536);

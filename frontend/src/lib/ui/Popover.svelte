@@ -4,13 +4,14 @@
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 	import { portal, clampToViewport, overlayViewport } from 'panelty';
+	import Catcher from './Catcher.svelte';
 
 	let {
 		anchor,
 		open,
 		onDismiss,
 		flip = false,
-		catcher = false,
+		catcher = true,
 		class: klass = '',
 		children,
 		...rest
@@ -21,7 +22,9 @@
 		onDismiss: () => void;
 		/** Let the surface flip ABOVE a bottom-anchored trigger rather than shift up and cover it. */
 		flip?: boolean;
-		/** Render a full-screen catcher under the surface so a dismissing click ONLY dismisses. */
+		/** The layer under the surface that takes the press which dismisses it, so that press does
+		 * nothing else. Off for a surface that is no place to act in, a tooltip, and for one whose
+		 * anchor is typed into while it is open, a combobox's list. */
 		catcher?: boolean;
 		children?: Snippet;
 	} = $props();
@@ -60,16 +63,29 @@
 	});
 
 	function onWindowPointerDown(e: PointerEvent): void {
-		const t = e.target as Node | null;
+		const t = e.target as Element | null;
 		// The anchor is not "outside": its own onclick toggles, so a dismiss here would reopen.
 		if (t && menuEl?.contains(t)) return;
 		if (t && anchor?.contains(t)) return;
+		// Nor is a surface opened from this one — a picker's popover, a menu — which is portalled
+		// beside it rather than inside it.
+		if (t?.closest('.ui-popover, .context-menu')) return;
 		onDismiss();
 	}
 	function onWindowKeydown(e: KeyboardEvent): void {
 		if (e.key !== 'Escape') return;
-		// Consumed, and capture-phase for it: the open surface is topmost, so no window-bubble
-		// listener beneath it may also act on this Escape.
+		// A key from inside reaches its element first: an editor's open completion takes the
+		// Escape; the one it lets through dismisses, from `onInnerKeydown`.
+		if (menuEl?.contains(e.target as Node)) return;
+		// The topmost surface alone answers: one opened from this one is portalled after it.
+		const open = document.querySelectorAll('.ui-popover');
+		if (open[open.length - 1] !== menuEl) return;
+		// Consumed, and capture-phase for it: no window-bubble listener beneath may also act on it.
+		e.stopPropagation();
+		onDismiss();
+	}
+	function onInnerKeydown(e: KeyboardEvent): void {
+		if (e.key !== 'Escape' || e.defaultPrevented) return;
 		e.stopPropagation();
 		onDismiss();
 	}
@@ -80,17 +96,18 @@
 	onkeydowncapture={open ? onWindowKeydown : undefined}
 />
 
+<!-- One portalled element per block: Svelte tears a block down by walking siblings from its first
+     node to its last, so a moved LAST node would take the anchor's neighbours instead. -->
+{#if open && catcher}
+	<Catcher />
+{/if}
 {#if open}
-	{#if catcher}
-		<!-- Handler-free by design: the layer only ABSORBS the pointer event, so a dismissing click
-		     does not also act on what it landed on. The window listener above dismisses. -->
-		<div class="ui-popover-catcher" use:portal></div>
-	{/if}
 	<div
 		{...rest}
 		bind:this={menuEl}
 		class={`ui-popover ${klass}`.trim()}
 		style="left:{pos.left}px; top:{pos.top}px; visibility:{placed ? 'visible' : 'hidden'}"
+		onkeydown={onInnerKeydown}
 		use:portal
 	>
 		{@render children?.()}
@@ -98,11 +115,6 @@
 {/if}
 
 <style>
-	.ui-popover-catcher {
-		position: fixed;
-		inset: 0;
-		z-index: calc(var(--popover-z, var(--z-menu)) - 1);
-	}
 	.ui-popover {
 		position: fixed;
 		z-index: var(--popover-z, var(--z-menu));

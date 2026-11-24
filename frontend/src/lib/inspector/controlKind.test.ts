@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { controlKind } from './controlKind';
+import { controlKind, elementName, rowPlan } from './controlKind';
 import type {
-	BaseParam,
-	FloatParam,
-	IntParam,
+	ParamDescriptor,
+	ParamBase,
+	NumParam,
 	BoolParam,
 	StringParam,
 	PulseParam,
@@ -16,34 +16,33 @@ import type {
 // string is text, anything else is unknown. The MODE decides nothing here — a row wears its own
 // control in every mode, disabled where a source drives it — and the source's own editor is the
 // second row, which is ParamField's business. Kept pure so that switch is thin and this is the SSOT.
-const base: Omit<BaseParam, 'value'> = {
+const base: ParamBase = {
 	default: null,
 	doc: null,
 	refreshable: false,
 	expression: null,
 	mode: 'constant',
-	reference: null,
-	triggers: false,
 	error: null,
 	section: 0,
-	show: null
+	show: [],
+	role: null
 };
 
-const floatParam = (over: Partial<FloatParam> = {}): FloatParam => ({
+const floatParam = (over: Partial<NumParam> = {}): NumParam => ({
 	...base,
-	type: 'float',
+	type: 'num',
 	value: 0,
 	default: 0,
 	vmin: 0,
 	vmax: 1,
+	int: false,
+	options: [],
+	face: 'plain',
 	...over
 });
-const intParam = (over: Partial<IntParam> = {}): IntParam => ({
-	...base,
-	type: 'int',
-	value: 0,
-	default: 0,
-	vmin: 0,
+const intParam = (over: Partial<NumParam> = {}): NumParam => ({
+	...floatParam(),
+	int: true,
 	vmax: 10,
 	...over
 });
@@ -104,8 +103,8 @@ describe('controlKind', () => {
 		expect(controlKind(pulseParam())).toBe('pulse');
 	});
 
-	it('keeps a pulse a pulse in reference mode, so the button stays and the chips show', () => {
-		expect(controlKind(pulseParam({ mode: 'reference', reference: 'clock.out' }))).toBe('pulse');
+	it('keeps a pulse a pulse under a bare read, so the button stays and the chips show', () => {
+		expect(controlKind(pulseParam({ mode: 'expression', expression: "nd('clock')" }))).toBe('pulse');
 	});
 
 	/* The mode used to win here, and the driven row rendered the source's editor INSTEAD of the
@@ -113,9 +112,9 @@ describe('controlKind', () => {
 	   what the source produces — which leaves this mapping a function of the type alone. */
 	it('gives a driven param the very control its type gets, whatever drives it', () => {
 		expect(controlKind(floatParam({ mode: 'expression' }))).toBe('numeric');
-		expect(controlKind(intParam({ mode: 'reference' }))).toBe('numeric');
+		expect(controlKind(intParam({ mode: 'expression' }))).toBe('numeric');
 		expect(controlKind(boolParam({ mode: 'expression' }))).toBe('toggle');
-		expect(controlKind(stringParam({ options: ['a'], mode: 'reference' }))).toBe('select');
+		expect(controlKind(stringParam({ options: ['a'], mode: 'expression' }))).toBe('select');
 		expect(controlKind(stringParam({ mode: 'expression' }))).toBe('text');
 		expect(controlKind(unknownParam({ mode: 'expression' }))).toBe('unknown');
 	});
@@ -123,5 +122,55 @@ describe('controlKind', () => {
 	it('maps an unknown param to unknown', () => {
 		expect(controlKind(unknownParam())).toBe('unknown');
 	});
+});
 
+// The row's parts come from one plan, so a change to what a vector or a colour shows is a change
+// here, not a condition scattered through the markup.
+describe('rowPlan', () => {
+	const list = { individual: false };
+	const entries = { individual: true };
+	const colour = (over: Partial<NumParam> = {}): NumParam =>
+		floatParam({ value: [1, 0, 0, 1], face: 'color', ...over });
+
+	it('shows a scalar as its control, with no switch and the whole foot', () => {
+		const p = rowPlan(floatParam(), list);
+		expect(p).toMatchObject({ face: 'numeric', viewSwitch: false, list: false, elements: false, source: false, foot: true });
+	});
+
+	it('shows an envelope as its knobs over its list, opening as entries named by stage', () => {
+		const env = floatParam({ value: [0.01, 0.1, 1, 0.3], face: 'envelope' });
+		expect(controlKind(env)).toBe('envelope');
+		expect(rowPlan(env, list)).toMatchObject({ face: 'envelope', viewSwitch: true, list: true, elements: false, foot: true });
+		expect(rowPlan(env, entries)).toMatchObject({ face: 'vector', elements: true, foot: false });
+		expect([0, 1, 2, 3].map((i) => elementName(env, i))).toEqual(['A', 'D', 'S', 'R']);
+		expect(elementName(colour(), 3)).toBe('A');
+		expect(elementName(floatParam({ value: [1, 2] }), 1)).toBe('[1]');
+	});
+
+	it('shows a constant colour as the picker over its list, with the foot beside the list', () => {
+		expect(rowPlan(colour(), list)).toMatchObject({ face: 'color', viewSwitch: true, list: true, elements: false, source: false, foot: true, disabled: false });
+	});
+
+	it('shows a driven colour as the source editor in place of the list', () => {
+		const p = rowPlan(colour({ mode: 'expression', expression: '[1, 0, 0, 1]' }), list);
+		expect(p).toMatchObject({ list: false, source: true, foot: true, disabled: true });
+	});
+
+	it('opens a colour as entries: a vector face, entry rows, and no whole foot', () => {
+		const p = rowPlan(colour(), entries);
+		expect(p).toMatchObject({ face: 'vector', elements: true, list: false, foot: false, disabled: false });
+	});
+
+	it('shows the entries alone while a whole source is set; the list view releases it', () => {
+		expect(rowPlan(colour({ mode: 'expression', expression: "nd('a')" }), entries)).toMatchObject({ foot: false, source: false, elements: true });
+	});
+
+	it('disables the list face while an entry has a source of its own', () => {
+		const d: ParamDescriptor = {
+			...colour(),
+			elements: [{ mode: 'expression', expression: '0', error: null, value: 0 }]
+		};
+		expect(rowPlan(d, list).disabled).toBe(true);
+		expect(rowPlan(d, entries).disabled).toBe(false);
+	});
 });

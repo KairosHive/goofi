@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DataFrame } from '$lib/codec/decode';
-	import type { SettingsMap } from './settingsSchema';
+	import type { SettingsMap } from './module';
 	import { renderMarkdown } from './renderMarkdown';
 
 	type Props = { frame: DataFrame; settings?: SettingsMap };
@@ -69,16 +69,16 @@
 		margin: 0.3em 0;
 		padding-left: 1.3em;
 	}
-	.md :global(code) {
-		background: var(--bg);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 0 var(--space-2);
-	}
+	.md :global(code),
 	.md :global(pre) {
 		background: var(--bg);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
+	}
+	.md :global(code) {
+		padding: 0 var(--space-2);
+	}
+	.md :global(pre) {
 		padding: var(--space-3) var(--space-5);
 		overflow: auto;
 	}

@@ -14,6 +14,7 @@ default = ["embed"]
 embed = ["goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed", "dep:pyo3"]
 
 [dependencies]
+goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
 goofi-core = { path = "../goofi-core" }
@@ -29,6 +30,8 @@ goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
+goofi-agent = { path = "../goofi-agent" }
+goofi-runtime = { path = "../goofi-runtime" }
 goofi-view = { path = "../goofi-view" }
 # The manager side of both Python tiers. `subproc` is unconditional — it only SPAWNS an
 # interpreter — so its suite runs in the default build.
@@ -44,6 +47,8 @@ tokio = { version = "1", features = ["sync", "rt", "net", "time", "io-util"] }
 # The `Client` below IS a WebSocket client — the transport suite's half of the harness.
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
+# The MIDI situations play a virtual port, in the suite and from `midikeys` for the browser suite.
+midir = "0.11"
 
 # The latency probes and the parity benchmark live here, beside the OutputProbe they drive; the
 # Python two need the embedded interpreter, so they skip unless `embed` is on.
@@ -72,7 +77,6 @@ rmpv = "1"
 # Pin a tiny SO_RCVBUF on a test client so a stalled reader deterministically lags the broadcast
 # ring, instead of the OS silently autotuning a huge buffer.
 socket2 = "0.6"
-midir = "0.11"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 audio_thread_priority = "0.35.1"

@@ -2,9 +2,10 @@
 //! thread, and every knob turned in it carried back into the document through the one param door.
 //! Everything here runs on the window thread, and the table is that thread's own.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
@@ -16,7 +17,6 @@ use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComRef, ComWrapper};
 
-use super::node::Derived;
 use crate::control::AudioShared;
 use goofi_window::{Host, Runloop, Window};
 
@@ -31,12 +31,13 @@ thread_local! {
     static PLUGINS: RefCell<HashMap<Uid, Running>> = RefCell::new(HashMap::new());
 }
 
-/// One running plugin as the window thread knows it: the controller a view is asked of, and the
-/// window while one is open.
+/// One running plugin as the window thread knows it: the controller a view is asked of, what its
+/// values are read back with, and the window while one is open.
 struct Running {
     controller: ComPtr<IEditController>,
-    _class: Arc<Derived>,
-    _handler: ComWrapper<Handler>,
+    class: Arc<super::node::Derived>,
+    known: Arc<[AtomicU64]>,
+    handler: ComWrapper<Handler>,
     editor: Option<Editor>,
 }
 
@@ -47,12 +48,12 @@ struct Editor {
 }
 
 /// A plugin came up: its controller edits through here from now on, and a view can be asked of it.
-pub(super) fn register(uid: Uid, controller: ComPtr<IEditController>, class: Arc<Derived>, shared: Arc<AudioShared>) {
-    let handler = ComWrapper::new(Handler { uid, shared });
+pub(super) fn register(uid: Uid, controller: ComPtr<IEditController>, shared: Arc<AudioShared>, class: Arc<super::node::Derived>, known: Arc<[AtomicU64]>) {
+    let handler = ComWrapper::new(Handler { uid, shared, quiet: Cell::new(false) });
     if let Some(h) = handler.to_com_ptr::<IComponentHandler>() {
         unsafe { controller.setComponentHandler(h.as_ptr()) };
     }
-    PLUGINS.with(|p| p.borrow_mut().insert(uid, Running { controller, _class: class, _handler: handler, editor: None }));
+    PLUGINS.with(|p| p.borrow_mut().insert(uid, Running { controller, class, known, handler, editor: None }));
 }
 
 /// The plugin is going: its window first, then its place here — before its halves are torn down.
@@ -85,6 +86,15 @@ pub(crate) fn show(host: &mut Host, uid: Uid, title: &str, show: bool) -> Result
     Ok(true)
 }
 
+/// Run `f` with `uid`'s handler deaf, as a state is restored.
+pub(super) fn quietly<T>(uid: Uid, f: impl FnOnce() -> T) -> T {
+    let quiet = |on: bool| PLUGINS.with(|p| p.borrow().get(&uid).map(|r| r.handler.quiet.set(on)));
+    quiet(true);
+    let out = f();
+    quiet(false);
+    out
+}
+
 /// The record's values, told to the controller so the window shows what the document holds.
 pub(crate) fn sync(uid: Uid, values: Vec<(ParamID, f64)>) {
     PLUGINS.with(|p| {
@@ -108,6 +118,7 @@ impl Editor {
         let window = host.open_window(
             title,
             size,
+            goofi_window::Place::default(),
             Box::new(move |host| {
                 if let Some(editor) = PLUGINS.with(|p| p.borrow_mut().get_mut(&uid).and_then(|r| r.editor.take())) {
                     editor.close(host);
@@ -143,6 +154,8 @@ impl Editor {
 struct Handler {
     uid: Uid,
     shared: Arc<AudioShared>,
+    /// While a state is restored: what the plugin reports of it is the restore's to say, once.
+    quiet: Cell<bool>,
 }
 
 impl Class for Handler {
@@ -155,7 +168,10 @@ impl IComponentHandlerTrait for Handler {
     }
 
     unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
-        self.shared.edits.lock().unwrap().push((self.uid, id, value));
+        if self.quiet.get() {
+            return kResultOk;
+        }
+        self.shared.edits.lock().push((self.uid, id, value, goofi_node::Origin::Authored));
         self.shared.waker.notify();
         kResultOk
     }
@@ -164,8 +180,18 @@ impl IComponentHandlerTrait for Handler {
         kResultOk
     }
 
-    /// A restart asks for a shape goofi fixed at scan time: accepted, so the plugin sees no error.
-    unsafe fn restartComponent(&self, _flags: int32) -> tresult {
+    /// A plugin that moved its own values, as a preset load does, says only that they moved: every
+    /// value is read back. Any other restart asks for a shape goofi fixed at scan time: accepted,
+    /// so the plugin sees no error.
+    unsafe fn restartComponent(&self, flags: int32) -> tresult {
+        if self.quiet.get() || flags & RestartFlags_::kParamValuesChanged as int32 == 0 {
+            return kResultOk;
+        }
+        PLUGINS.with(|p| {
+            if let Some(r) = p.borrow().get(&self.uid) {
+                super::node::read_back(&r.controller, &r.class, &r.known, self.uid, &self.shared, goofi_node::Origin::Changed);
+            }
+        });
         kResultOk
     }
 }

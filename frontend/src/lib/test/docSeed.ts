@@ -1,10 +1,8 @@
 /** Fill a store replica the way the manager does — by emitting `doc_state` / `doc_patch`, never by writing into it. */
-import { applyMerge } from '$lib/crdt/mergePatch';
+import { diffOps, isObj, type Obj } from '$lib/crdt/ops';
 import { emptyDoc, type Doc } from '$lib/crdt/graphDoc';
 import { SCOPE_TYPE } from '$lib/api/vocab';
 import type { FakeControl } from './fakeControl';
-
-type Obj = Record<string, unknown>;
 
 export class DocSeed {
 	private doc: Doc = emptyDoc();
@@ -13,10 +11,6 @@ export class DocSeed {
 	/** Seeds the empty document at once: a replica refuses a patch until it has a base. */
 	constructor(private fc: FakeControl) {
 		this.push();
-	}
-
-	get state(): Doc {
-		return this.doc;
 	}
 
 	get version(): number {
@@ -31,18 +25,20 @@ export class DocSeed {
 		return this;
 	}
 
-	/** Send one merge patch — `null` at a key deletes it, as RFC 7386 says. */
+	/** Send one change, spelled as a merge — `null` at a key deletes it — and sent as the ops the
+	 * manager would send for it. */
 	patch(patch: Obj): this {
-		applyMerge(this.doc, patch);
+		const before = structuredClone(this.doc);
+		merge(this.doc, patch);
 		const from = this.v;
 		this.v += 1;
-		this.fc.emit({ event: 'doc_patch', payload: { from, v: this.v, patch: structuredClone(patch) } });
+		this.fc.emit({ event: 'doc_patch', payload: { from, v: this.v, ops: diffOps(before, this.doc) } });
 		return this;
 	}
 
 	/** One node, with whatever leaves the test cares about beyond identity. */
 	node(uid: string, type: string, name: string, pos: [number, number] = [0, 0], extra: Obj = {}): this {
-		return this.patch({ nodes: { [uid]: { type, name, pos: { x: pos[0], y: pos[1] }, ...extra } } });
+		return this.patch({ nodes: { [uid]: { type, name, pos: [pos[0], pos[1]], ...extra } } });
 	}
 
 	/** One sub-patch facade — a node record wearing the scope type. Membership is each MEMBER's own
@@ -56,17 +52,9 @@ export class DocSeed {
 		return this.node(uid, type, name, pos, { scope });
 	}
 
-	links(list: Obj[]): this {
-		return this.patch({ links: list });
-	}
-
 	/** One variable, `{value, type, system}`. */
 	variable(name: string, rec: Obj): this {
 		return this.patch({ variables: { [name]: rec } });
-	}
-
-	arrangement(id: string, rec: Obj): this {
-		return this.patch({ arrangement: { [id]: rec } });
 	}
 
 	remove(root: string, key: string): this {
@@ -76,4 +64,15 @@ export class DocSeed {
 
 export function seed(fc: FakeControl): DocSeed {
 	return new DocSeed(fc);
+}
+
+/** A test spells a change as a merge: an object merges, `null` removes, anything else replaces whole. */
+function merge(target: Obj, patch: Obj): void {
+	for (const [k, pv] of Object.entries(patch)) {
+		if (pv === null) delete target[k];
+		else if (isObj(pv)) {
+			if (!isObj(target[k])) target[k] = {};
+			merge(target[k] as Obj, pv);
+		} else target[k] = pv;
+	}
 }

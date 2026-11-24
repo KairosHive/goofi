@@ -10,29 +10,32 @@ pub fn situation(module_path: &str) -> &str {
 mod audio_priority;
 mod browser;
 mod children;
+mod clock;
 mod codec_golden;
 mod contracts;
 mod demo;
 mod editing;
 mod engines;
-mod filter_golden;
 mod graphics;
 mod headless;
 mod inspect;
 #[cfg(not(feature = "embed"))]
 mod io;
 mod logging;
+mod machine;
 mod nodes;
 #[cfg(feature = "embed")]
 mod param_modulation;
 mod plugins;
 mod python;
+mod ready;
 #[cfg(feature = "embed")]
 mod python_init_order;
 mod recording;
 mod running;
 mod session;
-mod signals;
 mod subpatches;
-mod textures;
+mod texture_graphics;
+mod timeline;
+mod timing;
 mod transport;

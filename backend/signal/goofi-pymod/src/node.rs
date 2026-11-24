@@ -8,13 +8,16 @@ use pyo3::types::{PyDict, PyList};
 #[pyclass(subclass)]
 pub struct Node {
     pub(crate) clear_inputs: Option<Vec<String>>,
+    /// The engine's clock, in seconds, as of the call in progress: `self.now` in `setup` and `process`.
+    #[pyo3(get)]
+    pub(crate) now: f64,
 }
 
 #[pymethods]
 impl Node {
     #[new]
     fn new() -> Node {
-        Node { clear_inputs: None }
+        Node { clear_inputs: None, now: 0.0 }
     }
 
     /// Clear a held input after this process call succeeds.

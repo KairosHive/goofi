@@ -2,7 +2,7 @@
 //! gives one answer; in updates it holds whole frames and hands back the one from further back.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Delay {
@@ -61,11 +61,12 @@ static PARAMS: &[ParamDecl] = &[
     ParamDecl {
         group: "delay",
         name: "size",
-        spec: ParamSpec::Float { default: 10.0, min: 0.0, max: 1.0e7 },
+        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e7, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("How far back to read, in the unit below. Never a sleep: the node answers at once."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "delay",
@@ -74,16 +75,18 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Samples counts along the axis. Seconds uses sfreq, or delays whole frames at ufreq if no sample rate is set. Updates and seconds (ufreq) delay whole frames."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "delay",
         name: "axis",
-        spec: ParamSpec::Int { default: -1, min: -8, max: 7, options: &[-2, -1, 0, 1, 2] },
+        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
         expression: None,
         doc: Some("Which axis the delay runs along when it counts samples. -1 is time."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ParamDecl {
         group: "delay",
@@ -92,7 +95,8 @@ static PARAMS: &[ParamDecl] = &[
         expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

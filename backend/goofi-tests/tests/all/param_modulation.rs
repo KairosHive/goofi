@@ -1,23 +1,17 @@
 //! Parameter modulation through the public expression interface.
 
-use std::collections::HashMap;
-use goofi_core::Param;
-use goofi_node::{EvalCtx, ExprEvaluator};
+use goofi_core::{control, Param};
+use goofi_node::{EvalCtx, ExprEvaluator, ExprState, Local};
 use goofi_python::inproc::PyExprEvaluator;
 
 #[test]
 fn modulation_uses_the_current_target_range_and_coordinate() {
     let evaluator = PyExprEvaluator::new().unwrap();
-    let locals = HashMap::new();
     let evaluate = |source: &str, t: f64, lo: f64, hi: f64| {
-        let target = Param::Float { value: 0.0, vmin: lo, vmax: hi };
         let code = evaluator.compile(source).unwrap();
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &locals, t, target: &target });
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t, range: (lo, hi), state: None });
         evaluator.release(code.id);
-        result.map(|p| match p {
-            Param::Float { value, .. } => value,
-            _ => panic!("expected a float"),
-        })
+        result.map(|d| control::number_of(&d))
     };
     for (t, expected) in [(0.0, 4.0), (0.25, 6.0), (0.75, 2.0)] {
         assert!((evaluate("lfo()", t, 2.0, 6.0).unwrap() - expected).abs() < 1e-10);
@@ -25,17 +19,18 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     assert_eq!(evaluate("lfo(src=0.25, vmin=-3, vmax=9)", 0.75, 2.0, 6.0).unwrap(), 9.0);
     assert_eq!(evaluate("lfo(src=0.25)", 0.0, -10.0, 10.0).unwrap(), 10.0);
     for t in [-2.3, 0.0, 0.25, 1.0, 100.5] {
-        let value = evaluate("noi()", t, 2.0, 6.0).unwrap();
+        let value = evaluate("nse()", t, 2.0, 6.0).unwrap();
         assert!((2.0..=6.0).contains(&value));
-        assert_eq!(value, evaluate(&format!("noi(src={t})"), 999.0, 2.0, 6.0).unwrap());
-        let unit = evaluate("noi(vmin=0, vmax=1)", t, 2.0, 6.0).unwrap();
-        assert!((value - (2.0 + 4.0 * unit)).abs() < 1e-10);
+        assert_eq!(value, evaluate(&format!("nse(src={t})"), 999.0, 2.0, 6.0).unwrap());
+        let unit = evaluate("nse(vmin=0, vmax=1)", t, 2.0, 6.0).unwrap();
+        // The result crosses the f32 carrier, so the two readings agree to f32 precision.
+        assert!((value - (2.0 + 4.0 * unit)).abs() < 1e-5);
     }
-    assert_ne!(evaluate("noi()", 0.0, 0.0, 1.0).unwrap(), evaluate("noi()", 1.0, 0.0, 1.0).unwrap());
-    let left = evaluate("noi()", 1.0 - 1e-6, 0.0, 1.0).unwrap();
-    let right = evaluate("noi()", 1.0 + 1e-6, 0.0, 1.0).unwrap();
+    assert_ne!(evaluate("nse()", 0.0, 0.0, 1.0).unwrap(), evaluate("nse()", 1.0, 0.0, 1.0).unwrap());
+    let left = evaluate("nse()", 1.0 - 1e-6, 0.0, 1.0).unwrap();
+    let right = evaluate("nse()", 1.0 + 1e-6, 0.0, 1.0).unwrap();
     assert!((left - right).abs() < 1e-9);
-    for kind in ["lfo", "noi"] {
+    for kind in ["lfo", "nse"] {
         for freq in [0.0, 0.05, 0.5, 2.0] {
             let actual = evaluate(&format!("{kind}(freq={freq})"), 0.37, 2.0, 6.0).unwrap();
             let expected = evaluate(&format!("{kind}()"), 0.37 * freq, 2.0, 6.0).unwrap();
@@ -44,14 +39,314 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
             assert_eq!(actual, explicit);
         }
     }
+    // The result is a frame; the reader reads it into its param, an int rounded.
     let code = evaluator.compile("lfo()").unwrap();
     for (lo, hi) in [(2, 6), (-10, 20)] {
-        let target = Param::Int { value: 0, vmin: lo, vmax: hi, options: vec![] };
-        let result = evaluator.eval(code.id, &EvalCtx { locals: &locals, t: 0.25, target: &target }).unwrap();
-        assert!(matches!(result, Param::Int { value, .. } if value == hi));
+        let target = Param::int(0, lo, hi);
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.25, range: (lo as f64, hi as f64), state: None }).unwrap();
+        let read = control::read(&result, &target);
+        assert!(matches!(&read, Param::Num { value, int: true, .. } if value[0] == hi as f64), "{read:?}");
     }
     evaluator.release(code.id);
-    for source in ["lfo(1)", "noi(1)", "lfo(rate=1)", "noi(rate=1)"] {
+    for source in ["lfo(1)", "nse(1)", "lfo(rate=1)", "nse(rate=1)"] {
         assert!(evaluate(source, 0.0, 0.0, 1.0).is_err(), "{source}");
     }
+
+    // One text compiles once however many bindings hold it, and the last release lets it go.
+    let (a, b) = (evaluator.compile("t + 1").unwrap(), evaluator.compile("t + 1").unwrap());
+    assert_eq!(a.id, b.id, "one source, one compiled function");
+    evaluator.release(a.id);
+    assert_eq!(control::number_of(&evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0), state: None }).unwrap()), 3.0, "held by the other");
+    evaluator.release(b.id);
+    assert!(evaluator.eval(b.id, &EvalCtx { locals: &[], t: 2.0, range: (0.0, 1.0), state: None }).is_err(), "released");
+
+    // A FUNCTIONAL is a compiled expression's code as a frame: it crosses the wire as bytes, equal
+    // by those bytes, and whoever reads it runs it at their own time; a clamp is the code's own.
+    let compiled = evaluator.compile("min(2 + 3 * t, 5)").unwrap();
+    let frame = goofi_core::Data::functional(compiled.code.clone(), goofi_core::Meta::default());
+    evaluator.release(compiled.id);
+    let crossed = goofi_codec::decode(&goofi_codec::encode(&frame).unwrap()).unwrap();
+    assert_eq!(crossed, frame);
+    assert_eq!(crossed.as_functional(), frame.as_functional());
+    for (t, want) in [(0.0, 2.0), (0.5, 3.5), (1.0, 5.0), (7.0, 5.0)] {
+        let value = goofi_node::at(&evaluator, &crossed, t, (0.0, 1.0)).unwrap();
+        assert_eq!(control::number_of(&value), want, "at t={t}");
+    }
+    let plain = goofi_core::Data::number(4.0);
+    assert_eq!(goofi_node::at(&evaluator, &plain, 9.0, (0.0, 1.0)).unwrap(), plain, "a plain frame is itself");
+    assert!(goofi_codec::decode(&goofi_codec::encode(&goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default())).unwrap()).is_ok());
+    assert!(goofi_node::at(&evaluator, &goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default()), 0.0, (0.0, 1.0)).is_err(), "code that is not code is a run error, not a panic");
+}
+
+/// Compiles, evaluations and a free-threaded collection run on their own threads at once, as a
+/// patch's reducers, node threads and machines do. A collection stops the world until every
+/// attached thread parks; an evaluator that blocks attached on a lock whose holder waits to
+/// attach never parks, and the manager, the machines and every node freeze with it.
+#[test]
+fn concurrent_compile_eval_and_collection_all_finish() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    const ROUNDS: u64 = 300;
+    let evaluator = Arc::new(PyExprEvaluator::new().unwrap());
+    let ctx = || EvalCtx { locals: &[], t: 0.5, range: (0.0, 1.0), state: None };
+    let done: Arc<Vec<AtomicU64>> = Arc::new((0..9).map(|_| AtomicU64::new(0)).collect());
+    for (i, counter) in (0..9).zip(0..) {
+        let (ev, done) = (evaluator.clone(), done.clone());
+        std::thread::spawn(move || {
+            for round in 0..ROUNDS {
+                match i {
+                    // The collector: every call is a stop-the-world collection.
+                    0 => {
+                        let code = ev.compile("__import__('gc').collect() * 0 + t").unwrap();
+                        assert_eq!(control::number_of(&ev.eval(code.id, &ctx()).unwrap()), 0.5);
+                        ev.release(code.id);
+                    }
+                    // Compilers: a fresh text each round is a compile under the table lock.
+                    1..=4 => {
+                        let code = ev.compile(&format!("t + {i} * {round}")).unwrap();
+                        ev.release(code.id);
+                    }
+                    // Evaluators: a held function read attached, as a node thread reads it.
+                    _ => {
+                        let code = ev.compile("t * 2").unwrap();
+                        assert_eq!(control::number_of(&ev.eval(code.id, &ctx()).unwrap()), 1.0);
+                        ev.release(code.id);
+                    }
+                }
+                done[counter].fetch_add(1, Ordering::Relaxed);
+            }
+        });
+    }
+    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
+    while done.iter().any(|d| d.load(Ordering::Relaxed) < ROUNDS) {
+        let rounds: Vec<u64> = done.iter().map(|d| d.load(Ordering::Relaxed)).collect();
+        assert!(std::time::Instant::now() < deadline, "threads stalled at {rounds:?} of {ROUNDS} rounds each");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn qtz_snaps_volts_per_octave_onto_a_scale() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let evaluate = |source: &str| {
+        let code = evaluator.compile(source).unwrap();
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (-5.0, 5.0), state: None });
+        evaluator.release(code.id);
+        result
+    };
+    let semis = |source: &str| control::number_of(&evaluate(source).unwrap()) * 12.0;
+    let near = |source: &str, want: f64| {
+        let got = semis(source);
+        assert!((got - want).abs() < 1e-4, "{source}: {got} semitones, not {want}");
+    };
+    // C major by default, 0 V the C: a pitch goes to its nearest degree, in its own octave, and
+    // one just under the next C climbs to it.
+    near("qtz(0)", 0.0);
+    near("qtz(1.4 / 12)", 2.0);
+    near("qtz(0.23)", 2.0);
+    near("qtz(1 + 11.4 / 12)", 23.0);
+    near("qtz(11.6 / 12)", 12.0);
+    near("qtz(-0.4 / 12)", 0.0);
+    near("qtz(-1.6 / 12)", -1.0);
+    // A scale by name and a root by note or by semitones: D major pentatonic is D E F# A B.
+    near("qtz(5.4 / 12, 'pentatonic_major', 'D')", 6.0);
+    near("qtz(5.4 / 12, scale='pentatonic_major', root=2)", 6.0);
+    near("qtz(1.4 / 12, 'minor', 'a')", 2.0);
+    near("qtz(3.4 / 12, 'chromatic')", 3.0);
+    // An array snaps element by element.
+    let frame = evaluate("qtz(np.array([0.0, 1.4 / 12, 4.6 / 12]))").unwrap();
+    let goofi_core::Value::Array(a) = frame.value() else { panic!("an array: {frame:?}") };
+    let got: Vec<f64> = a.values().map(|v| (f64::from(v) * 12.0 * 1e4).round() / 1e4).collect();
+    assert_eq!(got, [0.0, 2.0, 5.0]);
+    // A scale or root that is none is the expression's error, naming what there is.
+    let why = format!("{:?}", evaluate("qtz(0, 'nope')").unwrap_err());
+    assert!(why.contains("major") && why.contains("dorian"), "{why}");
+    let why = format!("{:?}", evaluate("qtz(0, root='H')").unwrap_err());
+    assert!(why.contains("F#"), "{why}");
+}
+
+/// The harness's functions as the editor documents them: `goofi_node::expr::BUILTINS` is what the
+/// completion offers, and the Python in `goofi_python::inproc::expr` is what runs, so the two are
+/// held together here — names, keyword-only arguments, every option, and the math names.
+#[test]
+fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_run() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let evaluate = |source: &str| {
+        let code = evaluator.compile(source).unwrap();
+        let result = evaluator.eval(code.id, &EvalCtx { locals: &[], t: 0.0, range: (0.0, 1.0), state: None });
+        evaluator.release(code.id);
+        result
+    };
+    let number = |source: &str| evaluate(source).map(|d| control::number_of(&d));
+    let text = |source: &str| evaluate(source).map(|d| control::text(&d));
+
+    for b in goofi_node::expr::BUILTINS.iter().filter(|b| b.kind == "function" && b.pick.is_none()) {
+        let signature = text(&format!("str(__import__('inspect').signature({}))", b.name)).unwrap();
+        let documented: Vec<&str> = b.args.iter().map(|a| a.name).collect();
+        let python: Vec<&str> = signature.trim_matches(|c| c == '(' || c == ')').split(", ").filter(|p| *p != "*").map(|p| p.split('=').next().unwrap()).collect();
+        assert_eq!(documented, python, "{}'s arguments as documented and as defined", b.name);
+        for a in b.args {
+            let keyword_only = signature.find("*, ").is_some_and(|star| signature[star..].contains(&format!(" {}=", a.name)) || signature[star..].starts_with(&format!("*, {}=", a.name)));
+            assert_eq!(a.keyword, keyword_only, "{}'s `{}` keyword-only as documented", b.name, a.name);
+            for option in a.options {
+                let call = format!("{}({}{}='{option}')", b.name, if b.name == "qtz" { "0.5, " } else { "" }, a.name);
+                assert!(evaluate(&call).is_ok(), "{call} is an option the harness takes");
+            }
+            if !a.options.is_empty() {
+                let call = format!("{}({}{}='nope')", b.name, if b.name == "qtz" { "0.5, " } else { "" }, a.name);
+                let why = evaluate(&call).unwrap_err().0;
+                assert!(why.contains(a.options[0]), "{call} is refused naming the options: {why}");
+            }
+        }
+    }
+    let names = goofi_node::expr::MATH.iter().chain(goofi_node::expr::MATH_CONSTANTS).copied().collect::<Vec<_>>().join(", ");
+    assert_eq!(number(&format!("len([{names}])")).unwrap() as usize, goofi_node::expr::MATH.len() + goofi_node::expr::MATH_CONSTANTS.len());
+    assert!(evaluate("time()").is_err(), "the wall clock is not in scope; `t` is the patch's");
+
+    // Every waveform spans the range over one cycle of `freq * src`; `sin` is the old default.
+    let wave = |fn_: &str, src: f64| number(&format!("lfo(fn='{fn_}', src={src}, vmin=0, vmax=1)")).unwrap();
+    for (fn_, src, expected) in [
+        ("sin", 0.0, 0.5), ("sin", 0.25, 1.0), ("cos", 0.0, 1.0), ("cos", 0.5, 0.0),
+        ("tri", 0.0, 0.0), ("tri", 0.25, 0.5), ("tri", 0.5, 1.0), ("tri", 1.75, 0.5),
+        ("sqr", 0.25, 1.0), ("sqr", 0.75, 0.0), ("saw", 0.25, 0.25), ("saw", 1.75, 0.75),
+    ] {
+        assert!((wave(fn_, src) - expected).abs() < 1e-6, "lfo(fn='{fn_}') at {src}: {} != {expected}", wave(fn_, src));
+    }
+    assert_eq!(number("lfo(src=0.25, vmin=0, vmax=1)").unwrap(), number("lfo(fn='sin', src=0.25, vmin=0, vmax=1)").unwrap());
+
+    // `qtz` snaps in the unit it is given: volts per octave with C4 at 0 V, or hertz.
+    assert!((number("qtz(0.6)").unwrap() - 7.0 / 12.0).abs() < 1e-6, "7.2 semitones up snaps to G, the fifth");
+    assert!((number("qtz(440, mode='hz')").unwrap() - 440.0).abs() < 1e-3, "A4 is in C major");
+    assert!((number("qtz(450, mode='hz')").unwrap() - 440.0).abs() < 1e-3, "450 Hz snaps down to A4");
+    assert!((number("qtz(261.6255653, mode='hz')").unwrap() - 261.6255653).abs() < 1e-3, "C4 is 0 V");
+    let frames = evaluate("qtz(np.array([440.0, 450.0]), mode='hz')").unwrap();
+    let got: Vec<f64> = control::numbers(&frames).collect();
+    assert!(got.iter().all(|v| (v - 440.0).abs() < 1e-2), "{got:?}");
+}
+
+/// `gte()` is the first function with state: the binding's cell keeps what each call site saw
+/// and when its edge was, through the evaluator's one state door. An evaluation without a cell
+/// keeps nothing, so it never sees an edge.
+#[test]
+fn a_stateful_function_keeps_its_state_in_the_bindings_cell_by_call_site() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let at = |id: goofi_node::BindingId, t: f64, x: goofi_core::Data, cell: Option<&ExprState>| {
+        let locals = vec![("__v0".to_string(), Local::Frame(x))];
+        evaluator.eval(id, &EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: cell }).map(|d| control::number_of(&d))
+    };
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-5;
+    let n = goofi_core::Data::number;
+
+    // The defaults: a gate, open from the edge for the decay, whatever the source does meanwhile.
+    let gate = evaluator.compile("gte(__v0, decay=0.5)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(gate.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(gate.id, 0.1, n(1.0), Some(&cell)).unwrap(), 1.0, "the edge opens the gate");
+    assert_eq!(at(gate.id, 0.3, n(1.0), Some(&cell)).unwrap(), 1.0, "open through the decay");
+    assert_eq!(at(gate.id, 0.7, n(1.0), Some(&cell)).unwrap(), 0.0, "closed after it");
+    assert_eq!(at(gate.id, 1.0, n(1.0), Some(&cell)).unwrap(), 0.0, "a level that never fell opens nothing");
+    assert_eq!(at(gate.id, 1.1, n(0.0), Some(&cell)).unwrap(), 0.0, "nor the fall");
+    assert_eq!(at(gate.id, 1.2, n(0.2), Some(&cell)).unwrap(), 1.0, "any positive is high");
+    assert_eq!(at(gate.id, 0.05, n(0.2), Some(&cell)).unwrap(), 0.0, "a clock that started over drops the envelope");
+    for (t, x) in [(0.0, 0.0), (0.1, 1.0), (0.2, 1.0)] {
+        assert_eq!(at(gate.id, t, n(x), None).unwrap(), 0.0, "no cell, no memory, no edge");
+    }
+    let other = ExprState::default();
+    assert_eq!(at(gate.id, 2.0, n(1.0), Some(&other)).unwrap(), 0.0, "another cell starts fresh: a high level is no edge");
+    evaluator.release(gate.id);
+
+    // The shape: up over the attack, down to the sustain over the decay, to nothing over the
+    // release; a second edge starts the attack from the level it stands at.
+    let gain = evaluator.compile("gte(__v0, attack=0.2, decay=0.2, sustain=0.5, release=0.2)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(gain.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    for (t, expected) in [(1.0, 0.0), (1.1, 0.5), (1.2, 1.0), (1.3, 0.75), (1.4, 0.5), (1.5, 0.25), (1.6, 0.0), (3.0, 0.0)] {
+        let got = at(gain.id, t, n(1.0), Some(&cell)).unwrap();
+        assert!(close(got, expected), "at {t}: {got}, not {expected}");
+    }
+    assert_eq!(at(gain.id, 4.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(gain.id, 4.1, n(1.0), Some(&cell)).unwrap(), 0.0, "the edge, the attack from nothing");
+    assert!(close(at(gain.id, 4.2, n(0.0), Some(&cell)).unwrap(), 0.5), "the attack runs on through the fall");
+    assert!(close(at(gain.id, 4.25, n(1.0), Some(&cell)).unwrap(), 0.75), "a second edge takes the level it finds");
+    assert!(close(at(gain.id, 4.35, n(1.0), Some(&cell)).unwrap(), 0.875), "and climbs from there");
+    evaluator.release(gain.id);
+
+    // Two call sites in one expression keep two states; a text's edge is its change; negative
+    // seconds are refused.
+    let two = evaluator.compile("gte(__v0, decay=0.05) + 10 * gte(1 - __v0, decay=0.05)").unwrap();
+    let cell = ExprState::default();
+    assert_eq!(at(two.id, 0.0, n(0.0), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(two.id, 0.1, n(1.0), Some(&cell)).unwrap(), 1.0, "the first site's edge");
+    assert_eq!(at(two.id, 0.2, n(0.0), Some(&cell)).unwrap(), 10.0, "the second site's, on the fall");
+    evaluator.release(two.id);
+    let text = evaluator.compile("gte(__v0)").unwrap();
+    let cell = ExprState::default();
+    let s = goofi_core::Data::text;
+    assert_eq!(at(text.id, 0.0, s("A"), Some(&cell)).unwrap(), 0.0);
+    assert_eq!(at(text.id, 0.01, s("A"), Some(&cell)).unwrap(), 0.0, "the same text is no edge");
+    assert_eq!(at(text.id, 0.02, s("B"), Some(&cell)).unwrap(), 1.0, "a change is");
+    assert_eq!(at(text.id, 0.05, s("B"), Some(&cell)).unwrap(), 1.0);
+    assert_eq!(at(text.id, 0.2, s("B"), Some(&cell)).unwrap(), 0.0);
+    evaluator.release(text.id);
+    let bad = evaluator.compile("gte(__v0, decay=-1)").unwrap();
+    let why = at(bad.id, 0.0, n(0.0), Some(&ExprState::default())).unwrap_err().0;
+    assert!(why.contains("at least 0"), "{why}");
+    evaluator.release(bad.id);
+}
+
+/// A param that leaves a computed expression for a constant keeps its binding, and the expression
+/// comes back to that binding: by a mode given alone, and by an undo of the constant. Each return
+/// compiles the retained text again, or it reaches the node with no handle and reads as a bare target.
+#[test]
+fn a_computed_expression_a_mode_or_an_undo_brings_back_runs_again() {
+    use goofi_tests::{f32s, hex, j, Goofi};
+    let g = Goofi::new();
+    g.graph().set_evaluator(std::sync::Arc::new(PyExprEvaluator::new().unwrap()));
+    let n = g.add("_TestScalar");
+    g.set_param(n, "common", "max_frequency", 50.0);
+    g.ready(n);
+    let probe = g.probe(n, "out");
+    let level = |want: f32| probe.latest().map(|d| f32s(&d)[0]).filter(|v| *v == want).map(|_| ());
+    let edit = |change: serde_json::Value| {
+        let mut payload = j!({ "node": hex(n), "param": "control/value" });
+        payload.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+        let answer = g.call("node param edit", payload);
+        assert!(answer["error"].is_null(), "{answer}");
+    };
+
+    edit(j!({ "expression": "3 + 4" }));
+    g.until("the expression's value", |_| level(7.0));
+    edit(j!({ "value": 1 }));
+    g.until("the constant", |_| level(1.0));
+    edit(j!({ "mode": "expression" }));
+    g.until("the retained expression, back by its mode, runs", |_| level(7.0));
+
+    edit(j!({ "value": 1 }));
+    g.until("the constant again", |_| level(1.0));
+    assert_eq!(g.call("undo", j!({}))["changed"], j!(true));
+    g.until("the expression an undo brought back runs", |_| level(7.0));
+}
+
+/// Every evaluator of a process shares the one harness module, and an evaluation reads its time,
+/// range and state off that module's thread local. One made while another evaluates leaves the
+/// evaluation the call it set.
+#[test]
+fn an_evaluator_made_meanwhile_leaves_a_running_evaluation_its_call() {
+    let evaluator = PyExprEvaluator::new().unwrap();
+    let wave = evaluator.compile("lfo(vmin=0, vmax=1)").unwrap();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let refused = std::thread::scope(|s| {
+        s.spawn(|| {
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                PyExprEvaluator::new().unwrap();
+            }
+        });
+        let refused = (0..20_000).find_map(|_| {
+            let ctx = EvalCtx { locals: &[], t: 0.25, range: (2.0, 6.0), state: None };
+            evaluator.eval(wave.id, &ctx).map(|d| assert_eq!(control::number_of(&d), 1.0)).err()
+        });
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        refused
+    });
+    assert!(refused.is_none(), "an evaluation lost its call: {refused:?}");
 }

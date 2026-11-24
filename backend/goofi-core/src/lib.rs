@@ -6,25 +6,19 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-pub mod child;
-pub mod log;
 pub mod variables;
-pub mod home;
+pub mod control;
+pub mod drawing;
+pub mod ease;
 pub mod normalize;
 pub mod path;
-pub mod png;
 pub mod probe;
 pub mod reduce;
 pub mod scale;
 pub mod record;
-pub mod registry;
-pub mod session;
-pub mod startup;
+pub mod replay;
 pub mod stream;
-pub mod time;
 pub mod texture;
-pub mod turtle;
-pub mod worker;
 
 pub use indexmap;
 pub use stream::Stream;
@@ -147,6 +141,11 @@ fn f16_to_f32(bits: u16) -> f32 {
     if sign == 1 { -val } else { val }
 }
 
+/// `{prefix}{n}` for the first `n` from `start` that `taken` does not hold.
+pub fn fresh_name(prefix: &str, start: usize, taken: impl Fn(&str) -> bool) -> String {
+    (start..).map(|n| format!("{prefix}{n}")).find(|c| !taken(c)).expect("an unbounded counter finds a free name")
+}
+
 /// Reinterpret a foreign little-endian buffer as f32 LE bytes; the flag is false when no cast ran.
 pub fn cast_to_f32(src: SrcDtype, bytes: &[u8]) -> Result<(Vec<u8>, bool)> {
     let sz = src.itemsize();
@@ -180,24 +179,35 @@ pub fn warn_cast_once(warned: &mut std::collections::HashSet<SrcDtype>, slot: &s
     true
 }
 
-/// A row-major, little-endian, contiguous f32 array; the buffer is `Arc`-shared, so fan-out
-/// is a refcount bump and a numpy or audio view can alias it zero-copy.
+/// A row-major, contiguous f32 LE array, a RANGE of an `Arc`-shared buffer: fan-out is a
+/// refcount bump, numpy aliases it, and a frame decoded off a wire views the bytes it arrived in.
 #[derive(Clone, Debug)]
 pub struct ArrayStore {
     shape: Vec<usize>,
-    buf: Arc<Vec<u8>>, // f32 LE, `buf.len() == nelem * 4`; a `Vec` so a built buffer moves in uncopied
+    buf: Arc<Vec<u8>>, // f32 LE; a `Vec` so a built buffer moves in uncopied
+    samples: std::ops::Range<usize>, // `samples.len() == nelem * 4`
 }
 
 impl ArrayStore {
     /// Build without normalization — the caller guarantees `buf.len() == nelem * 4`.
     pub fn new(shape: Vec<usize>, buf: Arc<Vec<u8>>) -> ArrayStore {
-        ArrayStore { shape, buf }
+        let samples = 0..buf.len();
+        ArrayStore { shape, buf, samples }
+    }
+    /// The samples at `samples` of `buf`, the rest of which is the wire around them: the caller
+    /// guarantees the range is within `buf` and `samples.len() == nelem * 4`.
+    pub fn view(shape: Vec<usize>, buf: Arc<Vec<u8>>, samples: std::ops::Range<usize>) -> ArrayStore {
+        ArrayStore { shape, buf, samples }
     }
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buf
+        &self.buf[self.samples.clone()]
+    }
+    /// The samples, each a little-endian f32.
+    pub fn values(&self) -> impl Iterator<Item = f32> + '_ {
+        self.as_bytes().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
     pub fn ndim(&self) -> usize {
         self.shape.len()
@@ -225,6 +235,9 @@ impl Axis {
         self.coords.is_none()
     }
 }
+
+/// Array rank is a u8 on the wire, so no dimension at or above this bound can carry labels.
+pub const MAX_RANK: usize = 256;
 
 /// Positional per-dimension labels; trailing unlabeled dimensions may be omitted (`len <= ndim`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -255,6 +268,10 @@ impl Axes {
         }
         self.0[dim] = axis;
         self
+    }
+    /// `with` for a `dim` read off a wire: `None` when no array can have that dimension.
+    pub fn with_checked(self, dim: usize, axis: Axis) -> Option<Axes> {
+        (dim < MAX_RANK).then(|| self.with(dim, axis))
     }
 
     /// Subset dimension `dim`'s coords to `indices`; a missing index is skipped.
@@ -327,14 +344,34 @@ pub enum MetaValue {
 /// Reserved builtin meta keys — always present in a [`Meta`], `Null`/empty when unset.
 pub const META_SFREQ: &str = "sfreq";
 pub const META_UFREQ: &str = "ufreq";
-pub const META_TIME: &str = "time";
+/// Patch seconds when the run that made the frame began, and when the frame left the node.
+pub const META_PROCSTART: &str = "procstart";
+pub const META_PROCEND: &str = "procend";
 pub const META_INDEX: &str = "index";
+/// The node that made the frame, as its uid's hex, and the output it left by: what a consumer
+/// copies into its own `source`, and what a recording or a viewer has of where a frame came from.
+pub const META_NODE: &str = "node";
+pub const META_SLOT: &str = "slot";
+/// The frames this frame was made from: per input slot, the frame the node held there as it ran,
+/// each as `node`, `slot`, `index`, `procstart` and `procend` — the immediate inputs, and nothing
+/// behind them. Unset for a frame made from no input.
+pub const META_SOURCE: &str = "source";
+
+/// One run's stamps, the same on every frame it emits: the patch seconds it began and ended at,
+/// the node's count of emits (a gap means a frame was LOST) and its measured rate.
+pub struct Run {
+    pub procstart: f64,
+    pub procend: f64,
+    pub index: u64,
+    pub ufreq: Option<f64>,
+}
 pub const META_CHANNELS: &str = "channels";
 /// How far a DERIVED timeline stands ahead of patch time, in seconds, as the engine last measured
 /// it. Only an engine that counts rather than reads sets it.
 pub const META_DRIFT: &str = "drift";
 pub const META_REDUCED: &str = "reduced";
-const BUILTIN_KEYS: [&str; 6] = [META_SFREQ, META_UFREQ, META_TIME, META_INDEX, META_CHANNELS, META_REDUCED];
+const BUILTIN_KEYS: [&str; 10] =
+    [META_SFREQ, META_UFREQ, META_PROCSTART, META_PROCEND, META_INDEX, META_NODE, META_SLOT, META_SOURCE, META_CHANNELS, META_REDUCED];
 
 static EMPTY_AXES: Axes = Axes(Vec::new());
 
@@ -354,8 +391,12 @@ impl Meta {
         let mut m = IndexMap::with_capacity(BUILTIN_KEYS.len());
         m.insert(META_SFREQ.to_string(), MetaValue::Null);
         m.insert(META_UFREQ.to_string(), MetaValue::Null);
-        m.insert(META_TIME.to_string(), MetaValue::Null);
+        m.insert(META_PROCSTART.to_string(), MetaValue::Null);
+        m.insert(META_PROCEND.to_string(), MetaValue::Null);
         m.insert(META_INDEX.to_string(), MetaValue::Null);
+        m.insert(META_NODE.to_string(), MetaValue::Null);
+        m.insert(META_SLOT.to_string(), MetaValue::Null);
+        m.insert(META_SOURCE.to_string(), MetaValue::Null);
         m.insert(META_CHANNELS.to_string(), MetaValue::Axes(Axes::new()));
         m.insert(META_REDUCED.to_string(), MetaValue::Null);
         Meta(m)
@@ -388,17 +429,38 @@ impl Meta {
     pub fn set_ufreq(&mut self, v: Option<f64>) {
         self.set(META_UFREQ, v.map_or(MetaValue::Null, MetaValue::Float));
     }
-    /// Patch seconds at the process tick that produced this frame.
-    pub fn time(&self) -> Option<f64> {
-        as_f64(self.0.get(META_TIME))
+    /// Patch seconds when the run that made this frame began.
+    pub fn procstart(&self) -> Option<f64> {
+        as_f64(self.0.get(META_PROCSTART))
     }
-    pub fn set_time(&mut self, v: Option<f64>) {
-        self.set(META_TIME, v.map_or(MetaValue::Null, MetaValue::Float));
+    pub fn set_procstart(&mut self, v: Option<f64>) {
+        self.set(META_PROCSTART, v.map_or(MetaValue::Null, MetaValue::Float));
+    }
+    /// Patch seconds when this frame left its node.
+    pub fn procend(&self) -> Option<f64> {
+        as_f64(self.0.get(META_PROCEND))
+    }
+    pub fn set_procend(&mut self, v: Option<f64>) {
+        self.set(META_PROCEND, v.map_or(MetaValue::Null, MetaValue::Float));
     }
     pub fn index(&self) -> Option<u64> {
         match self.0.get(META_INDEX) {
             Some(MetaValue::Uint(u)) => Some(*u),
             Some(MetaValue::Int(i)) if *i >= 0 => Some(*i as u64),
+            _ => None,
+        }
+    }
+    /// The node and the output this frame left by, once an engine stamped it.
+    pub fn origin(&self) -> Option<(&str, &str)> {
+        match (self.0.get(META_NODE), self.0.get(META_SLOT)) {
+            (Some(MetaValue::Str(node)), Some(MetaValue::Str(slot))) => Some((node, slot)),
+            _ => None,
+        }
+    }
+    /// The frames this frame was made from, by input slot; see [`META_SOURCE`].
+    pub fn source(&self) -> Option<&BTreeMap<String, MetaValue>> {
+        match self.0.get(META_SOURCE) {
+            Some(MetaValue::Map(m)) => Some(m),
             _ => None,
         }
     }
@@ -487,16 +549,37 @@ pub enum Value {
     Array(ArrayStore),
     Str(Arc<str>),
     Table(Arc<IndexMap<String, Data>>),
+    /// A value as a function of the patch time: a compiled expression of `t`, marshaled, that the
+    /// reader runs through the evaluator at the instant it reads. Its constants are its own.
+    Functional(Arc<[u8]>),
 }
 
+/// Two values are equal when they say the same thing; a texture or a table only when it is one.
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Array(a), Value::Array(b)) => a.shape() == b.shape() && a.as_bytes() == b.as_bytes(),
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Table(a), Value::Table(b)) => Arc::ptr_eq(a, b),
+            (Value::Texture(a), Value::Texture(b)) => Arc::ptr_eq(a, b),
+            (Value::Functional(a), Value::Functional(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// The GOOF dtype tag bytes by name: a frame's sixth byte indexes this table.
+pub const DTYPE_NAMES: [&str; 5] = ["ARRAY", "STRING", "TABLE", "TEXTURE", "FUNCTIONAL"];
+
 impl Value {
-    /// The GOOF dtype tag byte (0=ARRAY, 1=STRING, 2=TABLE).
+    /// The GOOF dtype tag byte, an index into [`DTYPE_NAMES`].
     pub fn dtype_tag(&self) -> u8 {
         match self {
             Value::Array(_) => 0,
             Value::Str(_) => 1,
             Value::Table(_) => 2,
             Value::Texture(_) => 3,
+            Value::Functional(_) => 4,
         }
     }
 }
@@ -511,16 +594,17 @@ pub struct DataInner {
 #[derive(Clone, Debug)]
 pub struct Data(Arc<DataInner>);
 
-/// Non-array frames report 0 dims.
+/// Equal by VALUE, the stamps aside: what a variable asks when a write arrives.
+impl PartialEq for Data {
+    fn eq(&self, other: &Data) -> bool {
+        self.same(other) || self.0.value == other.0.value
+    }
+}
+
+/// Non-array frames report an empty shape.
 impl goofi_view::Reducible for Data {
     fn dtype_tag(&self) -> u8 {
         self.0.value.dtype_tag()
-    }
-    fn ndim(&self) -> usize {
-        match &self.0.value {
-            Value::Array(s) => s.shape().len(),
-            _ => 0,
-        }
     }
     fn shape(&self) -> &[usize] {
         match &self.0.value {
@@ -539,6 +623,10 @@ impl Data {
     pub fn value(&self) -> &Value {
         &self.0.value
     }
+    /// Whether the two are ONE frame — the same allocation, not two that say the same thing.
+    pub fn same(&self, other: &Data) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn meta(&self) -> &Meta {
         &self.0.meta
     }
@@ -555,12 +643,19 @@ impl Data {
         }))
     }
 
-    /// A copy with the engine-owned `index` and `ufreq` stamped on — overwritten, never inherited.
-    pub fn with_stamps(&self, time: f64, index: u64, ufreq: Option<f64>) -> Data {
+    /// A copy with the engine-owned stamps on — overwritten, never inherited: the run's, where
+    /// the frame left by, its `source` (`Null` for a frame made from no input) and no `drift`,
+    /// which only a counting engine's record carries.
+    pub fn with_stamps(&self, run: &Run, node: &str, slot: &str, source: MetaValue) -> Data {
         let mut meta = self.0.meta.clone();
-        meta.set_time(Some(time));
-        meta.set_index(Some(index));
-        meta.set_ufreq(ufreq);
+        meta.set_procstart(Some(run.procstart));
+        meta.set_procend(Some(run.procend));
+        meta.set_index(Some(run.index));
+        meta.set_ufreq(run.ufreq);
+        meta.0.shift_remove(META_DRIFT);
+        meta.set(META_NODE, MetaValue::Str(node.to_string()));
+        meta.set(META_SLOT, MetaValue::Str(slot.to_string()));
+        meta.set(META_SOURCE, source);
         Data(Arc::new(DataInner {
             value: self.0.value.clone(),
             meta,
@@ -581,8 +676,28 @@ impl Data {
         }))
     }
 
+    /// A functional: the marshaled code of a compiled expression of `t`.
+    pub fn functional(code: impl Into<Arc<[u8]>>, meta: Meta) -> Data {
+        Data(Arc::new(DataInner { value: Value::Functional(code.into()), meta }))
+    }
+
+    /// The code a functional carries, if this is one.
+    pub fn as_functional(&self) -> Option<&[u8]> {
+        match &self.0.value {
+            Value::Functional(code) => Some(code),
+            _ => None,
+        }
+    }
+
     /// Build an f32 array `Data`, promoting 0-d to 1-d and validating channel coords.
     pub fn array_f32(shape: Vec<usize>, buf: Vec<u8>, meta: Meta) -> Result<Data> {
+        let samples = 0..buf.len();
+        Data::array_shared(shape, Arc::new(buf), samples, meta)
+    }
+
+    /// An f32 array `Data` over the `samples` range of a shared buffer, validated as
+    /// [`Data::array_f32`] is: what a decoder builds so a frame keeps the bytes it arrived in.
+    pub fn array_shared(shape: Vec<usize>, buf: Arc<Vec<u8>>, samples: std::ops::Range<usize>, meta: Meta) -> Result<Data> {
         // Checked: a garbled shape could otherwise wrap `expect` down onto a short buffer.
         let nelem: usize = shape
             .iter()
@@ -591,10 +706,10 @@ impl Data {
         let expect = nelem
             .checked_mul(4) // f32 itemsize
             .ok_or_else(|| GoofiError::Invalid("array byte length overflows usize".into()))?;
-        if buf.len() != expect {
+        if samples.len() != expect || samples.end > buf.len() {
             return Err(GoofiError::Invalid(format!(
                 "buffer length {} != nelem {nelem} * 4 = {expect}",
-                buf.len(),
+                samples.len(),
             )));
         }
 
@@ -619,7 +734,7 @@ impl Data {
             }
         }
 
-        Ok(Data::array(ArrayStore::new(shape, Arc::new(buf)), meta))
+        Ok(Data::array(ArrayStore::view(shape, buf, samples), meta))
     }
 
     pub fn as_array(&self) -> std::result::Result<&ArrayStore, String> {
@@ -628,6 +743,7 @@ impl Data {
             Value::Array(a) => Ok(a),
             Value::Str(_) => Err("expected an array, got a string".into()),
             Value::Table(_) => Err("expected an array, got a table".into()),
+            Value::Functional(_) => Err("expected an array, got a functional".into()),
         }
     }
 
@@ -637,6 +753,7 @@ impl Data {
             Value::Str(s) => Ok(s),
             Value::Array(_) => Err("expected a string, got an array".into()),
             Value::Table(_) => Err("expected a string, got a table".into()),
+            Value::Functional(_) => Err("expected a string, got a functional".into()),
         }
     }
 
@@ -646,6 +763,7 @@ impl Data {
             Value::Table(t) => Ok(t),
             Value::Array(_) => Err("expected a table, got an array".into()),
             Value::Str(_) => Err("expected a table, got a string".into()),
+            Value::Functional(_) => Err("expected a table, got a functional".into()),
         }
     }
 
@@ -716,10 +834,10 @@ impl SlotType {
             SlotType::Texture => "TEXTURE",
         }
     }
-    /// Whether an output of this kind may feed an input of `into`: the same kind, or an
-    /// engine-local kind into an array, which that engine's tap turns into frames.
+    /// Whether an output of this kind may feed an input of `into`: the same kind only. A plane
+    /// is crossed by a node that declares the foreign kind on an input, never by a bare cable.
     pub fn feeds(self, into: SlotType) -> bool {
-        self == into || (self.engine_local().is_some() && into == SlotType::Array)
+        self == into
     }
 
     /// How a node carrying this kind is written — and, by having an answer at all, that the kind
@@ -738,19 +856,53 @@ impl SlotType {
     }
 }
 
+/// What four numbers are to their reader: plain, an RGBA colour the inspector picks, or an ADSR
+/// envelope (attack, decay and release in seconds, sustain in 0..1) it draws with four knobs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+pub enum Face {
+    #[default]
+    Plain,
+    Color,
+    Envelope,
+}
+
+/// The envelope a widget or an attribute is born with: a short pluck, held at full level.
+pub const ENVELOPE_BORN: [f64; 4] = [0.01, 0.1, 1.0, 0.3];
+
+impl Face {
+    pub const ALL: [Face; 3] = [Face::Plain, Face::Color, Face::Envelope];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Face::Plain => "plain",
+            Face::Color => "color",
+            Face::Envelope => "envelope",
+        }
+    }
+
+    /// The dimensions a face fixes: four for a colour or an envelope; none for plain numbers.
+    pub fn dims(self) -> Option<usize> {
+        match self {
+            Face::Plain => None,
+            Face::Color | Face::Envelope => Some(4),
+        }
+    }
+}
+
 /// A typed parameter descriptor; the `common` scheduling group is a RunPolicy, not a `Param`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Param {
-    Float {
-        value: f64,
+    /// A number, or a vector of them: one value per dimension, inside bounds they all share.
+    /// `int` rounds every value; `face` says what four of them are, a colour or an envelope.
+    Num {
+        value: Vec<f64>,
         vmin: f64,
         vmax: f64,
-    },
-    Int {
-        value: i64,
-        vmin: i64,
-        vmax: i64,
+        int: bool,
         options: Vec<i64>,
+        #[serde(default)]
+        face: Face,
     },
     Bool {
         value: bool,
@@ -768,10 +920,20 @@ pub enum Param {
 
 impl Param {
     pub fn float(value: f64, vmin: f64, vmax: f64) -> Param {
-        Param::Float { value, vmin, vmax }
+        Param::Num { value: vec![value], vmin, vmax, int: false, options: Vec::new(), face: Face::Plain }
     }
     pub fn int(value: i64, vmin: i64, vmax: i64) -> Param {
-        Param::Int { value, vmin, vmax, options: Vec::new() }
+        Param::Num { value: vec![value as f64], vmin: vmin as f64, vmax: vmax as f64, int: true, options: Vec::new(), face: Face::Plain }
+    }
+    pub fn vec(value: Vec<f64>, vmin: f64, vmax: f64) -> Param {
+        Param::Num { value, vmin, vmax, int: false, options: Vec::new(), face: Face::Plain }
+    }
+    pub fn color(rgba: [f64; 4]) -> Param {
+        Param::Num { value: rgba.to_vec(), vmin: 0.0, vmax: 1.0, int: false, options: Vec::new(), face: Face::Color }
+    }
+    /// An ADSR envelope; `vmax` bounds the three times in seconds, the sustain is in 0..1.
+    pub fn envelope(adsr: [f64; 4], vmax: f64) -> Param {
+        Param::Num { value: adsr.to_vec(), vmin: 0.0, vmax, int: false, options: Vec::new(), face: Face::Envelope }
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }
@@ -784,19 +946,25 @@ impl Param {
         }
     }
 
+    /// The first dimension of a number; a bool as 0 or 1.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Param::Float { value, .. } => Some(*value),
-            Param::Int { value, .. } => Some(*value as f64),
+            Param::Num { value, .. } => value.first().copied(),
             Param::Bool { value } => Some(if *value { 1.0 } else { 0.0 }),
             _ => None,
         }
     }
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Param::Int { value, .. } => Some(*value),
-            Param::Float { value, .. } => Some(*value as i64),
+            Param::Num { value, .. } => value.first().map(|v| v.round() as i64),
             Param::Bool { value } => Some(*value as i64),
+            _ => None,
+        }
+    }
+    /// Every dimension of a number.
+    pub fn as_vec(&self) -> Option<&[f64]> {
+        match self {
+            Param::Num { value, .. } => Some(value),
             _ => None,
         }
     }
@@ -812,18 +980,35 @@ impl Param {
             _ => None,
         }
     }
+    /// How many dimensions a number has; one for everything else.
+    pub fn dims(&self) -> usize {
+        match self {
+            Param::Num { value, .. } => value.len().max(1),
+            _ => 1,
+        }
+    }
+    /// Dimension `k` as a scalar of this param's kind and bounds — what an element binding is
+    /// evaluated against. A scalar is its own one dimension; a colour's element is no colour.
+    pub fn dim(&self, k: usize) -> Param {
+        match self {
+            Param::Num { value, vmin, vmax, int, options, .. } => Param::Num {
+                value: vec![value.get(k).copied().unwrap_or(0.0)],
+                vmin: *vmin,
+                vmax: *vmax,
+                int: *int,
+                options: options.clone(),
+                face: Face::Plain,
+            },
+            other => other.clone(),
+        }
+    }
 }
 
 /// What a sidecar has already said, key by key, so the next line can be a DELTA against it.
 pub type Said = BTreeMap<String, Vec<u8>>;
 
-/// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them.
-/// Answers whether anything was written.
-///
-/// Two entries never reach a line: a `Null`, which says nothing, and the instant, because a
-/// sidecar's own `t` is the one owner of that. Everything else is written once and carried
-/// forward by the reader — `sfreq` and the channel names are the stream's, not the frame's, and
-/// repeating them per frame cost more than the samples on a narrow fast stream.
+/// Write the entries of `meta` that MOVED since `said` as a JSON object, and remember them: the
+/// reader carries a key forward until a `null` UNSETS it. `procstart` stays out; `t` owns it.
 pub fn write_meta_delta(
     out: &mut impl std::io::Write,
     meta: &Meta,
@@ -832,7 +1017,7 @@ pub fn write_meta_delta(
 ) -> std::io::Result<bool> {
     let mut opened = false;
     for (key, value) in meta.iter() {
-        if key == META_TIME || matches!(value, MetaValue::Null) || !in_json(value) {
+        if key == META_PROCSTART || matches!(value, MetaValue::Null) || !in_json(value) {
             continue;
         }
         scratch.clear();
@@ -855,6 +1040,16 @@ pub fn write_meta_delta(
                 said.insert(key.clone(), scratch.clone());
             }
         }
+    }
+    // A key said before that is now gone, `Null` or unrepresentable: one `null` unsets it.
+    let gone: Vec<String> =
+        said.keys().filter(|k| meta.get(k).is_none_or(|v| !in_json(v))).cloned().collect();
+    for key in gone {
+        out.write_all(if opened { b"," } else { b"{" })?;
+        serde_json::to_writer(&mut *out, &key).map_err(std::io::Error::other)?;
+        out.write_all(b":null")?;
+        opened = true;
+        said.remove(&key);
     }
     if opened {
         out.write_all(b"}")?;

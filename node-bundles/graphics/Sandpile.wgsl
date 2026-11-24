@@ -3,10 +3,10 @@
   "tags": ["image", "generator", "simulation"],
   "state": ["grains"],
   "params": [
-    {"group": "sandpile", "name": "threshold", "kind": "int", "default": 4, "min": 2, "max": 8},
-    {"group": "sandpile", "name": "rain", "kind": "float", "default": 0.002, "min": 0.0, "max": 0.2},
-    {"group": "sandpile", "name": "start", "kind": "float", "default": 2.0, "min": 0.0, "max": 8.0},
-    {"group": "sandpile", "name": "seed", "kind": "float", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
+    {"group": "sandpile", "name": "threshold", "kind": "num", "int": true, "default": 4, "min": 2, "max": 8},
+    {"group": "sandpile", "name": "rain", "kind": "num", "default": 0.002, "min": 0.0, "max": 0.2},
+    {"group": "sandpile", "name": "start", "kind": "num", "default": 2.0, "min": 0.0, "max": 8.0},
+    {"group": "sandpile", "name": "seed", "kind": "num", "default": 0.0, "min": 0.0, "max": 1000.0} ] }
 */
 fn hash3(v: vec3f) -> f32 {
     let q = vec3u(vec3i(v) + 65536);

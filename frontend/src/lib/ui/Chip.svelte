@@ -23,10 +23,9 @@
 <button
 	{...rest}
 	{type}
-	class={`ui-chip t-${tone} ${density === 'chrome' ? 'd-chrome ' : ''}${klass}`.trim()}
+	class={`ui-chip pill-type t-${tone} ${density === 'chrome' ? 'd-chrome ' : ''}${klass}`.trim()}
 >
-	<!-- Same ink wrapper as Badge: the glyph run alone, for the gallery's ink pin to measure. -->
-	<span class="ui-chip-ink">{@render children?.()}</span>
+	{@render children?.()}
 </button>
 
 <style>
@@ -38,12 +37,6 @@
 		padding: var(--space-1) var(--space-4);
 		border: 1px solid transparent;
 		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: var(--fs-micro);
-		font-weight: 600;
-		line-height: 1;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		white-space: nowrap;
 		cursor: pointer;
 		transition:
@@ -66,17 +59,11 @@
 			min-height: var(--hit);
 		}
 	}
-	.ui-chip-ink {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2);
-	}
 	.ui-chip:disabled {
 		opacity: var(--disabled-opacity);
 		cursor: not-allowed;
 	}
 	.ui-chip:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
 		outline-offset: 2px;
 	}
 
@@ -91,40 +78,13 @@
 		background: var(--hover-fill);
 		color: var(--text);
 	}
-	.ui-chip.t-accent {
-		background: var(--accent-fill);
-		border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-		color: var(--accent);
+	.ui-chip:not(.t-neutral) {
+		background: var(--tone-fill);
+		border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+		color: var(--tone);
 	}
-	.ui-chip.t-accent:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent) 28%, transparent);
-		border-color: var(--accent);
-	}
-	.ui-chip.t-success {
-		background: var(--success-fill);
-		border-color: color-mix(in srgb, var(--success) 40%, transparent);
-		color: var(--success);
-	}
-	.ui-chip.t-success:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--success) 28%, transparent);
-		border-color: var(--success);
-	}
-	.ui-chip.t-warning {
-		background: var(--warning-fill);
-		border-color: color-mix(in srgb, var(--warning) 40%, transparent);
-		color: var(--warning);
-	}
-	.ui-chip.t-warning:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--warning) 28%, transparent);
-		border-color: var(--warning);
-	}
-	.ui-chip.t-danger {
-		background: var(--danger-fill);
-		border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-		color: var(--danger);
-	}
-	.ui-chip.t-danger:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--danger) 28%, transparent);
-		border-color: var(--danger);
+	.ui-chip:not(.t-neutral):hover:not(:disabled) {
+		background: color-mix(in srgb, var(--tone) 28%, transparent);
+		border-color: var(--tone);
 	}
 </style>

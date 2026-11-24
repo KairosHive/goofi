@@ -1,17 +1,15 @@
-<!--
-  ParamField — one inspector row: the name, and the one control `controlKind(descriptor)` chooses.
-  That control is the row in EVERY mode — driven, it is disabled and reads out what the source
-  produces, since the param's own face is what a reader recognises. The entry background opens a second row
-  holding the three-way switch — constant, expression, reference — and the editor of whichever
-  source is active. `vmin/vmax` are SOFT bounds: they scope only the Slider's track, and the
-  NumberInput beside it commits what is typed.
--->
+<!-- One param row, every part of it named by `rowPlan`: the face control, disabled when a source
+     drives it, and the open region with the list or the entries, the source editor and the foot.
+     A row with no descriptor has no face: its label and `more` alone, as a transition's row is. -->
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
-	import type { ParamDescriptor, ParamMode, SourcePatch } from '$lib/api/types';
+	import { PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import {
 		Field,
 		Slider,
+		ColorPicker,
+		EnvelopePicker,
 		NumberInput,
 		Toggle,
 		Select,
@@ -21,114 +19,222 @@
 		Segmented
 	} from '$lib/ui';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { controlKind } from './controlKind';
-	import { sourceForMode } from './paramSeed';
+	import { drag, dropTarget, takes, type DragSource, type DragTag, type DropTargetOptions } from '$lib/drag';
+	import { stepOf } from '$lib/ui/knob';
+	import { elementName as nameOf, isNumeric, rowPlan, type RowPlan } from './controlKind';
+	import { numValue, numValues } from '$lib/api/types';
+	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
 	import MidiLearn from './MidiLearn.svelte';
-	import RefPicker from './RefPicker.svelte';
 
 	let {
 		paramName,
+		label = paramName,
 		descriptor,
+		note,
+		more,
+		open: opened,
+		onToggle,
 		onCommit,
+		onPreview,
 		onSetSource,
+		onCommitElement,
+		onSetElementSource,
 		onRefresh,
 		onPulse,
 		refreshing = false,
 		selfName,
-		dropZone = null,
-		class: klass = '',
+		machine,
+		accept,
+		viewKey = '',
+		literal = false,
 		...rest
 	}: HTMLAttributes<HTMLDivElement> & {
 		paramName: string;
-		descriptor: ParamDescriptor;
+		/** What the row is called; a slot of a list wears its name inside the section. */
+		label?: string;
+		/** The value the row shows and edits; absent, the row has no face. */
+		descriptor?: ParamDescriptor;
+		/** A muted note after the face: what the row sums up. */
+		note?: string;
+		/** What the open row shows besides the descriptor's own parts. */
+		more?: Snippet;
+		/** Whether the row is open, where the parent owns that with `onToggle`; else the row does. */
+		open?: boolean;
+		onToggle?: () => void;
 		onCommit: (value: unknown) => unknown;
-		onSetSource: (source: SourcePatch) => void;
+		/** A step of a drag on the value, ahead of its commit. */
+		onPreview?: (value: number | number[]) => unknown;
+		/** Absent on a literal row, which takes no source. */
+		onSetSource?: (source: SourcePatch) => void;
+		/** One element of a vector: its literal into its dimension, and its own source. */
+		onCommitElement?: (index: number, value: number) => unknown;
+		onSetElementSource?: (index: number, source: SourcePatch) => void;
 		onRefresh?: () => void;
 		onPulse?: () => void;
 		refreshing?: boolean;
 		/** The node's display name, handed to the expression editor as `me`. */
 		selfName?: string;
-		/** This row's key as a node-drop target; null while it is not one. */
-		dropZone?: string | null;
+		/** The machine whose setting this row is: its expression reads the machine's own scope. */
+		machine?: string;
+		/** An exception to what the row takes by its type, such as the node it belongs to. */
+		accept?: (source: DragSource) => boolean;
+		/** `uid/group/name`, under which a colour's view (picker or vector) is remembered. */
+		viewKey?: string;
+		/** A value alone — a machine attribute's — with no source to pick, trigger or learn. */
+		literal?: boolean;
 	} = $props();
 
 	const learnId = $props.id();
 	const uiStore = ui();
 	let row = $state<HTMLDivElement>();
-	const over = $derived(
-		(dropZone !== null && uiStore.nodeDragZone === dropZone) ||
-		(uiStore.variableDrag !== null && uiStore.variableDrag.target === row)
+	const engine = drag();
+	/** The form the row takes a dropped value in: text for a string, a number for the rest. */
+	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : 'number');
+	const target = $derived<DropTargetOptions | null>(
+		literal || !descriptor
+			? null
+			: {
+					tags: [tag],
+					accept,
+					onDrop: async ({ source, tag, at }) => {
+						const expression = await source.expression?.(tag, at);
+						if (expression) onSetSource?.({ expression });
+					}
+				}
 	);
+	const armed = $derived(target !== null && engine.source !== null && takes(target, engine.source) !== null);
+	const over = $derived(row !== undefined && engine.isOver(row));
 
-	function acceptVariable(el: HTMLDivElement): { destroy(): void } {
-		const drop = (event: Event): void => {
-			picking = false;
-			onSetSource({ expression: (event as CustomEvent<string>).detail });
-		};
-		el.addEventListener('variable-expression-drop', drop);
-		return { destroy: () => el.removeEventListener('variable-expression-drop', drop) };
+	let ownOpen = $state(false);
+	const open = $derived(onToggle ? opened === true : ownOpen);
+	function toggle(): void {
+		if (onToggle) onToggle();
+		else ownOpen = !ownOpen;
 	}
 
-	const kind = $derived(controlKind(descriptor));
+	/** A row with nothing of its own to show. */
+	const NONE: Omit<RowPlan, 'face'> & { face: null } = { face: null, viewSwitch: false, disabled: false, list: false, elements: false, source: false, foot: false };
+	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
+	const plan = $derived(descriptor ? rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }) : NONE);
+	/** Whether the label has anything to open. */
+	const openable = $derived(plan.list || plan.elements || plan.source || plan.foot || more !== undefined);
+	const dims = $derived(descriptor && isNumeric(descriptor) ? numValues(descriptor).length : 1);
+	/** Each element's own source, which an entry row shows beside its number. */
+	const elements = $derived(descriptor?.elements ?? []);
+	const elementDisabled = (i: number): boolean => driven || (elements[i]?.mode ?? 'constant') !== 'constant';
 
-	let open = $state(false);
+	const elementName = (i: number): string => (descriptor ? nameOf(descriptor, i) : String(i));
+	function chooseElement(i: number, mode: ParamMode): void {
+		const el = elements[i];
+		if (!el || mode === el.mode) return;
+		const seed = { ...descriptor, value: numValues(num!)[i], expression: el.expression } as ParamDescriptor;
+		onSetElementSource?.(i, sourceForMode(seed, mode));
+	}
+	/** A typed `[a, b, c, d]`, or bare numbers apart; short lists fill with zero, long ones are cut. */
+	function parseList(text: string): number[] | null {
+		const parts = text.replace(/[[\]]/g, '').split(/[,\s]+/).filter(Boolean).map(Number);
+		if (parts.length === 0 || parts.some((n) => !Number.isFinite(n))) return null;
+		return Array.from({ length: dims }, (_, i) => parts[i] ?? 0);
+	}
 
-	// `step` uses the declared bounds; a native `'any'` would
-	// NaN the NumberInput's scrub arithmetic.
-	const num = $derived(descriptor.type === 'float' || descriptor.type === 'int' ? descriptor : null);
-	const step = $derived(num ? (num.type === 'int' ? 1 : Math.max((num.vmax - num.vmin) / 200, 1e-6)) : 1);
+	// `step` uses the declared bounds, so the arrow keys move in rungs that fit the range.
+	const num = $derived(descriptor && isNumeric(descriptor) ? descriptor : null);
+	const step = $derived(num ? (num.int ? 1 : stepOf(num.vmin, num.vmax)) : 1);
+	/** The vector with one dimension replaced, which is what a dimension's control commits. */
+	const withDim = (i: number, v: number): number[] => numValues(num!).map((held, k) => (k === i ? v : held));
 
-	const options = $derived(descriptor.type === 'string' ? (descriptor.options ?? []) : []);
+	const options = $derived(descriptor?.type === 'string' ? (descriptor.options ?? []) : []);
 
-	const driven = $derived(descriptor.mode !== 'constant');
-	// A reference chosen before one is retained shows the picker without a record to show yet.
-	let picking = $state(false);
-	// The MODE, not the kind: a pulse is a button in every mode, so its kind cannot name its source.
-	const showPicker = $derived(descriptor.mode === 'reference' || picking);
-	const showSource = $derived(showPicker || descriptor.mode === 'expression');
-	// The error and preview belong to a source that IS live: a picker over a retained expression
-	// shows neither.
-	const shown = $derived(descriptor.mode === 'reference' || (descriptor.mode === 'expression' && !picking));
-	$effect(() => {
-		if (descriptor.mode === 'reference') picking = false;
-	});
+	const driven = $derived(descriptor !== undefined && descriptor.mode !== 'constant');
+
+	const MODE_TITLE: Record<ParamMode, string> = {
+		constant: 'a value set here by hand, unchanging until you edit it',
+		expression: "a bare nd('node'), vars.group.element or sm('playhead').x copied as it comes, or Python over them"
+	};
 
 	function choose(mode: ParamMode): void {
-		picking = false;
-		if (mode === descriptor.mode) return;
-		if (mode === 'reference' && !descriptor.reference) {
-			picking = true;
-		} else {
-			onSetSource(sourceForMode(descriptor, mode));
-		}
+		if (descriptor && mode !== descriptor.mode) onSetSource?.(sourceForMode(descriptor, mode));
 	}
 </script>
 
-<div
-	class={`pf-param ${klass}`.trim()}
-	bind:this={row}
-	use:acceptVariable
-	data-variable-drop
-	class:armed={dropZone !== null || uiStore.variableDrag !== null}
-	class:over
-	class:open
-	data-node-drop={dropZone}
-	{...rest}
->
+<div class="pf-param" bind:this={row} use:dropTarget={target} class:armed class:over class:open {...rest}>
+	<!-- Which face a vector wears, L or I: one list with one source (a colour's picker over it), or
+	     one row per entry with a source each. It sits at the row's end in both, so it stays put. -->
+	{#snippet viewSwitch()}
+		<Segmented
+			class="pf-view"
+			value={plan.elements ? 'individual' : 'list'}
+			segments={[
+				{ id: 'list', label: 'L', name: 'List', title: 'List — the values as one list, with one source for all', testid: 'param-view-list' },
+				{ id: 'individual', label: 'I', name: 'Individual', title: 'Individual — one row per entry, each with a source of its own', testid: 'param-view-individual' }
+			]}
+			onChange={(v) => {
+				if (v === 'individual') uiStore.paramView[viewKey] = 'individual';
+				else delete uiStore.paramView[viewKey];
+			}}
+			aria-label={`${paramName} view`}
+			data-testid="param-view"
+		/>
+	{/snippet}
+
 	<Field
-		label={paramName}
-		doc={descriptor.doc ?? undefined}
+		{label}
+		doc={descriptor?.doc ?? undefined}
 		expanded={open}
 		stretchSummary
-		onExpand={() => (open = !open)}
+		onExpand={openable ? toggle : undefined}
 	>
 		<!-- `display: contents` so the face inherits WITHOUT laying out: Field requires paired controls to
 		     be its direct children, and a real box would take them out of the @container column-flip. -->
 		<div class="pf-value">
-			{#if num}
+			{#if !descriptor}
+				<!-- No face: the note alone, where a value would sit. -->
+			{:else if num && plan.face === 'color'}
+				<ColorPicker
+					value={numValues(num)}
+					onChange={onCommit}
+					onInput={onPreview}
+					disabled={plan.disabled}
+					title={plan.disabled && !driven ? 'An entry has a source of its own; see the individual view' : undefined}
+					data-param-edit
+					data-testid="param-color"
+				/>
+				{@render viewSwitch()}
+			{:else if num && plan.face === 'envelope'}
+				<!-- A range that admits -1 lets the release hold. -->
+				<EnvelopePicker
+					value={numValues(num)}
+					max={num.vmax}
+					hold={num.vmin < 0}
+					onChange={onCommit}
+					onInput={onPreview}
+					disabled={plan.disabled}
+					label={paramName}
+					data-param-edit
+					data-testid="param-envelope"
+				/>
+				{@render viewSwitch()}
+			{:else if num && plan.face === 'vector'}
+				<!-- One number per dimension, sharing the row's width as the picker would; each commits
+				     the whole vector. -->
+				<div class="pf-vector" data-testid="param-vector">
+					{#each numValues(num) as held, i (i)}
+						<NumberInput
+							class="pf-fill"
+							value={held}
+							onChange={(v) => onCommit(withDim(i, v))}
+							{step}
+							disabled={elementDisabled(i)}
+							data-param-edit
+							data-testid={`param-number-${i}`}
+						/>
+					{/each}
+				</div>
+				{#if plan.viewSwitch}{@render viewSwitch()}{/if}
+			{:else if num}
 				<!-- SOFT bounds → Slider only; the NumberInput is UNBOUNDED (the engine does not clamp on set). -->
-				{#if num.type === 'int' && num.options?.length}
+				{#if num.int && num.options?.length}
 					<Segmented
 						value={String(num.value)}
 						segments={num.options.map((value) => ({ id: String(value), label: String(value) }))}
@@ -139,8 +245,9 @@
 					/>
 				{:else}
 				<Slider
-					value={num.value}
+					value={numValue(num)}
 					onChange={onCommit}
+					onInput={onPreview}
 					min={num.vmin}
 					max={num.vmax}
 					{step}
@@ -149,15 +256,14 @@
 				/>
 				{/if}
 				<NumberInput
-					value={num.value}
+					value={numValue(num)}
 					onChange={onCommit}
 					{step}
-					scrub
 					disabled={driven}
 					data-param-edit
 					data-testid="param-number"
 				/>
-			{:else if kind === 'toggle'}
+			{:else if plan.face === 'toggle'}
 				<Toggle
 					value={Boolean(descriptor.value)}
 					onChange={onCommit}
@@ -165,8 +271,7 @@
 					data-param-edit
 					data-testid="param-toggle"
 				/>
-			{:else if kind === 'select'}
-				<!-- A non-refreshable dropdown passes no `onRefresh`, so the Select renders no ⟳. -->
+			{:else if plan.face === 'select'}
 				<Select
 					{options}
 					value={String(descriptor.value)}
@@ -178,7 +283,7 @@
 					data-param-edit
 					data-testid="param-select"
 				/>
-			{:else if kind === 'text'}
+			{:else if plan.face === 'text'}
 				<TextInput
 					value={String(descriptor.value)}
 					onChange={onCommit}
@@ -186,97 +291,136 @@
 					data-param-edit
 					data-testid="param-text"
 				/>
-			{:else if kind === 'pulse'}
+			{:else if plan.face === 'pulse'}
 				<!-- A pulse holds no value to read out, so a driven one keeps its button: firing one by
 				     hand is a request, and the source fires on its own edges. -->
 				<Button class="pf-pulse" title="Fire one pulse" onclick={onPulse} data-param-edit data-testid="param-pulse">
 					pulse
 				</Button>
-			{:else if kind === 'unknown'}
+			{:else if plan.face === 'unknown'}
 				<code class="unknown" data-testid="param-unknown">{JSON.stringify(descriptor.value)}</code>
 			{/if}
+			{#if note}<span class="pf-note" data-testid="param-note">{note}</span>{/if}
 		</div>
 	</Field>
 
 	{#if open}
 		<div class="pf-more" data-testid="param-more">
-			{#if showSource}
-				<div class="src-region">
-					{#if showPicker}
-						<RefPicker
-							value={descriptor.reference}
-							paramType={descriptor.type}
-							onCommit={(reference) => onSetSource({ reference })}
-							testid="param-ref"
-						/>
-					{:else}
-						<ExprEditor
-							{selfName}
-							value={descriptor.expression ?? ''}
-							error={descriptor.error}
-							onCommit={(expression) => onSetSource({ expression })}
-							label={`${paramName} expression`}
-							placeholder="nd('oscillator0').out.data.mean()"
-							testid="param-expr-input"
-						/>
-					{/if}
+			{#if more}
+				<div class="pf-extra">{@render more()}</div>
+			{/if}
+			{#if num && plan.elements}
+				<!-- One row per element: its number, and a source of its own that drives that dimension. -->
+				<div class="pf-elements" data-testid="param-elements">
+					{#each numValues(num) as held, i (i)}
+						{@const el = elements[i]}
+						<div class="pf-element" data-testid={`param-element-${i}`}>
+							<div class="pf-element-row">
+								<span class="pf-element-name">{elementName(i)}</span>
+								<NumberInput
+									class="pf-fill"
+									value={el?.value ?? held}
+									onChange={(v) => onCommitElement?.(i, v)}
+									{step}
+									disabled={elementDisabled(i)}
+									title={driven ? 'A source drives the whole list; see the list view' : undefined}
+									data-param-edit
+									data-testid={`param-element-number-${i}`}
+								/>
+								<Segmented
+									value={el?.mode ?? 'constant'}
+									bad={!!el?.error}
+									segments={PARAM_MODES.map((id) => ({
+										id,
+										...MODE_FACE[id],
+										title: `${MODE_FACE[id].name} — ${MODE_TITLE[id]}`,
+										testid: `param-element-mode-${id}-${i}`
+									}))}
+									onChange={(m) => chooseElement(i, m as ParamMode)}
+									aria-label={`${paramName} ${elementName(i)} source`}
+								/>
+								<MidiLearn
+									label={`${paramName} ${elementName(i)}`}
+									target={`param:${learnId}:${i}`}
+									onLearn={(reference, index) => onSetElementSource?.(i, { expression: `${reference}[${index}]` })}
+									testid={`param-element-learn-${i}`}
+								/>
+							</div>
+							{#if el?.mode === 'expression'}
+								<ExprEditor
+									{selfName}
+									{machine}
+									value={el.expression ?? ''}
+									error={el.error}
+									onCommit={(expression) => onSetElementSource?.(i, { expression })}
+									label={`${paramName} ${elementName(i)} expression`}
+									placeholder="nd('oscillator0').out.data.mean()"
+									testid={`param-element-expr-${i}`}
+								/>
+							{/if}
+							{#if el?.error}
+								<div class="src-error" title={el.error}>
+									<span class="prefix"><Icon name="triangle-alert" /></span>
+									<span class="msg">{el.error}</span>
+								</div>
+							{/if}
+						</div>
+					{/each}
 				</div>
 			{/if}
-			{#if driven}
-				<Segmented
-					value={descriptor.triggers ? 'trig' : null}
-					segments={[
-						{
-							id: 'trig',
-							label: 'trig',
-							name: 'Trigger',
-							title: "Trigger — wake the node's process() each time this source changes",
-							testid: 'param-triggers'
-						}
-					]}
-					onChange={() => onSetSource({ triggers: !descriptor.triggers })}
+			{#if num && plan.list}
+				<!-- The whole list, typed as one: what an expression would hand the param. -->
+				<TextInput
+					class="pf-list"
+					value={`[${numValues(num).map((v) => Number(v.toFixed(4))).join(', ')}]`}
+					onChange={(text) => {
+						const list = parseList(text);
+						if (list) onCommit(list);
+					}}
+					disabled={plan.disabled}
+					spellcheck={false}
+					aria-label={`${paramName} as a list`}
+					data-testid="param-list"
 				/>
 			{/if}
-			<!-- `picking` lights the reference segment before one is committed, whatever the mode says. -->
+			{#if plan.source && descriptor}
+				<div class="src-region">
+					<ExprEditor
+						{selfName}
+						{machine}
+						value={descriptor.expression ?? ''}
+						error={descriptor.error}
+						onCommit={(expression) => onSetSource?.({ expression })}
+						label={`${paramName} expression`}
+						placeholder="nd('oscillator0').out.data.mean()"
+						testid="param-expr-input"
+					/>
+				</div>
+			{/if}
+			{#if plan.foot && descriptor}
 			<Segmented
-				value={picking ? 'reference' : descriptor.mode}
+				value={descriptor.mode}
 				bad={!!descriptor.error}
-				segments={[
-					{
-						id: 'constant',
-						label: 'C',
-						name: 'Constant',
-						title: 'Constant — a value set here by hand, unchanging until you edit it',
-						testid: 'param-mode-constant'
-					},
-					{
-						id: 'expression',
-						label: 'E',
-						name: 'Expression',
-						title: 'Expression — Python over nd(), variables and me, evaluated at control rate',
-						testid: 'param-mode-expression'
-					},
-					{
-						id: 'reference',
-						label: 'R',
-						name: 'Reference',
-						title: "Reference — one node's output slot, followed at that node's rate",
-						testid: 'param-mode-reference'
-					}
-				]}
+				segments={PARAM_MODES.map((id) => ({
+					id,
+					...MODE_FACE[id],
+					title: `${MODE_FACE[id].name} — ${MODE_TITLE[id]}`,
+					testid: `param-mode-${id}`
+				}))}
 				onChange={(m) => choose(m as ParamMode)}
 				aria-label={`${paramName} source`}
 				data-testid="param-mode"
 			/>
 			{#if num}
 				<MidiLearn label={paramName} target={`param:${learnId}`}
-					onLearn={(reference, index) => onSetSource({ reference: `${reference}[${index}]` })} />
+					onLearn={(reference, index) => onSetSource?.({ expression: `${reference}[${index}]` })} />
+			{/if}
 			{/if}
 		</div>
 	{/if}
 	<!-- Shown whether or not the source is unfolded: the value beside it is the literal standing in,
 	     and a failure is not a readout. -->
-	{#if shown && descriptor.error}
+	{#if driven && descriptor?.error}
 		<div class="src-error" title={descriptor.error} data-testid="param-source-error">
 			<span class="prefix"><Icon name="triangle-alert" /></span>
 			<span class="msg">{descriptor.error}</span>
@@ -304,11 +448,11 @@
 		position: relative;
 		pointer-events: auto;
 	}
-	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it. */
+	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it.
+	   It draws inside the box, which is the drop area, so the outlines of adjacent rows never overlap. */
 	.pf-param.armed {
 		outline: 1px dashed var(--border-strong);
-		outline-offset: var(--space-2);
-		border-radius: var(--radius-sm);
+		outline-offset: -1px;
 	}
 	.pf-param.over {
 		outline: 1px solid var(--accent);
@@ -332,6 +476,21 @@
 	}
 	/* The switches sit at the row's end, under the widget they act on; the reading they explain
 	   leads the row. */
+	/* The note sits after the face, muted, and takes the slack where there is no face. */
+	.pf-note {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-muted);
+		font-size: var(--fs-small);
+	}
+	/* What a parent opens in the row: its own form, on the row's full width. */
+	.pf-extra {
+		flex: 1 1 100%;
+		min-width: 0;
+	}
 	.pf-more {
 		pointer-events: none;
 		display: flex;
@@ -365,6 +524,52 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		min-width: 0;
+	}
+	.pf-value :global(.pf-view) {
+		flex: 0 0 auto;
+	}
+	.pf-vector {
+		flex: 1 1 auto;
+		min-width: 0;
+		display: flex;
+		gap: var(--space-2);
+		--number-width: 100%;
+	}
+	/* A number that shares its row: the picker's bar fills the row, so its numbers do too. */
+	.pf-vector :global(.pf-fill),
+	.pf-element-row :global(.pf-fill) {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+	.pf-elements {
+		flex: 1 1 100%;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.pf-element {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+	}
+	.pf-element-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		--number-width: 100%;
+	}
+	.pf-element-name {
+		flex: 0 0 1.5rem;
+		font-family: var(--font-mono);
+		font-size: var(--fs-small);
+		color: var(--text-muted);
+	}
+	/* The list shares its row with the source foot, and takes its own line only when the pane is
+	   too narrow for both. */
+	.pf-more :global(.pf-list) {
+		flex: 1 1 10rem;
+		min-width: 0;
+		font-family: var(--font-mono);
 	}
 	.unknown {
 		font-size: var(--fs-micro);

@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
 import { addNode, frameSummary, selectNode, updateParam, waitForNode } from '../lib/goofi';
 import { rawCall } from '../lib/harness';
+import { backendDoc } from '../lib/raw';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -53,11 +54,15 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		await waitForNode(page, osc);
 		await page.evaluate((u) => {
 			const g = (window as any).goofi;
-			g.commands.updateParam(u, 'output', 'mode', 'block');
-			g.commands.updateParam(u, 'output', 'sfreq', 64);
+			g.commands.updateParam(u, 'lfo', 'mode', 'block');
+			g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 		}, osc);
 		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
 		const body = card.locator('.slot-viewer .body');
+		// The pane is not blank: its grid dots are the texture "nothing painted" is judged against.
+		const first = (await card.boundingBox())!;
+		const bare = { x: first.x, y: first.y + first.height + 40, width: first.width, height: 60 };
+		const flatPane = (await inspect(page, bare)).contrast + 10;
 		let flat = '';
 		let ramp = '';
 		await expect(body).toBeVisible();
@@ -81,7 +86,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect(below.height, 'the card shrank away from where the plot was').toBeGreaterThan(20);
 			await expect
 				.poll(async () => (await inspect(page, below)).contrast, { message: 'the freed room is flat pane' })
-				.toBeLessThan(10);
+				.toBeLessThan(flatPane);
 			await card.getByLabel('toggle viewer').first().click();
 			await expect(body).toBeVisible();
 		});
@@ -103,7 +108,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const right = { x: cardBox.x + cardBox.width + 48, y: box.y, width: 24, height: box.height };
 			await expect
 				.poll(async () => (await inspect(page, right)).contrast)
-				.toBeLessThan(10);
+				.toBeLessThan(flatPane);
 			await page.mouse.wheel(0, 400);
 			await expect
 				.poll(async () => Math.abs((await card.boundingBox())!.width - before.width))
@@ -131,8 +136,45 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 				.toBeGreaterThan(40);
 			const above = { x: cardBox.x + 20, y: cardBox.y - 30, width: cardBox.width - 40, height: 20 };
 			const right = { x: cardBox.x + cardBox.width + 16, y: box.y, width: 24, height: box.height };
-			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(10);
-			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(10);
+			expect((await inspect(page, above)).contrast, 'nothing painted above the card').toBeLessThan(flatPane);
+			expect((await inspect(page, right)).contrast, 'nothing painted beside the card').toBeLessThan(flatPane);
+		});
+
+		await test.step('four docked viewers beside the editor leave the card its plot, and it still pans', async () => {
+			// A worker may hold four WebGL contexts, and the editor with four panels is five surfaces:
+			// one shared context draws them all, or the editor's, the oldest, is the one lost.
+			const editor = await page.evaluate(() => (window as any).goofi.query.panels()[0].panelId as string);
+			const docked: string[] = [];
+			for (let i = 0; i < 4; i++) {
+				const born = await rawCall(page, 'layout panel add', { beside: editor, side: 'left', ratio: 0.12 });
+				expect(born.error).toBeUndefined();
+				docked.push(born.result.id);
+				const state = { node: osc, slot: 'out', kind: 'line' };
+				const edited = await rawCall(page, 'layout panel edit', { panel: born.result.id, type: 'viewer', state });
+				expect(edited.error).toBeUndefined();
+			}
+			const bodies = page.locator('.vp-body');
+			await expect(bodies).toHaveCount(4);
+			for (const vp of await bodies.all())
+				await expect.poll(async () => (await inspect(page, (await vp.boundingBox())!)).tint).toBeGreaterThan(40);
+			await expect
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { message: 'the card keeps its plot' })
+				.toBeGreaterThan(40);
+			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
+			const before = (await card.boundingBox())!;
+			const from = { x: pane.x + pane.width - 80, y: pane.y + pane.height - 80 };
+			await page.mouse.move(from.x, from.y);
+			await page.mouse.down();
+			await page.mouse.move(from.x - 60, from.y - 40, { steps: 4 });
+			await page.mouse.move(from.x - 120, from.y - 80, { steps: 4 });
+			await page.mouse.up();
+			await expect.poll(async () => before.x - (await card.boundingBox())!.x, { message: 'the card moved with the pan' })
+				.toBeGreaterThan(100);
+			await expect
+				.poll(async () => (await inspect(page, (await body.boundingBox())!)).tint, { message: 'the plot moved with the card' })
+				.toBeGreaterThan(40);
+			for (const id of docked) expect((await rawCall(page, 'layout remove', { entry: id })).error).toBeUndefined();
+			await expect(bodies).toHaveCount(0);
 		});
 
 		await test.step('a raised card covers the plot beneath it', async () => {
@@ -143,8 +185,8 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await page.evaluate((u) => {
 				const g = (window as any).goofi;
 				g.commands.updateParam(u, 'lfo', 'amplitude', 0);
-				g.commands.updateParam(u, 'output', 'mode', 'block');
-				g.commands.updateParam(u, 'output', 'sfreq', 64);
+				g.commands.updateParam(u, 'lfo', 'mode', 'block');
+				g.commands.updateParam(u, 'lfo', 'sfreq', 64);
 			}, flat);
 			const top = page.locator(`.svelte-flow__node[data-id="${flat}"]`);
 			const topBody = top.locator('.slot-viewer .body');
@@ -171,7 +213,7 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 
 		await test.step('an image draws after a line plot has gone, with no GL error', async () => {
 			await page.evaluate((u) => (window as any).goofi.commands.removeNode(u), flat);
-			ramp = await addNode(page, 'graphics:Ramp', [520, 80]);
+			ramp = await addNode(page, 'graphics:Gradient', [520, 80]);
 			await waitForNode(page, ramp);
 			const image = page.locator(`.svelte-flow__node[data-id="${ramp}"] .slot-viewer .body`);
 			await expect
@@ -208,10 +250,13 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			const x = box.x + box.width / 2;
 			// The sine crosses every row at some column, so a column scan meets it; the readout
 			// gives the value over the sample index, and marks the point on the line.
+			// The drawing answers a hover from its worker, a frame or two later on a loaded machine:
+			// each column position is given that long before the scan moves on.
 			await expect
 				.poll(async () => {
 					for (let y = box.y + 6; y < box.y + box.height - 6; y += 4) {
 						await page.mouse.move(x, y);
+						await readout.first().waitFor({ state: 'attached', timeout: 1000 }).catch(() => {});
 						if ((await readout.count()) > 0) return readout.innerText();
 					}
 					return '';
@@ -244,12 +289,15 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 });
 
 test('streams served at the cap paint together, so the page paints at the cap', async ({ page }) => {
-	// Each slot served on a phase of its own made the page paint once per stream; the counter read
-	// twice `system.viewer_fps`. An upper bound: a busy machine can only paint less.
+	// Each slot served on a phase of its own made the page paint once per stream, and a paint
+	// loop re-armed per tick split one tick's streams in two: the counter read twice
+	// `system.viewer_fps`. A cap the display outpaces by far shows the second; an upper bound,
+	// since a busy machine can only paint less.
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.goto('/');
 	await waitForApp(page);
 	try {
+		await rawCall(page, 'variable entry edit', { name: 'system.viewer_fps', value: 15 });
 		const lfos: string[] = [];
 		for (const x of [40, 340, 640]) {
 			const n = await addNode(page, 'LFO', [x, 80]);
@@ -264,14 +312,27 @@ test('streams served at the cap paint together, so the page paints at the cap', 
 			.poll(async () => (await emitted()).every((i, k) => i > from[k] + 400), { message: 'all three stream' })
 			.toBe(true);
 		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
-		expect(await fps(), 'paints a second, with three streams at a 30 fps cap').toBeLessThanOrEqual(36);
+		// A wake the machine held past half a tick serves that stream on the next, so a loaded
+		// machine splits a tick's streams now and then: the count is read over a quiet window.
+		await expect.poll(fps, { message: 'paints a second, with three streams at a 15 fps cap' }).toBeLessThanOrEqual(18);
+
+		// Producers slower than the cap emit at phases of their own; the reducer still serves each
+		// frame on the next tick of the grid, so they arrive together and the page paints no more.
+		for (const [k, n] of lfos.entries())
+			await page.evaluate(([u, f]) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', f), [n, 7 + 4 * k] as const);
+		const again = await emitted();
+		await expect
+			.poll(async () => (await emitted()).every((i, k) => i > again[k] + 20), { message: 'all three stream below the cap' })
+			.toBe(true);
+		await expect.poll(fps, { message: 'paints a second, with three streams below the cap' }).toBeLessThanOrEqual(18);
 	} finally {
 		await resetPatch(page);
 	}
 });
 
-test('a viewer with a drag of its own keeps it from the card; one without lets the card move', async ({ page }) => {
-	// The 3-D brain turns under a drag, so a press on it must not start a node drag; the ring
+test('the brain draws a scalp on the surface, names its channels in the DOM, and turns under its own drag', async ({ page }) => {
+	// A value per named channel is a topomap; a channel-by-channel matrix a ring, whose names are
+	// text the surface never draws; in 3-D a press on it must not start a node drag, and the ring
 	// has no drag, so the same press moves the node as a press on any viewer does.
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.goto('/');
@@ -279,8 +340,17 @@ test('a viewer with a drag of its own keeps it from the card; one without lets t
 	try {
 		const c = await addNode(page, 'signal:Constant', [160, 120]);
 		await waitForNode(page, c);
-		await updateParam(page, c, 'constant', 'shape', '4,4');
-		const card = page.locator(`.svelte-flow__node[data-id="${c}"]`);
+		await updateParam(page, c, 'constant', 'shape', '4');
+		const m = await addNode(page, 'signal:Meta', [420, 120]);
+		await waitForNode(page, m);
+		await updateParam(page, m, 'meta', 'labels', 'Fz,Cz,Pz,Oz');
+		await page.evaluate(
+			([a, b]) =>
+				(window as any).goofi.commands.addLink({ node_out: a, slot_out: 'out', node_in: b, slot_in: 'input' }),
+			[c, m]
+		);
+		await expect.poll(() => frameSummary(page, m)).not.toBeNull();
+		const card = page.locator(`.svelte-flow__node[data-id="${m}"]`);
 		const feed = card.locator('.slot-viewer .body .viewer-feed');
 		const drag = async (): Promise<{ dx: number; dy: number }> => {
 			const before = (await card.boundingBox())!;
@@ -293,19 +363,65 @@ test('a viewer with a drag of its own keeps it from the card; one without lets t
 			return { dx: after.x - before.x, dy: after.y - before.y };
 		};
 
-		await test.step('the 3-D brain takes the drag', async () => {
-			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: '3d' } }] });
-			await expect(feed, 'the viewer declares its drag once the frame is drawn').toHaveClass(/nodrag/);
-			expect(await drag()).toEqual({ dx: 0, dy: 0 });
+		await test.step('a value per channel draws a scalp map, read by a hover inside the head', async () => {
+			await rawCall(page, 'node edit', { node: m, viewer: [{ slot: 'out', kind: 'brain', settings: {} }] });
+			await expect
+				.poll(async () => (await inspect(page, (await feed.boundingBox())!)).contrast, { message: 'the head disc is painted' })
+				.toBeGreaterThan(60);
+			const box = (await feed.boundingBox())!;
+			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+			await expect(page.locator('.viewer-hover-readout')).toHaveText(/^-?[\d.]+/);
+			await page.mouse.move(4, 4);
 		});
 
-		await test.step('the ring leaves it to the card', async () => {
-			await rawCall(page, 'node edit', { node: c, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: 'ring' } }] });
+		await test.step('a channel-by-channel matrix draws a ring, its channel names as text', async () => {
+			await updateParam(page, c, 'constant', 'shape', '4,4');
+			await expect(feed.locator('.placed')).toHaveCount(4);
+			await expect(feed.locator('.placed').first()).toHaveText('Fz');
 			await expect(feed).not.toHaveClass(/nodrag/);
 			const moved = await drag();
 			expect(moved.dx, 'the card followed the pointer').toBeGreaterThan(40);
 			expect(moved.dy).toBeGreaterThan(20);
 		});
+
+		await test.step('the 3-D brain takes the drag', async () => {
+			await rawCall(page, 'node edit', { node: m, viewer: [{ slot: 'out', kind: 'brain', settings: { mode: '3d' } }] });
+			await expect(feed, 'the viewer declares its drag once the frame is drawn').toHaveClass(/nodrag/);
+			await expect(feed.locator('.placed')).toHaveCount(0);
+			expect(await drag()).toEqual({ dx: 0, dy: 0 });
+		});
+	} finally {
+		await resetPatch(page);
+	}
+});
+
+test('the cog opens a card\'s settings, a click elsewhere closes them, and the header keeps its slot name', async ({ page }) => {
+	// The menu portals to <body> from between the cog and the slot name; a dismiss must remove the
+	// menu and nothing else of the header. A setting picked in it lands in the document.
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		const osc = await addNode(page, 'LFO', [300, 200]);
+		await waitForNode(page, osc);
+		const card = page.locator(`.svelte-flow__node[data-id="${osc}"]`);
+		const name = card.getByTestId('slot-output').first();
+		const cog = card.getByTestId('viewer-settings-cog').first();
+		const menu = page.getByTestId('viewer-settings-menu');
+		await expect(name).toHaveText('out');
+
+		await cog.click();
+		await expect(menu).toBeVisible();
+		await menu.getByLabel('Auto range').click();
+		await expect
+			.poll(async () => (await backendDoc(page)).nodes[osc]?.viewers?.out?.settings?.yAuto)
+			.toBe(false);
+
+		await page.mouse.click(900, 600);
+		await expect(menu).toHaveCount(0);
+		await expect(name, 'the dismiss took only the menu').toHaveText('out');
+		await expect(cog).toBeVisible();
+		await expect(card.locator('.slot-viewer .body')).toBeVisible();
 	} finally {
 		await resetPatch(page);
 	}

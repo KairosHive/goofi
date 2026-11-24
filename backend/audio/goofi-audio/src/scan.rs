@@ -23,7 +23,7 @@ pub(crate) fn scan(engine: &mut AudioEngine, dir: &Path) -> Vec<ScannedType> {
         } else {
             Scanned::Unavailable("an audio node is an `.rs` file".into())
         };
-        goofi_core::startup::scanned(dir, &path);
+        goofi_supervisor::progress::scanned(dir, &path);
         out.push(ScannedType { type_name, stamp, outcome });
     }
     out.extend(crate::vst3::scan_dir(engine, dir));
@@ -34,7 +34,7 @@ impl AudioEngine {
     /// An `.rs` file: the artifact the prebuild left for these bytes, loaded — a library that will
     /// not load displaces a stale registration and greys the type out with the reason.
     fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
-        let base = goofi_build::base_dir(&goofi_core::home::dir());
+        let base = goofi_supervisor::layout::runtime().build();
         let loaded = goofi_build::built(&goofi_build::AUDIO, path, &base)
             .and_then(|artifact| self.load_rust(&artifact, type_name));
         match loaded {
@@ -47,20 +47,10 @@ impl AudioEngine {
     }
 
     fn load_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
-        if !self.rust_loaded.contains_key(artifact) {
-            let opened = goofi_build::open(artifact)?;
-            let intro = goofi_node::parse_introspection(&opened.describe)?;
-            if let Some(reason) = goofi_node::illegal_slot(&intro)
-                .or_else(|| goofi_node::foreign_output(&intro, Some(goofi_core::SlotType::Audio)))
-            {
-                return Err(reason);
-            }
-            let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
-            let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
-            self.rust_loaded.insert(artifact.to_path_buf(), Arc::new(loaded));
-        }
-        let loaded = self.rust_loaded[artifact].clone();
-        let manifest = loaded.manifest;
+        let opened = goofi_build::open(artifact)?;
+        let intro = goofi_node::parse_introspection(&opened.describe)?;
+        let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Audio))?;
+        let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
         let class = Class { manifest, make: Arc::new(move |_| loaded.instantiate()), plugin: None };
         Ok(self.classes.insert(manifest.type_name, class).is_some())
     }

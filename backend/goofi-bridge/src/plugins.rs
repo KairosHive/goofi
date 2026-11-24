@@ -1,7 +1,7 @@
 //! Folder plugins: discovery, isolated Python services, and shared operation hooks.
 
 use crate::{
-    ops::{Handler, Op},
+    ops::{ArgDecl, Row},
     AppState,
 };
 use serde::Deserialize;
@@ -12,7 +12,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
+use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
 const SDK: &str = include_str!("../../../sdk/python/goofi_plugin/__init__.py");
@@ -83,6 +84,8 @@ struct Package {
 #[derive(Default)]
 pub struct Plugins {
     packages: Vec<Package>,
+    /// The packages' op rows: leaked once, since a row is `'static` on every transport.
+    rows: Vec<Row>,
     pub(crate) record_start: Mutex<()>,
     stopped: AtomicBool,
 }
@@ -91,29 +94,47 @@ type Reply = Result<Value, String>;
 type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Reply>>>>;
 
 struct Service {
-    input: mpsc::Sender<Value>,
-    child: Mutex<goofi_core::child::Child>,
+    /// The one Sender to the stdin writer; taken when the service stops, which ends that thread.
+    input: Mutex<Option<mpsc::Sender<Value>>>,
+    child: Mutex<goofi_supervisor::child::Child>,
     pending: Pending,
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
+    /// Its stdin writer, its stdout reader and every call thread: joined once the child is stopped.
+    scope: goofi_supervisor::scope::Scope,
 }
 
-fn write(input: &mpsc::Sender<Value>, message: &Value) -> Result<(), String> {
-    input
-        .send(message.clone())
-        .map_err(|_| "plugin service input closed".into())
+impl Package {
+    fn new(manifest: Manifest, root: PathBuf) -> Package {
+        Package { manifest, root, frontend: None, contributions: Contributions::default(), service: None, error: None }
+    }
+
+    /// Withdraw everything the package offers, and keep `error` as the reason.
+    fn fail(&mut self, error: String) {
+        log(&self.manifest.id, &error);
+        self.error = Some(error);
+        self.service = None;
+        self.frontend = None;
+        self.contributions = Contributions::default();
+    }
 }
 
-fn log(id: &str, level: &str, message: &str) {
-    use goofi_core::log::{record, Level, Source};
-    let level = match level {
-        "error" => Level::Error,
-        "warning" => Level::Warning,
-        _ => Level::Info,
-    };
+impl Service {
+    fn write(&self, message: Value) -> Result<(), String> {
+        self.input
+            .lock()
+            .as_ref()
+            .ok_or("the service is stopped")?
+            .send(message)
+            .map_err(|_| "plugin service input closed".into())
+    }
+}
+
+fn log(id: &str, message: &str) {
+    use goofi_supervisor::log::{record, Level, Source};
     record(
         Source::component(&format!("plugin:{id}")),
-        level,
+        Level::Error,
         None,
         message,
     );
@@ -135,7 +156,7 @@ impl Service {
     ) -> Result<(Arc<Self>, Contributions), String> {
         let id = config["id"].as_str().unwrap_or_default().to_string();
         // stdout is the protocol channel; what the plugin says on stderr is its log.
-        let mut child = goofi_core::child::run(
+        let mut child = goofi_supervisor::child::run(
             format!("plugin {id}"),
             Command::new(python)
                 .args(["-u", "-m", "goofi_plugin"])
@@ -147,15 +168,15 @@ impl Service {
                         .ok_or("missing package path")?,
                 ),
         )
-        .source(goofi_core::log::Source::component(&format!("plugin:{id}")))
+        .source(goofi_supervisor::log::Source::component(&format!("plugin:{id}")))
         .stdin_piped()
-        .stdout(goofi_core::child::Out::Pipe)
+        .stdout(goofi_supervisor::child::Out::Pipe)
         .spawn()
         .map_err(|e| format!("start Python: {e}"))?;
         let input = child.stdin.take().ok_or("missing Python stdin")?;
         let output = child.stdout.take().ok_or("missing Python stdout")?;
         let (tx, rx) = mpsc::channel();
-        let _ = goofi_core::worker::spawn("goofi-plugin-handshake", move || {
+        let handshake_worker = goofi_supervisor::worker::spawn("goofi-plugin-handshake", move || {
             let mut reader = BufReader::new(output);
             let mut line = String::new();
             let result = reader
@@ -172,6 +193,9 @@ impl Service {
             let _ = tx.send((reader, result));
         });
         let handshake = rx.recv_timeout(TIMEOUT);
+        if let Ok(worker) = handshake_worker {
+            let _ = worker.join_within(Duration::from_secs(1));
+        }
         let (reader, contributions) = match handshake {
             Ok((reader, Ok(contributions))) => (reader, contributions),
             other => {
@@ -185,9 +209,17 @@ impl Service {
         let pending: Pending = Arc::default();
         let replies = pending.clone();
         let (sender, messages) = mpsc::channel::<Value>();
+        let service = Arc::new(Self {
+            input: Mutex::new(Some(sender)),
+            child: Mutex::new(child),
+            pending,
+            sequence: AtomicU64::new(1),
+            output: Mutex::new(Some(reader)),
+            scope: goofi_supervisor::scope::Scope::default(),
+        });
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
         // service that stopped reading, including when the first payload exceeds the pipe.
-        let _ = goofi_core::worker::spawn("goofi-plugin-stdin", move || {
+        service.scope.spawn("goofi-plugin-stdin", move || {
             let mut input = input;
             for message in messages {
                 let sent = serde_json::to_writer(&mut input, &message)
@@ -201,7 +233,6 @@ impl Service {
                 if let Err(error) = sent {
                     for (_, tx) in replies
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .drain()
                     {
                         let _ = tx.send(Err(format!("plugin service input: {error}")));
@@ -210,31 +241,20 @@ impl Service {
                 }
             }
         });
-        Ok((
-            Arc::new(Self {
-                input: sender,
-                child: Mutex::new(child),
-                pending,
-                sequence: AtomicU64::new(1),
-                output: Mutex::new(Some(reader)),
-            }),
-            contributions,
-        ))
+        Ok((service, contributions))
     }
 
     fn listen(self: &Arc<Self>, state: AppState, plugin_id: String) {
         let Some(reader) = self
             .output
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             return;
         };
         let pending = self.pending.clone();
-        let input = self.input.clone();
         let service = self.clone();
-        let _ = goofi_core::worker::spawn("goofi-plugin-stdout", move || {
+        self.scope.spawn("goofi-plugin-stdout", move || {
             for line in reader.lines() {
                 let message = match line
                     .ok()
@@ -246,7 +266,6 @@ impl Service {
                 if let Some(id) = message["id"].as_u64() {
                     if let Some(tx) = pending
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .remove(&id)
                     {
                         let reply = match message["error"].as_str() {
@@ -257,9 +276,9 @@ impl Service {
                     }
                 } else if let Some(id) = message["call"].as_u64() {
                     let state = state.clone();
-                    let input = input.clone();
+                    let writer = service.clone();
                     let plugin_id = plugin_id.clone();
-                    let _ = goofi_core::worker::spawn("goofi-plugin-call", move || {
+                    service.scope.spawn("goofi-plugin-call", move || {
                         let chain: Vec<String> =
                             serde_json::from_value(message["chain"].clone()).unwrap_or_default();
                         CHAIN.with(|held| *held.borrow_mut() = chain);
@@ -269,7 +288,7 @@ impl Service {
                         CHAIN.with(|held| held.borrow_mut().clear());
                         if id == 0 {
                             if let Err(error) = result {
-                                log(&plugin_id, "error", &format!("log write: {error}"));
+                                log(&plugin_id, &format!("log write: {error}"));
                             }
                             return;
                         }
@@ -277,14 +296,15 @@ impl Service {
                             Ok(value) => json!({"reply": id, "result": value}),
                             Err(error) => json!({"reply": id, "error": error}),
                         };
-                        let _ = write(&input, &reply);
+                        let _ = writer.write(reply);
                     });
                 }
             }
-            service.kill();
+            // The service is dead from here: close its input, fail what waits, and leave the
+            // join to `kill`, which this thread must not call on itself.
+            service.input.lock().take();
             for (_, tx) in pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .drain()
             {
                 let _ = tx.send(Err("plugin service stopped".into()));
@@ -293,30 +313,20 @@ impl Service {
     }
 
     fn request(&self, method: &str, data: Value, actor: &str) -> Reply {
-        if self
-            .child
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait()
-            .map_err(|e| e.to_string())?
-            .is_some()
-        {
+        if !self.alive() {
             return Err("plugin service stopped".into());
         }
         let id = self.sequence.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         self.pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, tx);
         let chain = CHAIN.with(|chain| chain.borrow().clone());
-        if let Err(error) = write(
-            &self.input,
-            &json!({"id": id, "method": method, "data": data, "actor": actor, "chain": chain}),
+        if let Err(error) = self.write(
+            json!({"id": id, "method": method, "data": data, "actor": actor, "chain": chain}),
         ) {
             self.pending
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&id);
             return Err(error);
         }
@@ -325,7 +335,6 @@ impl Service {
             Err(_) => {
                 self.pending
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&id);
                 self.kill();
                 Err(
@@ -336,13 +345,19 @@ impl Service {
         }
     }
 
+    /// The one aliveness answer: a service whose stdout closed, or that was stopped, has no input.
+    fn alive(&self) -> bool {
+        self.input.lock().is_some()
+    }
+
     /// Ask the service to leave and insist after a short grace, so a Python that is flushing
     /// its data gets to; a service that stopped answering gets no longer than that.
     fn kill(&self) {
+        self.input.lock().take();
         self.child
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .stop(Duration::from_secs(2));
+        self.scope.close(Duration::from_secs(2));
     }
 }
 impl Drop for Service {
@@ -355,7 +370,7 @@ impl Drop for Service {
 /// hold a load past.
 fn run(command: &mut Command) -> Result<(), String> {
     let tool = command.get_program().to_string_lossy().into_owned();
-    let output = goofi_core::child::output(format!("plugin build: {tool}"), command, BUILD_WAIT).map_err(|e| e.to_string())?;
+    let output = goofi_supervisor::child::output(format!("plugin build: {tool}"), command, BUILD_WAIT).map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(())
     } else {
@@ -380,15 +395,15 @@ impl Plugins {
         if !state.plugins.packages.is_empty() {
             return Err("plugins are already loaded; restart to change packages".into());
         }
-        let sdk = std::path::absolute(goofi_build::base_dir(home))
-            .map_err(|e| e.to_string())?
+        let sdk = goofi_supervisor::layout::runtime()
+            .build()
             .join("plugin-sdk")
             .join(goofi_build::digest([SDK.as_bytes(), MAIN.as_bytes()]));
         std::fs::create_dir_all(sdk.join("goofi_plugin")).map_err(|e| e.to_string())?;
         for (name, source) in [("__init__.py", SDK), ("__main__.py", MAIN)] {
             let destination = sdk.join("goofi_plugin").join(name);
             if !destination.is_file() {
-                let temporary = destination.with_extension(format!("{}.tmp", goofi_core::session::tag()));
+                let temporary = destination.with_extension(format!("{}.tmp", goofi_supervisor::session::tag()));
                 std::fs::write(&temporary, source)
                     .and_then(|()| std::fs::rename(temporary, destination))
                     .map_err(|e| e.to_string())?;
@@ -426,37 +441,16 @@ impl Plugins {
                         Err(e) => e,
                         _ => "plugin ID must match its folder; api must be 1".into(),
                     };
-                    log(&id, "error", &error);
-                    packages.push(Package {
-                        manifest: Manifest {
-                            id,
-                            version: String::new(),
-                            api: 1,
-                        },
-                        root: dir,
-                        frontend: None,
-                        contributions: Contributions::default(),
-                        service: None,
-                        error: Some(error),
-                    });
+                    let mut package = Package::new(Manifest { id, version: String::new(), api: 1 }, dir);
+                    package.fail(error);
+                    packages.push(package);
                     continue;
                 }
             };
-            goofi_core::startup::report(format!("Preparing plugin {}", manifest.id));
-            let mut package = Package {
-                manifest,
-                root: dir,
-                frontend: None,
-                contributions: Contributions::default(),
-                service: None,
-                error: None,
-            };
+            goofi_supervisor::progress::report(format!("Preparing plugin {}", manifest.id));
+            let mut package = Package::new(manifest, dir);
             if let Err(error) = package.prepare(home, python, &sdk, state) {
-                log(&package.manifest.id, "error", &error);
-                package.error = Some(error);
-                package.service = None;
-                package.contributions = Contributions::default();
-                package.frontend = None;
+                package.fail(error);
             }
             packages.push(package);
         }
@@ -482,17 +476,9 @@ impl Plugins {
                     .pre_op
                     .iter()
                     .chain(&package.contributions.post_op)
-                    .find(|name| {
-                        !names.contains(*name)
-                            || matches!(name.as_str(), "compound" | "undo" | "redo")
-                    });
+                    .find(|name| !names.contains(*name) || state.find_op(name).is_some_and(|o| o.moves_history()));
                 if let Some(name) = invalid {
-                    let error = format!("unsupported hook operation: {name}");
-                    log(&package.manifest.id, "error", &error);
-                    package.error = Some(error);
-                    package.service = None;
-                    package.frontend = None;
-                    package.contributions = Contributions::default();
+                    package.fail(format!("unsupported hook operation: {name}"));
                     removed = true;
                 }
             }
@@ -500,8 +486,19 @@ impl Plugins {
                 break;
             }
         }
+        let rows = packages
+            .iter()
+            .flat_map(|package| {
+                let leak = |s: &str| -> &'static str { Box::leak(s.to_string().into_boxed_str()) };
+                package.contributions.ops.iter().map(move |op| {
+                    let args: &'static [ArgDecl] = Box::leak(ArgDecl::parse_list(&op.args).into_boxed_slice());
+                    Row::plugin(leak(&op.name), op.kind == "read", args, leak(&op.doc), leak(&op.result))
+                })
+            })
+            .collect();
         state.plugins = Arc::new(Self {
             packages,
+            rows,
             record_start: Mutex::new(()),
             stopped: AtomicBool::new(false),
         });
@@ -513,7 +510,7 @@ impl Plugins {
         for package in &state.plugins.packages {
             if let Some(service) = &package.service {
                 if let Err(error) = service.request("start", json!({}), &package.manifest.id) {
-                    log(&package.manifest.id, "error", &format!("on_start: {error}"));
+                    log(&package.manifest.id, &format!("on_start: {error}"));
                     service.kill();
                 }
             }
@@ -521,21 +518,9 @@ impl Plugins {
         Ok(())
     }
 
-    pub fn operations(&self) -> impl Iterator<Item = Op<'_>> {
-        self.packages.iter().flat_map(|package| {
-            package.contributions.ops.iter().map(|op| Op {
-                name: &op.name,
-                args: &op.args,
-                positional: 0,
-                doc: &op.doc,
-                result: &op.result,
-                handler: if op.kind == "read" {
-                    Handler::PluginRead
-                } else {
-                    Handler::PluginEffect
-                },
-            })
-        })
+    /// Every plugin's op rows, built once at load.
+    pub fn operations(&self) -> &[Row] {
+        &self.rows
     }
 
     pub fn node_roots(&self) -> impl Iterator<Item = (PathBuf, goofi_graph::Origin)> + '_ {
@@ -560,7 +545,7 @@ impl Plugins {
         })
     }
 
-    pub fn pre_op(&self, _state: &AppState, op: &str, mut args: Value, actor: &str) -> Reply {
+    pub fn pre_op(&self, op: &str, mut args: Value, actor: &str) -> Reply {
         let mut changed = BTreeMap::new();
         for package in &self.packages {
             if !package.contributions.pre_op.iter().any(|name| name == op) {
@@ -599,7 +584,7 @@ impl Plugins {
         Ok(args)
     }
 
-    pub fn post_op(&self, _state: &AppState, op: &str, args: &Value, result: &Reply, actor: &str) {
+    pub fn post_op(&self, op: &str, args: &Value, result: &Reply, actor: &str) {
         for package in &self.packages {
             if !package.contributions.post_op.iter().any(|name| name == op) {
                 continue;
@@ -613,16 +598,12 @@ impl Plugins {
                 Err(error) => data["error"] = json!(error),
             }
             if let Err(error) = service.request("post_op", data, actor) {
-                log(
-                    &package.manifest.id,
-                    "error",
-                    &format!("post_op {op}: {error}"),
-                );
+                log(&package.manifest.id, &format!("post_op {op}: {error}"));
             }
         }
     }
 
-    pub fn call(&self, _state: &AppState, op: &str, args: &Value, actor: &str) -> Reply {
+    pub fn call(&self, op: &str, args: &Value, actor: &str) -> Reply {
         let package = self
             .packages
             .iter()
@@ -638,14 +619,14 @@ impl Plugins {
             .request("op", json!({"name": name, "args": args}), actor)
     }
 
-    pub fn stop(&self, _state: &AppState) {
+    pub fn stop(&self) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
         for package in self.packages.iter().rev() {
             if let Some(service) = &package.service {
                 if let Err(error) = service.request("stop", json!({}), &package.manifest.id) {
-                    log(&package.manifest.id, "error", &error);
+                    log(&package.manifest.id, &error);
                 }
                 service.kill();
             }
@@ -671,8 +652,8 @@ impl Package {
         state: &AppState,
     ) -> Result<(), String> {
         let data = home.join("plugin-data").join(&self.manifest.id);
-        let cache = std::path::absolute(goofi_build::base_dir(home))
-            .map_err(|e| e.to_string())?
+        let cache = goofi_supervisor::layout::runtime()
+            .build()
             .join("plugins")
             .join(&self.manifest.id);
         std::fs::create_dir_all(&data)
@@ -686,7 +667,7 @@ impl Package {
                 static BUILD_ID: AtomicU64 = AtomicU64::new(0);
                 let work = cache.join(format!(
                     "work-{}-{}",
-                    goofi_core::session::tag(),
+                    goofi_supervisor::session::tag(),
                     BUILD_ID.fetch_add(1, Ordering::Relaxed)
                 ));
                 let prepared = || -> Result<(), String> {
@@ -699,15 +680,14 @@ impl Package {
                     }
                     let frontend = work.join("frontend");
                     let out = work.join("output");
-                    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                    run(Command::new(npm).args(["ci"]).current_dir(&frontend))?;
+                    run(goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Npm).args(["ci"]).current_dir(&frontend))?;
                     let frontend_sdk = frontend.join("node_modules/@goofi/plugin");
                     std::fs::create_dir_all(&frontend_sdk).map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("index.ts"), FRONTEND_SDK)
                         .map_err(|e| e.to_string())?;
                     std::fs::write(frontend_sdk.join("package.json"), FRONTEND_PACKAGE)
                         .map_err(|e| e.to_string())?;
-                    run(Command::new(npm)
+                    run(goofi_supervisor::layout::command(goofi_supervisor::layout::Tool::Npm)
                         .args(["run", "build"])
                         .env("GOOFI_PLUGIN_OUT_DIR", &out)
                         .current_dir(&frontend))?;
@@ -748,8 +728,8 @@ impl Package {
                 lock.as_slice(),
                 identity.as_bytes(),
             ]));
-            run(Command::new("uv")
-                .args(["sync", "--locked", "--no-install-project", "--python"])
+            let runtime = goofi_supervisor::layout::runtime();
+            run(goofi_init::python::uv(&runtime, ["sync", "--locked", "--no-install-project", "--python"])
                 .arg(python)
                 .env("UV_PROJECT_ENVIRONMENT", &env)
                 .current_dir(&self.root))?;
@@ -793,9 +773,10 @@ impl Package {
     }
 }
 
-pub(crate) fn list(state: &AppState, _: &Value, _: &str, _: &mut Vec<String>) -> Reply {
+pub(crate) fn list(tx: &mut crate::Txn) -> Reply {
+    let state = tx.state;
     let packages: Vec<_> = state.plugins.packages.iter().map(|p| {
-        let dead = p.service.as_ref().is_some_and(|s| s.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_wait().ok().flatten().is_some());
+        let dead = p.service.as_ref().is_some_and(|s| !s.alive());
         json!({"id": p.manifest.id, "version": p.manifest.version, "error": p.error.as_deref().or(dead.then_some("plugin service stopped")),
             "frontend": p.frontend.as_ref().filter(|_| !dead).map(|_| format!("/plugins/{}/index.js", p.manifest.id))})
     }).collect();

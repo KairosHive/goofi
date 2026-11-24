@@ -1,6 +1,6 @@
 use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, NOTES, SCALES};
 use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
 goofi_audio_sdk::params! {
     SCALE = ParamDecl {
@@ -10,7 +10,8 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("a named scale, or `custom` to build one from the params below"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     ROOT = ParamDecl {
         group: "scale",
@@ -19,7 +20,8 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("the note the scale starts on"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     METHOD = ParamDecl {
         group: "scale",
@@ -28,43 +30,48 @@ goofi_audio_sdk::params! {
         expression: None,
         doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     GENERATOR = ParamDecl {
         group: "scale",
         name: "generator",
-        spec: ParamSpec::Float { default: 700.0, min: 0.0, max: 4800.0 },
+        spec: ParamSpec::Num { default: &[700.0], min: 0.0, max: 4800.0, int: false, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     STEPS = ParamDecl {
         group: "scale",
         name: "steps",
-        spec: ParamSpec::Int { default: 7, min: 1, max: 53, options: &[] },
+        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 53.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     MASK = ParamDecl {
         group: "scale",
         name: "mask",
-        spec: ParamSpec::Int { default: 0, min: 0, max: (1 << MASK_BITS) - 1, options: &[] },
+        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: ((1 << MASK_BITS) - 1) as f64, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
     MODE = ParamDecl {
         group: "scale",
         name: "mode",
-        spec: ParamSpec::Int { default: 4, min: 0, max: 52, options: &[] },
+        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 52.0, int: true, options: &[], face: Face::Plain },
         expression: None,
         doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
         section: 0,
-        show: None,
+        show: &[],
+        role: None,
     },
 }
 

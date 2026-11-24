@@ -4,12 +4,10 @@ use std::path::Path;
 
 #[test]
 fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
-    let mut goofi = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert!(
         listing["plugins"][0]["error"].is_null(),
@@ -21,16 +19,20 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .unwrap()
         .ends_with("index.js"));
     let ops = goofi.call("op list", j!({"doc": true}));
-    assert!(ops["ops"]
+    let select = ops["ops"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|op| op["op"] == "plugin example subject select" && op["args"] == "subject:string!"));
-    let lines = vec!["plugin example subject select --subject Alice".into()];
+        .find(|op| op["op"] == "plugin example subject select").expect("the plugin registered its op");
+    assert_eq!(select["args"][0], j!({ "name": "subject", "type": "string", "required": true }));
+    assert!(select["schema"]["properties"]["tags"].get("type").is_none(), "JSON args permit lists: {select}");
+    let lines = vec!["plugin example subject select --subject Alice --tags '[\"fixture\"]'".into()];
+    let selected = goofi_bridge::phrase::exec_lines(&goofi.state, &lines, "operator").unwrap();
     assert_eq!(
-        goofi_bridge::phrase::exec_lines(&goofi.state, &lines, "operator").unwrap()[0]["subject"],
+        selected[0]["subject"],
         "Alice"
     );
+    assert_eq!(selected[0]["tags"], j!(["fixture"]), "the plugin receives the advertised JSON argument");
     assert_eq!(
         goofi.call("plugin example subject select", j!({"subject": " Alice "}))["subject"],
         "Alice"
@@ -95,7 +97,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .state
         .call("record start", j!({}), "operator")
         .unwrap_err()
-        .contains("requires string"));
+        .contains("expected a string"));
     goofi.call("plugin example mode", j!({"mode": "normal"}));
     let started = goofi.call("record start", j!({"root": home.path().join("ignored")}));
     let folder = Path::new(started["folder"].as_str().unwrap());
@@ -119,9 +121,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
     assert_eq!(annotation["subject"], "Alice");
     drop(goofi);
     assert!(home.path().join("plugin-data/example/stopped").is_file());
-    let mut reopened = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut reopened.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let reopened = Goofi::with_plugins(home.path());
     assert_eq!(
         reopened.call("plugin example status", j!({}))["subject"],
         "Bob"
@@ -137,7 +137,7 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
 
 #[test]
 fn conflicting_hooks_and_invalid_packages_leave_the_recorder_idle() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::plugin_package(home.path());
     let second = home.path().join("plugins/other");
@@ -151,9 +151,7 @@ fn conflicting_hooks_and_invalid_packages_leave_the_recorder_idle() {
     let bad = home.path().join("plugins/broken");
     std::fs::create_dir_all(&bad).unwrap();
     std::fs::write(bad.join("goofi-plugin.toml"), "invalid TOML").unwrap();
-    let mut goofi = Goofi::new();
-    goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py))
-        .unwrap();
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert_eq!(listing["plugins"].as_array().unwrap().len(), 3);
     assert!(listing["plugins"]
@@ -183,14 +181,10 @@ fn pipewire_here() -> bool {
 
 #[test]
 fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
-    let python = require_python();
+    let _python = require_python();
     let home = tempfile::tempdir().unwrap();
     goofi_tests::fixtures::virtual_cables(home.path());
-    let goofi = {
-        let mut goofi = Goofi::new();
-        goofi_bridge::plugins::Plugins::load(&mut goofi.state, home.path(), Path::new(&python.py)).unwrap();
-        goofi
-    };
+    let goofi = Goofi::with_plugins(home.path());
     let listing = goofi.call("plugin list", j!({}));
     assert!(listing["plugins"][0]["error"].is_null(), "{listing}; {:?}", goofi.call("log list", j!({})));
     let status = goofi.call("plugin virtual-cables list", j!({}));
@@ -203,8 +197,9 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     assert!(status["unsupported"].is_null(), "{status}");
     let cable = format!("goofi test {}", std::process::id());
     let made = goofi.call("plugin virtual-cables create", j!({"name": cable, "channels": 4}));
-    let device = format!("PipeWire: {cable}");
-    assert_eq!(made["device"], j!(device));
+    // Reached through PipeWire's PulseAudio server: the sink is the output, its monitor the input.
+    let (output, input) = (format!("PulseAudio: {cable}"), format!("PulseAudio: Monitor of {cable}"));
+    assert_eq!((&made["output"], &made["input"]), (&j!(output), &j!(input)));
     assert!(goofi.refuse("plugin virtual-cables create", j!({"name": cable})).contains("exists"));
 
     // A node's own picker offers the cable, spelled as the plugin said it would be.
@@ -215,8 +210,8 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
         let p = ev.next("state_update");
         (p["node"] == hex(inn) && p["refreshed_params"] == j!([["audio", "device"]])).then_some(p)
     });
-    let options = echo["params"]["audio"]["device"]["options"].as_array().cloned().unwrap_or_default();
-    assert!(options.contains(&j!(device)), "the cable is an input device: {options:?}");
+    let options = echo["options"]["audio"]["device"].as_array().cloned().unwrap_or_default();
+    assert!(options.contains(&j!(input)), "the cable's monitor is an input device: {options:?}");
 
     // An AudioIn drop points that node at the cable; an AudioOut drop moves EVERY AudioOut,
     // because the engine's clock is one device.
@@ -231,19 +226,94 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     both.sort();
     assert_eq!(moved, both);
     let doc = goofi.doc();
-    for uid in [inn, out_a, out_b] {
-        assert_eq!(doc["nodes"][hex(uid)]["params"]["audio"]["device"]["value"], j!(device), "{uid:?}");
+    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(input));
+    for uid in [out_a, out_b] {
+        assert_eq!(doc["nodes"][hex(uid)]["params"]["audio"]["device"]["value"], j!(output), "{uid:?}");
     }
     // One undo step takes the AudioOut move back whole.
     goofi.call("undo", j!({}));
     let doc = goofi.doc();
     assert_eq!(doc["nodes"][hex(out_a)]["params"]["audio"]["device"]["value"], j!("default"));
     assert_eq!(doc["nodes"][hex(out_b)]["params"]["audio"]["device"]["value"], j!("default"));
-    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(device));
+    assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(input));
     let signal = goofi.add("signal:Constant");
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(signal), "cable": cable})).contains("not an AudioIn"));
 
     assert_eq!(goofi.call("plugin virtual-cables remove", j!({"name": cable}))["removed"], true);
     assert_eq!(goofi.call("plugin virtual-cables list", j!({}))["cables"], j!([]));
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(inn), "cable": cable})).contains("no cable"));
+}
+
+#[test]
+fn the_latency_plugin_times_every_tick_from_one_node_to_the_next() {
+    let _python = require_python();
+    let home = tempfile::tempdir().unwrap();
+    goofi_tests::fixtures::plugin_package(home.path());
+    goofi_tests::fixtures::latency(home.path());
+    let goofi = Goofi::with_plugins(home.path());
+    let listing = goofi.call("plugin list", j!({}));
+    assert!(
+        listing["plugins"].as_array().unwrap().iter().all(|p| p["error"].is_null()),
+        "{listing}; {:?}",
+        goofi.call("log list", j!({}))
+    );
+    goofi.call("library refresh", j!({}));
+    let number = goofi.call("node add", j!({"type": "signal:PluginNumber"}))["uid"].as_str().unwrap().to_string();
+    let echo = goofi.call("node add", j!({"type": "signal:PluginEcho"}))["uid"].as_str().unwrap().to_string();
+    goofi.call("link add", j!({"from": format!("{number}/out"), "to": format!("{echo}/input")}));
+    let output = goofi.probe(goofi_tests::Uid::from_hex(&echo).unwrap(), "out");
+    goofi.until("the echo runs", |_| output.latest());
+    assert_eq!(goofi.call("plugin latency status", j!({}))["running"], false);
+
+    // A run arms both outputs and records them; the first output is the one timed.
+    let started = goofi.call("plugin latency start", j!({"source": number, "target": echo}));
+    assert_eq!(started["running"], true, "{started}");
+    assert_eq!(started["source"]["slot"], "out");
+    assert_eq!(started["target"]["slot"], "out");
+    assert!(goofi.refuse("plugin latency start", j!({"source": number, "target": echo})).contains("in progress"));
+    assert_eq!(goofi.call("record status", j!({}))["running"], true);
+    goofi.until("five ticks paired", |g| {
+        let s = g.call("plugin latency status", j!({}));
+        assert!(s["error"].is_null(), "{s}");
+        (s["ticks"].as_u64().unwrap_or(0) >= 5).then_some(())
+    });
+
+    // The stop pairs the last ticks, and the CSV holds one line per target tick.
+    let stopped = goofi.call("plugin latency stop", j!({}));
+    assert_eq!(stopped["running"], false);
+    assert!(stopped["error"].is_null(), "{stopped}");
+    let ticks = stopped["ticks"].as_u64().unwrap();
+    assert!(ticks >= 5, "{stopped}");
+    let csv = std::fs::read_to_string(stopped["csv"].as_str().unwrap()).unwrap();
+    let lines: Vec<&str> = csv.lines().collect();
+    // One hop on this path, so the total is that hop's wait and run: from the instant the source's
+    // frame left to the instant the echo's did.
+    let echo_name = goofi.doc()["nodes"][&echo]["name"].as_str().unwrap().to_string();
+    assert_eq!(lines[0], format!("target_procend,target_index,source_procend,source_index,latency_ms,{echo_name}_wait_ms,{echo_name}_run_ms"));
+    assert_eq!(lines.len() as u64 - 1, ticks);
+    assert_eq!(stopped["unpaired"], 0, "{stopped}");
+    assert_eq!(stopped["path"], j!([goofi.doc()["nodes"][&number]["name"], echo_name]));
+    let mut last_index = -1i64;
+    for line in &lines[1..] {
+        let cols: Vec<&str> = line.split(',').collect();
+        assert_eq!(cols.len(), 7, "{line}");
+        let target: f64 = cols[0].parse().unwrap();
+        let index: i64 = cols[1].parse().unwrap();
+        let source: f64 = cols[2].parse().unwrap();
+        let ms: f64 = cols[4].parse().unwrap();
+        let wait: f64 = cols[5].parse().unwrap();
+        let run: f64 = cols[6].parse().unwrap();
+        assert!(source < target && ms > 0.0, "the echo's frame left after the source's, and it took time: {line}");
+        assert!(wait > 0.0 && run >= 0.0, "the echo waited for the frame, then ran: {line}");
+        assert!((ms - (wait + run)).abs() < 1e-9, "the total is the sum of its hops' waits and runs: {line}");
+        assert!(index > last_index, "target ticks in order: {line}");
+        last_index = index;
+    }
+    assert_eq!(goofi.call("plugin latency status", j!({}))["ticks"], ticks, "the summary stays readable");
+    assert_eq!(goofi.call("record status", j!({}))["running"], false);
+    let doc = goofi.doc();
+    for uid in [&number, &echo] {
+        assert!(doc["nodes"][uid].get("record").is_none(), "the run's arms are gone: {}", doc["nodes"][uid]);
+    }
+    assert!(goofi.refuse("plugin latency stop", j!({})).contains("no latency run"));
 }

@@ -49,8 +49,8 @@ class RatioSequence(goofi.Node):
     PARAMS = {
         'sequence': {
             'ratios': goofi.StringParam('9/8, 6/5, 5/4, 4/3, 7/5, 3/2, 5/3, 7/4', doc='Ordered steps, as positive ratios or fractions. At most 64.'),
-            'seconds': goofi.FloatParam(2.5, 0.05, 30.0, doc='Seconds per step, including its glide. Steps faster than the update rate can be skipped.'),
-            'glide': goofi.FloatParam(0.7, 0.0, 1.0, doc='Fraction of each step used for a smooth pitch glide. Zero gives immediate steps.'),
+            'seconds': goofi.NumParam(2.5, 0.05, 30.0, doc='Seconds per step, including its glide. Steps faster than the update rate can be skipped.'),
+            'glide': goofi.NumParam(0.7, 0.0, 1.0, doc='Fraction of each step used for a smooth pitch glide. Zero gives immediate steps.'),
             'direction': goofi.StringParam('forward', ['forward', 'ping-pong'], doc='Loop forward or reverse at the endpoints.'),
             'running': goofi.BoolParam(True, doc='Off holds the current ratio and position.'),
             'reset': goofi.PulseParam(doc='Return to the first ratio and start its hold again.'),
@@ -58,9 +58,9 @@ class RatioSequence(goofi.Node):
         'chord': {
             'state': goofi.StringParam('single ratio', ['single ratio', 'anchor chord'], doc='Transition endpoints use one ratio or the full anchor chord with its selected voice replaced.'),
             'anchors': goofi.StringParam('1, 9/8, 2', doc='Fixed chord before one voice is replaced by the moving ratio. At most 32 components.'),
-            'voice': goofi.IntParam(1, 0, 31, doc='Zero-based component replaced in tuning. Other components stay fixed.'),
+            'voice': goofi.NumParam(1, 0, 31, int=True, doc='Zero-based component replaced in tuning. Other components stay fixed.'),
         },
-        'common': {'autotrigger': goofi.BoolParam(True), 'max_frequency': goofi.FloatParam(30.0, 0.0, 120.0)},
+        'common': {'autotrigger': goofi.BoolParam(True), 'max_frequency': goofi.NumParam(30.0, 0.0, 120.0)},
     }
 
     def setup(self):

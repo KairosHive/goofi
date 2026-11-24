@@ -1,16 +1,23 @@
 /** Descriptor → the inspector control that renders it. The param's TYPE alone decides: the row
  *  wears the same control in every mode, disabled where a source drives it. */
-import type { ParamDescriptor } from '$lib/api/types';
+import type { NumParam, ParamDescriptor } from '$lib/api/types';
+import { ADSR_SHORT } from '$lib/ui/envelope';
 
-export type ControlKind = 'pulse' | 'numeric' | 'toggle' | 'select' | 'text' | 'unknown';
+export type ControlKind = 'pulse' | 'numeric' | 'vector' | 'color' | 'envelope' | 'toggle' | 'select' | 'text' | 'unknown';
+
+export const isNumeric = (d: ParamDescriptor): d is NumParam => d.type === 'num';
+
+/** The faces a list of numbers wears, each with one source for all or one per entry. */
+const LISTS: readonly ControlKind[] = ['vector', 'color', 'envelope'];
 
 export function controlKind(descriptor: ParamDescriptor): ControlKind {
+	if (isNumeric(descriptor)) {
+		if (descriptor.face !== 'plain') return descriptor.face;
+		return Array.isArray(descriptor.value) && descriptor.value.length > 1 ? 'vector' : 'numeric';
+	}
 	switch (descriptor.type) {
 		case 'pulse':
 			return 'pulse';
-		case 'float':
-		case 'int':
-			return 'numeric';
 		case 'bool':
 			return 'toggle';
 		case 'string':
@@ -18,4 +25,57 @@ export function controlKind(descriptor: ParamDescriptor): ControlKind {
 		default:
 			return 'unknown';
 	}
+}
+
+/** What entry `i` of a list is called: a colour's channel, an envelope's stage, else its index. */
+export function elementName(descriptor: ParamDescriptor, i: number): string {
+	const face = isNumeric(descriptor) ? descriptor.face : 'plain';
+	if (face === 'color') return ['R', 'G', 'B', 'A'][i] ?? `[${i}]`;
+	if (face === 'envelope') return ADSR_SHORT[i] ?? `[${i}]`;
+	return `[${i}]`;
+}
+
+/** The parts of one param row, declared in one place from the descriptor and the reader's view.
+ *  The markup renders what the plan names and decides nothing of its own. */
+export type RowPlan = {
+	/** The control on the row's face. A list opened as entries wears a vector's numbers. */
+	face: ControlKind;
+	/** The L/I switch after the face: a list of entries can be read either way. */
+	viewSwitch: boolean;
+	/** The face cannot be edited: a source drives the whole, or an entry while the whole is shown. */
+	disabled: boolean;
+	/** Open: the whole list typed as one. Only a constant whole has a list to type. */
+	list: boolean;
+	/** Open: one row per entry, each with a source of its own. */
+	elements: boolean;
+	/** Open: the editor of the expression that drives the whole. The entry view shows the entries only. */
+	source: boolean;
+	/** Open: the whole's C/E, trigger and MIDI learn. Entry rows stand in for it. */
+	foot: boolean;
+};
+
+export type RowView = {
+	/** The reader opened the list as individual entries. */
+	individual: boolean;
+	/** The value may take a source; false is a literal alone, with no foot and no entry sources. */
+	sources?: boolean;
+};
+
+export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
+	const kind = controlKind(d);
+	const sources = view.sources !== false;
+	const entries = sources && LISTS.includes(kind);
+	const individual = entries && view.individual;
+	const driven = d.mode !== 'constant';
+	const anyEntryDriven = (d.elements ?? []).some((e) => e.mode !== 'constant');
+	const source = !individual && d.mode === 'expression';
+	return {
+		face: individual ? 'vector' : kind,
+		viewSwitch: entries,
+		disabled: driven || (entries && !individual && anyEntryDriven),
+		list: LISTS.includes(kind) && !individual && !source,
+		elements: individual,
+		source,
+		foot: sources && !individual
+	};
 }

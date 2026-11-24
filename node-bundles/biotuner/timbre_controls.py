@@ -85,15 +85,15 @@ class TimbreControls(goofi.Node):
     }
     PARAMS = {
         "timbre": {
-            "base_freq": goofi.FloatParam(220.0, 20.0, 2000.0, doc="The frequency ratio 1 sits at, in Hz."),
-            "tilt": goofi.FloatParam(0.0, -2.0, 2.0, doc="Amplitude rolloff per partial: above 0 favours the low ones."),
-            "spread_span": goofi.FloatParam(25.0, 1.0, 200.0, doc="Cents away from just that reads as spread 1."),
-            "justLimit": goofi.IntParam(8, 2, 32, doc="Largest denominator a degree may be called just by."),
+            "base_freq": goofi.NumParam(220.0, 20.0, 2000.0, doc="The frequency ratio 1 sits at, in Hz."),
+            "tilt": goofi.NumParam(0.0, -2.0, 2.0, doc="Amplitude rolloff per partial: above 0 favours the low ones."),
+            "spread_span": goofi.NumParam(25.0, 1.0, 200.0, doc="Cents away from just that reads as spread 1."),
+            "justLimit": goofi.NumParam(8, 2, 32, int=True, doc="Largest denominator a degree may be called just by."),
         },
         "voice": {
-            "row": goofi.IntParam(0, 0, 65535, doc="Tuning row used by the audio outputs, counting from zero."),
-            "voices": goofi.IntParam(8, 1, 8, doc="Fixed voice count. Use the lowest partials; unused voices are silent."),
-            "velocity": goofi.FloatParam(0.7, 0.0, 1.0, doc="VST note velocity, scaled by each partial's amplitude."),
+            "row": goofi.NumParam(0, 0, 65535, int=True, doc="Tuning row used by the audio outputs, counting from zero."),
+            "voices": goofi.NumParam(8, 1, 8, int=True, doc="Fixed voice count. Use the lowest partials; unused voices are silent."),
+            "velocity": goofi.NumParam(0.7, 0.0, 1.0, doc="VST note velocity, scaled by each partial's amplitude."),
         },
     }
 
