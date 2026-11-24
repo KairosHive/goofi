@@ -512,7 +512,7 @@ async fn run(
                     facts.push(format!("open {url} in a browser to use it"));
                 }
                 if demo {
-                    facts.push("demo: no terminal, no agents, no filesystem, no audio".to_string());
+                    facts.push("demo: no terminal, no agents, no filesystem, no sound card".to_string());
                 }
                 if let Some(patch) = &state.load {
                     facts.push(format!("opened {}", patch.display()));

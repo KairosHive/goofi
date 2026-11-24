@@ -149,7 +149,10 @@ struct DeviceClock {
 }
 
 impl DeviceClock {
-    fn open(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(DeviceClock, f64), String> {
+    fn open(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>, outlet: Arc<Outlet>) -> Result<(DeviceClock, f64), String> {
+        if name == BROWSER_DEVICE {
+            return Ok((DeviceClock::paced(buffer, runtime, stats, outlet)?, f64::from(BROWSER_RATE)));
+        }
         let (opened, on_open) = mpsc::channel::<Result<(f64, u16, Option<u32>), String>>();
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
@@ -186,6 +189,36 @@ impl DeviceClock {
         Ok((DeviceClock { name: name.to_string(), channels, buffer, period, go: Some(go), done: on_done, _lease: lease }, rate))
     }
 
+    /// The browser device: a thread that renders one period and sleeps to the next, as a card's
+    /// callback would ask, and offers each period to the outlet. It ends when `go` is dropped.
+    fn paced(buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, outlet: Arc<Outlet>) -> Result<DeviceClock, String> {
+        let frames = if buffer > 0 { buffer } else { BROWSER_PERIOD };
+        let (go, on_go) = mpsc::channel::<()>();
+        let (done, on_done) = mpsc::channel::<()>();
+        goofi_supervisor::worker::thread("goofi-audio-clock")
+            .spawn(move || {
+                if on_go.recv().is_ok() {
+                    let channels = usize::from(BROWSER_CHANNELS);
+                    let mut realtime = Realtime::Unasked;
+                    let mut scratch = vec![0.0; frames as usize * channels];
+                    let mut pace = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(f64::from(frames) / f64::from(BROWSER_RATE)));
+                    let mut first = 0u64;
+                    while matches!(on_go.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                        realtime.claim(frames as usize, BROWSER_RATE);
+                        render_period(&runtime, &stats, &mut scratch, channels, BROWSER_RATE);
+                        outlet.offer(first, &scratch);
+                        first += u64::from(frames);
+                        goofi_supervisor::timing::sleep_until(pace.next());
+                        pace.advance();
+                    }
+                }
+                let _ = done.send(());
+            })
+            .map_err(|e| format!("could not start the clock thread: {e}"))?;
+        let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {BROWSER_DEVICE}"));
+        Ok(DeviceClock { name: BROWSER_DEVICE.to_string(), channels: BROWSER_CHANNELS, buffer, period: Some(frames), go: Some(go), done: on_done, _lease: lease })
+    }
+
     /// Start the callbacks — only once the runtime is cut to this stream's rate and width.
     fn play(&self) {
         if let Some(go) = &self.go {
@@ -208,6 +241,68 @@ pub(crate) const DEFAULT_DEVICE: &str = "default";
 /// What an input names its device to say the name resolved and nothing was opened.
 pub(crate) const NO_DEVICE: &str = "the external clock owns no device";
 
+/// What a card's name answers on an engine that opens none.
+pub(crate) const NO_CARDS: &str = "this goofi opens no sound card: `browser` is its one device";
+
+/// The device every browser on the app plays: no hardware, a paced clock, and the mix handed to
+/// whoever streams it. Always listed, so a goofi with no sound card is still heard.
+pub const BROWSER_DEVICE: &str = "browser";
+
+/// The browser device's rate and width, which Opus and a browser's audio context both take.
+pub const BROWSER_RATE: u32 = 48_000;
+pub const BROWSER_CHANNELS: u16 = 2;
+
+/// Its period where `audio.buffer_size` names none: 10 ms.
+const BROWSER_PERIOD: u32 = 480;
+
+/// How many periods wait for the streamer before the oldest is lost.
+const OUTLET_DEPTH: usize = 32;
+
+/// One period of the browser device's mix, interleaved, and the frame it begins at.
+pub struct Chunk {
+    pub first: u64,
+    pub samples: Vec<f32>,
+}
+
+/// The browser device's outlet: each period its clock rendered, for the one streamer that holds
+/// the other end. Bounded, and filled only while someone listens: the clock never waits on it.
+pub struct Outlet {
+    tx: Mutex<Option<mpsc::SyncSender<Chunk>>>,
+    rx: Mutex<Option<mpsc::Receiver<Chunk>>>,
+    heard: AtomicBool,
+}
+
+impl Outlet {
+    fn new() -> Outlet {
+        let (tx, rx) = mpsc::sync_channel(OUTLET_DEPTH);
+        Outlet { tx: Mutex::new(Some(tx)), rx: Mutex::new(Some(rx)), heard: AtomicBool::new(false) }
+    }
+
+    /// The streamer's end, once: every period from here on, while [`Outlet::listen`] says so.
+    pub fn take(&self) -> Option<mpsc::Receiver<Chunk>> {
+        self.rx.lock().take()
+    }
+
+    /// Whether anyone listens: a mix nobody hears is not copied.
+    pub fn listen(&self, heard: bool) {
+        self.heard.store(heard, Ordering::Relaxed);
+    }
+
+    /// No more periods: the streamer's end reads the close and its worker leaves.
+    pub fn close(&self) {
+        self.tx.lock().take();
+    }
+
+    /// One period from the clock; a full queue loses it, and the frame count says so downstream.
+    fn offer(&self, first: u64, samples: &[f32]) {
+        if self.heard.load(Ordering::Relaxed) {
+            if let Some(tx) = self.tx.lock().as_ref() {
+                let _ = tx.try_send(Chunk { first, samples: samples.to_vec() });
+            }
+        }
+    }
+}
+
 /// Open `name` with `buffer` frames per callback, or the host's own buffer for 0. A host left to
 /// itself may hold seconds (pipewire-pulse holds 2 s); `render_into` is size-agnostic.
 fn open_output(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>) -> Result<(cpal::Stream, f64, u16), String> {
@@ -227,6 +322,38 @@ fn open_output(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc
     };
     let stream = open(format).map_err(|e| format!("`{name}`: {e}"))?;
     Ok((stream, rate, channels))
+}
+
+/// One period of a clock, a card's or the browser device's: `scratch` rendered under the runtime's
+/// lock, and what it cost counted. A lock held elsewhere, or a panic, is a period of silence.
+fn render_period(runtime: &Mutex<Runtime>, stats: &Stats, scratch: &mut [f32], channels: usize, rate: u32) {
+    let frames = scratch.len() / channels;
+    stats.callbacks.fetch_add(1, Ordering::Relaxed);
+    let started = Instant::now();
+    match runtime.try_lock() {
+        // A panic must not unwind through cpal's callback: the period is silence and the cause
+        // is logged; the runtime's lock takes the poison over.
+        Some(mut rt) => {
+            // The render helpers keep this thread's deadline, so they take its grant.
+            rt.pool.realtime(frames as u32, rate);
+            if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(scratch))) {
+                scratch.fill(0.0);
+                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
+            }
+            let (waited, worst) = rt.pool.waited();
+            stats.pool_wait_ns.store(waited.as_nanos() as u64, Ordering::Relaxed);
+            stats.pool_wait_max_ns.store(worst.as_nanos() as u64, Ordering::Relaxed);
+        }
+        None => {
+            scratch.fill(0.0);
+            stats.contended.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let took = started.elapsed();
+    stats.render_max_us.fetch_max(took.as_micros() as u64, Ordering::Relaxed);
+    if took.as_secs_f64() * f64::from(rate) > frames as f64 {
+        stats.late.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// The clock's callback, rendering `f32` and handing the device whatever word it speaks, through
@@ -250,35 +377,10 @@ where
             config,
             move |data: &mut [T], _| {
                 realtime.claim(data.len() / channels, rate);
-                stats.callbacks.fetch_add(1, Ordering::Relaxed);
-                let started = Instant::now();
                 scratch.resize(data.len(), 0.0);
-                match runtime.try_lock() {
-                    // A panic must not unwind through cpal's callback: the block is silence and
-                    // the cause is logged; the runtime's lock takes the poison over.
-                    Some(mut rt) => {
-                        // The render helpers keep this thread's deadline, so they take its grant.
-                        rt.pool.realtime((data.len() / channels) as u32, rate);
-                        if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(&mut scratch))) {
-                            scratch.fill(0.0);
-                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
-                        }
-                        let (waited, worst) = rt.pool.waited();
-                        stats.pool_wait_ns.store(waited.as_nanos() as u64, Ordering::Relaxed);
-                        stats.pool_wait_max_ns.store(worst.as_nanos() as u64, Ordering::Relaxed);
-                    }
-                    None => {
-                        scratch.fill(0.0);
-                        stats.contended.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                render_period(&runtime, &stats, &mut scratch, channels, rate);
                 for (out, v) in data.iter_mut().zip(scratch.iter()) {
                     *out = T::from_sample_(*v);
-                }
-                let took = started.elapsed();
-                stats.render_max_us.fetch_max(took.as_micros() as u64, Ordering::Relaxed);
-                if took.as_secs_f64() * f64::from(rate) > (data.len() / channels) as f64 {
-                    stats.late.fetch_add(1, Ordering::Relaxed);
                 }
             },
             // An underrun the backend reports recovers on its own and is an xrun; a device that
@@ -426,6 +528,8 @@ pub struct AudioEngine {
     /// again until one moves.
     tried: Option<(String, u32, Option<String>)>,
     stats: Arc<Stats>,
+    /// Where the browser device's clock offers its mix.
+    outlet: Arc<Outlet>,
     shared: Arc<Shared>,
     /// What only an audio control half needs: the clock's rate, what drives it, and the edits a
     /// plugin's own window made.
@@ -493,11 +597,13 @@ impl AudioEngine {
             device: None,
             tried: None,
             stats: Arc::new(Stats::default()),
+            outlet: Arc::new(Outlet::new()),
             shared: Arc::new(Shared::new(waker.clone())),
             audio: Arc::new(AudioShared {
                 rate: AtomicU64::new(RATE.to_bits()),
                 buffer: AtomicU32::new(goofi_core::variables::DEFAULT_BUFFER),
                 clock,
+                cards: AtomicBool::new(true),
                 edits: Mutex::new(Vec::new()),
                 waker,
                 anchor: anchor.clone(),
@@ -542,6 +648,17 @@ impl AudioEngine {
     }
 
     /// The timeline's note tracks as MIDI ports, for the thread that plays them.
+    /// Open no sound card of this machine: the browser device is the one output, `default` names
+    /// it, and no input opens. A public goofi's engine.
+    pub fn browser_only(&mut self) {
+        self.audio.cards.store(false, Ordering::Relaxed);
+    }
+
+    /// The browser device's outlet, for the one that streams its mix to the browsers.
+    pub fn outlet(&self) -> Arc<Outlet> {
+        self.outlet.clone()
+    }
+
     pub fn track_ports(&self) -> TrackPorts {
         self.audio.tracks.clone()
     }
@@ -780,15 +897,19 @@ impl AudioEngine {
                 return error.clone();
             }
         }
+        if !self.audio.cards() && name != BROWSER_DEVICE {
+            self.tried = Some((name.to_string(), self.audio.buffer(), Some(NO_CARDS.to_string())));
+            return Some(NO_CARDS.to_string());
+        }
         if self.opening.as_ref().is_some_and(|o| o.name == name && o.buffer == self.audio.buffer()) {
             return None;
         }
         // The open runs on a thread of its own and the settle goes on: a device takes seconds to
         // answer, and the graph is not held for them. The clock lands at the settle after.
         let previous = self.close();
-        let (runtime, stats, waker, buffer) = (self.runtime.clone(), self.stats.clone(), self.shared.waker.clone(), self.audio.buffer());
+        let (runtime, stats, waker, buffer, outlet) = (self.runtime.clone(), self.stats.clone(), self.shared.waker.clone(), self.audio.buffer(), self.outlet.clone());
         let device = name.to_string();
-        let clock = goofi_supervisor::ready::prepare(format!("goofi-audio-open {name}"), move || DeviceClock::open(&device, buffer, runtime, stats, waker));
+        let clock = goofi_supervisor::ready::prepare(format!("goofi-audio-open {name}"), move || DeviceClock::open(&device, buffer, runtime, stats, waker, outlet));
         let drain = self.shared.waker.clone();
         clock.on_ready(move || drain.notify());
         self.opening = Some(Opening { name: name.to_string(), buffer, clock, previous });
@@ -1147,7 +1268,11 @@ impl Engine for AudioEngine {
                 ui.post(move |_| vst3::editor::sync(uid, moved));
             }
         }
-        let outs = self.devices(view, audio_out::TYPE, audio_out::P::DEVICE);
+        let mut outs = self.devices(view, audio_out::TYPE, audio_out::P::DEVICE);
+        if !self.audio.cards() {
+            // With no card, the default device is the one there is.
+            outs.iter_mut().filter(|(_, device)| device == DEFAULT_DEVICE).for_each(|(_, device)| *device = BROWSER_DEVICE.to_string());
+        }
         let clock = outs.first().map(|(_, device)| device.clone());
         let agrees = |device: &String| Some(device) == clock.as_ref();
         let mut faults: Vec<(Uid, String)> = outs

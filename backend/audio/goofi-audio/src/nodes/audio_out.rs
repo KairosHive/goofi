@@ -26,7 +26,9 @@ pub static MANIFEST: Manifest = Manifest {
     doc: "The sound device: what reaches `input` is heard, times `gain`.\n\
           `channels` names the device channels it lands on, the first incoming channel on the \
           first channel named, so two AudioOuts can hold different pairs of one card.\n\
-          Every AudioOut on the device sums.",
+          Every AudioOut on the device sums.\n\
+          The `browser` device is no sound card: the sound button of each browser on the app \
+          plays it, at 48 kHz in stereo.",
     inputs: INS,
     outputs: &[],
     params: PARAMS,

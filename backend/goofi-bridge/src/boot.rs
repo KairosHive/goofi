@@ -134,18 +134,19 @@ pub fn boot(config: Config) -> Result<Manager, String> {
                 graphics.set_host(host.clone());
             }
         }
-        // A demo registers no audio engine, so there is nothing to hand it.
-        if !mode.demo {
-            let audio = crate::audio_engine(&mut g);
-            if let Some(host) = host {
-                audio.set_vst3(host, vst3_dirs);
-            }
-            audio.set_ui(ui.clone());
-        }
         // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
         // A demo has none, whatever its host has: a `Window` node there is a pass-through.
+        let ui = ui.filter(|_| !mode.demo);
+        let audio = crate::audio_engine(&mut g);
+        audio.set_ui(ui.clone());
+        // A demo is heard in its visitors' browsers alone, and loads no plugin of its host's.
+        match (mode.demo, host) {
+            (true, _) => audio.browser_only(),
+            (false, Some(host)) => audio.set_vst3(host, vst3_dirs),
+            (false, None) => {}
+        }
         if let Some(graphics) = crate::try_graphics_engine(&mut g) {
-            graphics.set_ui(ui.filter(|_| !mode.demo));
+            graphics.set_ui(ui);
         }
     }
     let patch = manager.state.mount();

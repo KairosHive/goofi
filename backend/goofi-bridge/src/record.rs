@@ -39,7 +39,7 @@ impl goofi_record::Engines for Engines {
         let graph = self.0.upgrade().ok_or("the recording graph is gone")?;
         let waits = {
             let mut graph = graph.lock();
-            let mut waits = crate::try_audio_engine(&mut graph).map(|audio| audio.flush_recording()).unwrap_or_default();
+            let mut waits = crate::audio_engine(&mut graph).flush_recording();
             waits.extend(crate::try_graphics_engine(&mut graph).map(|graphics| graphics.flush_recording()).unwrap_or_default());
             waits
         };
@@ -52,7 +52,7 @@ impl goofi_record::Engines for Engines {
     fn audio_blocks(&self) -> Option<u64> {
         let graph = self.0.upgrade()?;
         let mut graph = graph.lock();
-        crate::try_audio_engine(&mut graph).map(|audio| audio.blocks())
+        Some(crate::audio_engine(&mut graph).blocks())
     }
 }
 

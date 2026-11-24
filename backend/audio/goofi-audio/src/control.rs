@@ -81,6 +81,8 @@ pub struct AudioShared {
     pub buffer: AtomicU32,
     /// What drives the blocks: a live stream is opened only where the device does.
     pub clock: Clock,
+    /// Whether this engine opens the machine's sound cards; a public goofi opens none.
+    pub cards: AtomicBool,
     /// What a plugin reported of its own values — node, plugin param id, normalized value, and
     /// what moved it — for the worker to put into the document.
     pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64, goofi_node::Origin)>>,
@@ -150,6 +152,10 @@ impl AudioShared {
 
     pub fn buffer(&self) -> u32 {
         self.buffer.load(Ordering::Relaxed)
+    }
+
+    pub fn cards(&self) -> bool {
+        self.cards.load(Ordering::Relaxed)
     }
 }
 
@@ -247,11 +253,18 @@ impl AudioHalf {
     fn enumerate(&self) -> Option<Vec<String>> {
         let named = |kind: crate::host::Kind| {
             let mut names = vec![DEFAULT_DEVICE.to_string()];
-            names.extend(crate::host::named(kind).into_iter().map(|(n, _)| n));
+            if self.audio.cards() {
+                names.extend(crate::host::named(kind).into_iter().map(|(n, _)| n));
+            }
             names
         };
         match self.manifest.type_name {
-            audio_out::TYPE => Some(named(crate::host::Kind::Output)),
+            // The browser device stands after the default: it is there on every machine.
+            audio_out::TYPE => {
+                let mut names = named(crate::host::Kind::Output);
+                names.insert(1, crate::BROWSER_DEVICE.to_string());
+                Some(names)
+            }
             audio_in::TYPE => Some(named(crate::host::Kind::Input)),
             midi_in::TYPE => {
                 let mut names = vec![NO_PORT.to_string()];
@@ -283,6 +296,8 @@ impl AudioHalf {
                 // A selection that does not parse is the CHANNELS param's error, not the device's.
                 let (stream, error, sel_error) = match crate::chanmap::parse(&wanted.2) {
                     Err(why) => (None, None, Some(why)),
+                    // An engine that opens no card has no input to open.
+                    Ok(_) if !self.audio.cards() => (None, Some(crate::NO_CARDS.to_string()), None),
                     Ok(sel) => match open_input(&wanted.0, wanted.1, wanted.3, sel.as_deref(), producer, io.dead.clone(), clock) {
                         Ok(Some((stream, c))) => {
                             chans.store(c, Ordering::Relaxed);

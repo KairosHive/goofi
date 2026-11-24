@@ -3,7 +3,8 @@
 //! this mode withholds is the convenient doors.
 
 use goofi_bridge::phrase;
-use goofi_tests::{host, http, j, render, Client, Goofi};
+use futures_util::StreamExt;
+use goofi_tests::{host, http, j, render, Client, Goofi, Message, WAIT};
 
 /// Every op a demo drops, and the one it keeps because a visitor needs a reset.
 const DROPPED: [&str; 7] =
@@ -48,17 +49,14 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
         assert!(!offered(&g, word), "a demo does not offer `{word}`");
     }
 
-    // No audio ENGINE, which is the one line that also empties the audio half of the catalog.
+    // The catalog is the graph's, whole: every plane a full server has.
     let types = |g: &Goofi| -> Vec<String> {
         goofi_bridge::catalog_type_names(&g.graph())
     };
-    assert!(types(&full).iter().any(|t| t.starts_with("audio:")), "a full server has audio nodes");
-    assert!(
-        !types(&g).iter().any(|t| t.starts_with("audio:")),
-        "a demo has none: {:?}",
-        types(&g)
-    );
-    assert!(types(&g).iter().any(|t| t.starts_with("signal:")), "…and every signal node stands");
+    for plane in ["signal:", "audio:"] {
+        assert!(types(&full).iter().any(|t| t.starts_with(plane)), "a full server has `{plane}` nodes");
+        assert!(types(&g).iter().any(|t| t.starts_with(plane)), "and a demo has them: {:?}", types(&g));
+    }
 
     // The graph itself is untouched by the mode: a node is added, and it runs.
     let osc = g.add("LFO");
@@ -157,4 +155,68 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     )
     .await;
     assert_eq!(status, 403, "a local goofi admits no DNS name");
+}
+
+/// The packets of one `/audio` stream: what its first message says it is, then `count` packets as
+/// the index of their first frame and their payload.
+async fn heard(base: &str, codec: &str, count: usize) -> (serde_json::Value, Vec<(u64, Vec<u8>)>) {
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("{base}/audio?codec={codec}")).await.unwrap();
+    let mut next = async || tokio::time::timeout(WAIT, ws.next()).await.expect("the stream sends").expect("the stream is open").unwrap();
+    let Message::Text(head) = next().await else { panic!("the first message says what the stream is") };
+    let mut packets = Vec::new();
+    while packets.len() < count {
+        if let Message::Binary(bytes) = next().await {
+            packets.push((u64::from_le_bytes(bytes[..8].try_into().unwrap()), bytes[8..].to_vec()));
+        }
+    }
+    (serde_json::from_str(&head).unwrap(), packets)
+}
+
+#[tokio::test]
+async fn a_public_goofi_is_heard_in_its_visitors_browsers_and_opens_no_sound_card() {
+    let g = Goofi::demo();
+    let (osc, out) = (g.add("audio:Osc"), g.add("audio:AudioOut"));
+    g.ready(osc);
+    g.ready(out);
+    g.link(osc, "out", out, "input");
+    // `default` names the one device a demo has, and that device is the browser's.
+    let device = |g: &Goofi| g.call("session status", j!({}))["audio"]["device"].clone();
+    g.until("the clock is on the browser device", |g| (device(g) == j!("browser")).then_some(()));
+    // A card's name opens nothing, and says why; the name of the device there is opens it again.
+    g.set_param(out, "audio", "device", "ALSA: a card of the host");
+    let why = g.until("a card is refused", |g| g.error(out));
+    assert!(why.contains("opens no sound card"), "{why}");
+    g.set_param(out, "audio", "device", "browser");
+    g.until("the browser device plays again", |g| (device(g) == j!("browser") && g.error(out).is_none()).then_some(()));
+
+    let base = g.serve().await;
+    // PCM: whole 20 ms frames of 16-bit stereo, one after the other, and the oscillator in them.
+    let (head, packets) = heard(&base, "pcm", 8).await;
+    assert_eq!(head, j!({ "codec": "pcm", "rate": 48000, "channels": 2, "frame": 960 }));
+    for pair in packets.windows(2) {
+        assert_eq!(pair[1].0, pair[0].0 + 960, "each packet begins where the one before ended");
+    }
+    assert!(packets.iter().all(|(_, payload)| payload.len() == 960 * 2 * 2), "a packet is one frame of stereo words");
+    assert!(packets.iter().any(|(_, payload)| payload.iter().any(|b| *b != 0)), "the oscillator is in the mix");
+
+    // Opus: one packet a frame, which libopus decodes to that frame again, with sound in it.
+    let (head, packets) = heard(&base, "opus", 8).await;
+    assert_eq!(head["codec"], j!("opus"));
+    let mut error = 0;
+    // SAFETY: plain arguments; the decoder is destroyed below.
+    let decoder = unsafe { unsafe_libopus::opus_decoder_create(48000, 2, &mut error) };
+    assert_eq!(error, unsafe_libopus::OPUS_OK);
+    let mut loud = false;
+    for (_, payload) in &packets {
+        let mut frame = vec![0f32; 960 * 2];
+        // SAFETY: `payload` is one packet, and `frame` holds 960 frames of two channels.
+        let frames = unsafe { unsafe_libopus::opus_decode_float(decoder, payload.as_ptr(), payload.len() as i32, frame.as_mut_ptr(), 960, 0) };
+        assert_eq!(frames, 960, "an Opus packet is one 20 ms frame");
+        loud |= frame.iter().any(|v| v.abs() > 0.01);
+    }
+    // SAFETY: the decoder made above, destroyed once.
+    unsafe { unsafe_libopus::opus_decoder_destroy(decoder) };
+    assert!(loud, "the oscillator is in what Opus carries");
+    // A codec the stream does not have is no stream.
+    assert!(tokio_tungstenite::connect_async(format!("{base}/audio?codec=flac")).await.is_err());
 }

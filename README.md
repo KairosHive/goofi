@@ -67,7 +67,7 @@ which is what a CI job runs to prove the build; it has no flag.
 | `--load PATCH` | — | Open this `.gfi` at start. `GOOFI_LOAD` is the same. |
 | `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, and `/mcp` under `--mcp`. The app's routes are never mounted and the `layout` ops leave the op table. |
 | `--mcp` | — | Serve the MCP endpoint at `/mcp`: one tool, `goofi_exec`, running the CLI's command lines. Off by default; `GOOFI_MCP=1` is the same switch. |
-| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `record`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs, no plugin loads and a `Window` node opens no window. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
+| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `record`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no plugin loads, a `Window` node opens no window, and the audio engine opens no sound card: its one device is `browser`. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |
 
 The Save and Open dialogs each carry a second door — *Download a copy* and *Upload…* — which pass
@@ -85,6 +85,10 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 | `signal` | Array data, at whatever rate the source runs. LSL and OSC in and out, MIDI out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
 | `audio` | The same node interface at audio rate. Live in and out, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
 | `graphics` | Pixels from WGSL shaders or Rust/Python sources, with shared GPU textures. Noise and shapes generate images; Camera captures them; blur, displacement, and feedback process them. | The GPU. |
+
+An `AudioOut` plays on a sound card of the machine goofi runs on, or on the `browser` device:
+the mix is sent to every browser on the app as Opus, and the sound button in the top bar plays
+it in that tab. A goofi on another machine, or a public one, is heard that way.
 
 VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its nodes come off the
 machine the patch is open on, so goofi supports VST3 and ships none.
