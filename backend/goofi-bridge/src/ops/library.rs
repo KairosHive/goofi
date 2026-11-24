@@ -17,7 +17,7 @@ op!(Get, "library get", 1, GetArgs {
     pub ty: String,
     pub source: Option<bool>,
 },
-    "ONE library entry in full: the palette fields — slots, params, availability — plus where the type came from. `--source` reads the file itself too, under `text`. Copy a node into the patch workspace to modify one.",
+    "ONE library entry in full: the palette fields — slots, params, availability — plus where the type came from. `--source` reads the file itself too, under `text`. A type that could not load answers too, as the row `library list` gives with its file, so its source can still be read. Copy a node into the patch workspace to modify one.",
     "the `library list --full` entry plus {language, tier, provenance, path, shadowed}, and `text` under `--source` — `shadowed` being the same type's files in the roots BEHIND the winner, each {provenance, path}");
 
 op!(Save, "library save", 1, SaveArgs {

@@ -298,9 +298,21 @@ pub fn node_source(
     roots: &[(PathBuf, goofi_graph::Origin)],
     source: bool,
 ) -> Result<Value, String> {
-    let (engine, entry) = g.resolve_type(ty)?;
-    let ty = &goofi_node::qualify(engine, entry.manifest.type_name);
-    let mut info = crate::schemas::palette_row(g, engine, ty, Some(entry.manifest), None, crate::schemas::Detail::Full);
+    // A type that could not load, and a boundary port, are entries too: the row the list gives.
+    let (engine, mut info) = match g.resolve_type(ty) {
+        Ok((engine, entry)) => {
+            let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+            (engine.to_string(), crate::schemas::palette_row(g, engine, &ty, Some(entry.manifest), None, crate::schemas::Detail::Full))
+        }
+        Err(unknown) => {
+            let Value::Array(rows) = crate::schemas::catalog_types(g, crate::schemas::Detail::Full) else { return Err(unknown) };
+            let named = |row: &Value| row["type"].as_str().is_some_and(|t| t == ty || goofi_node::bare(t) == ty);
+            let row = rows.into_iter().find(named).ok_or(unknown)?;
+            let engine = goofi_node::split_type_id(row["type"].as_str().unwrap_or_default()).0.unwrap_or_default().to_string();
+            (engine, row)
+        }
+    };
+    let (engine, ty) = (engine.as_str(), &info["type"].as_str().unwrap_or(ty).to_string());
     // `.rev()` is load-bearing: `rescan` scans the roots forwards and lets each overwrite the
     // last, so a first-match search walks them backwards.
     let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| mount.join(goofi_node::folder_of(id))).collect();

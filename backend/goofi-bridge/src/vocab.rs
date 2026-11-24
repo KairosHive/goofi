@@ -121,6 +121,48 @@ pub fn boundary_types_help() -> String {
     BOUNDARY_TYPES.iter().map(|(name, _, _)| *name).collect::<Vec<_>>().join("/")
 }
 
+/// The same tables as data: what `op vocabulary` answers, and what a reference is written from.
+pub fn catalog() -> Value {
+    let dims = |(lo, hi): (u8, u8)| json!([lo, hi]);
+    json!({
+        "data_types": SlotType::ALL.iter().map(|t| json!({
+            "name": t.name(),
+            "feeds": SlotType::ALL.iter().filter(|into| t.feeds(**into)).map(|into| into.name()).collect::<Vec<_>>(),
+            "engine_local": t.engine_local(),
+        })).collect::<Vec<_>>(),
+        "panel_types": PANEL_TYPES.iter().map(|p| json!({
+            "id": p.id, "title": p.title, "icon": p.icon, "accepts_node": p.accepts_node, "doc": p.doc,
+        })).collect::<Vec<_>>(),
+        "default_panel_type": DEFAULT_PANEL_TYPE,
+        "viewer_kinds": VIEWER_KINDS.iter().map(|k| {
+            let (draws, accepts) = match k.draws {
+                Draws::Array { draws, accepts } => (Some(dims(draws)), Some(dims(accepts))),
+                Draws::Pinned(_) => (None, None),
+            };
+            json!({ "id": k.id, "dtype": k.dtype(), "draws": draws, "accepts": accepts, "doc": k.doc })
+        }).collect::<Vec<_>>(),
+        "boundary_types": BOUNDARY_TYPES.iter().map(|(name, dir, dtype)| json!({
+            "type": name, "dir": dir.name(), "dtype": dtype.name(),
+        })).collect::<Vec<_>>(),
+        "boundary_slot": BOUNDARY_SLOT,
+        "scope_type": SCOPE_TYPE,
+        "tags": goofi_node::Tag::ALL.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "control_kinds": goofi_core::variables::ControlKind::ALL.iter().map(|k| json!({
+            "id": k.as_str(), "draws": k.draws(),
+        })).collect::<Vec<_>>(),
+        "expression": {
+            "builtins": goofi_node::expr::BUILTINS.iter().map(|b| json!({
+                "name": b.name, "kind": b.kind, "scope": b.scope, "signature": b.signature, "doc": b.doc,
+                "args": b.args.iter().map(|a| json!({
+                    "name": a.name, "kind": a.kind, "default": a.default, "options": a.options, "keyword": a.keyword, "doc": a.doc,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "math": goofi_node::expr::MATH,
+            "math_constants": goofi_node::expr::MATH_CONSTANTS,
+        },
+    })
+}
+
 /// The frontend's vocabulary module, generated from the tables above and checked into the tree.
 pub fn typescript() -> String {
     let dtypes = SlotType::ALL.iter().map(|t| format!("'{}'", t.name())).collect::<Vec<_>>().join(" | ");
