@@ -162,7 +162,12 @@ impl Smoothing {
                     self.level = x.clone();
                 }
                 for (y, v) in self.level.iter_mut().zip(&x) {
-                    pull(y, *v, rate);
+                    // A level that is no number is an average of nothing: it starts at the sample.
+                    if y.is_finite() {
+                        pull(y, *v, rate);
+                    } else {
+                        *y = *v;
+                    }
                 }
                 Ok(self.level.clone())
             }

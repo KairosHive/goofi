@@ -51,14 +51,14 @@ pub enum Msg {
 pub struct Driver {
     tx: Sender<Msg>,
     door: Arc<Door>,
-    /// The note tracks as the audio engine's MIDI ports; on a demo, which has none, nobody's.
+    /// The note tracks as the audio engine's MIDI ports.
     ports: goofi_audio::TrackPorts,
 }
 
 impl Driver {
     pub fn new(hub: &Hub, g: &mut Graph) -> (Driver, Receiver<Msg>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        let ports = crate::try_audio_engine(g).map(|audio| audio.track_ports()).unwrap_or_default();
+        let ports = crate::audio_engine(g).track_ports();
         (Driver { tx, door: hub.door(&machines_door(g.instance())), ports }, rx)
     }
 

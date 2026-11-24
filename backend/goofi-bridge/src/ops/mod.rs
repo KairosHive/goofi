@@ -518,6 +518,7 @@ pub static TREE: &[Entry] = &[
     ]),
     Group("op", "the vocabulary itself", &[
         Leaf(read::<history::OpList>()),
+        Leaf(read::<history::OpVocabulary>()),
         Leaf(read::<history::OpComplete>()),
     ]),
     Group("guide", "what an agent reads first: the orientation, then the skill for its task", &[

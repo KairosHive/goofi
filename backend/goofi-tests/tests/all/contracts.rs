@@ -129,6 +129,16 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
                     "`{}` draws {draws:?} but its ViewSpec accepts only {accepts:?}", k.id);
         }
     }
+    // The same tables are an op's reply, with what this goofi is: a reference is written from it.
+    let words = Goofi::new().call("op vocabulary", j!({}));
+    assert_eq!(words["version"], j!(env!("CARGO_PKG_VERSION")));
+    assert!(words["protocol_version"].as_i64().is_some_and(|v| v > 0) && words["rust_toolchain"].is_string(), "{words}");
+    let ids = |rows: &Value, key: &str| -> Vec<String> { rows.as_array().unwrap().iter().map(|r| r[key].as_str().unwrap().to_string()).collect() };
+    assert_eq!(ids(&words["panel_types"], "id"), vocab::PANEL_TYPES.iter().map(|p| p.id).collect::<Vec<_>>());
+    assert_eq!(ids(&words["viewer_kinds"], "id"), vocab::VIEWER_KINDS.iter().map(|k| k.id).collect::<Vec<_>>());
+    assert_eq!(ids(&words["data_types"], "name"), SlotType::ALL.iter().map(|t| t.name()).collect::<Vec<_>>());
+    assert_eq!(words["boundary_types"].as_array().unwrap().len(), goofi_graph::subpatch::BOUNDARY_TYPES.len());
+    assert!(ids(&words["examples"], "slug").iter().all(|slug| !slug.is_empty()) && !words["tags"].as_array().unwrap().is_empty(), "{words}");
 }
 
 #[test]

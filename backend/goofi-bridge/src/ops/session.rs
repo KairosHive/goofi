@@ -70,9 +70,8 @@ impl ReadOp for Status {
             "workspace": goofi_core::path::to_slash(&tx.state.mount()),
             "dirty": tx.state.is_dirty(),
             "errors": inspect::errors(&tx.g),
-            // The clock and counters, null where the engine is not registered: a demo has no audio
-            // engine, and a machine with no adapter no graphics one.
-            "audio": crate::try_audio_engine(&mut tx.g).map(|a| a.status()),
+            // The clocks and counters; graphics is null on a machine with no adapter.
+            "audio": crate::audio_engine(&mut tx.g).status(),
             "graphics": crate::try_graphics_engine(&mut tx.g).map(|a| a.status()),
             // Every resource this process holds — children, workers, ports, paths, devices — from the
             // one index a lease enters and leaves. What is held at ANY moment, not what was made.

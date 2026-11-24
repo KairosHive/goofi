@@ -13,6 +13,10 @@ op!(OpList, "op list", 0, OpListArgs {
     "Every op this server speaks: its name, its arguments (`!` marks a required one) and its kind — a `write` is undoable and may ride in a batch, an `effect` runs alone. Every argument is reachable as `--name value`, which is all a caller needs to write one. What an op DOES is `<op> --help`; `--doc` answers the whole vocabulary explained, which is the manual and costs like one.",
     "{ops: [{op, args, kind}]}, each row also carrying {positional, doc, result} under `--doc`");
 
+op!(OpVocabulary, "op vocabulary", 0, NoArgs,
+    "The words the ops and a patch are written in, and what this goofi is: its version and protocol, the data types and what each feeds, the panel types, the viewer kinds, the sub-patch boundary types, the node tags, the control widgets, what an expression can call, and the examples a public instance offers. With `op list --doc` and `library list --full` it is everything a reference of goofi is written from.",
+    "{version, protocol_version, rust_toolchain, data_types: [{name, feeds, engine_local}], panel_types: [{id, title, icon, accepts_node, doc}], default_panel_type, viewer_kinds: [{id, dtype, draws, accepts, doc}], boundary_types: [{type, dir, dtype}], boundary_slot, scope_type, tags, control_kinds: [{id, draws}], expression: {builtins: [{name, kind, scope, signature, doc, args}], math, math_constants}, examples: [{slug, label, blurb}]}");
+
 op!(OpComplete, "op complete", 1, OpCompleteArgs {
     pub line: Option<String>,
 },
@@ -52,6 +56,17 @@ impl ReadOp for OpList {
             })
             .collect();
         Ok(json!({ "ops": ops }))
+    }
+}
+
+impl ReadOp for OpVocabulary {
+    fn run(_tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
+        let mut words = crate::vocab::catalog();
+        words["version"] = json!(env!("CARGO_PKG_VERSION"));
+        words["protocol_version"] = json!(crate::schemas::PROTOCOL_VERSION);
+        words["rust_toolchain"] = json!(crate::schemas::rust_toolchain());
+        words["examples"] = crate::schemas::example_list();
+        Ok(words)
     }
 }
 

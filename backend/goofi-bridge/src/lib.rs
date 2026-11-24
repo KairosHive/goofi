@@ -15,6 +15,7 @@ pub mod doc;
 mod fsbrowse;
 mod inspect;
 mod mcp;
+mod listen;
 pub mod machines;
 pub mod midi;
 pub mod ops;
@@ -127,6 +128,8 @@ pub struct AppState {
     pub variables: Arc<variables::Variables>,
     /// The MIDI devices open on the bus, each writing its group through the store.
     pub midi: Arc<midi::Midi>,
+    /// The browser device's mix on its way to the browsers.
+    listen: listen::Listen,
     /// The state machines' thread, handed the settled model and every request.
     pub machines: Arc<machines::Driver>,
     /// Pulsed after every settle, for whoever derives its address from the graph: a `/data`
@@ -220,7 +223,7 @@ impl AppState {
         let workspace_baseline = goofi_graph::archive::fingerprint(&dir);
         // Project the INITIAL graph — no nodes, but the seeded system variables — so a client that
         // connects to a fresh backend has the current state at once.
-        let (mut graph_val, recorder) = fresh_graph(hub.clone(), (!mode.demo).then_some(clock), render)?;
+        let (mut graph_val, recorder) = fresh_graph(hub.clone(), clock, render)?;
         graph_val.set_workspace(&dir);
         let mut doc = crate::doc::GraphDoc::new();
         doc.apply_projection(graph_val.projection());
@@ -229,6 +232,7 @@ impl AppState {
         let variables = Arc::new(variables::Variables::new(hub.clone(), graph_val.instance()));
         graph_val.variables().set_plane(variables.clone());
         let midi = Arc::new(midi::Midi::new(graph_val.variable_store()));
+        let listen = listen::Listen::new(audio_engine(&mut graph_val).outlet());
         let graph = Arc::new(Mutex::new(graph_val));
         record::attach(&recorder, &graph);
         let (follow_tx, follow_rx) = std::sync::mpsc::channel();
@@ -250,6 +254,7 @@ impl AppState {
             reducers,
             variables,
             midi,
+            listen,
             machines: Arc::new(machines),
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
@@ -276,6 +281,8 @@ impl AppState {
         state.scope.spawn("goofi-variables", move || served.serve(&graph, &stopping));
         autosave::spawn(state.clone());
         spawn_midi(state.clone());
+        let listen = state.listen.clone();
+        state.scope.spawn("goofi-listen", move || listen.serve());
         Ok(state)
     }
 
@@ -291,6 +298,7 @@ impl AppState {
         self.changed.notify();
         self.variables.poke();
         self.midi.release_all();
+        self.listen.close();
         self.scope.close(goofi_transport::SHUTDOWN_WAIT);
         self.reducers.stop_all(goofi_transport::SHUTDOWN_WAIT);
         self.graph.lock().shutdown();
@@ -510,6 +518,16 @@ fn routes(state: AppState) -> Router {
             "/presence",
             any(|ws: WebSocketUpgrade, State(state): State<AppState>| async {
                 ws.on_upgrade(move |socket| async move { presence::handle(socket, &state.presence).await })
+            }),
+        )
+        // The browser device's mix, as Opus or as PCM.
+        .route(
+            "/audio",
+            any(|ws: WebSocketUpgrade, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>, State(state): State<AppState>| async move {
+                match listen::Codec::named(q.get("codec").map(String::as_str)) {
+                    Some(codec) => ws.on_upgrade(move |socket| state.listen.clone().handle(socket, codec)),
+                    None => axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND),
+                }
             }),
         )
         // One stream per (node, slot): each connection sends its viewers' ViewSpecs inband.
@@ -1006,15 +1024,12 @@ pub fn prebuild(state: &AppState, patch: &std::path::Path) {
 }
 
 /// A graph with every engine this machine has, and the one recorder its armed outputs queue to.
-/// A `None` audio clock asks for no audio engine at all.
-pub fn fresh_graph(hub: Arc<goofi_transport::Hub>, clock: Option<Clock>, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
+pub fn fresh_graph(hub: Arc<goofi_transport::Hub>, clock: Clock, render: Clock) -> Result<(Graph, Arc<goofi_record::Recorder>), String> {
     let mut g = Graph::new(goofi_supervisor::session::fresh_id()?);
     let recorder = Arc::new(goofi_record::Recorder::new(g.time(), hub.clone()));
     let signal = goofi_signal::SignalEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker())?;
     g.register_engine(Box::new(signal));
-    if let Some(clock) = clock {
-        g.register_engine(Box::new(goofi_audio::AudioEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
-    }
+    g.register_engine(Box::new(goofi_audio::AudioEngine::new(hub.clone(), g.instance().to_string(), g.time(), g.drain_waker(), clock)?));
     match goofi_graphics::GraphicsEngine::open(hub, g.instance().to_string(), g.time(), g.drain_waker(), render, recorder.running_flag()) {
         Ok(engine) => g.register_engine(Box::new(engine)),
         Err(why) => goofi_supervisor::log::record(goofi_supervisor::log::Source::component("bridge"), goofi_supervisor::log::Level::Error, None, format!("graphics: {why}; this machine renders no shaders")),
@@ -1036,13 +1051,7 @@ pub use goofi_supervisor::timing::Clock;
 
 /// The audio engine registered in `g` — its external clock is the concrete door a test drives.
 pub fn audio_engine(g: &mut Graph) -> &mut goofi_audio::AudioEngine {
-    try_audio_engine(g).expect("the audio engine is registered")
-}
-
-/// …or nothing, on a demo, which registers no audio engine at all. One resolution behind both
-/// doors: a caller that can be answered without audio asks here.
-pub fn try_audio_engine(g: &mut Graph) -> Option<&mut goofi_audio::AudioEngine> {
-    g.engine_mut("audio").and_then(|e| e.as_any_mut().downcast_mut())
+    g.engine_mut("audio").and_then(|e| e.as_any_mut().downcast_mut()).expect("the audio engine is registered")
 }
 
 /// The signal engine registered in `g` — the composition root's reach to its concrete doors.

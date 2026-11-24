@@ -1,6 +1,7 @@
 /** Agent read/introspection surface — paired with `commands`. */
 import { variableValue } from '$lib/stores/variableValues.svelte';
 import { graph } from '$lib/stores/graph.svelte';
+import { listen } from '$lib/stores/listen.svelte';
 import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
 import { history } from '$lib/stores/history.svelte';
@@ -74,6 +75,11 @@ export const query = {
 			savePath: g.savePath,
 			unsavedChanges: g.unsavedChanges
 		};
+	},
+	/** Whether this tab plays the browser device, the frames its player was given, and why it stopped. */
+	listening: (): { on: boolean; frames: number; error: string | null } => {
+		const l = listen();
+		return { on: l.on, frames: l.frames, error: l.error };
 	},
 	/** Every armed output slot, as the document holds it. */
 	armed: (): { uid: string; slot: string }[] => graph().armed,

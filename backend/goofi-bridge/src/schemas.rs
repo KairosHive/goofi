@@ -14,6 +14,16 @@ pub const PROTOCOL_VERSION: i64 = 5;
 /// The examples a public deployment offers, compiled in beside the `.gfi` files they name.
 const EXAMPLES: &str = include_str!("../../../examples/demo.json");
 
+/// The examples as the manifest lists them: {slug, label, blurb} each.
+pub(crate) fn example_list() -> Value {
+    serde_json::from_str::<Value>(EXAMPLES).expect("the compiled example manifest")["examples"].take()
+}
+
+/// The compiler this build is gated with: the channel `rust-toolchain.toml` pins.
+pub(crate) fn rust_toolchain() -> Option<&'static str> {
+    include_str!("../../../rust-toolchain.toml").lines().find_map(|l| l.strip_prefix("channel = \"")?.strip_suffix('"'))
+}
+
 /// One row per example: where it answers under `base`, and which of them is `current`.
 pub(crate) fn examples(base: &str, current: Option<&str>) -> Value {
     let base = base.trim_end_matches('/');

@@ -6,6 +6,8 @@
 	import { workspace } from 'panelty';
 	import { harnesses, harnessLabel } from '$lib/stores/harness.svelte';
 	import { presence } from '$lib/stores/presence.svelte';
+	import { listen } from '$lib/stores/listen.svelte';
+	import { variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
 	import { paints as p } from '$lib/api/frames';
 	import { patchName } from '$lib/api/patchFile';
 	import { activeOrOnlyEditor } from '$lib/panels/editorCommands';
@@ -35,6 +37,14 @@
 	const ws = workspace();
 	const hs = harnesses();
 	const pr = presence();
+
+	// The patch's clock is the browser device: this tab can play it, once a press turns it on.
+	const ear = listen();
+	watchVariables(() => ['audio.device']);
+	const heard = $derived(variableValue('audio.device') === 'browser');
+	$effect(() => {
+		if (!heard && ear.on) ear.stop();
+	});
 
 	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
 	const rec = $derived(g.record);
@@ -191,6 +201,7 @@
 			unplanned('topbar-connection') +
 			unplanned('topbar-agents') +
 			unplanned('topbar-errors') +
+			unplanned('topbar-listen') +
 			unplanned('topbar-examples');
 		const budget =
 			bar.clientWidth -
@@ -237,6 +248,7 @@
 		void g.savePath;
 		void g.unsavedChanges;
 		void hudActive;
+		void heard;
 		void rec.running;
 		void dropping;
 		void hs.instances.length;
@@ -375,6 +387,17 @@
 				aria-expanded={menu?.key === 'agents'}
 				title="Running agents"
 				onclick={openAgents}><Icon name="bot" />{hs.instances.length}</Button
+			>
+		{/if}
+		<!-- The browser device plays in this tab once it is turned on here: a browser needs the press. -->
+		{#if heard}
+			<IconButton
+				variant="ghost"
+				style={ear.on ? '--panelty-btn-ink: var(--accent)' : ''}
+				data-testid="topbar-listen"
+				aria-pressed={ear.on}
+				label={ear.error ? `Sound stopped: ${ear.error}. Press to play again` : ear.on ? 'Sound on: this tab plays the patch' : 'Sound off: press to hear the patch in this tab'}
+				onclick={() => ear.toggle()}><Icon name={ear.on ? 'volume-2' : 'volume-x'} /></IconButton
 			>
 		{/if}
 		<!-- The nodes in error: a count that opens their list, each row selecting its node. -->

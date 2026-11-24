@@ -55,3 +55,4 @@ anstyle = "1"
 toml = "0.8"
 ts-rs = { version = "12", features = ["serde-compat", "indexmap-impl", "serde-json-impl"] }
 schemars = { version = "1", features = ["indexmap2"] }
+unsafe-libopus = "0.2"

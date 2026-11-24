@@ -82,6 +82,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   from before it, undo and redo swap one in, a preview publishes without pushing.
 - Signal nodes schedule themselves; audio and graphics have their own clocks. Node processing
   does not run under the graph lock. Cross-engine transport is latest-wins shared memory.
+- The audio engine's clock is one output device: a sound card, or `browser`, a paced clock with no
+  card whose mix `/audio` sends to every browser as Opus or PCM. A demo has that device alone.
 - Params have one active source: constant or expression. Values use `/params/<node>`; errors use
   `/control`. Viewer demand must not change engine scheduling.
 - The state machines and the timeline are one snapshot root, stepped by one thread

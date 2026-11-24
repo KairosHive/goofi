@@ -221,9 +221,10 @@ impl Goofi {
         Goofi::with_mode(goofi_bridge::Mode { headless: true, ..Default::default() })
     }
 
-    /// Boot a PUBLIC one — no host-facing ops, and no audio engine behind the catalog.
+    /// Boot a PUBLIC one: no host-facing ops, and the audio engine on its own clock, as the binary
+    /// runs it. That clock opens the browser device alone, so no test here reaches a sound card.
     pub fn demo() -> Goofi {
-        Goofi::with_mode(goofi_bridge::Mode { demo: true, ..Default::default() })
+        Goofi::boot(goofi_bridge::Mode { demo: true, ..Default::default() }, goofi_bridge::Clock::Internal, goofi_bridge::Clock::External, None)
     }
 
     /// Boot one that serves `/mcp`, as `--mcp` does; the default serves none.
@@ -234,24 +235,24 @@ impl Goofi {
     /// One whose graphics engine runs on its OWN timer clock, as the binary does — nothing to
     /// drive by hand, and nothing to mistake a driven frame for.
     pub fn timed() -> Goofi {
-        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::Internal, None)
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, goofi_bridge::Clock::Internal, None)
     }
 
     fn with_mode(mode: goofi_bridge::Mode) -> Goofi {
-        Goofi::boot(mode, goofi_bridge::Clock::External, None)
+        Goofi::boot(mode, goofi_bridge::Clock::External, goofi_bridge::Clock::External, None)
     }
 
     /// Boot one with the plugins under `home`, as the binary loads its own home's.
     pub fn with_plugins(home: &std::path::Path) -> Goofi {
-        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, Some(home.to_path_buf()))
+        Goofi::boot(goofi_bridge::Mode::default(), goofi_bridge::Clock::External, goofi_bridge::Clock::External, Some(home.to_path_buf()))
     }
 
-    fn boot(mode: goofi_bridge::Mode, render: goofi_bridge::Clock, plugins: Option<PathBuf>) -> Goofi {
+    fn boot(mode: goofi_bridge::Mode, audio: goofi_bridge::Clock, render: goofi_bridge::Clock, plugins: Option<PathBuf>) -> Goofi {
         walled_home();
         // The window thread has no screen: a `Window` node and a plugin editor open on a loop the
         // suite owns, and no test reaches a desktop.
         let windows = Some(window_thread());
-        let mut config = goofi_bridge::Config::new(hub(), mode, goofi_bridge::Clock::External, render);
+        let mut config = goofi_bridge::Config::new(hub(), mode, audio, render);
         // The suite's own stand-in for the binary scans a bundle and hosts a node built after
         // boot; no platform folder, so an installed plugin never reaches a test.
         config.host = Some(scanner());

@@ -447,7 +447,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // client, the host default first; the clock itself reports through `session status`.
     let mut ev = g.events();
     let devices = refreshed(&g, &mut ev, out, "audio", "device");
-    assert_eq!(devices[0], "default");
+    assert_eq!(devices[..2], ["default", "browser"], "the two names every machine has stand first");
     let status = g.call("session status", j!({}));
     assert_eq!(status["audio"]["clock"], "external", "{status}");
     assert_eq!(status["audio"]["rate"], 48000.0, "{status}");
@@ -465,12 +465,12 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(variable("audio.channels")["value"].as_f64(), status["audio"]["channels"].as_f64(), "the channels it published");
     assert_eq!(variable("audio.device")["value"], j!(""), "no device under the external clock");
     assert_eq!(variable("audio.driver")["value"], j!(""), "and no ASIO driver holds this process");
-    // The APIs this build carries are published too, and every device a refresh offers is prefixed
+    // The APIs this build carries are published too, and every card a refresh offers is prefixed
     // with one of them — the name IS the host choice, so a name from an API outside the list would
     // be one nobody can resolve. It is also the only place a whole API missing from a build says so.
     let hosts = variable("audio.hosts")["value"].as_str().unwrap_or_default().to_string();
     assert!(!hosts.is_empty(), "a build carries at least one audio host");
-    for name in devices.iter().filter(|n| *n != "default") {
+    for name in &devices[2..] {
         assert!(hosts.split(", ").any(|h| name.starts_with(&format!("{h}: "))),
                 "`{name}` names an audio host outside `{hosts}`");
     }
@@ -726,6 +726,19 @@ fn a_patch_sounds_under_the_external_clock() {
     sounds(&g, "silence where the NaN would have played", |x| x.iter().all(|v| v.is_finite()) && peak(x) == 0.0);
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "value": 1.0, "mode": "constant" }));
     g.until("the error to clear", |g| g.error(gain3).is_none().then_some(()));
+
+    // Step: …and a COMPUTED NaN, which is a block for the audio thread, never reaches the node. A
+    // filter keeps what it is given: one that took a NaN cutoff is silent for ever, and this one passes.
+    let lowpass = g.add("audio:Filter");
+    g.link(gain3, "out", lowpass, "input");
+    g.call("node param edit", j!({ "node": hex(lowpass), "param": "filter/cutoff", "expression": format!("nd('{poison_name}') * 1") }));
+    let why = g.until("the filter's NaN to be refused", |g| g.error(lowpass));
+    assert!(why.contains("evaluated to NaN"), "{why}");
+    drive(&g, TENTH);
+    g.call("node param edit", j!({ "node": hex(lowpass), "param": "filter/cutoff", "value": 6.0, "mode": "constant" }));
+    heard(&g, lowpass, "the filter to pass what it is given", |x| peak(x) > 0.1);
+    assert_eq!(g.error(lowpass), None, "a filter that never took the NaN has no fault");
+    g.call("node remove", j!({ "node": hex(lowpass) }));
 
     // Step: a bare read of a frame wider than one reads its first element, no error; back on a
     // constant, the literal lands.

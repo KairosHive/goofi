@@ -67,6 +67,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"]
 tempfile = "3"
 # The frame type a reducer subscription yields.
 bytes = "1"
+# The decoder that proves the browser stream's Opus packets are Opus.
+unsafe-libopus = "0.2"
 # A `.gfi` no goofi would write: the session scenario makes one by hand to prove the load's refusal.
 zip = { version = "8.6", default-features = false }
 # The Meta map type the codec round-trips.
