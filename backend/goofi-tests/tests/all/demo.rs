@@ -108,7 +108,7 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     // address each, and the one this instance IS marked, because a chooser has to say where it is.
     let (_client, hello) = Client::connect(&base).await;
     let examples = hello["examples"].as_array().expect("a demo names its siblings").clone();
-    assert_eq!(examples.len(), 4, "every example in the manifest: {examples:?}");
+    assert_eq!(examples.len(), 5, "every example in the manifest: {examples:?}");
     assert_eq!(examples[0]["url"], j!("https://demo.example.com/psd-topomap"));
     let current: Vec<&str> = examples
         .iter()

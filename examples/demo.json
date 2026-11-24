@@ -19,6 +19,11 @@
 			"slug": "connectivity-spectrogram",
 			"label": "Connectivity spectrogram",
 			"blurb": "Channel pairs reduced to a spectrogram that runs with the stream."
+		},
+		{
+			"slug": "chladni-drone",
+			"label": "Chladni drone",
+			"blurb": "Complexity and alpha power as a Chladni figure and a drone, heard in the browser."
 		}
 	]
 }
