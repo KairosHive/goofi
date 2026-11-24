@@ -3,11 +3,11 @@
 //! this mode withholds is the convenient doors.
 
 use goofi_bridge::phrase;
-use goofi_tests::{host, http, j, Client, Goofi};
+use goofi_tests::{host, http, j, render, Client, Goofi};
 
 /// Every op a demo drops, and the one it keeps because a visitor needs a reset.
-const DROPPED: [&str; 5] =
-    ["dir list", "agent list", "session save", "session load", "library save"];
+const DROPPED: [&str; 7] =
+    ["dir list", "agent list", "session save", "session load", "library save", "record arm", "record start"];
 
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
@@ -78,6 +78,27 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     assert_eq!(g.nodes().len(), 2, "a demo boots into the patch it was given");
     g.call("session new", j!({}));
     assert_eq!(g.nodes().len(), 2, "…and the visitor's reset restores it rather than emptying it");
+
+    // No screen: the steps that open a `Window` node's window on a full server open none on a
+    // demo, where the node stands as a pass-through.
+    let wired = |g: &Goofi| {
+        let (c, win) = (g.add("graphics:Constant"), g.add("graphics:Window"));
+        g.ready(c);
+        g.ready(win);
+        g.link(c, "out", win, "input");
+        win
+    };
+    let opened = |g: &Goofi, win| goofi_bridge::graphics_engine(&mut g.graph()).window_of(win);
+    let shown = wired(&full);
+    full.until("a full server opens the window", |full| {
+        render(full, 1);
+        opened(full, shown)
+    });
+    let win = wired(&g);
+    render(&g, 5);
+    assert!(opened(&g, win).is_none(), "a demo opens no window");
+    assert_eq!(g.call("session status", j!({}))["graphics"]["windows"], j!(0));
+    assert!(g.error(win).is_none(), "and the node is no fault");
 
     g.state.demo_base = Some("https://demo.example.com".into());
     let base = g.serve().await;

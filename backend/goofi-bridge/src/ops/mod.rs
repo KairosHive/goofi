@@ -598,8 +598,8 @@ pub fn find(name: &str) -> Option<&'static Row> {
 pub fn table(mode: crate::Mode) -> Vec<Row> {
     // What a demo drops: what reaches the host's files or spawns on it, since every visitor
     // shares one process. `session new` stays: it is the visitor's reset.
-    const DEMO_DROPS: [&str; 8] =
-        ["dir", "agent", "session save", "session load", "library save",
+    const DEMO_DROPS: [&str; 9] =
+        ["dir", "agent", "record", "session save", "session load", "library save",
          "session recoverable", "session recover", "session discard"];
     let dropped = |name: &str, group: &str| {
         name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))

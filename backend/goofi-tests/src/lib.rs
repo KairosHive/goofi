@@ -250,7 +250,7 @@ impl Goofi {
         walled_home();
         // The window thread has no screen: a `Window` node and a plugin editor open on a loop the
         // suite owns, and no test reaches a desktop.
-        let windows = (!mode.demo).then(window_thread);
+        let windows = Some(window_thread());
         let mut config = goofi_bridge::Config::new(hub(), mode, goofi_bridge::Clock::External, render);
         // The suite's own stand-in for the binary scans a bundle and hosts a node built after
         // boot; no platform folder, so an installed plugin never reaches a test.

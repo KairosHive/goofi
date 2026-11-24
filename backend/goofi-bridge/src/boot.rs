@@ -143,8 +143,9 @@ pub fn boot(config: Config) -> Result<Manager, String> {
             audio.set_ui(ui.clone());
         }
         // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
+        // A demo has none, whatever its host has: a `Window` node there is a pass-through.
         if let Some(graphics) = crate::try_graphics_engine(&mut g) {
-            graphics.set_ui(ui);
+            graphics.set_ui(ui.filter(|_| !mode.demo));
         }
     }
     let patch = manager.state.mount();

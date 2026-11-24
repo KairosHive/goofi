@@ -67,7 +67,7 @@ which is what a CI job runs to prove the build; it has no flag.
 | `--load PATCH` | — | Open this `.gfi` at start. `GOOFI_LOAD` is the same. |
 | `--headless` | — | Serve the API alone — `/control`, `/data`, `/term`, and `/mcp` under `--mcp`. The app's routes are never mounted and the `layout` ops leave the op table. |
 | `--mcp` | — | Serve the MCP endpoint at `/mcp`: one tool, `goofi_exec`, running the CLI's command lines. Off by default; `GOOFI_MCP=1` is the same switch. |
-| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `update`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs and no plugin loads. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
+| `--demo` | — | Withhold the doors a public instance cannot offer: `dir`, `agent`, `record`, session save/load/recover/discard and `library save` leave the op table; `/exec`, `/mcp`, `/term`, `/patch.gfi` and plugin assets are never mounted, no audio engine runs, no plugin loads and a `Window` node opens no window. `GOOFI_DEMO=1` is the same switch. Not a sandbox. |
 | `--debug` | — | Open `/dev/*`: the UI primitive gallery at `/dev/ui`, and the other development surfaces. Shut otherwise. |
 
 The Save and Open dialogs each carry a second door — *Download a copy* and *Upload…* — which pass

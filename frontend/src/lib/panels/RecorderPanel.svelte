@@ -125,6 +125,14 @@
 	}
 </script>
 
+{#if g.demo}
+	<div class="recorder" data-testid="recorder-panel">
+		<EmptyState>
+			{#snippet title()}Recording is off in this demo{/snippet}
+			{#snippet hint()}A public goofi writes no files. Run goofi locally to record.{/snippet}
+		</EmptyState>
+	</div>
+{:else}
 <div class="recorder" data-testid="recorder-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source, at }) => chooseSlots(source.key, at) }}>
 	<Bar>
 		{#snippet start()}
@@ -237,6 +245,7 @@
 
 	<DropHint id={panelId} />
 </div>
+{/if}
 
 {#if nodeMenu}
 	<ContextMenu x={nodeMenu.x} y={nodeMenu.y} items={nodeItems} onClose={() => (nodeMenu = null)} />
