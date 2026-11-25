@@ -49,6 +49,21 @@ impl Pixels {
         }
         Ok(())
     }
+
+    /// The pixels as the `[H, W, C]` array of values in 0..1 a reader of numbers takes, under `meta`.
+    pub fn to_array(&self, meta: crate::Meta) -> Result<crate::Data, String> {
+        let (channels, unit) = (self.format.channels(), self.format.bytes_per_channel());
+        let row = self.width as usize * channels * unit;
+        let mut buf = Vec::with_capacity(self.width as usize * self.height as usize * channels * 4);
+        for line in self.bytes.chunks_exact(self.stride) {
+            match unit {
+                1 => buf.extend(line[..row].iter().flat_map(|v| (f32::from(*v) / 255.0).to_le_bytes())),
+                _ => buf.extend_from_slice(&line[..row]),
+            }
+        }
+        let shape = vec![self.height as usize, self.width as usize, channels];
+        crate::Data::array_f32(shape, buf, meta).map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

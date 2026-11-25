@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use goofi_runtime::{Cx, Executor, Fault, HostExecutor, Out, Ticked};
 use goofi_node::NodeStage;
+use goofi_core::texture::{PixelFormat, Pixels, Texture};
 use goofi_core::{Data, Meta};
 use goofi_supervisor::sync::{Mailbox, Stack};
 pub use crate::resources::Upload;
@@ -96,9 +97,8 @@ impl GraphicsHalf {
         }
     }
 
-    /// The viewers' readback, as the frame their width asks for: a full frame goes as it is; the
-    /// 8-bit texels go as the GOOF frame they are, which their readers forward. Either way the
-    /// rows are copied off the mapped buffer once, into the frame itself.
+    /// The readers' readback: a full frame goes as the texture it is; the 8-bit texels go as the
+    /// GOOF frame a viewer forwards. Either way the rows are copied off the mapped buffer once.
     fn tap(&mut self, publish: &mut dyn FnMut(usize, Out<'_>)) {
         let Some(readback) = self.cells.tap.take() else { return };
         let (w, h) = readback.size();
@@ -135,7 +135,8 @@ impl GraphicsHalf {
                 if !readback.rows_into(&mut rows) {
                     return;
                 }
-                if let Ok(frame) = Data::array_f32(shape, rows, meta) {
+                let pixels = Pixels { width: w, height: h, stride: w as usize * 16, format: PixelFormat::Rgba32Float, bytes: rows };
+                if let Ok(frame) = Data::texture(Texture::Pixels(pixels), meta) {
                     self.refused = None;
                     publish(0, Out::Wire(&frame));
                 }

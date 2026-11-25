@@ -128,7 +128,7 @@ class DINO(goofi.Node):
             self.build(want)
         self.clear_input("image")
 
-        x = np.asarray(image.data)
+        x = image.data.numpy()
         seen = (fingerprint(x), p.resolution)
         if seen != self.seen:
             with torch.inference_mode():

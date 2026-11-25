@@ -34,7 +34,7 @@ impl Node for GraphicsIn {
         _c: &mut NodeCtx,
         p: &Params<'_>,
     ) -> NodeResult {
-        let d = inp.get("input").ok_or("`input` is required")?;
+        let d = &inp.get("input").ok_or("`input` is required")?.pixels_as_array()?;
         let a = d.assert_ndims().at_least(2)?;
         let mut shape = a.shape().to_vec();
 
@@ -53,7 +53,7 @@ impl Node for GraphicsIn {
         let c = shape.get(2).copied().unwrap_or(1);
         let mode = p.str("graphics", "mode").unwrap_or("pixels");
         if mode == "pixels" {
-            // A frame nothing cut crosses as it came, its buffer shared rather than copied.
+            // A frame nothing cut crosses as the texture's own pixels.
             let frame = match reduced {
                 None => d.clone(),
                 Some(bytes) => {

@@ -36,16 +36,17 @@ impl OutputProbe {
     fn poll(&self) -> bool {
         let Some(payload) = self.subscriber.borrow_mut().receive() else { return false };
         let decoded = match payload {
-            Payload::Data(frame) => Ok(frame),
-            Payload::Wire(bytes) => goofi_codec::decode(&bytes),
+            Payload::Data(frame) => Some(frame),
+            Payload::Wire(bytes) => goofi_codec::decode(&bytes).ok(),
         };
-        match decoded {
-            Ok(frame) => {
+        // As a viewer reads it: a texture is the array of its pixels.
+        match decoded.and_then(|frame| frame.pixels_as_array().ok()) {
+            Some(frame) => {
                 *self.latest.borrow_mut() = Some(frame);
                 self.seen.set(self.seen.get() + 1);
                 true
             }
-            Err(_) => false,
+            None => false,
         }
     }
 

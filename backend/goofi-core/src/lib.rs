@@ -737,9 +737,28 @@ impl Data {
         Ok(Data::array(ArrayStore::view(shape, buf, samples), meta))
     }
 
+    /// The texture a `TEXTURE` frame holds.
+    pub fn as_texture(&self) -> std::result::Result<&texture::Texture, String> {
+        match &self.0.value {
+            Value::Texture(t) => Ok(t),
+            _ => Err(format!("expected a texture, got {}", DTYPE_NAMES[usize::from(self.dtype_tag())])),
+        }
+    }
+
+    /// A texture frame as the `[H, W, C]` array of its pixels, stamps kept; any other frame as it is.
+    pub fn pixels_as_array(&self) -> std::result::Result<Data, String> {
+        match &self.0.value {
+            Value::Texture(t) => match &**t {
+                texture::Texture::Pixels(p) => p.to_array(self.0.meta.clone()),
+                texture::Texture::Render { .. } => Err("a texture program has no pixels".into()),
+            },
+            _ => Ok(self.clone()),
+        }
+    }
+
     pub fn as_array(&self) -> std::result::Result<&ArrayStore, String> {
         match &self.0.value {
-            Value::Texture(_) => Err("expected array, got a texture submission".into()),
+            Value::Texture(_) => Err("expected an array, got a texture".into()),
             Value::Array(a) => Ok(a),
             Value::Str(_) => Err("expected an array, got a string".into()),
             Value::Table(_) => Err("expected an array, got a table".into()),
@@ -749,7 +768,7 @@ impl Data {
 
     pub fn as_str(&self) -> std::result::Result<&str, String> {
         match &self.0.value {
-            Value::Texture(_) => Err("expected str, got a texture submission".into()),
+            Value::Texture(_) => Err("expected a string, got a texture".into()),
             Value::Str(s) => Ok(s),
             Value::Array(_) => Err("expected a string, got an array".into()),
             Value::Table(_) => Err("expected a string, got a table".into()),
@@ -759,7 +778,7 @@ impl Data {
 
     pub fn as_table(&self) -> std::result::Result<&IndexMap<String, Data>, String> {
         match &self.0.value {
-            Value::Texture(_) => Err("expected table, got a texture submission".into()),
+            Value::Texture(_) => Err("expected a table, got a texture".into()),
             Value::Table(t) => Ok(t),
             Value::Array(_) => Err("expected a table, got an array".into()),
             Value::Str(_) => Err("expected a table, got a string".into()),

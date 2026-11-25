@@ -32,7 +32,7 @@ class NdiOut(goofi.Node):
 
     def process(self, input):
         p = self.params.ndi
-        x = np.asarray(input.data)
+        x = input.data.numpy()
         if x.ndim != 3 or x.shape[2] not in (3, 4):
             raise ValueError(f"NdiOut sends a picture of [H, W, 3] or [H, W, 4], not {list(x.shape)}")
         if np.issubdtype(x.dtype, np.floating):

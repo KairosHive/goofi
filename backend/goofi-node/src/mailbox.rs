@@ -72,7 +72,7 @@ pub fn pick(local: &Local, index: Option<usize>) -> Result<Data, String> {
         Local::Record(_) => return Err("a record is read by attribute, not bare".into()),
     };
     match (frame.value(), index) {
-        (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read an unrendered texture submission".into()),
+        (goofi_core::Value::Texture(_), _) => Err("a bare source cannot read a TEXTURE output".into()),
         (goofi_core::Value::Table(_), _) => Err("a bare source cannot read a TABLE output".into()),
         (goofi_core::Value::Functional(_), Some(_)) => Err("a FUNCTIONAL has no element to index".into()),
         (goofi_core::Value::Array(a), Some(at)) => {
