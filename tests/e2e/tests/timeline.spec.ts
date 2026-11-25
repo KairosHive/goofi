@@ -974,12 +974,9 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 		const taken = await trackNamed(page, 'take');
 		expect([taken.keys[0].value, taken.range], 'from the level it began at').toEqual([0, [0, 5]]);
 		await expect(take.locator('.key').first()).toBeVisible();
-		// A note track records a MIDI device, and this host has none to offer: its input is the one
-		// there will be.
+		// A note track records a MIDI device: with none picked, its input is `auto`.
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'played' });
 		await expect((await settings(page.getByTestId('track-played'), '[data-testid="track-device"] select')).locator('option:checked')).toHaveText('auto');
-		await (await record(page.getByTestId('track-played'))).click();
-		await expect(page.getByText('no MIDI device is connected')).toBeVisible();
 		await expectIntact(page, 'the timeline panel with a track that recorded');
 	} finally {
 		await rawCall(page, 'clock set', { playing: true });

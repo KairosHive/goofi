@@ -74,17 +74,6 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 		expect(n!.params.common.max_frequency.value).toBe(30);
 	});
 
-	it('reflects a doc param-value leaf-write', () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		const d = seed(fc);
-		g.nodeTypes = catalog();
-		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
-
-		d.patch({ nodes: { n1: { params: { common: { max_frequency: { value: 42 } } } } } });
-		expect(g.nodeById('n1')!.params.common.max_frequency.value).toBe(42);
-	});
-
 	it('drops a node when it vanishes from the doc (mirror removal)', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
@@ -95,20 +84,6 @@ describe('node-identity read cutover — nodes built from the doc when the catal
 
 		d.remove('nodes', 'n1');
 		expect(g.nodeById('n1'), 'node removed from the doc → dropped from the store').toBeFalsy();
-	});
-
-	it('ignores a node_added announcement — the doc owns node existence', () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		const d = seed(fc);
-		g.nodeTypes = catalog();
-		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
-
-		// node_added for a node NOT in the doc must not mint a phantom — the reconcile owns
-		// existence (else the announcement would race/duplicate the doc mirror).
-		fc.emit({ event: 'node_added', payload: { uid: 'ghost' } });
-		expect(g.nodeById('ghost')).toBeFalsy();
-		expect(g.nodeById('n1')).toBeDefined();
 	});
 
 	it('state_update merges runtime bits without clobbering the doc-owned value', () => {

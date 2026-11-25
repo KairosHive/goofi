@@ -78,35 +78,6 @@ export async function pinch(
 }
 
 /**
- * Fake a soft keyboard by shrinking `visualViewport.height` (an own property shadows the prototype
- * getter) and firing the resize the real keyboard would fire. `px = 0` restores it.
- *
- * Here rather than in a spec because two specs need the same fake: `device-stamp.spec.ts` proves
- * `--kb-inset` tracks it and that the two anchored-overlay clamps read it, and `touch-expr.spec.ts`
- * proves the completion popup does. A second copy is a second thing to keep true.
- */
-export async function setKeyboardInset(page: Page, px: number): Promise<void> {
-	await page.evaluate((n) => {
-		const vv = window.visualViewport as VisualViewport & { height?: number };
-		if (n > 0) {
-			Object.defineProperty(vv, 'height', {
-				configurable: true,
-				get: () => window.innerHeight - n
-			});
-		} else {
-			delete (vv as { height?: number }).height;
-		}
-		vv.dispatchEvent(new Event('resize'));
-	}, px);
-}
-
-/** The published `--kb-inset`, as the app computed it. */
-export const kbInset = (page: Page): Promise<string> =>
-	page.evaluate(() =>
-		getComputedStyle(document.documentElement).getPropertyValue('--kb-inset').trim()
-	);
-
-/**
  * A point where the flow pane really is the topmost element AND no node card is within a tap target
  * of it. One backend serves this whole worker, so the patch may carry nodes left by an earlier
  * spec — a hardcoded centre point could land on a node card (which must NOT arm the long-press
@@ -120,28 +91,15 @@ export const kbInset = (page: Page): Promise<string> =>
  * a full `--hit` as well as being provably bare.
  */
 export async function emptySpot(page: Page): Promise<TouchPoint> {
-	const spot = await bareSpot(page, [0.25, 0.35, 0.45, 0.55, 0.65, 0.75], 0);
+	const spot = await bareSpot(page, [0.25, 0.35, 0.45, 0.55, 0.65, 0.75]);
 	expect(spot, 'the canvas has some empty space to press on').not.toBeNull();
 	return spot!;
 }
 
-/**
- * The same bare point, but as LOW on the canvas as one can be found — at or below `minY` in viewport
- * coordinates. The add-node menu's clamp only engages when the press sits within a menu's height of
- * the bottom, and that is the geometry in which the menu covers the finger, so a spec about the
- * clamp has to be able to ask for a press point there rather than in the comfortable middle.
- */
-export async function lowEmptySpot(page: Page, minY: number): Promise<TouchPoint> {
-	const spot = await bareSpot(page, [0.98, 0.93, 0.88, 0.83, 0.78, 0.73, 0.68], minY);
-	expect(spot, `the canvas has empty space below y=${minY} to press on`).not.toBeNull();
-	return spot!;
-}
-
-/** Scan `fys` (fractions of the pane's height, in order) for the first bare, card-clear point at or
- * below `minY`. One copy of the bareness rule the doc comment above spells out. */
-async function bareSpot(page: Page, fys: number[], minY: number): Promise<TouchPoint | null> {
+/** Scan `fys` (fractions of the pane's height, in order) for the first bare, card-clear point. */
+async function bareSpot(page: Page, fys: number[]): Promise<TouchPoint | null> {
 	return page.locator('.svelte-flow__pane').first().evaluate(
-		(pane, { fys, minY }) => {
+		(pane, fys) => {
 			const hit = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hit'));
 			const cards = [...document.querySelectorAll('.svelte-flow__node')].map((n) =>
 				n.getBoundingClientRect()
@@ -155,12 +113,11 @@ async function bareSpot(page: Page, fys: number[], minY: number): Promise<TouchP
 				for (let fx = 0.2; fx <= 0.8; fx += 0.1) {
 					const x = Math.round(r.left + r.width * fx);
 					const y = Math.round(r.top + r.height * fy);
-					if (y < minY) continue;
 					if (document.elementFromPoint(x, y) === pane && clear(x, y)) return { x, y };
 				}
 			}
 			return null;
 		},
-		{ fys, minY }
+		fys
 	);
 }

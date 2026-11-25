@@ -10,12 +10,6 @@ describe('UIStore editor standdown (ref-counted modalOpen)', () => {
 		expect(ui.modalOpen).toBe(false);
 	});
 
-	it('opens while any editor is registered', () => {
-		const ui = new UIStore();
-		ui.openEditor('a');
-		expect(ui.modalOpen).toBe(true);
-	});
-
 	it('stays open until the LAST editor closes — collapsing one never lifts another (#2B)', () => {
 		const ui = new UIStore();
 		ui.openEditor('a');

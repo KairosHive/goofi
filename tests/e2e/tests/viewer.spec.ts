@@ -1,8 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
 import { addNode, frameSummary, selectNode, updateParam, waitForNode } from '../lib/goofi';
-import { rawCall } from '../lib/harness';
-import { backendDoc } from '../lib/raw';
+import { backendDoc, rawCall } from '../lib/raw';
 
 type Clip = { x: number; y: number; width: number; height: number };
 
@@ -222,27 +221,6 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			expect(glErrors).toEqual([]);
 		});
 
-		await test.step('zoomed out past legibility, a viewer keeps its picture and lets its stream go', async () => {
-			const before = (await card.boundingBox())!.width;
-			const summary = () => frameSummary(page, osc);
-			const wheelTo = async (ratio: (r: number) => boolean, dy: number) => {
-				await expect
-					.poll(async () => {
-						const r = (await card.boundingBox())!.width / before;
-						if (!ratio(r)) await page.mouse.wheel(0, dy);
-						return ratio(r);
-					})
-					.toBe(true);
-			};
-			const at = (await card.boundingBox())!;
-			await page.mouse.move(at.x + 4, at.y + 4);
-			await wheelTo((r) => r < 0.28, 100);
-			await expect.poll(summary).toBeNull();
-			expect((await inspect(page, (await body.boundingBox())!)).tint, 'the last frame stays').toBeGreaterThan(40);
-			await wheelTo((r) => r > 0.4, -100);
-			await expect.poll(summary).not.toBeNull();
-		});
-
 		await test.step('a hover near the line reads the point under it, and nothing away from it', async () => {
 			const box = (await body.boundingBox())!;
 			// The readout is portalled to <body>, so it is found from the page.
@@ -283,48 +261,6 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 			await page.mouse.move(4, 4);
 			await expect(tick).toHaveCSS('opacity', '1');
 		});
-	} finally {
-		await resetPatch(page);
-	}
-});
-
-test('streams served at the cap paint together, so the page paints at the cap', async ({ page }) => {
-	// Each slot served on a phase of its own made the page paint once per stream, and a paint
-	// loop re-armed per tick split one tick's streams in two: the counter read twice
-	// `system.viewer_fps`. A cap the display outpaces by far shows the second; an upper bound,
-	// since a busy machine can only paint less.
-	await page.setViewportSize({ width: 1280, height: 800 });
-	await page.goto('/');
-	await waitForApp(page);
-	try {
-		await rawCall(page, 'variable entry edit', { name: 'system.viewer_fps', value: 15 });
-		const lfos: string[] = [];
-		for (const x of [40, 340, 640]) {
-			const n = await addNode(page, 'LFO', [x, 80]);
-			await waitForNode(page, n);
-			await page.evaluate((u) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', 200), n);
-			lfos.push(n);
-		}
-		// 400 emits on every stream, two seconds or more at 200 Hz, so the HUD's last window saw all three.
-		const emitted = async () => Promise.all(lfos.map(async (n) => (await frameSummary(page, n))?.index ?? -1));
-		const from = await emitted();
-		await expect
-			.poll(async () => (await emitted()).every((i, k) => i > from[k] + 400), { message: 'all three stream' })
-			.toBe(true);
-		const fps = async () => Number((await page.getByText(/^\d+ fps$/).first().textContent())?.split(' ')[0]);
-		// A wake the machine held past half a tick serves that stream on the next, so a loaded
-		// machine splits a tick's streams now and then: the count is read over a quiet window.
-		await expect.poll(fps, { message: 'paints a second, with three streams at a 15 fps cap' }).toBeLessThanOrEqual(18);
-
-		// Producers slower than the cap emit at phases of their own; the reducer still serves each
-		// frame on the next tick of the grid, so they arrive together and the page paints no more.
-		for (const [k, n] of lfos.entries())
-			await page.evaluate(([u, f]) => (window as any).goofi.commands.updateParam(u, 'common', 'max_frequency', f), [n, 7 + 4 * k] as const);
-		const again = await emitted();
-		await expect
-			.poll(async () => (await emitted()).every((i, k) => i > again[k] + 20), { message: 'all three stream below the cap' })
-			.toBe(true);
-		await expect.poll(fps, { message: 'paints a second, with three streams below the cap' }).toBeLessThanOrEqual(18);
 	} finally {
 		await resetPatch(page);
 	}

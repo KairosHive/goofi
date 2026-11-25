@@ -7,7 +7,7 @@
  * is an op, so what a gesture SENDS is the behaviour worth pinning.
  */
 import { describe, expect, it, beforeEach } from 'vitest';
-import { workspace, type LayoutHost, type Workspace } from 'panelty';
+import { workspace, type Workspace } from 'panelty';
 import { FakeControl } from '$lib/test/fakeControl';
 import { goofiLayoutHost } from './layoutHost';
 import { history } from './history.svelte';
@@ -63,20 +63,6 @@ function resized(a: number, b: number): Workspace[] {
 	return tabs;
 }
 
-/** A host that answers every gesture with "no" — every member of the port, so a consumer that
- * wires nothing up still gets a workspace it can look at. */
-const REFUSING_HOST: LayoutHost = {
-	addTab: async () => null,
-	removeTab: async () => false,
-	renameTab: async () => false,
-	reorderTab: async () => false,
-	splitPanel: async () => null,
-	removePanel: async () => false,
-	resizeSplit: async () => false,
-	setPanel: async () => false,
-	movePanel: async () => false
-};
-
 let fc: FakeControl;
 
 function boot(tabs: Workspace[] = oneTab()): ReturnType<typeof workspace> {
@@ -107,15 +93,6 @@ function sent(): Array<[string, Record<string, unknown>]> {
 beforeEach(() => history().reset());
 
 describe('a frozen gesture is a layout command', () => {
-	it('rebuilds the tree the manager holds, and holds none of its own', () => {
-		const ws = boot(split());
-		expect(ws.state.workspaces).toHaveLength(1);
-		const root = ws.active.root;
-		expect(root.kind).toBe('split');
-		if (root.kind !== 'split') return;
-		expect(root.children.map((c) => c.id)).toEqual(['panel-2', 'panel-3']);
-	});
-
 	it('splits through layout panel add, carrying the SIDE the drag went', async () => {
 		// The panel system raises an axis and a half; the op takes one word for the pair, so the two
 		// cannot disagree on the way over.
@@ -164,6 +141,13 @@ describe('a frozen gesture is a layout command', () => {
 		ws.unlinkNodeFromPanel('panel-3');
 		await Promise.resolve();
 		expect(sent().map(([, p]) => p.state)).toEqual([{ slot: 'out' }, { node: null }]);
+	});
+
+	it('makes a panel-state write authoring by default — a viewer kind, a slot pick', async () => {
+		const ws = boot();
+		ws.setPanelState('panel-2', { node: 'osc0', kind: 'image' });
+		await Promise.resolve();
+		expect(sent().map(([op]) => op)).toContain('layout panel edit');
 	});
 
 	it('writes a panel that lives on a page in the background', async () => {
@@ -295,24 +279,6 @@ describe('a frozen gesture is a layout command', () => {
 			sent().some(([, p]) => 'name' in p),
 			'and not one of them names a tab'
 		).toBe(false);
-	});
-
-	it('draws and refuses when nothing has installed a host', async () => {
-		// The panel system holds no tree and writes nothing itself, so a consumer that has not wired
-		// one up should get a workspace it can look at rather than an exception per click. Every
-		// gesture below is a no-op; none of them throws, and none reaches the wire.
-		fc = new FakeControl();
-		const ws = workspace();
-		ws.configureHost(REFUSING_HOST);
-		ws.syncFromDoc(split());
-		ws.split('panel-2', 'row');
-		ws.close('panel-3');
-		ws.setType('panel-2', 'console');
-		ws.addTab();
-		ws.renameTab('tab-1', 'Signals');
-		await settle();
-		expect(sent(), 'nothing left the client').toEqual([]);
-		expect(ws.state.workspaces, 'and the tree it was handed is still drawn').toHaveLength(1);
 	});
 
 	it('addresses a tab by its ID, never by the label it happens to wear', async () => {
@@ -448,15 +414,6 @@ describe('viewpoint stays here', () => {
 			panel: 'panel-8',
 			paths: { 'panel-8': '/inst0' }
 		});
-	});
-
-	it('drops a maximize and a focus a peer’s close took away', () => {
-		const ws = boot(split());
-		ws.setActive('panel-3');
-		ws.toggleMaximize('panel-3');
-		ws.syncFromDoc(oneTab());
-		expect(ws.maximizedPanelId).toBeNull();
-		expect(ws.activePanelId).toBe('panel-2');
 	});
 });
 

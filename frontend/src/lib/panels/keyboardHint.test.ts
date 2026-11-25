@@ -10,8 +10,7 @@ import { fileURLToPath } from 'node:url';
  * Guarded here rather than in e2e because the hint only renders when the editor's scope is EMPTY,
  * and the suite's shared backend patch is not empty by the time any spec could assert on it. This
  * pins the two ends against each other inside the one file that holds both: the word the hint
- * prints, and the keydown branch that word promises. `menu-position.spec.ts` separately proves that
- * pressing that key really does open the menu, so the chain is complete.
+ * prints, and the keydown branch that word promises.
  */
 
 const SRC = readFileSync(

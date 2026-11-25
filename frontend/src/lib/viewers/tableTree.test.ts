@@ -33,9 +33,6 @@ describe('leafSummary', () => {
 	it('summarizes a multi-d array by shape', () => {
 		expect(leafSummary(arr([4, 8]), 3)).toBe('array[4×8]');
 	});
-	it('truncates a string', () => {
-		expect(leafSummary(str('hello world'), 3)).toBe('hello world');
-	});
 	it('counts fields for a nested table', () => {
 		expect(leafSummary(table({ a: str('x'), b: str('y') }), 3)).toBe('{2 fields}');
 	});

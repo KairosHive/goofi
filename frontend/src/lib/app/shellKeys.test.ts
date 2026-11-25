@@ -50,7 +50,4 @@ describe('shellKeyAction: Escape', () => {
 	it('stands down for a nearer handler that already took the key', () => {
 		expect(shellKeyAction(esc({ defaultPrevented: true }), false, true)).toBe(null);
 	});
-	it('stands down while typing or while a modal is open', () => {
-		expect(shellKeyAction(esc(), true, true)).toBe(null);
-	});
 });

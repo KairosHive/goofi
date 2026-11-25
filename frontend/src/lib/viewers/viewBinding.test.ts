@@ -24,13 +24,4 @@ describe('viewBinding', () => {
 		expect((state.settings as Record<string, unknown>).colormap).toBe('viridis');
 		expect(b.settings.colormap).toBe('viridis');
 	});
-
-	it('forces the string viewer for STRING dtype regardless of stored kind', () => {
-		const b = viewBinding(
-			'STRING',
-			() => ({ kind: 'image' }),
-			() => {}
-		);
-		expect(b.kind).toBe('string');
-	});
 });

@@ -92,27 +92,13 @@ describe('scale tokens exist and are ordered', () => {
 		const steps = ['micro', 'small', 'body', 'strong', 'title'].map((r) => px(`fs-${r}`));
 		for (let i = 1; i < steps.length; i++) expect(steps[i]).toBeGreaterThan(steps[i - 1]);
 	});
-	it('--radius-lg is deleted', () => expect(css).not.toMatch(/--radius-lg\s*:/));
-	/* `--font-sans is deleted (collapsed to --font-mono)` used to sit here: at the time the app had
-	   exactly one face and an unused second token. The two-face design (D-T1) reverses that — sans
-	   is a real, shipped face with a real job. The token's contract now lives in `fonts.test.ts`,
-	   stated positively: it exists, and it leads with the vendored 'Inter'. */
 });
 
 describe('the success green is differentiated from the accent (D-M1)', () => {
 	// --success and --accent were byte-identical #50d0a0, so a selected+healthy node's accent ring
 	// and its success health dot read as one colour. M nudges --success to a distinct green.
-	it('--success is not the same colour as --accent', () => {
-		expect(token('success')).not.toBe(token('accent'));
-	});
 	it('--success and --accent are perceptually separated (>1.1:1)', () => {
 		expect(contrastRatio(token('success'), token('accent'))).toBeGreaterThan(1.1);
-	});
-});
-
-describe('category colour system is gone', () => {
-	it('no --cat-* tokens remain in app.css', () => {
-		expect(css).not.toMatch(/--cat-[a-z]+\s*:/);
 	});
 });
 

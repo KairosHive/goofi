@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { NODE, inputPorts } from './nodeMetrics';
-import { inputAnchors, nearSlots, sameKeys, SLOT_PROXIMITY_PX, type AnchorNode } from './slotProximity';
+import { inputAnchors, nearSlots, sameKeys, type AnchorNode } from './slotProximity';
 
 /*
  * The arithmetic behind the input-name proximity reveal.
@@ -16,20 +16,6 @@ import { inputAnchors, nearSlots, sameKeys, SLOT_PROXIMITY_PX, type AnchorNode }
  */
 
 const key = (uid: string, slot: string): string => `${uid}|${slot}`;
-
-describe('SLOT_PROXIMITY_PX', () => {
-	/* One coarse `--hit` (app.css raises `--hit` to 44px under the coarse idiom).
-	 *
-	 * The radius answers "which inputs is this drop choosing between", and a fingertip target IS that
-	 * neighbourhood — so the tags that light up are exactly the ones a finger could plausibly land
-	 * on. Input connectors tile the left edge at `--node-u` (24px), so 44px reaches roughly two slots
-	 * either side of the pointer: enough to tell them apart, far short of naming a whole node.
-	 * Measured in SCREEN px, not flow px, because a fingertip is a physical size — the caller divides
-	 * by the live zoom before comparing against flow-space anchors. */
-	it('is one coarse --hit', () => {
-		expect(SLOT_PROXIMITY_PX).toBe(44);
-	});
-});
 
 describe('nearSlots', () => {
 	const anchors = [

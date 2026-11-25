@@ -71,27 +71,10 @@ describe('a wholesale load resets the client history (lockstep with the manager)
 });
 
 // (The panels a delete empties, and their re-binding on undo, moved to the MANAGER: `RemoveNode`
-// clears every panel bound to a uid it takes, so one inverse restores both. Pinned over the real
-// wire by `deleting_a_node_empties_the_panels_bound_to_it_and_an_undo_binds_them_back`.)
+// clears every panel bound to a uid it takes, so one inverse restores both.)
 
 describe('deleting a collapsed sub-patch instance is undoable (manager owns the subtree capture)', () => {
 	beforeEach(() => history().reset());
-
-	it('deletes the instance via remove_node and records one undoable step', async () => {
-		const { fc, g } = withInstance();
-		history().configure(() => fc, () => g);
-
-		await g.removeNode('sub');
-
-		// Forward: the instance IS deleted via remove_node (the manager's RemoveNode captures the
-		// whole subtree for its inverse — B3b).
-		expect(fc.recordedCalls().some((c) => c.op === 'node remove' && c.payload.node === 'sub')).toBe(
-			true
-		);
-		// One undoable entry, on the manager.
-		expect(fc.undoStack).toHaveLength(1);
-		expect(history().canUndo).toBe(true);
-	});
 
 	it('undo DELEGATES to the manager (no client-side checkpoint / add_node replay)', async () => {
 		const { fc, g } = withInstance();

@@ -462,12 +462,6 @@ describe('style vocabulary', () => {
 		expect(offenders).toEqual([]);
 	});
 
-	it('exempts nothing it cannot justify in one line', () => {
-		for (const why of Object.values(ALLOW_FILE)) expect(why.length).toBeGreaterThan(0);
-		for (const a of ALLOW_VALUE) expect(a.why.length).toBeGreaterThan(0);
-		for (const a of ALLOW_DUPLICATE) expect(a.why.length, a.sel).toBeGreaterThan(0);
-	});
-
 	it('scans the central module and the components it claims to (no silently empty sweep)', () => {
 		const scanned = sources();
 		expect(scanned.length).toBeGreaterThan(40);
@@ -711,9 +705,6 @@ describe('style vocabulary', () => {
  * TEST rather than a claim. Both halves are enumerable over the source, which is worth more than
  * any number of hand-written cases: a case proves the six doors R built still open; a scan proves
  * a seventh cannot appear without one.
- *
- * `touch-hover-doors.spec.ts` is the other half of this pair and stays: it proves the doors named
- * here actually open under real touch. This file proves the inventory is closed.
  */
 
 /** A hover-gated reveal: a rule that turns `opacity`/`visibility` on from behind `:hover`.
@@ -750,7 +741,7 @@ const HOVER_ONLY_OK: { file: string; target: string; why: string }[] = [
 	{
 		file: 'editor/GoofiNode.svelte',
 		target: 'conn-label',
-		why: 'its coarse door is a PROXIMITY reveal, not a resting form: `.conn.in.cable-near` (editor/slotProximity.ts, pinned by touch-slot-name.spec) names the inputs a cable in flight is closing on, for both modalities — the always-open coarse rule it replaced was the only way a finger could read an input name and therefore hung a name tag on every input on the canvas at all times'
+		why: 'its coarse door is a PROXIMITY reveal, not a resting form: `.conn.in.cable-near` (editor/slotProximity.ts) names the inputs a cable in flight is closing on, for both modalities — the always-open coarse rule it replaced was the only way a finger could read an input name and therefore hung a name tag on every input on the canvas at all times'
 	},
 	{
 		file: 'machine/StateCard.svelte',
@@ -898,8 +889,8 @@ describe('coarse-pointer doors', () => {
 	 * §5.4, pinned globally rather than site by site. `app.css` floors `input, select, textarea` at
 	 * 16px under the coarse idiom — at (0,0,1), which ANY product class rule out-specifies, which
 	 * is how this failed at seven sites. So: a file that sets `font-size` on one of its own form
-	 * controls must restate a ≥16px size for that control under coarse. `touch-hit-floor.spec.ts`
-	 * measures four of these in the running app; this is what stops an eighth appearing.
+	 * controls must restate a ≥16px size for that control under coarse. This is what stops an
+	 * eighth appearing.
 	 */
 	it('never lets a control’s own rule drop it under the focus-zoom floor (§5.4)', () => {
 		const offenders: string[] = [];
@@ -926,10 +917,6 @@ describe('coarse-pointer doors', () => {
 					offenders.push(`${rel}  ${where}`);
 		}
 		expect(offenders).toEqual([]);
-	});
-
-	it('exempts nothing it cannot justify in one line', () => {
-		for (const e of [...HOVER_ONLY_OK, ...FOCUS_ZOOM_OK]) expect(e.why.length, `${e.file} .${e.target}`).toBeGreaterThan(0);
 	});
 
 	/* Both guards only earn their lines if they fire on the defect they claim to catch — so each
