@@ -370,6 +370,8 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.set_param(src_uid, "common", "max_frequency", 100.0);
     let src = goofi_tests::hex(src_uid);
     let dst = goofi_tests::hex(g.add("_TestSink"));
+    // A name no other situation in this process has: the recorder's threads are named by it.
+    g.call("node edit", j!({ "node": &src, "name": "rearmed" }));
 
     g.call("record arm", j!({ "output": goofi_tests::ep(&src, "out") }));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "arming is the node's own record");
@@ -380,12 +382,23 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     g.call("link add", j!({ "from": goofi_tests::ep(&src, "out"), "to": goofi_tests::ep(&dst, "input") }));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "a re-wire cannot disarm a recording");
 
+    // Held, the worker of the first arming cannot leave before the redo arms the slot again.
+    let workers = |g: &goofi_tests::Goofi| -> usize {
+        let status = g.call("session status", j!({}));
+        status["resources"].as_array().expect("resources").iter().filter(|r| r["name"] == j!("goofi-record rearmed/out")).count()
+    };
+    g.state.recorder.hold(true);
     g.call("undo", j!({}));
     g.call("undo", j!({}));
     assert!(g.doc()["nodes"][&src]["record"].as_array().is_none_or(|r| r.is_empty()), "arming has an exact inverse");
 
     g.call("redo", j!({}));
     assert_eq!(g.doc()["nodes"][&src]["record"], j!([{ "slot": "out", "quality": "high" }]), "and the arm comes back");
+    g.until("the second arming to have its worker", |g| (workers(g) == 2).then_some(()));
+    g.state.recorder.hold(false);
+    // Step: an arming put back is a new arming, on a queue of its own. On the queue of the first
+    // one, the worker that left is never woken, and can take a frame of the take below.
+    g.until("the worker of the first arming to leave", |g| (workers(g) == 1).then_some(()));
 
     let root = tempfile::tempdir().expect("a temp root");
     let folder = g.call("record start", j!({ "name": "walk", "root": root.path() }))["folder"]
