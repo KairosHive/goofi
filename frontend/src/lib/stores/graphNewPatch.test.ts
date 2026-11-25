@@ -51,8 +51,7 @@ describe('GraphStore.newPatch — the reset door', () => {
 	 * `.gfi`, because the client keeps no copy.
 	 */
 	// (That a New patch opens on the DEFAULT arrangement is the manager's now — `new` reloads an
-	// empty document, which restores the default layout with it. Pinned over the wire by
-	// `a_new_patch_is_empty_clean_and_unnamed`.)
+	// empty document, which restores the default layout with it.)
 });
 
 function snapshot(savePath: string | null) {

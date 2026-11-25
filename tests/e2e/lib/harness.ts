@@ -1,39 +1,15 @@
 import { expect, type Page } from '@playwright/test';
+import { rawCall } from './raw';
 
 /**
  * The agent-harness door for specs: spawn, read the roster, hand it back.
  *
- * Everything here goes through a RAW `/control` socket (the `ua-reset.spec.ts` idiom) because the
+ * Everything here goes through a RAW `/control` socket because the
  * harness these specs use is `_sh` — a config entry `globalSetup` writes into the scoped
  * `GOOFI_HOME`, a plain `sh`, the same `_`-prefixed idiom the node catalog uses. A `_` entry has
  * no door in the UI on purpose: the launcher never advertises it. So nothing here needs a real
  * agent installed.
  */
-
-/** One RPC over its own `/control` socket. */
-export async function rawCall(page: Page, op: string, payload: unknown): Promise<any> {
-	return page.evaluate(
-		async ({ op, payload }) => {
-			const ws = new WebSocket(`ws://${location.host}/control`);
-			await new Promise((r) => (ws.onopen = r));
-			const reply = await new Promise<any>((res) => {
-				const id = Math.floor(Math.random() * 1e6);
-				const on = (e: MessageEvent): void => {
-					if (typeof e.data !== 'string') return;
-					const m = JSON.parse(e.data);
-					if (m.id !== id) return;
-					ws.removeEventListener('message', on);
-					res(m);
-				};
-				ws.addEventListener('message', on);
-				ws.send(JSON.stringify({ id, op, payload }));
-			});
-			ws.close();
-			return reply;
-		},
-		{ op, payload }
-	);
-}
 
 export const spawnSh = async (page: Page): Promise<string> =>
 	(await rawCall(page, 'agent start', { name: '_sh' })).result.instance_id;

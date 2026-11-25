@@ -2172,12 +2172,13 @@ impl Graph {
         Ok(())
     }
 
-    /// Every arming the batch left unnumbered gets the next serial: one per slot however often
-    /// the batch armed it.
+    /// Every arming the last settle did not hold gets the next serial: one per slot however often
+    /// the batch armed it. A snapshot put back names a serial of its own time, so it is new too.
     fn mint_serials(&mut self, uid: Uid) {
+        let held = self.runtime.settled.nodes.get(&uid).map(|p| p.record.clone()).unwrap_or_default();
         let mut serial = self.runtime.arm_serial;
         if let Some(e) = self.entry_mut(uid) {
-            for output in e.record.iter_mut().filter(|o| o.serial == 0) {
+            for output in e.record.iter_mut().filter(|o| !held.iter().any(|h| h.slot == o.slot && h.serial == o.serial)) {
                 serial += 1;
                 output.serial = serial;
             }

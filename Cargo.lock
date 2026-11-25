@@ -1113,7 +1113,9 @@ version = "3.0.0"
 dependencies = [
  "goofi-screen",
  "goofi-supervisor",
+ "serde",
  "sha2",
+ "toml",
 ]
 
 [[package]]
@@ -1235,7 +1237,6 @@ dependencies = [
 name = "goofi-tests"
 version = "3.0.0"
 dependencies = [
- "audio_thread_priority",
  "base64",
  "bytes",
  "futures-util",

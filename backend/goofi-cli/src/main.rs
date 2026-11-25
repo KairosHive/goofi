@@ -445,7 +445,7 @@ async fn run(
         Err(error) => return refused(&mut screen, &error),
     };
     let state = &manager.state;
-    if !demo {
+    if !state.mode.withholds(goofi_init::demo::Module::SoundCard) {
         report("Checking audio hosts");
         goofi_supervisor::progress::note(format!("{}{}", goofi_audio::hosts(), goofi_audio::NO_ASIO_NOTE));
     }
@@ -501,7 +501,7 @@ async fn run(
                 }
                 say("");
                 goofi_screen::url(&url);
-                if mcp && !demo {
+                if mcp && !state.mode.withholds(goofi_init::demo::Module::Mcp) {
                     say(&format!("    MCP endpoint → {url}/mcp"));
                 }
                 let spa = if headless { &[][..] } else { SPA };
@@ -512,7 +512,7 @@ async fn run(
                     facts.push(format!("open {url} in a browser to use it"));
                 }
                 if demo {
-                    facts.push("demo: no terminal, no agents, no filesystem, no sound card".to_string());
+                    facts.push("demo: without the ops, modules, bundles and nodes that demo.toml names".to_string());
                 }
                 if let Some(patch) = &state.load {
                     facts.push(format!("opened {}", patch.display()));

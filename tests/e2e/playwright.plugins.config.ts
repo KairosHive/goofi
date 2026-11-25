@@ -22,6 +22,7 @@ export default defineConfig({
 	},
 	projects: [
 		{ name: 'desktop' },
-		{ name: 'phone', use: { ...devices['Pixel 7'] } }
+		// The cable and latency walks are mouse drags; only the session walk has a phone door.
+		{ name: 'phone', testMatch: 'session.spec.ts', use: { ...devices['Pixel 7'] } }
 	]
 });

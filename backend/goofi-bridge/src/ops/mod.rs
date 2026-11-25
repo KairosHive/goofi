@@ -597,18 +597,11 @@ pub fn find(name: &str) -> Option<&'static Row> {
 /// The rows one server serves. A mode does not REGISTER what it withholds — the one spelling of
 /// each mode, so `op list`, the phrase resolver and the MCP all shrink with it.
 pub fn table(mode: crate::Mode) -> Vec<Row> {
-    // What a demo drops: what reaches the host's files or spawns on it, since every visitor
-    // shares one process. `session new` stays: it is the visitor's reset.
-    const DEMO_DROPS: [&str; 9] =
-        ["dir", "agent", "record", "session save", "session load", "library save",
-         "session recoverable", "session recover", "session discard"];
-    let dropped = |name: &str, group: &str| {
-        name == group || name.strip_prefix(group).is_some_and(|rest| rest.starts_with(' '))
-    };
+    let demo = goofi_init::demo::demo();
     registry()
         .iter()
-        .filter(|o| !mode.headless || !dropped(o.name, "layout"))
-        .filter(|o| !mode.demo || !DEMO_DROPS.iter().any(|d| dropped(o.name, d)))
+        .filter(|o| !mode.headless || !(o.name == "layout" || o.name.starts_with("layout ")))
+        .filter(|o| !mode.demo || !demo.op(o.name))
         .copied()
         .collect()
 }

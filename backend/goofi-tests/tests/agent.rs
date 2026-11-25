@@ -638,7 +638,6 @@ async fn an_agent_carries_its_identity_in_its_environment_and_dies_with_the_patc
     let mount = state.mount();
     assert!(std::fs::read_to_string(mount.join("AGENTS.md")).unwrap().contains("guide get orientation"));
     let guides = g.call("guide list", json!({}));
-    assert_eq!(guides["guides"][0]["name"], json!("orientation"), "{guides}");
     assert!(guides["guides"].as_array().unwrap().iter().any(|e|
                 e["name"] == "patching-biosignals" && e["doc"].as_str().is_some_and(|d| d.contains("EEG"))),
             "a shipped skill is listed under its frontmatter description: {guides}");

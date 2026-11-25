@@ -6,26 +6,25 @@ use goofi_bridge::phrase;
 use futures_util::StreamExt;
 use goofi_tests::{host, http, j, render, Client, Goofi, Message, WAIT};
 
-/// Every op a demo drops, and the one it keeps because a visitor needs a reset.
-const DROPPED: [&str; 7] =
-    ["dir list", "agent list", "session save", "session load", "library save", "record arm", "record start"];
-
 #[tokio::test]
 async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
     // The full server is asked for `/mcp`, so the demo's absence below is the mode, not the default.
     let full = Goofi::mcp();
     let mut g = Goofi::demo();
 
+    // What a demo lacks is what `demo.toml` names, and every line there names a thing a full
+    // server has: a line that names nothing is a line that withholds nothing.
+    let lists = goofi_init::demo::demo();
     // The rows are ABSENT, not filtered on read — the index, dispatch and the resolver agree,
     // exactly as they do for headless.
-    let names: Vec<String> = g.call("op list", j!({}))["ops"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|o| o["op"].as_str().map(str::to_string))
-        .collect();
-    for dropped in DROPPED {
-        assert!(!names.iter().any(|n| n == dropped), "`{dropped}` is served: {names:?}");
+    let served = |g: &Goofi| -> Vec<String> {
+        g.call("op list", j!({}))["ops"].as_array().unwrap().iter().filter_map(|o| o["op"].as_str().map(str::to_string)).collect()
+    };
+    let names = served(&g);
+    let under = |name: &str, held: &str| name == held || name.strip_prefix(held).is_some_and(|rest| rest.starts_with(' '));
+    for held in &lists.ops {
+        assert!(served(&full).iter().any(|n| under(n, held)), "`{held}` names an op of a full server");
+        assert!(!names.iter().any(|n| under(n, held)), "`{held}` is served: {names:?}");
     }
     assert!(names.iter().any(|n| n == "session new"), "the visitor's reset stays: {names:?}");
     // The REST of the group stays: a visitor still reads the library it cannot write into.
@@ -58,9 +57,22 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
         assert!(types(&g).iter().any(|t| t.starts_with(plane)), "and a demo has them: {:?}", types(&g));
     }
 
+    // The bundles and the node types the file names are not in a demo's library at all.
+    let bundles = |g: &Goofi| -> Vec<String> {
+        g.state.roots.iter().filter_map(|r| Some(r.file_name()?.to_string_lossy().into_owned())).collect()
+    };
+    for held in &lists.bundles {
+        assert!(bundles(&full).contains(held), "`{held}` names a bundle of a full server");
+        assert!(!bundles(&g).contains(held), "a demo has no bundle `{held}`");
+    }
+    for held in &lists.nodes {
+        assert!(types(&full).contains(held), "`{held}` names a node type of a full server");
+        assert!(!types(&g).contains(held), "a demo has no `{held}`");
+    }
+
     // The graph itself is untouched by the mode: a node is added, and it runs.
     let osc = g.add("LFO");
-    assert_eq!(g.call("node state", j!({ "node": goofi_tests::hex(osc) }))["error"], j!(null));
+    g.ready(osc);
 
     // A public instance is not empty: it opens the patch named at boot, and `session new` — the
     // only reset a visitor has — brings that patch back rather than the empty canvas. The file

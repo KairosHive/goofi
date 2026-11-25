@@ -34,11 +34,18 @@ pub fn folder_of(engine: &str) -> String {
 /// signal engine's elsewhere; either then says why it does not build.
 pub fn engine_of(path: &Path) -> Option<String> {
     match path.extension()?.to_str()? {
-        "py" => Some(std::fs::read_to_string(path).ok()
-            .and_then(|s| s.lines().next()?.strip_prefix("# goofi: ").map(str::to_owned))
-            .unwrap_or_else(|| "signal".to_string())),
+        "py" => engine_in(path, &std::fs::read_to_string(path).unwrap_or_default()),
+        "rs" => engine_in(path, &std::fs::read_to_string(path).ok()?),
+        _ => engine_in(path, ""),
+    }
+}
+
+/// [`engine_of`] for a file whose text is in hand.
+pub fn engine_in(path: &Path, source: &str) -> Option<String> {
+    match path.extension()?.to_str()? {
+        "py" => Some(source.lines().next().and_then(|l| l.strip_prefix("# goofi: ")).unwrap_or("signal").to_string()),
         "wgsl" => Some("graphics".to_string()),
-        "rs" => Some(sdk_engine(&std::fs::read_to_string(path).ok()?).unwrap_or_else(|| folder_engine(path))),
+        "rs" => Some(sdk_engine(source).unwrap_or_else(|| folder_engine(path))),
         _ => None,
     }
 }

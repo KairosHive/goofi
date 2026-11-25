@@ -107,18 +107,3 @@ export function undo(page: Page): Promise<void> {
 export function redo(page: Page): Promise<void> {
 	return page.evaluate(() => (window as any).goofi.commands.redo());
 }
-/** Whether an undo is available. */
-export function canUndo(page: Page): Promise<boolean> {
-	return page.evaluate(() => (window as any).goofi.query.canUndo());
-}
-/** Add a user variable; returns whether it landed. */
-export function addVariable(page: Page, name: string, value: number | number[] | string): Promise<void> {
-	// A command op — resolves void on success, rejects on a server refusal (invalid/collision).
-	return page.evaluate(([n, v]) => (window as any).goofi.commands.addVariable(n, v), [name, value] as const);
-}
-/** All patch variables (system + user). */
-export function variables(
-	page: Page
-): Promise<Array<{ name: string; value: unknown; system: boolean }>> {
-	return page.evaluate(() => (window as any).goofi.query.variables());
-}

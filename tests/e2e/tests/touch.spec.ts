@@ -14,7 +14,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
 import { addNode, frameSummary, tapNode, waitForNode } from '../lib/goofi';
-import { rawCall } from '../lib/harness';
+import { rawCall } from '../lib/raw';
 import { emptySpot, pinch, swipe, touchSession } from '../lib/touch';
 import { pane } from '../lib/inspector';
 
@@ -436,7 +436,6 @@ test('a finger held on a viewer reads it, and follows as it moves, without movin
 		await expect(readout, 'the press reads the cell under the finger').toHaveCount(1);
 		await touch.moveTo({ x: at.x + 30, y: at.y + 10 });
 		await expect(readout, 'and holds through the move').toHaveCount(1);
-		await page.waitForTimeout(150);
 		await touch.up();
 		await expect(readout, 'and goes with the finger').toHaveCount(0);
 		const after = (await card.boundingBox())!;

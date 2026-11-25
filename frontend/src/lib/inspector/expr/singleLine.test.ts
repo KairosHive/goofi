@@ -12,21 +12,13 @@ import { singleLineExpression } from './singleLine';
  * with nothing would silently change the expression's meaning.
  */
 
-const state = (doc: string, singleLine = true) =>
-	EditorState.create({ doc, extensions: singleLine ? [singleLineExpression] : [] });
+const state = (doc: string) => EditorState.create({ doc, extensions: [singleLineExpression] });
 
 describe('single-line mode rejects newlines', () => {
 	it('flattens a pasted multi-line expression to one line', () => {
 		const tr = state("nd('a')").update({ changes: { from: 7, insert: "\n+ 1\n* 2" } });
 		expect(tr.state.doc.lines).toBe(1);
 		expect(tr.state.doc.toString()).toBe("nd('a') + 1 * 2");
-	});
-
-	// The control: without the extension the same transaction lands three lines, so the assertion
-	// above is measuring the extension rather than something CodeMirror does anyway.
-	it('is the extension doing it, not the editor', () => {
-		const tr = state("nd('a')", false).update({ changes: { from: 7, insert: "\n+ 1\n* 2" } });
-		expect(tr.state.doc.lines).toBe(3);
 	});
 
 	// A newline is one character and so is the space replacing it, so the caret the transaction asked

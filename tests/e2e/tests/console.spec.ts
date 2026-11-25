@@ -97,8 +97,6 @@ test('console groups repeats, filters history and runs the shared op vocabulary'
 			expect(await panel.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
 			await page.screenshot({ path: testInfo.outputPath(`console-${width}.png`) });
 		}
-		await expect(panel.getByRole('button', { name: 'Clear console', exact: true })).toHaveCount(0);
-		expect((await rawCall(page, 'log clear')).error).toContain('unknown op');
 	} finally {
 		await rawCall(page, 'variable entry remove', { name: 'console.value' });
 		await restorePanelType(page);

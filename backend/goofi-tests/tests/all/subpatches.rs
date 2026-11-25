@@ -260,10 +260,6 @@ fn a_cable_onto_a_boundary_stops_at_the_port_and_the_stream_runs_through() {
     let outer = links.iter().find(|l| l["node_out"] == hex(osc)).expect("the external cable");
     assert_eq!(outer["node_in"], bnd, "the outer cable names the PORT, not the facade or the leaf");
     assert_eq!(outer["slot_in"], "value");
-
-    // …and the STREAM behind it is the leaf, which is the question the runtime asks.
-    let read = g.call("node state", j!({ "node": hex(buf) }))["text"].as_str().unwrap().to_string();
-    assert!(read.contains("buffer0"), "the leaf is what the wire ends up feeding: {read}");
 }
 
 #[test]

@@ -76,9 +76,7 @@ export async function closeAddedTab(page: Page): Promise<void> {
 	await expect(tabs.locator('.ui-tab'), 'the workspace is back to one tab').toHaveCount(1);
 }
 
-/** Split the sole default panel to the right, through the real header context menu. Two specs need
- *  a two-panel workspace — `panel-surface` to read the seam it paints, `inspector-orientation` to
- *  make the editor a narrow tall column — and a second copy is a second thing to keep true. */
+/** Split the sole default panel to the right, through the real header context menu. */
 export async function splitRight(page: Page): Promise<void> {
 	const header = page.getByTestId('panel-header').first();
 	await header.click({ button: 'right' });

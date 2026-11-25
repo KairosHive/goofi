@@ -10,6 +10,7 @@ use std::time::Duration;
 use goofi_supervisor::layout::{self, Tool};
 use goofi_supervisor::progress;
 
+pub mod demo;
 pub mod python;
 use python::{answers, query, run, uv};
 
@@ -36,8 +37,9 @@ pub const RUN_ME: &str = "run `cargo run -p goofi-init` first — it provisions 
                           interpreters in goofi's runtime and the frontend's dependencies \
                           (needs `uv` and `npm` on PATH)";
 
-/// Provision everything, from nothing, idempotently.
-pub fn init(root: &Path) -> Result<(), String> {
+/// Provision everything, from nothing, idempotently. For a demo, the bundles `demo.toml`
+/// withholds are left out: none of their packages is installed.
+pub fn init(root: &Path, demo: bool) -> Result<(), String> {
     let runtime = layout::runtime();
     progress::report("Checking the tools goofi builds with");
     require_uv(&runtime)?;
@@ -59,7 +61,8 @@ pub fn init(root: &Path) -> Result<(), String> {
 
     // The bundles' packages every time, never gated on presence: a bundle added since the last
     // run names new ones, and uv answers a satisfied list in milliseconds.
-    let dirs = bundle_dirs(root);
+    let withheld = |dir: &PathBuf| demo && dir.file_name().is_some_and(|name| demo::demo().bundle(&name.to_string_lossy()));
+    let dirs: Vec<PathBuf> = bundle_dirs(root).into_iter().filter(|dir| !withheld(dir)).collect();
     let (shared, gil_only) = python::requirement_sets(&dirs);
     for (label, py, reqs) in [("ft", &ft, &shared), ("gil", &gil, &gil_only)] {
         if !python::has_goofi(py) {

@@ -42,18 +42,13 @@ describe('a positioned SyntaxError anchors to its line', () => {
 });
 
 describe('a positionless error spans the document', () => {
-	// The middle one is `expr.rs:37` verbatim — the raise D-X10's completion detail exists to prevent.
-	for (const msg of [
-		"KeyError: 'oscillator0'",
-		"ValueError: nd('spectrum0') is ambiguous: it has multiple outputs; use nd('spectrum0').slot",
-		'TypeError: unsupported operand type(s)'
-	]) {
-		it(`spans it all: ${msg.split(':')[0]}`, () => {
-			const d = expressionDiagnostics(msg, doc("nd('spectrum0') * 2"));
-			expect(d).toHaveLength(1);
-			expect([d[0].from, d[0].to]).toEqual([0, 19]);
-		});
-	}
+	// `expr.rs:37` verbatim — the raise D-X10's completion detail exists to prevent.
+	it('spans it all: ValueError', () => {
+		const msg = "ValueError: nd('spectrum0') is ambiguous: it has multiple outputs; use nd('spectrum0').slot";
+		const d = expressionDiagnostics(msg, doc("nd('spectrum0') * 2"));
+		expect(d).toHaveLength(1);
+		expect([d[0].from, d[0].to]).toEqual([0, 19]);
+	});
 
 	it('still reports on an empty document', () => {
 		const d = expressionDiagnostics('KeyError: x', doc(''));

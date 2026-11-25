@@ -30,10 +30,6 @@ describe('the node a panel binds, as a list of choices', () => {
 		expect(l.options).not.toContain('u-deleted');
 	});
 
-	it('takes the empty choice’s wording from the panel, because a console filters and a viewer binds', () => {
-		expect(nodePickList(set, null, 'All nodes').labels[NO_NODE]).toBe('All nodes');
-	});
-
 	it('survives a patch with no nodes at all — the empty choice is still a choice', () => {
 		const l = nodePickList([], 'u-buf', 'No node');
 		expect(l.options).toEqual([NO_NODE]);

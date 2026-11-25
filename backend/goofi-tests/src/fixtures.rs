@@ -45,7 +45,6 @@ pub fn register(g: &mut Graph) {
     add(g, manifest("_TestCommonFirst", "declares its common page first, with its own max_frequency", &[], OUT_ARRAY, COMMON_FIRST_PARAMS, true), || Box::new(Counter::default()));
     add(g, manifest("_TestParamWrites", "emits how many param writes were delivered", IN_ARRAY, OUT_ARRAY, SINK_PARAMS, false), || Box::new(ParamWrites::default()));
     add(g, manifest("_TestRequired", "refuses to run without its input", IN_REQUIRED, OUT_ARRAY, NO_PARAMS, false), || Box::new(RequiredCounter::default()));
-    add(g, manifest("_TestGrid", "a [3, 4] frame of three offset rising signals", &[], OUT_ARRAY, NO_PARAMS, true), || Box::new(Grid::default()));
     add(g, manifest("_TestPicker", "a refreshable device list", &[], &[], PICKER_PARAMS, false), || Box::new(Picker));
     add(g, manifest("_TestMute", "a refreshable list with no hook behind it", &[], &[], PICKER_PARAMS, false), || Box::new(MutePicker));
     add(g, manifest("_TestConst", "constant float32 array source (value+length) — hidden test/bench scaffolding.", &[], OUT_ARRAY, CONST_PARAMS, true), || Box::new(TestConst));
@@ -436,34 +435,6 @@ impl Node for RequiredCounter {
         self.runs += 1;
         let bytes = (self.runs as f32).to_le_bytes().to_vec();
         o.set("out", Data::array_f32(vec![1], bytes, Meta::new()).map_err(|e| e.to_string())?);
-        Ok(())
-    }
-}
-
-/// A `[3, 4]` frame — the only source here that is not a vector. Each row rises, offset by a round
-/// 100, so a leak between channels, a reversed window or a degenerate measure all show up.
-#[derive(Default)]
-struct Grid {
-    /// Samples emitted so far; each frame continues the sequence rather than restarting it.
-    n: u64,
-}
-impl Node for Grid {
-    fn process(&mut self, _i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
-        let (rows, cols) = (3u64, 4u64);
-        let first = self.n;
-        self.n += cols;
-        let buf = (0..rows)
-            .flat_map(|r| {
-                (0..cols).flat_map(move |t| {
-                    let n = (first + t) as f64;
-                    let v = r as f64 * 100.0 + n + 0.4 * (std::f64::consts::TAU * n / 8.0).sin();
-                    (v as f32).to_le_bytes()
-                })
-            })
-            .collect();
-        let meta = Meta::new().with_sfreq(Some(256.0));
-        let shape = vec![rows as usize, cols as usize];
-        o.set("out", Data::array_f32(shape, buf, meta).map_err(|e| e.to_string())?);
         Ok(())
     }
 }

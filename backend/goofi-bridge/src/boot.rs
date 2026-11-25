@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use goofi_node::{Isolation, Scanned};
+use goofi_init::demo::Module;
 use goofi_supervisor::progress::{note, report};
 
 use crate::{AppState, Clock, Mode};
@@ -135,15 +136,16 @@ pub fn boot(config: Config) -> Result<Manager, String> {
             }
         }
         // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
-        // A demo has none, whatever its host has: a `Window` node there is a pass-through.
-        let ui = ui.filter(|_| !mode.demo);
+        // Withheld, there is none, whatever the host has: a `Window` node is a pass-through.
+        let ui = ui.filter(|_| !mode.withholds(Module::Windows));
         let audio = crate::audio_engine(&mut g);
         audio.set_ui(ui.clone());
-        // A demo is heard in its visitors' browsers alone, and loads no plugin of its host's.
-        match (mode.demo, host) {
-            (true, _) => audio.browser_only(),
-            (false, Some(host)) => audio.set_vst3(host, vst3_dirs),
-            (false, None) => {}
+        // With no sound card, the engine is heard in its visitors' browsers alone.
+        if mode.withholds(Module::SoundCard) {
+            audio.browser_only();
+        }
+        if let Some(host) = host.filter(|_| !mode.withholds(Module::Vst3)) {
+            audio.set_vst3(host, vst3_dirs);
         }
         if let Some(graphics) = crate::try_graphics_engine(&mut g) {
             graphics.set_ui(ui);

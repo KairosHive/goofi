@@ -14,7 +14,7 @@ pub struct Cli {
     pub headless: bool,
     /// Open `/dev/*`, the development surfaces. Also set by `GOOFI_DEBUG` in the environment.
     pub debug: bool,
-    /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. Also set
+    /// A PUBLIC goofi: it withholds what `demo.toml` names. Also set
     /// by `GOOFI_DEMO` in the environment. Not a sandbox.
     pub demo: bool,
     /// Serve `/mcp`. Also set by `GOOFI_MCP` in the environment.

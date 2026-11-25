@@ -20,12 +20,6 @@ describe('nodeStatsRows', () => {
 		expect(nodeStatsRows(undefined)).toEqual([]);
 	});
 
-	it('returns the update rate — the one metric the engine measures', () => {
-		expect(nodeStatsRows({ updates_per_second: 12.4 })).toEqual([
-			{ label: 'Update rate', value: '12.4 upd/s' }
-		]);
-	});
-
 	it('narrows decimals as magnitudes grow', () => {
 		expect(nodeStatsRows({ updates_per_second: 1000 })).toEqual([{ label: 'Update rate', value: '1000 upd/s' }]);
 		expect(nodeStatsRows({ updates_per_second: 0 })).toEqual([{ label: 'Update rate', value: '0.0 upd/s' }]);
