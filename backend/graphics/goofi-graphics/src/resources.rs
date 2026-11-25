@@ -131,9 +131,6 @@ impl Ring {
 
 /// One node's GPU state, kept across plans so a topology edit costs no allocation.
 pub(crate) struct State {
-    /// What a host producer last made, as the render thread took it off its cell.
-    pub(crate) produced: Option<crate::producer::Produced>,
-    pub(crate) submitted: Option<u64>,
     pub(crate) out: Option<Target>,
     /// One per [`Want`], sized with `out`; only a stage that reader watches has one.
     pub(crate) reads: [Option<Ring>; 4],
@@ -167,8 +164,6 @@ impl State {
             })
         };
         State {
-            produced: None,
-            submitted: None,
             out: None,
             reads: [None, None, None, None],
             buffers: Vec::new(),
@@ -280,7 +275,6 @@ impl State {
             let fresh = || Target::new(gpu, "state", size, crate::gpu::FORMAT, usage);
             self.buffers = (0..buffers).map(|_| [fresh(), fresh()]).collect();
             self.count = 0;
-            self.submitted = None;
             self.reads = [None, None, None, None];
         }
         for w in Want::ALL {
@@ -293,21 +287,6 @@ impl State {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn submit_upload(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, up: &Upload) {
-        let out = self.out.as_ref().expect("output allocated");
-        if out.size == (up.width, up.height) {
-            write_texels(gpu, &out.texture, out.size, &up.texels);
-        } else {
-            self.upload(gpu, 0, up);
-            gpu.resize(
-                encoder,
-                &self.uploads[0].as_ref().unwrap().view,
-                &self.out.as_ref().unwrap().view,
-                &self.resolution,
-            );
-        }
     }
 
     /// One arrival into the texture its input samples.

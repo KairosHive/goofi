@@ -124,16 +124,10 @@ pub fn boot(config: Config) -> Result<Manager, String> {
         }
         // Handed to the engines before anything scans, so the boot scan and every rescan share it.
         if let Some(python) = python {
-            crate::signal_engine(&mut g).set_python(goofi_signal::Python::new(python.clone()));
-            if let Some(graphics) = crate::try_graphics_engine(&mut g) {
-                graphics.set_python(goofi_signal::Python::new(python));
-            }
+            crate::signal_engine(&mut g).set_python(goofi_signal::Python::new(python));
         }
         if let Some(host) = &host {
             crate::signal_engine(&mut g).set_host(host.clone());
-            if let Some(graphics) = crate::try_graphics_engine(&mut g) {
-                graphics.set_host(host.clone());
-            }
         }
         // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
         // Withheld, there is none, whatever the host has: a `Window` node is a pass-through.

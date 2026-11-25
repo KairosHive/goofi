@@ -754,7 +754,6 @@ impl Data {
         match &self.0.value {
             Value::Texture(t) => match &**t {
                 texture::Texture::Pixels(p) => p.to_array(self.0.meta.clone()),
-                texture::Texture::Render { .. } => Err("a texture program has no pixels".into()),
             },
             _ => Ok(self.clone()),
         }

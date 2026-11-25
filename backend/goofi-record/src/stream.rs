@@ -46,7 +46,6 @@ impl Kind {
                 (Value::Texture(t), _) => match (&**t, d.meta().sfreq().filter(|fps| *fps > 0.0)) {
                     (goofi_core::texture::Texture::Pixels(p), Some(fps)) => Ok(Kind::Video { size: (p.width, p.height), fps, quality }),
                     (goofi_core::texture::Texture::Pixels(_), None) => Err("a texture frame with no `sfreq` names no frame rate to record at".into()),
-                    (goofi_core::texture::Texture::Render { .. }, _) => Err("a texture program is not recorded".into()),
                 },
                 (Value::Functional(_), _) => Err("a functional is not recorded".into()),
             },

@@ -68,7 +68,7 @@ impl SignalEngine {
     /// registration was displaced, and the tier the type runs on.
     fn load_rust(&mut self, artifact: PathBuf, type_name: &str) -> Result<(bool, Isolation), String> {
         let (manifest, factory, tier) = goofi_runtime::hosted::load(
-            self.hub.clone(), artifact, type_name, None, self.host.as_deref(), self.booted,
+            self.hub.clone(), artifact, type_name, self.host.as_deref(), self.booted,
         )?;
         let isolation = tier.get();
         Ok((self.register_dyn_type(manifest, factory, tier), isolation))

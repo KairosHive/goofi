@@ -19,7 +19,6 @@ pub fn load(
     hub: Arc<Hub>,
     artifact: PathBuf,
     type_name: &str,
-    own: Option<goofi_core::SlotType>,
     host: Option<&Path>,
     booted: bool,
 ) -> Result<(&'static NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
@@ -32,7 +31,7 @@ pub fn load(
         Some(host) => describe(host, &artifact)?,
         None => goofi_build::open(&artifact)?.describe,
     };
-    let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, own)?;
+    let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, None)?;
     let (factory, tier): (goofi_host_sdk::NodeFactory, _) = match host {
         Some(host) => (Box::new(move |_| Box::new(node(hub.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
         None => {

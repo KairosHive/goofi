@@ -116,7 +116,7 @@ pub struct Gpu {
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
-    blits: [wgpu::RenderPipeline; 5],
+    blits: [wgpu::RenderPipeline; 4],
     /// The `screen` pass per surface format a window turned out to want, made at its first frame.
     screens: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
     blit_module: wgpu::ShaderModule,
@@ -267,7 +267,6 @@ impl Gpu {
             blit("tap", Want::Tap.format()),
             blit("tap8", Want::TapU8.format()),
             blit("tap8", Want::Record.format()),
-            blit("tap", FORMAT),
         ];
         Ok(Gpu {
             _lease: goofi_supervisor::scope::lease(
@@ -303,17 +302,7 @@ impl Gpu {
         into: &wgpu::TextureView,
         out_size: &wgpu::Buffer,
     ) {
-        self.blit_index(encoder, want as usize, src, into, out_size);
-    }
-
-    pub fn resize(&self, encoder: &mut wgpu::CommandEncoder, src: &wgpu::TextureView,
-                  into: &wgpu::TextureView, size: &wgpu::Buffer) {
-        self.blit_index(encoder, 4, src, into, size);
-    }
-
-    fn blit_index(&self, encoder: &mut wgpu::CommandEncoder, index: usize, src: &wgpu::TextureView,
-                  into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
-        self.blit_with(encoder, &self.blits[index], src, into, out_size);
+        self.blit_with(encoder, &self.blits[want as usize], src, into, out_size);
     }
 
     /// A surface onto a window, from the handles its screen answered. Made where the handles

@@ -40,13 +40,6 @@ pub const SIGNAL: Sdk = Sdk {
     glue: "goofi_signal_sdk::cdylib!(node, {sdk});",
 };
 
-pub const GRAPHICS: Sdk = Sdk {
-    name: "goofi-graphics-sdk",
-    dir: "backend/graphics/goofi-graphics-sdk",
-    allow: &[],
-    glue: "goofi_graphics_sdk::cdylib!(node, {sdk});",
-};
-
 pub const AUDIO: Sdk = Sdk {
     name: "goofi-audio-sdk",
     dir: "backend/audio/goofi-audio-sdk",
@@ -55,7 +48,7 @@ pub const AUDIO: Sdk = Sdk {
 };
 
 pub fn sdk(name: &str) -> Option<&'static Sdk> {
-    [&SIGNAL, &AUDIO, &GRAPHICS].into_iter().find(|s| s.name == name)
+    [&SIGNAL, &AUDIO].into_iter().find(|s| s.name == name)
 }
 
 /// How long one node build may run. A first build compiles the SDK's dependency tree, which is

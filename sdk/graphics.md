@@ -1,15 +1,20 @@
-# Graphics node sources
+# Textures
 
-Graphics nodes can use WGSL, Rust, or Python. All outputs use the same GPU texture
-resources, downstream shader connections, windows, recording, and readback.
+A `TEXTURE` slot carries a picture. A node's engine says how the node is scheduled, not which
+kinds it carries: a shader runs on the graphics tick, and a Python or Rust node that makes or reads
+a picture is a signal node on its own pace.
 
-## Python
+## Shaders
 
-Put `# goofi: graphics` on the first line of the file. Declare one `TEXTURE` output
-named `out`. Return `goofi.Texture(pixels)` from `process`:
+A `.wgsl` file is a graphics node. The graphics engine owns its output texture, its upload
+textures, its state buffers and its readback buffers. Between two shaders a texture stays on the
+GPU. Read `graphics:Life` for state kept between ticks.
+
+## A signal node that makes a texture
+
+Declare a `TEXTURE` output and return `goofi.Texture(pixels)` from `process`:
 
 ```python
-# goofi: graphics
 import goofi
 import numpy as np
 
@@ -26,14 +31,10 @@ Pixels must have shape `[height, width, 3 or 4]` and dtype `uint8` or little-end
 working color space. RGB input receives alpha 1. Python makes non-contiguous arrays
 contiguous. Dimensions must be within 1 through 8192.
 
-Automatic Python tier selection applies: safe imports use embedded free-threaded
-Python; other imports use a subprocess. Both tiers use the same texture contract.
-Capture and processing run on a host worker. A viewer is not required to run it.
+Return `(goofi.Texture(pixels), {"sfreq": fps})` to state the frame rate. The recorder files an
+armed texture output as video at that rate, and refuses a texture that states none.
 
-## Rust
-
-Use `goofi_graphics_sdk` with the same `Node` lifecycle as `goofi_signal_sdk`.
-Declare one `SlotType::Texture` output named `out`. Submit a validated frame:
+In Rust, use `goofi_signal_sdk` and declare a `SlotType::Texture` output:
 
 ```rust
 let pixels = Pixels {
@@ -44,38 +45,36 @@ let pixels = Pixels {
 out.set("out", Data::texture(Texture::Pixels(pixels), Meta::new())?);
 ```
 
-Import `Pixels`, `PixelFormat`, and `Texture` from `goofi_graphics_sdk`, and `Data`
-and `Meta` from `goofi_core`. Rust pixels support RGB/RGBA U8 and F32. The stride
-includes padding; the byte count must equal stride times height. A `.rs` built after the
-boot scan runs hosted: its library loads in a child of goofi's own binary and the texture
-crosses the exchange, so the newest build runs without a restart.
+Import `Pixels`, `PixelFormat` and `Texture` from `goofi_core::texture`, and `Data` and `Meta`
+from `goofi_core`. The stride includes padding; the byte count must equal stride times height.
 
-A native producer can submit GPU work with
-`Texture::Render { width, height, source }`. The source defines
-`fn shade(uv: vec2f) -> vec4f`. It uses the regular graphics uniforms and writes
-into the engine-owned output target. The engine compiles and submits this program
-on its existing device. No wgpu object or pointer crosses the dynamic-library ABI.
-This command supports render programs; arbitrary native GPU handles and external
-CUDA/Vulkan/Metal imports are not part of this API.
+`signal:Camera` captures devices and video files this way. Connect it directly to a shader.
 
-Host nodes currently accept single CPU-frame inputs. Texture processing uses
-shader nodes. Scheduling, params, pulse, refresh, and error handling use the shared
-host runtime. There is one pending frame per producer; a new frame replaces an
-unconsumed one. The last valid GPU texture remains until another frame arrives.
+## A signal node that reads a texture
 
-## Resource ownership
+Declare a `TEXTURE` input. The frame's `data` is a `goofi.Texture`:
 
-The graphics engine owns output textures, upload textures, state buffers, and
-readback buffers. Host workers submit owned pixels or GPU programs. They never
-allocate a separate GPU device. Natural output dimensions follow each submission;
-zero common width/height inherits that size. Explicit dimensions request resizing.
-A size change updates downstream inherited dimensions at graph settlement.
+```python
+INPUTS = {'image': goofi.InputSlot(goofi.DataType.TEXTURE)}
 
-CPU frames require an upload. A matching-size frame writes directly to the output;
-it does not need a shader pass. Shader consumers then sample that same resource.
-GPU programs render directly into it. Readback happens only for consumers that
-request CPU pixels, viewers, snapshots, or recording.
+def process(self, image):
+    pixels = image.data.numpy()   # [height, width, 3 or 4], uint8 or float32
+```
 
-`graphics:Camera` captures devices and video files. Connect it directly to graphics
-nodes. Use `signal:GraphicsIn` when a CPU consumer needs pixels. That crossing uses
-shared GPU readback at the graphics clock and works without an open viewer.
+In Rust, `frame.as_texture()` gives the texture, and `frame.pixels_as_array()` gives the
+`[H, W, C]` array of values in 0..1. `signal:GraphicsIn` is that crossing as a node.
+
+## How a texture crosses
+
+- A shader's output that another engine reads is read back from the GPU and sent as `RGBA`
+  `float32` pixels. Readback happens only for a reader: a consumer on another engine, a viewer, a
+  snapshot or a recording.
+- A signal node's texture that a shader reads is uploaded into that shader's own input texture.
+  There is one pending frame per input; a new frame replaces one not yet uploaded, and the last
+  uploaded texture stays until another frame arrives.
+- A shader whose `common` width or height is zero follows the first texture input that is fed: a
+  shader's size, or the size of the frame a signal node sent.
+
+A file that starts with `# goofi: graphics`, or a Rust file against `goofi_graphics_sdk`, is
+reserved for a node that the graphics tick runs. The graphics engine refuses it until that kind
+exists (`roadmap/texture-plane.md`).

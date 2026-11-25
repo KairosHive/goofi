@@ -62,21 +62,15 @@ pub enum Input {
     None,
 }
 
-pub enum Pass {
-    Shader(Built),
-    Host { source: crate::producer::Source, program: Option<(Arc<str>, Built)> },
-}
-
 pub struct Stage {
     pub uid: Uid,
-    pub pass: Pass,
+    pub pass: Built,
     pub inputs: Vec<Input>,
     /// How many state buffers this stage carries between two ticks.
     pub state: usize,
     /// How many ARRAY inputs it has: the upload cells that carry a range and a head layout.
     pub arrays: usize,
     pub size: (u32, u32),
-    pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
     pub cells: Arc<Cells>,
     /// The window on the machine's own screen this stage draws into, once one is open, and the
@@ -185,11 +179,8 @@ pub fn compile(
     let mut stages = Vec::with_capacity(order.len());
     for uid in &order {
         let inst = &live[uid];
-        if let crate::scan::Kind::Shader(built) = &inst.class.kind {
-            if let Some(why) = built.error() { faults.push((*uid, format!("shader: {why}"))); }
-        }
-        if let Some((_, built)) = &inst.program {
-            if let Some(why) = built.error() { faults.push((*uid, format!("texture program: {why}"))); }
+        if let Some(why) = inst.class.pipeline.error() {
+            faults.push((*uid, format!("shader: {why}")));
         }
         let manifest = inst.class.manifest;
         let arrays = crate::shader::array_inputs(manifest).count();
@@ -206,15 +197,11 @@ pub fn compile(
             .collect();
         stages.push(Stage {
             uid: *uid,
-            pass: match &inst.class.kind {
-                crate::scan::Kind::Shader(built) => Pass::Shader(built.clone()),
-                crate::scan::Kind::Host(_) => Pass::Host { source: inst.source.clone().expect("host source"), program: inst.program.clone() },
-            },
+            pass: inst.class.pipeline.clone(),
             inputs,
             state: inst.class.state.len(),
             arrays,
             size: sizes[uid],
-            natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
             cells: inst.cells.clone(),
             window: windows.get(uid).map(|o| o.id),
@@ -261,8 +248,8 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
 /// first fed texture input's size on that axis: a stage's, or the frame another engine sent. With
-/// no texture behind it, the frame its host made or its first array input uploaded. A chain that
-/// follows itself, or one that follows nothing, takes the patch's default.
+/// no texture behind it, the frame its first array input uploaded. A chain that follows itself,
+/// or one that follows nothing, takes the patch's default.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
@@ -290,10 +277,7 @@ fn size_of(
             Some(p) => Some(size_of(*p, live, wires, fallback, sizes, visiting)),
             None => uploaded(arrays + t),
         });
-        let (fw, fh) = behind
-            .or_else(|| inst.and_then(|i| i.produced.as_ref().map(|f| f.size)))
-            .or_else(|| uploaded(0).filter(|_| arrays > 0))
-            .unwrap_or(fallback);
+        let (fw, fh) = behind.or_else(|| uploaded(0).filter(|_| arrays > 0)).unwrap_or(fallback);
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }
     visiting.pop();

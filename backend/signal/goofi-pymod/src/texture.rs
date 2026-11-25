@@ -8,7 +8,7 @@ impl Texture {
     fn pixels(&self) -> PyResult<&Pixels> {
         match self.frame.as_texture() {
             Ok(Frame::Pixels(p)) => Ok(p),
-            _ => Err(pyo3::exceptions::PyTypeError::new_err("this texture holds no pixels")),
+            Err(why) => Err(pyo3::exceptions::PyTypeError::new_err(why)),
         }
     }
 }

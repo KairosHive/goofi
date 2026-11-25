@@ -1,6 +1,5 @@
 //! The graphics engine's executor on a node's runtime: an arrival becomes texels the render
-//! thread uploads, and the frame that thread read back goes out while anyone drinks from it. A
-//! host producer runs here too, on the shared host executor, and what it renders is the source.
+//! thread uploads, and the frame that thread read back goes out while anyone drinks from it.
 //!
 //! Every crossing between this thread and the render thread is a cell with no lock on either
 //! side: the render thread hands a readback over as the mapped GPU buffer it is, and this thread
@@ -11,8 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use goofi_runtime::{Cx, Executor, Fault, HostExecutor, Out, Ticked};
-use goofi_node::NodeStage;
+use goofi_runtime::{Cx, Executor, Fault, Out, Ticked};
 use goofi_core::texture::{PixelFormat, Pixels, Texture};
 use goofi_core::{Data, Meta};
 use goofi_supervisor::sync::{Mailbox, Stack};
@@ -46,9 +44,6 @@ pub struct Cells {
 }
 
 pub struct GraphicsHalf {
-    producer: Option<(HostExecutor, crate::producer::Source)>,
-    /// What the producer last put out, so a frame that moved nothing asks for no settle.
-    produced: Option<crate::producer::Produced>,
     cells: Arc<Cells>,
     /// Where the universal `common` size starts in the param atomics.
     size: usize,
@@ -71,8 +66,8 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 }
 
 impl GraphicsHalf {
-    pub fn new(cells: Arc<Cells>, size: usize, producer: Option<(HostExecutor, crate::producer::Source)>) -> GraphicsHalf {
-        GraphicsHalf { producer, produced: None, cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new() }
+    pub fn new(cells: Arc<Cells>, size: usize) -> GraphicsHalf {
+        GraphicsHalf { cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new() }
     }
 
     /// Whether the render thread left something for this thread to take.
@@ -152,8 +147,7 @@ impl Executor for GraphicsHalf {
 
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
     /// crossing into a scheduled engine is.
-    fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
-        if let Some((producer, _)) = &mut self.producer { return producer.arrive(inbox, wire, frame); }
+    fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
         let Some(cell) = self.cells.uploads.get(inbox) else { return false };
         // What the render thread is done with comes back here, where its buffer is freed or
         // filled again: an upload costs the clock a pointer move each way.
@@ -161,7 +155,6 @@ impl Executor for GraphicsHalf {
         let made = match frame.value() {
             goofi_core::Value::Texture(texture) => match &**texture {
                 Texture::Pixels(pixels) => Some(Upload::pixels(pixels)),
-                Texture::Render { .. } => None,
             },
             _ => Upload::of(frame, self.spare.pop().unwrap_or_default()),
         };
@@ -178,56 +171,19 @@ impl Executor for GraphicsHalf {
     }
 
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
-        if let Some((producer, _)) = &mut self.producer { producer.rewire(inbox, wires); }
         if let (true, Some(size)) = (wires.is_empty(), self.cells.uploaded.get(inbox)) {
             size.store(0, Ordering::Relaxed);
         }
     }
-    fn params_changed(&mut self, values: &[goofi_core::Param]) -> Ticked {
-        match &mut self.producer {
-            Some((producer, _)) => producer.params_changed(values),
-            None => Ticked::default(),
-        }
-    }
-    fn pulse(&mut self, param: usize) -> Ticked {
-        match &mut self.producer {
-            Some((producer, _)) => producer.pulse(param),
-            None => Ticked::default(),
-        }
-    }
-    fn refresh(&mut self, param: usize) -> Option<Vec<String>> {
-        self.producer.as_mut().and_then(|(producer, _)| producer.refresh(param))
-    }
-    /// Now, while the render thread has left a readback to take; else the tap's pace, and the
-    /// producer's own when it is due sooner.
+    /// Now, while the render thread has left a readback to take; else the tap's pace.
     fn next_wake(&self, last_run: Instant) -> Option<Instant> {
-        if self.owed() {
-            return Some(last_run);
-        }
-        let tap = last_run + goofi_runtime::TICK;
-        Some(self.producer.as_ref().and_then(|(p, _)| p.next_wake(last_run)).map_or(tap, |due| due.min(tap)))
+        Some(if self.owed() { last_run } else { last_run + goofi_runtime::TICK })
     }
     fn fault(&self) -> Option<Fault> {
-        self.refused.clone().map(Fault::Process).or_else(|| self.producer.as_ref().and_then(|(p, _)| p.fault()))
-    }
-    fn stage(&self) -> NodeStage {
-        self.producer.as_ref().map_or(NodeStage::Ready, |(p, _)| p.stage())
+        self.refused.clone().map(Fault::Process)
     }
     fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
         let mut ticked = Ticked::default();
-        if let Some((producer, source)) = &mut self.producer {
-            let now = Instant::now();
-            if producer.next_wake(now).is_some_and(|due| due <= now) {
-                let mut moved = false;
-                let last = &mut self.produced;
-                ticked = producer.run(cx, &mut |_, out| {
-                    if let Out::Frame(frame) = out {
-                        moved |= crate::producer::produced(source, last, frame);
-                    }
-                });
-                ticked.replan |= moved;
-            }
-        }
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.cells.readers.store(readers, Ordering::Relaxed);

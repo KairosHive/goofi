@@ -307,7 +307,7 @@ impl Format for Video {
             Frame::Texels(t) => self.encoder.write(&t.rgba)?,
             Frame::Data(d) => match d.as_texture() {
                 Ok(goofi_core::texture::Texture::Pixels(p)) => self.encoder.write(&p.to_rgba8())?,
-                _ => return Err("the frame is not the shape this stream holds".into()),
+                Err(_) => return Err("the frame is not the shape this stream holds".into()),
             },
         }
         self.encoded += 1;

@@ -75,6 +75,15 @@ impl<T> Ready<T> {
         }
     }
 
+    /// Block until the outcome is in: what a shutdown does, so the work does not outlive its owner.
+    pub fn wait(&self) {
+        let (done, waited) = std::sync::mpsc::channel();
+        self.on_ready(move || {
+            let _ = done.send(());
+        });
+        let _ = waited.recv();
+    }
+
     /// The outcome, moved out once: `None` while pending, and again once taken.
     pub fn take(&self) -> Option<Result<T, String>> {
         if !self.is_ready() {

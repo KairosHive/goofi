@@ -1,4 +1,4 @@
-//! Host submissions for engine-owned textures. No GPU object crosses a process or ABI boundary.
+//! The texture frame: a picture as any engine makes it and any engine reads it.
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SIZE: u32 = 8192;
@@ -88,34 +88,21 @@ impl Pixels {
     }
 }
 
+/// Where a texture frame's picture is held. The CPU form is the one form so far.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Texture {
     Pixels(Pixels),
-    /// GPU work encoded against the engine-owned output. The source defines `fn shade(uv: vec2f) -> vec4f`.
-    Render {
-        width: u32,
-        height: u32,
-        source: String,
-    },
 }
 
 impl Texture {
     pub fn size(&self) -> (u32, u32) {
         match self {
             Self::Pixels(p) => (p.width, p.height),
-            Self::Render { width, height, .. } => (*width, *height),
         }
     }
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Pixels(p) => p.validate(),
-            Self::Render { width, height, source } => {
-                dimensions(*width, *height)?;
-                if source.is_empty() || source.len() > 1024 * 1024 {
-                    return Err("texture program must contain 1..1048576 bytes".into());
-                }
-                Ok(())
-            }
         }
     }
 }

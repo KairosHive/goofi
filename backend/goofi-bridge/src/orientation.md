@@ -108,10 +108,11 @@ buffer empties, a device reopens). Missing imports register the node unavailable
 module; a raise in `process()` is that node's error, not a crash. `goofi library get <type>
 --source` is a shipped node to copy, in any of three languages: a `.rs` beside it is a Rust node,
 built on refresh where `cargo` exists and run in a child of goofi's own binary; a `.wgsl` in
-`nodes_graphics/` is a GPU shader (read `graphics:Life` for state kept between ticks). Graphics also
-take Rust (`goofi_graphics_sdk`) and Python: a file starting `# goofi: graphics`, one
-`goofi.DataType.TEXTURE` output named `out`, returning `goofi.Texture(pixels)` for RGB/RGBA uint8
-or float32 (`graphics:Camera` is one). `signal:GraphicsIn` reads GPU pixels back for the CPU.
+`nodes_graphics/` is a GPU shader (read `graphics:Life` for state kept between ticks). A Python or
+Rust node that makes a picture is a signal node: a `goofi.DataType.TEXTURE` output, returning
+`goofi.Texture(pixels)` for RGB/RGBA uint8 or float32 (`signal:Camera` is one), which a shader
+takes as its input. A `TEXTURE` input reads `data.numpy()`. `signal:GraphicsIn` is a texture as
+an array.
 
 ## Workspace
 

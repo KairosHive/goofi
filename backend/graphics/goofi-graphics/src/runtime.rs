@@ -19,7 +19,7 @@ use goofi_node::Uid;
 
 use crate::gpu::{padded_row, Gpu, Want};
 use crate::resources::{Readback, Slot, State, FAILED, PENDING, READY};
-use crate::plan::{Input, Plan, Pass};
+use crate::plan::{Input, Plan};
 use crate::shader;
 
 /// What the graph asks of the render thread. Applied at the top of a tick, so no op waits on one.
@@ -197,12 +197,7 @@ impl Runtime {
         if let Some(held) = &stage.pipeline {
             return Some(held.clone());
         }
-        let built = match &stage.pass {
-            Pass::Shader(built) => built,
-            Pass::Host { program: Some((_, built)), .. } => built,
-            Pass::Host { program: None, .. } => return None,
-        };
-        let Some(Ok(pipeline)) = built.peek() else { return None };
+        let Some(Ok(pipeline)) = stage.pass.peek() else { return None };
         stage.pipeline = Some(pipeline.clone());
         Some(pipeline)
     }
@@ -240,39 +235,10 @@ impl Runtime {
                 let stage = &self.plan.stages[i];
                 (stage.uid, stage.size, stage.wants(recording), stage.state)
             };
-            let Some(state) = self.states.get_mut(&uid) else { continue };
-            // What the host producer made since, as its newest.
-            if let Pass::Host { source, .. } = &self.plan.stages[i].pass {
-                if let Some(made) = source.to_render.take() {
-                    state.produced = Some(*made);
-                }
+            if !self.states.contains_key(&uid) {
+                continue;
             }
-            let produced = match &self.plan.stages[i].pass {
-                Pass::Host { program, .. } => {
-                    let stage = &self.plan.stages[i];
-                    state.produced.clone().filter(|frame| {
-                        let matches = match (&frame.content, program) {
-                            (crate::producer::Content::Pixels(_), None) => true,
-                            (crate::producer::Content::Render(text), Some((compiled, _))) => text == compiled,
-                            _ => false,
-                        };
-                        matches && (!stage.natural.0 || frame.size.0 == stage.size.0)
-                            && (!stage.natural.1 || frame.size.1 == stage.size.1)
-                    })
-                }
-                Pass::Shader(_) => None,
-            };
-            let draws = matches!(
-                (&self.plan.stages[i].pass, &produced),
-                (Pass::Shader(_), _) | (Pass::Host { program: Some(_), .. }, Some(crate::producer::Produced { content: crate::producer::Content::Render(_), .. }))
-            );
-            let pipeline = match draws {
-                true => match self.pipeline(i) {
-                    Some(pipeline) => Some(pipeline),
-                    None => continue,
-                },
-                false => None,
-            };
+            let Some(pipeline) = self.pipeline(i) else { continue };
             let readied = match self.states.get_mut(&uid) {
                 Some(state) => state.ensure_out(&self.gpu, size, wants, buffers),
                 None => continue,
@@ -302,55 +268,46 @@ impl Runtime {
                 let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, ranges);
                 self.gpu.queue.write_buffer(buf, 0, &bytes);
             }
-            if let Some(produced) = &produced {
-                if state.submitted != Some(produced.index) {
-                    if let crate::producer::Content::Pixels(pixels) = &produced.content {
-                        state.submit_upload(&self.gpu, &mut encoder, pixels);
-                        state.submitted = Some(produced.index);
-                    }
-                }
-            }
-            if let Some(pipeline) = pipeline {
-                // Cloned handles, so reading another stage's output ends the borrow of `states`.
-                let mut views: Vec<wgpu::TextureView> = stage
-                    .inputs
-                    .iter()
-                    .map(|input| match input {
-                        Input::Stage(j) => self
-                            .states
-                            .get(&self.plan.stages[*j].uid)
-                            .and_then(|s| s.out.as_ref())
-                            .map_or(&self.gpu.blank, |t| &t.view),
-                        Input::Upload(k) => self.states[&stage.uid]
-                            .uploads
-                            .get(*k)
-                            .and_then(|u| u.as_ref())
-                            .map_or(&self.gpu.blank, |t| &t.view),
-                        Input::None => &self.gpu.blank,
-                    })
-                    .cloned()
-                    .collect();
-                let state = &self.states[&stage.uid];
-                // After the inputs, one head layout per ARRAY input, in the prelude's order.
-                views.extend((0..stage.arrays).map(|k| {
-                    state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
-                }));
-                let group0 = state.group0(&self.gpu);
-                let group1 = self.gpu.bind_textures(&stage.layouts.0, &views);
-                let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
-                let group2 = self.gpu.bind_textures(&stage.layouts.1, &held);
-                // Cloned, so the readback below may take `states` mutably.
-                let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
-                // The output, then one target per state buffer — the order the prelude writes them in.
-                let targets: Vec<wgpu::TextureView> =
-                    std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
-                let mut pass = crate::gpu::clear_pass(&mut encoder, &targets);
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &group0, &[]);
-                pass.set_bind_group(1, &group1, &[]);
-                pass.set_bind_group(2, &group2, &[]);
-                pass.draw(0..3, 0..1);
-            }
+            // Cloned handles, so reading another stage's output ends the borrow of `states`.
+            let mut views: Vec<wgpu::TextureView> = stage
+                .inputs
+                .iter()
+                .map(|input| match input {
+                    Input::Stage(j) => self
+                        .states
+                        .get(&self.plan.stages[*j].uid)
+                        .and_then(|s| s.out.as_ref())
+                        .map_or(&self.gpu.blank, |t| &t.view),
+                    Input::Upload(k) => self.states[&stage.uid]
+                        .uploads
+                        .get(*k)
+                        .and_then(|u| u.as_ref())
+                        .map_or(&self.gpu.blank, |t| &t.view),
+                    Input::None => &self.gpu.blank,
+                })
+                .cloned()
+                .collect();
+            let state = &self.states[&stage.uid];
+            // After the inputs, one head layout per ARRAY input, in the prelude's order.
+            views.extend((0..stage.arrays).map(|k| {
+                state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
+            }));
+            let group0 = state.group0(&self.gpu);
+            let group1 = self.gpu.bind_textures(&stage.layouts.0, &views);
+            let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
+            let group2 = self.gpu.bind_textures(&stage.layouts.1, &held);
+            // Cloned, so the readback below may take `states` mutably.
+            let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
+            // The output, then one target per state buffer — the order the prelude writes them in.
+            let targets: Vec<wgpu::TextureView> =
+                std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
+            let mut pass = crate::gpu::clear_pass(&mut encoder, &targets);
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group0, &[]);
+            pass.set_bind_group(1, &group1, &[]);
+            pass.set_bind_group(2, &group2, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
             let out_view = self.states[&stage.uid].out.as_ref().expect("output allocated").view.clone();
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
             self.states.get_mut(&stage.uid).expect("just borrowed").advance();

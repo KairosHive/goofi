@@ -57,5 +57,5 @@ goofi-supervisor = { path = "../goofi-supervisor" }
 # `--no-default-features` is what a build with no libclang takes.
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
-python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed"]
+python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed"]
 
