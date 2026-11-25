@@ -1,5 +1,5 @@
 /* goofi
-{ "doc": "one shape on transparent black\nSize is the width across as a fraction of the frame, and soft is how far the edge fades. The colour's alpha scales the shape's own.",
+{ "doc": "one shape on transparent black\nSize is the width across as a fraction of the frame's shorter side, and soft is how far the edge fades. The colour's alpha scales the shape's own.",
   "tags": ["image", "generator"],
   "params": [
     {"group": "shape", "name": "kind", "kind": "str", "default": "circle", "options": ["circle", "square", "ring"]},
@@ -8,7 +8,7 @@
     {"group": "shape", "name": "colour", "kind": "color"} ] }
 */
 fn shade(uv: vec2f) -> vec4f {
-    let q = uv - vec2f(0.5);
+    let q = (uv - vec2f(0.5)) * resolution / max(min(resolution.x, resolution.y), 1.0);
     let radius = p.size * 0.5;
     var d = length(q) - radius;
     switch p.kind {
