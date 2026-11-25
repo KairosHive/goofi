@@ -53,7 +53,8 @@ out.set("out", Data::texture(Texture::Pixels(pixels), Meta::new())?);
 Import `Pixels`, `PixelFormat` and `Texture` from `goofi_core::texture`, and `Data` and `Meta`
 from `goofi_core`. The stride includes padding; the byte count must equal stride times height.
 
-`signal:Camera` captures devices and video files this way. Connect it directly to a shader.
+A picture source that follows the frames of the patch (`graphics:Camera`, `graphics:VideoFile`,
+`graphics:NdiIn`) is a graphics node instead: see "A Python node the graphics tick calls".
 
 ## A signal node that reads a texture
 
@@ -99,7 +100,8 @@ In Python, a picture has three forms, and each one converts to each other one:
   snapshot or a recording.
 - A signal node's texture that a shader reads is uploaded into that shader's own input texture.
   There is one pending frame per input; a new frame replaces one not yet uploaded, and the last
-  uploaded texture stays until another frame arrives.
+  uploaded texture stays until another frame arrives. `uint8` pixels go to the GPU as bytes, and
+  the GPU reads them as 0..1; `float32` pixels are converted to `float16` on the CPU.
 - A shader whose `common` width or height is zero follows the first texture input that is fed: a
   shader's size, or the size of the frame a signal node sent.
 
@@ -142,6 +144,12 @@ works on the CPU where it does not:
   It has no `common` width or height. An input takes one wire.
 - An input that a shader feeds is read back from the GPU as `RGBA` `float32`. An input that
   another engine feeds is the frame that engine sent.
+- A source has no input: `process(self)` runs at each tick while something reads the node.
+  Do not wait in it. Read a device or decode a file on a thread of the node's own, and return
+  the newest frame, or `None` when there is no new one (`graphics:Camera`, `graphics:VideoFile`).
+- Return `uint8` `RGBA` where the source has 8-bit pictures (`cv2.COLOR_BGR2RGBA`). The bytes
+  cross with no conversion on the CPU, and where the node shares memory with the engine (next
+  point) one copy puts them on the GPU.
 - On Linux, when the graphics device is an NVIDIA GPU and the node's interpreter finds the CUDA
   driver for the same GPU, the pictures stay on the GPU. The engine copies a shader's output
   into a buffer whose memory CUDA maps in the node's process: `image.data.torch()` is a tensor

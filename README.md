@@ -84,7 +84,7 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 | --- | --- | --- |
 | `signal` | Array data, at whatever rate the source runs. LSL and OSC in and out, MIDI out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
 | `audio` | The same node interface at audio rate. Live in and out, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
-| `graphics` | Pixels from WGSL shaders, with shared GPU textures. Noise and shapes generate images; blur, displacement, and feedback process them. A Python node can run inside the tick; a signal node (Camera, a model in Python) makes or reads a texture on its own pace. | The GPU. |
+| `graphics` | Pixels from WGSL shaders, with shared GPU textures. Noise and shapes generate images; blur, displacement, and feedback process them. A Python node can run inside the tick (Camera, VideoFile, NdiIn, Depth); a signal node (a model in Python) makes or reads a texture on its own pace. | The GPU. |
 
 An `AudioOut` plays on a sound card of the machine goofi runs on, or on the `browser` device:
 the mix is sent to every browser on the app as Opus, and each tab plays it unless the sound

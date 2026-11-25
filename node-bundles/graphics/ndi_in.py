@@ -1,7 +1,10 @@
-"""NdiIn — a picture another program sends over the network with NDI, as a texture.
+# goofi: graphics
+"""NdiIn — a picture another program sends over the network with NDI, as a texture on the
+graphics tick.
 
 The receiver asks for RGBA whatever the sender encodes, and a frame sync hands over the newest
-frame on each tick, so a slow sender repeats its last picture rather than stalling the patch.
+frame on each tick without a wait, so a slow sender keeps its last picture rather than stalling
+the patch.
 """
 
 import time
@@ -22,13 +25,9 @@ class NdiIn(goofi.Node):
 
     TAGS = ["input", "image"]
     OUTPUTS = {"out": goofi.DataType.TEXTURE}
-    PRODUCER = True
     PARAMS = {
         "ndi": {
             "source": goofi.StringParam("", doc="The source to receive, as `HOST (name)`; empty takes the first one found."),
-        },
-        "common": {
-            "max_frequency": goofi.NumParam(60.0, 0.1, 240.0, doc="Rate cap: the frames a second the node asks for."),
         },
     }
 
@@ -55,10 +54,11 @@ class NdiIn(goofi.Node):
             return None
         self.stamp = stamp
 
-        rows = self.frame.get_array().reshape(h, -1)[:, : w * 4].reshape(h, w, 4)
+        rows = np.ascontiguousarray(self.frame.get_array().reshape(h, -1)[:, : w * 4]).reshape(h, w, 4)
+        # An RGBX sender leaves the fourth byte unset: the picture is opaque.
         if self.frame.get_fourcc() == FourCC.RGBX:
-            rows = rows[..., :3]
-        return goofi.Texture(np.ascontiguousarray(rows)), {"sfreq": float(self.frame.get_frame_rate())}
+            rows[..., 3] = 255
+        return goofi.Texture(rows)
 
     def connect(self, name):
         """Point the receiver at the source `name` names, once discovery has seen it."""

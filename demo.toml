@@ -52,6 +52,6 @@ bundles = [
 # Node types left out of the bundles that stay, as `engine:Type`. These two open a device or a file
 # of the host through OpenCV, which the image does not carry.
 nodes = [
-    "signal:Camera",
-    "signal:VideoFile",
+    "graphics:Camera",
+    "graphics:VideoFile",
 ]

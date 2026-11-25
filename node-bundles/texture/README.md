@@ -232,7 +232,7 @@ and the `build` pulse make a space from a folder of photographs (subfolders are 
 
 ## Patches
 
-The picture and the material are `ImageFile` nodes, or `signal:Camera` through
+The picture and the material are `ImageFile` nodes, or `graphics:Camera` through
 `signal:GraphicsIn` for a live picture.
 
 1. A material where the picture is light, lit by a moving sun. Picture into `AdaptiveMask.image`

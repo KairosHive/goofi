@@ -1,14 +1,16 @@
-"""VideoFile — a video on disk played back as a texture, on its own clock.
+# goofi: graphics
+"""VideoFile — a video on disk played back as a texture, on the graphics tick.
 
 The playhead runs in video seconds at `speed` times real time, so the picture keeps the file's
-rate whatever the node's own rate cap is: a tick that lands between two frames repeats the last
-one, a tick that lands past several skips them.
+rate whatever the frame rate of the patch is: a tick that lands between two frames keeps the last
+one, a tick that lands past several skips them. A thread of the node's own opens the file and
+decodes; the tick takes the newest frame it has and never waits for the decoder.
 """
 
+import threading
 import time
 
 import cv2
-import numpy as np
 
 import goofi
 
@@ -16,12 +18,82 @@ import goofi
 SKIP_BY_SEEK = 64
 
 
+class Decoder(threading.Thread):
+    """One open file: decodes the frame the playhead last asked for, and holds it until taken."""
+
+    def __init__(self, file):
+        super().__init__(daemon=True)
+        self.file = file
+        self.fps = 0.0
+        self.count = 0  # frames in the file; 0 until it is open
+        self.error = None
+        self.lock = threading.Lock()
+        self.asked = threading.Event()
+        self.wanted = -1
+        self.ready = None
+        self.closed = False
+        self.start()
+
+    def want(self, index):
+        if index != self.wanted:
+            self.wanted = index
+            self.asked.set()
+
+    def take(self):
+        """The newest decoded frame not yet taken, as RGBA bytes, or None."""
+        with self.lock:
+            frame, self.ready = self.ready, None
+        return frame
+
+    def close(self):
+        self.closed = True
+        self.asked.set()
+
+    def run(self):
+        cap = cv2.VideoCapture(self.file)
+        try:
+            fps, count = cap.get(cv2.CAP_PROP_FPS) or 30.0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if not cap.isOpened() or count <= 0:
+                self.error = f"{self.file!r} has no frames" if cap.isOpened() else f"no video at {self.file!r}"
+                return
+            self.fps, self.count = fps, count
+            following, shown = 0, -1  # the frame the decoder gives next, and the one last decoded
+            while True:
+                self.asked.wait()
+                self.asked.clear()
+                if self.closed:
+                    return
+                wanted = self.wanted
+                if wanted == shown:
+                    continue
+                if wanted < following or wanted - following > SKIP_BY_SEEK:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, wanted)
+                    following = wanted
+                while following < wanted:
+                    cap.grab()
+                    following += 1
+                ok, frame = cap.read()
+                following = wanted + 1
+                if not ok and wanted == 0:
+                    self.error = f"could not decode {self.file!r}"
+                    return
+                if not ok:
+                    # A container can count more frames than it holds: the file ends here.
+                    self.count = min(self.count, wanted)
+                    continue
+                shown = wanted
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+                with self.lock:
+                    self.ready = frame
+        finally:
+            cap.release()
+
+
 class VideoFile(goofi.Node):
     """Play a video file as a texture."""
 
     TAGS = ["input", "image"]
     OUTPUTS = {"out": goofi.DataType.TEXTURE}
-    PRODUCER = True
     PARAMS = {
         "video": {
             "file": goofi.StringParam("", doc="The video file to play."),
@@ -30,20 +102,12 @@ class VideoFile(goofi.Node):
             "offset": goofi.NumParam(0.0, 0.0, 3600.0, doc="Where a reset starts, in seconds into the file."),
             "reset": goofi.PulseParam(doc="Move the playhead to `offset`."),
         },
-        "common": {
-            "max_frequency": goofi.NumParam(60.0, 0.1, 240.0, doc="Rate cap: the ticks a second the node asks for."),
-        },
     }
 
     def setup(self):
-        self.cap = None
+        self.decoder = None
         self.opened = None
-        self.fps = 0.0
-        self.count = 0
         self.position = 0.0
-        # The frame the decoder gives next, and the one the last emit showed.
-        self.next = 0
-        self.shown = -1
         self.clock = None
         self.pending_reset = False
 
@@ -53,68 +117,41 @@ class VideoFile(goofi.Node):
     def process(self):
         p = self.params.video
         if p.file != self.opened:
-            self.open(p.file)
+            self.release()
+            self.opened = p.file
+            self.decoder = Decoder(p.file) if p.file else None
+            self.clock = None
             self.pending_reset = True
-        if self.cap is None:
+        d = self.decoder
+        if d is None:
+            return None
+        if d.error:
+            raise ValueError(d.error)
+        if not d.count:
             return None
 
+        duration = d.count / d.fps
         now = time.monotonic()
         if self.pending_reset:
-            self.position = min(p.offset, self.duration())
+            self.position = min(p.offset, duration)
             self.pending_reset = False
         elif self.clock is not None:
             self.position += p.speed * (now - self.clock)
         self.clock = now
+        if self.position >= duration:
+            if p.loop:
+                self.position = p.offset + (self.position - p.offset) % max(duration - p.offset, 1e-9)
+            else:
+                self.position = duration
 
-        if self.position >= self.duration():
-            if not p.loop:
-                self.position = self.duration()
-                return None
-            self.position = p.offset + (self.position - p.offset) % max(self.duration() - p.offset, 1e-9)
-
-        wanted = min(int(self.position * self.fps), self.count - 1)
-        if wanted == self.shown:
-            return None
-        if wanted < self.next or wanted - self.next > SKIP_BY_SEEK:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, wanted)
-            self.next = wanted
-        while self.next < wanted:
-            self.cap.grab()
-            self.next += 1
-        ok, frame = self.cap.read()
-        if not ok:
-            raise ValueError(f"could not decode frame {wanted} of {p.file!r}")
-        self.next = wanted + 1
-        self.shown = wanted
-        return goofi.Texture(np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))), {"sfreq": self.fps}
-
-    def duration(self):
-        return self.count / self.fps
-
-    def open(self, file):
-        """The file the param now names, in place of whatever was open before."""
-        self.release()
-        self.opened = file
-        if not file:
-            return
-        cap = cv2.VideoCapture(file)
-        if not cap.isOpened():
-            cap.release()
-            raise ValueError(f"no video at {file!r}")
-        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        self.count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if self.count <= 0:
-            cap.release()
-            raise ValueError(f"{file!r} has no frames")
-        self.cap = cap
-        self.next = 0
-        self.shown = -1
-        self.clock = None
+        d.want(min(int(self.position * d.fps), d.count - 1))
+        frame = d.take()
+        return None if frame is None else goofi.Texture(frame)
 
     def release(self):
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
+        if self.decoder is not None:
+            self.decoder.close()
+            self.decoder = None
 
     def stop(self):
         self.release()
