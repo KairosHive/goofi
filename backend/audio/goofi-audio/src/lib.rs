@@ -148,6 +148,13 @@ struct DeviceClock {
     _lease: goofi_supervisor::scope::Lease,
 }
 
+/// The question an AudioOut on `default` asks the platform, and its answer once the settle read it.
+struct DefaultCard {
+    node: Uid,
+    asked: goofi_supervisor::ready::Ready<bool>,
+    answer: Option<bool>,
+}
+
 impl DeviceClock {
     fn open(name: &str, buffer: u32, runtime: Arc<Mutex<Runtime>>, stats: Arc<Stats>, waker: Arc<DrainWaker>, outlet: Arc<Outlet>) -> Result<(DeviceClock, f64), String> {
         if name == BROWSER_DEVICE {
@@ -527,6 +534,9 @@ pub struct AudioEngine {
     /// The name and buffer size last tried and what they answered: a pair that failed is not tried
     /// again until one moves.
     tried: Option<(String, u32, Option<String>)>,
+    /// Whether the platform has a default output that answers, asked on a thread of its own for
+    /// one node: an AudioOut that loads on `default` asks again.
+    default_card: Option<DefaultCard>,
     stats: Arc<Stats>,
     /// Where the browser device's clock offers its mix.
     outlet: Arc<Outlet>,
@@ -596,6 +606,7 @@ impl AudioEngine {
             clock,
             device: None,
             tried: None,
+            default_card: None,
             stats: Arc::new(Stats::default()),
             outlet: Arc::new(Outlet::new()),
             shared: Arc::new(Shared::new(waker.clone())),
@@ -878,6 +889,27 @@ impl AudioEngine {
             .collect();
         named.sort_by_key(|(uid, _)| uid.0);
         named
+    }
+
+    /// Whether `default` is a sound card for `node`, the first AudioOut that names it: `None`
+    /// while the platform is asked. A goofi with no cards has none; the external clock asks nothing.
+    fn default_card(&mut self, node: Uid) -> Option<bool> {
+        if !self.audio.cards() {
+            return Some(false);
+        }
+        if !owns_devices(self.clock) {
+            return Some(true);
+        }
+        if self.default_card.as_ref().is_none_or(|d| d.node != node) {
+            let asked = goofi_supervisor::ready::prepare("goofi-audio-default", || Ok(host::has_default(host::Kind::Output)));
+            let drain = self.shared.waker.clone();
+            asked.on_ready(move || drain.notify());
+            self.default_card = Some(DefaultCard { node, asked, answer: None });
+        }
+        let card = self.default_card.as_mut().expect("asked above");
+        // A question that could not be asked leaves `default` what it always was: a card.
+        card.answer = card.answer.or_else(|| card.asked.take().map(|answer| answer.unwrap_or(true)));
+        card.answer
     }
 
     /// Switch the output stream to `wanted`, the old one stopped first. A name that will not open
@@ -1269,7 +1301,11 @@ impl Engine for AudioEngine {
             }
         }
         let mut outs = self.devices(view, audio_out::TYPE, audio_out::P::DEVICE);
-        if !self.audio.cards() {
+        let card = match outs.iter().find(|(_, device)| device == DEFAULT_DEVICE) {
+            Some((node, _)) => self.default_card(*node),
+            None => Some(true),
+        };
+        if card == Some(false) {
             // With no card, the default device is the one there is.
             outs.iter_mut().filter(|(_, device)| device == DEFAULT_DEVICE).for_each(|(_, device)| *device = BROWSER_DEVICE.to_string());
         }
@@ -1297,7 +1333,10 @@ impl Engine for AudioEngine {
             if self.device.as_ref().is_some_and(|d| d.buffer != buffer) {
                 self.close();
             }
-            if let Some(why) = self.follow(clock.as_deref()) {
+            // While the platform is being asked what `default` is, it is not opened: the answer
+            // rings a settle, and that one follows it.
+            let asking = card.is_none() && clock.as_deref() == Some(DEFAULT_DEVICE);
+            if let Some(why) = (!asking).then(|| self.follow(clock.as_deref())).flatten() {
                 faults.extend(outs.iter().filter(|(_, device)| agrees(device)).map(|(uid, _)| (*uid, why.clone())));
             }
         }
@@ -1342,6 +1381,7 @@ impl Engine for AudioEngine {
         // the slot and the plan that uses it go to the audio thread in one step.
         if self.live.values().any(|i| i.making.as_ref().is_some_and(|m| m.node.is_ready()))
             || self.opening.as_ref().is_some_and(|o| o.clock.is_ready())
+            || self.default_card.as_ref().is_some_and(|d| d.answer.is_none() && d.asked.is_ready())
         {
             self.dirty = true;
         }

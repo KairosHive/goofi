@@ -87,8 +87,9 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 | `graphics` | Pixels from WGSL shaders, with shared GPU textures. Noise and shapes generate images; blur, displacement, and feedback process them. A signal node (Camera, a model in Python) makes or reads a texture too. | The GPU. |
 
 An `AudioOut` plays on a sound card of the machine goofi runs on, or on the `browser` device:
-the mix is sent to every browser on the app as Opus, and the sound button in the top bar plays
-it in that tab. A goofi on another machine, or a public one, is heard that way.
+the mix is sent to every browser on the app as Opus, and each tab plays it unless the sound
+button in its top bar is off. A goofi on another machine, or a public one, is heard that way.
+The `default` device is the machine's default sound card, and `browser` where it has none.
 
 VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its nodes come off the
 machine the patch is open on, so goofi supports VST3 and ships none.
