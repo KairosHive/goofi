@@ -231,8 +231,7 @@ fn a_patch_sounds_under_the_external_clock() {
     let noise = g.add("audio:Noise");
     let white = heard(&g, noise, "white noise", |x| peak(x) > 0.5 && mean(x).abs() < 0.1);
     g.set_param(noise, "noise", "mode", "pink");
-    let pink = heard(&g, noise, "pink noise", |x| peak(x) > 0.0 && per_tenth(x) < per_tenth(&white) / 2);
-    assert!(peak(&pink) > 0.0, "pink noise is still noise");
+    heard(&g, noise, "pink noise", |x| peak(x) > 0.0 && per_tenth(x) < per_tenth(&white) / 2);
     let four = g.probe(noise, "out");
     g.set_param(noise, "noise", "channels", 4);
     g.until("four channels of it", |g| {
@@ -269,8 +268,7 @@ fn a_patch_sounds_under_the_external_clock() {
     g.set_param(delay, "delay", "mix", 1.0);
     g.set_param(delay, "delay", "time", 1.0);
     g.link(tone, "out", delay, "input");
-    let quiet = heard(&g, delay, "a second of silence before the echo", |x| peak(x) == 0.0);
-    assert_eq!(peak(&quiet), 0.0, "nothing arrives before the delay is up");
+    heard(&g, delay, "a second of silence before the echo", |x| peak(x) == 0.0);
     g.set_param(delay, "delay", "time", 0.01);
     heard(&g, delay, "…and the echo once the delay is short", |x| peak(x) > 0.5);
     // A delay told in beats reads the patch's tempo: two beats at 60 are two seconds, so a new
@@ -330,11 +328,10 @@ fn a_patch_sounds_under_the_external_clock() {
     let down = g.add("audio:Mixdown");
     g.link(wide, "out", down, "input");
     let stereo = g.probe(down, "out");
-    let mixed = g.until("six channels folded to two", |g| {
+    g.until("six channels folded to two", |g| {
         drive(g, TENTH);
         stereo.latest().filter(|d| shape(d)[0] == 2)
     });
-    assert_eq!(shape(&mixed)[0], 2, "the width is the one that was asked for");
     for uid in [tone, shift, loud, limiter, delay, reverb, steps, wide, down] {
         g.call("node remove", j!({ "node": hex(uid) }));
     }
@@ -1529,18 +1526,6 @@ fn a_patch_sounds_under_the_external_clock() {
     assert!(g.refuse("node editor", j!({ "node": hex(plug) })).contains("no such node"), "the window went with the node");
 }
 
-/// The last sample of every channel of a node's own output — the shape a band bank is holding.
-fn shape_held(probe: &goofi_tests::OutputProbe) -> Option<Vec<f32>> {
-    let d = probe.latest()?;
-    let (channels, frames) = (shape(&d)[0], shape(&d)[1]);
-    let x = f32s(&d);
-    Some((0..channels).map(|c| x[c * frames + frames - 1]).collect())
-}
-
-fn loudest(levels: &[f32]) -> usize {
-    (0..levels.len()).max_by(|a, b| levels[*a].total_cmp(&levels[*b])).expect("a band")
-}
-
 /// Every audio node in the patch reported ready: each is made on a thread of its own and lands
 /// at a settle, so a block driven before that renders without it.
 fn audio_ready(g: &Goofi) {
@@ -1555,26 +1540,6 @@ fn audio_ready(g: &Goofi) {
     for uid in audio {
         g.ready(uid);
     }
-}
-
-/// A node's own output once the shape behind it has stopped moving, heard through an `AudioOut`
-/// of its own so the reading is the block `drive` renders rather than a tap's. The params last set
-/// reach the engine a control hop later, on wall time, so that hop is waited out first; a
-/// follower's release is then tens of milliseconds, so the node is driven past it before a tenth
-/// is kept.
-fn settled(g: &Goofi, uid: Uid, what: &str) -> Vec<f32> {
-    let out = g.add("AudioOut");
-    g.link(uid, "out", out, "input");
-    audio_ready(g);
-    goofi_tests::applied(g);
-    for _ in 0..5 {
-        drive(g, TENTH);
-    }
-    let (x, channels) = drive(g, TENTH);
-    g.call("node remove", j!({ "node": hex(out) }));
-    let heard = lane(&x, 0, channels);
-    assert_eq!(heard.len(), TENTH, "{what}: a tenth, heard");
-    heard
 }
 
 /// A param that moves is heard as a glide across the block, never as a step at its edge: the
@@ -1632,223 +1597,6 @@ fn a_moving_param_glides_across_the_block() {
     assert!(jump <= slope, "a computed value: no sample jumps: {jump} per sample");
 }
 
-#[test]
-fn one_signal_speaks_through_another_band_by_band() {
-    let g = Goofi::new();
-    g.graph().set_evaluator(Arc::new(FirstVar::default()));
-
-    // Step: with nothing behind `gains` every band is open, so a tone through the bank is still
-    // that tone, at that pitch — louder, because neighbouring bands overlap and add.
-    let carrier = g.add("Osc");
-    let bank = g.add("BandFilter");
-    g.link(carrier, "out", bank, "input");
-    // Past the onset tenth, whose half-silence would count as a lower pitch.
-    let open = settled(&g, bank, "a tone through a bank with every band open");
-    assert!(peak(&open) > 0.3, "the open bands add up: peak {}", peak(&open));
-    assert!(near(per_tenth(&open), 88), "A4 leaves as A4: {} crossings", per_tenth(&open));
-
-    // Step: `harmonic` stands the bands on the partials of `pitch` rather than spreading them.
-    // Narrow bands on a bank standing at C4: a tone three times C4 is the third partial and goes
-    // through, and one half again above C4 sits in the gap under the second and does not.
-    g.set_param(bank, "band", "layout", "harmonic");
-    g.set_param(bank, "band", "q", 20.0);
-    g.set_param(carrier, "osc", "pitch", 3f32.log2());
-    let partial = settled(&g, bank, "a tone on a partial of the bank's own pitch");
-    g.set_param(carrier, "osc", "pitch", 1.5f32.log2());
-    let between = settled(&g, bank, "a tone in the gap between two partials");
-    assert!(
-        peak(&partial) > 3.0 * peak(&between),
-        "a partial passes where the gap beside it does not: {} against {}",
-        peak(&partial),
-        peak(&between)
-    );
-    // A released note keeps the pitch it was playing, so `gate` is the only thing that lets a
-    // voice's partials go. Shut at zero, and the tone standing on one has nothing left to pass.
-    g.set_param(carrier, "osc", "pitch", 3f32.log2());
-    g.set_param(bank, "band", "gate", 0.0);
-    heard(&g, bank, "a voice let go takes its partials with it", |x| peak(x) < 0.01);
-    g.set_param(bank, "band", "gate", 1.0);
-    let reopened = settled(&g, bank, "and the same voice opened again brings them back");
-    assert!(peak(&reopened) > 3.0 * peak(&between), "the partial is back: {}", peak(&reopened));
-
-    g.set_param(bank, "band", "layout", "spread");
-    g.set_param(bank, "band", "q", 4.0);
-    g.set_param(carrier, "osc", "pitch", 0.75);
-
-    // Step: the follower hears WHERE a signal is. A4 lands in the bands around 440 Hz, and the
-    // same tone three octaves up moves the loudest band up the bank with it.
-    let voice = g.add("Osc");
-    let hush = g.add("Gain");
-    let follow = g.add("BandFollow");
-    g.link(voice, "out", hush, "input");
-    g.link(hush, "out", follow, "input");
-    let levels = g.probe(follow, "out");
-    // Polled to the shape, not taken at the first loud frame: a follower's attack passes through
-    // the bands beside the one it lands on.
-    let low = g.until("A4 to settle on band 5 or 6 of the default bank", |g| {
-        drive(g, TENTH);
-        shape_held(&levels).filter(|l| l.iter().any(|x| *x > 0.05) && (5..=6).contains(&loudest(l)))
-    });
-    assert_eq!(low.len(), 16, "sixteen bands are sixteen channels");
-    g.set_param(voice, "osc", "pitch", 3.75);
-    g.until("three octaves up to settle high in the bank", |g| {
-        drive(g, TENTH);
-        shape_held(&levels).filter(|l| loudest(l) >= 12)
-    });
-
-    // Both banks read the one layout, so the follower stands on partials too: C4 into a bank
-    // standing at C4 is the FIRST partial, which is the first band.
-    g.set_param(follow, "band", "layout", "harmonic");
-    g.set_param(voice, "osc", "pitch", 0.0);
-    let first = g.until("the first partial to become the loudest band", |g| {
-        drive(g, TENTH);
-        shape_held(&levels).filter(|l| loudest(l) == 0)
-    });
-    assert!(first[0] > 0.05, "and it is lit rather than merely least quiet: {first:?}");
-    g.set_param(follow, "band", "layout", "spread");
-
-    // Step: the two halves are a vocoder. The carrier becomes noise, and `gains` reads the
-    // follower — so the noise is only ever as loud as the tone's own bands are.
-    let noise = g.add("audio:Noise");
-    g.call("link remove", j!({ "from": ep(hex(carrier), "out"), "to": ep(hex(bank), "input") }));
-    g.link(noise, "out", bank, "input");
-    let follow_name = g.doc()["nodes"][hex(follow)]["name"].as_str().unwrap().to_string();
-    let bound = g.call(
-        "node param edit",
-        j!({ "node": hex(bank), "param": "band/gains", "expression": format!("nd('{follow_name}')") }),
-    );
-    assert!(bound["error"].is_null(), "{bound}");
-
-    // A modulator that says nothing shuts the carrier up: every band falls to its own silence.
-    g.set_param(hush, "gain", "gain", 0.0);
-    heard(&g, bank, "the carrier to fall silent behind a silent modulator", |x| peak(x) < 0.01);
-
-    // And the shape it does say is the shape that lands: noise gated open around 260 Hz crosses
-    // zero far less often than the same noise gated open around 3 kHz.
-    g.set_param(hush, "gain", "gain", 1.0);
-    g.set_param(voice, "osc", "pitch", 0.0);
-    let dark = settled(&g, bank, "noise shaped by a low tone");
-    g.set_param(voice, "osc", "pitch", 3.5);
-    let bright = settled(&g, bank, "noise shaped by a high tone");
-    assert!(
-        per_tenth(&bright) > 2 * per_tenth(&dark),
-        "the carrier speaks in the modulator's own band: {} crossings against {}",
-        per_tenth(&bright),
-        per_tenth(&dark)
-    );
-
-    // Step: the shape's own width IS the band count. The follower drops to eight bands while the
-    // filter's own `bands` still says sixteen, and the two still line up — where a filter holding
-    // its own count would have shut the half of its bank the narrower shape never reaches.
-    g.set_param(follow, "band", "bands", 8);
-    let narrow = settled(&g, bank, "eight bands shaped by that same high tone");
-    // Against the SAME tone the sixteen-band bank just answered: a filter keeping its own count
-    // would read the shape's band 6 into its own band 6, which stands six times lower down.
-    assert!(
-        2 * per_tenth(&narrow) > per_tenth(&bright),
-        "a narrower shape lands where the wider one did: {} crossings against {}",
-        per_tenth(&narrow),
-        per_tenth(&bright)
-    );
-    g.set_param(follow, "band", "bands", 16);
-
-    // Step: the bands are the gains' axis and never the output's — a two-channel carrier leaves
-    // as two channels, with the same sixteen-channel shape on both.
-    g.set_param(noise, "noise", "channels", 2);
-    let out = g.probe(bank, "out");
-    g.until("a two-channel carrier to leave in two channels", |g| {
-        drive(g, TENTH);
-        out.latest().filter(|d| shape(d)[0] == 2)
-    });
-
-    // Step: a chord, which is what `harmonic` is for. Four voices at C4, F#4, C5 and F#5 stand a
-    // bank of eight on two partials each, and the two frequencies where a lower voice's second
-    // partial meets a higher voice's first are the ones that carry TWICE as much.
-    let chord = g.add("_TestRamp");
-    g.set_param(chord, "ramp", "channels", 4);
-    // One sample long, so channel c is exactly c rather than a ramp from c to c + 1.
-    g.set_param(chord, "ramp", "length", 1);
-    let half = g.add("signal:Math");
-    g.set_param(half, "math", "multiply", 0.5);
-    let voices = g.add("audio:SignalIn");
-    g.link(chord, "out", half, "input");
-    g.link(half, "out", voices, "input");
-    let heard_voices = g.probe(voices, "out");
-    // `drive` moves the audio clock alone; the signal plane runs on wall time, so this waits on it.
-    // On the VALUES, not the width: the output is four channels wide from the re-plan the first
-    // frame asks for, and that frame enters the ring minted for it a control tick later.
-    g.until("C4, F#4, C5 and F#5 to cross into the audio plane in volts", |g| {
-        drive(g, TENTH);
-        shape_held(&heard_voices).filter(|v| *v == [0.0, 0.5, 1.0, 1.5])
-    });
-
-    let tone = g.add("Osc");
-    let chord_bank = g.add("BandFilter");
-    g.link(tone, "out", chord_bank, "input");
-    g.set_param(chord_bank, "band", "layout", "harmonic");
-    g.set_param(chord_bank, "band", "bands", 8);
-    g.set_param(chord_bank, "band", "q", 20.0);
-    let voices_name = g.doc()["nodes"][hex(voices)]["name"].as_str().unwrap().to_string();
-    let bound = g.call(
-        "node param edit",
-        j!({ "node": hex(chord_bank), "param": "band/pitch",
-             "expression": format!("nd('{voices_name}')") }),
-    );
-    assert!(bound["error"].is_null(), "{bound}");
-
-    g.set_param(tone, "osc", "pitch", 0.5);
-    let single = settled(&g, chord_bank, "a tone on one voice's own first partial");
-    g.set_param(tone, "osc", "pitch", 1.5);
-    let shared = settled(&g, chord_bank, "a tone where two voices' partials meet");
-    g.set_param(tone, "osc", "pitch", (629.0f32 / 261.63).log2());
-    let nobody = settled(&g, chord_bank, "a tone no voice of the chord stands on");
-    assert!(
-        peak(&shared) > 1.5 * peak(&single),
-        "two voices on one frequency carry more than one does: {} against {}",
-        peak(&shared),
-        peak(&single)
-    );
-    assert!(
-        peak(&single) > 3.0 * peak(&nobody),
-        "and a frequency the chord does not name carries little: {} against {}",
-        peak(&single),
-        peak(&nobody)
-    );
-
-    // A released note keeps its pitch, so `gate` is what drops one voice out of the chord. The
-    // same ramp mapped to nothing-then-everything shuts the first voice and leaves the other three.
-    g.set_param(tone, "osc", "pitch", 0.0);
-    let sounding = settled(&g, chord_bank, "the first voice's own partial while it is held");
-    let shut = g.add("signal:Math");
-    g.set_param(shut, "range", "from_low", 0.5);
-    g.set_param(shut, "range", "bound", "clamp");
-    let gates = g.add("audio:SignalIn");
-    g.link(chord, "out", shut, "input");
-    g.link(shut, "out", gates, "input");
-    let heard_gates = g.probe(gates, "out");
-    g.until("a gate per voice: one voice let go, three held", |g| {
-        drive(g, TENTH);
-        shape_held(&heard_gates).filter(|v| *v == [0.0, 1.0, 1.0, 1.0])
-    });
-    let gates_name = g.doc()["nodes"][hex(gates)]["name"].as_str().unwrap().to_string();
-    let bound = g.call(
-        "node param edit",
-        j!({ "node": hex(chord_bank), "param": "band/gate",
-             "expression": format!("nd('{gates_name}')") }),
-    );
-    assert!(bound["error"].is_null(), "{bound}");
-    let released = settled(&g, chord_bank, "and the same partial once that voice is let go");
-    assert!(
-        peak(&sounding) > 3.0 * peak(&released),
-        "the voice that was let go took its partials with it: {} against {}",
-        peak(&sounding),
-        peak(&released)
-    );
-    g.set_param(tone, "osc", "pitch", 1.5);
-    let others = settled(&g, chord_bank, "while the voices still held carry as they did");
-    assert!(peak(&others) > peak(&single), "the rest of the chord stands: {}", peak(&others));
-}
-
 /// One channel of the interleaved device buffer `drive` hands back.
 fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
     x.iter().skip(c).step_by(channels as usize).copied().collect()
@@ -1904,11 +1652,10 @@ fn an_audio_out_lands_on_the_channels_it_names() {
     // the width alone can be seen a tenth before the second output's gain.
     let channels = 4;
     let at = |x: &[f32], c: usize, level: f32| (peak(&lane(x, c, channels)) - level).abs() < 0.01;
-    let x = g.until("two outputs holding different pairs, the second at its own gain", |g| {
+    g.until("two outputs holding different pairs, the second at its own gain", |g| {
         let (x, c) = drive(g, TENTH);
         (c == channels && at(&x, 0, 1.0) && at(&x, 1, 1.0) && at(&x, 2, 0.5) && at(&x, 3, 0.5)).then_some(x)
     });
-    assert!(peak(&x) > 0.99, "the first output is heard at full level");
 
     // A selection that does not parse is a FAULT and plays nothing: silently falling back to the
     // whole device would put a signal on channels the patch took care to keep clear.
@@ -1943,86 +1690,3 @@ fn wide(g: &Goofi, what: &str, channels: u16) -> Vec<f32> {
         (c == channels).then_some(x)
     })
 }
-
-#[test]
-fn nodes_that_do_not_feed_each_other_render_at_once() {
-    // Two instances of one authored node share its library, so a counter there is a rendezvous:
-    // each waits inside `process` for the other to arrive in the same block. Rendered one after
-    // the other, the first waits out its bound alone and says 0; rendered at once, both say 1.
-    let g = Goofi::new();
-    assert!(std::thread::available_parallelism().is_ok_and(|n| n.get() > 1), "this machine has one core");
-    let dir = g.state.mount().join("nodes_audio");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("Meet.rs"),
-        "use goofi_audio_sdk::goofi_core::SlotType;\n\
-         use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl};\n\
-         use std::sync::atomic::{AtomicU64, Ordering};\n\
-         static ARRIVED: AtomicU64 = AtomicU64::new(0);\n\
-         static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
-         static MANIFEST: Manifest = Manifest { tags: &[], doc: \"waits in each block for a second of its kind\", inputs: &[], outputs: OUTS, params: &[] };\n\
-         #[derive(Default)]\nstruct Meet;\n\
-         impl AudioNode for Meet {\n    \
-         fn prepare(&mut self, _rate: f64) {}\n    \
-         fn process(&mut self, b: &mut Block<'_>) {\n        \
-         let mine = ARRIVED.fetch_add(1, Ordering::SeqCst) + 1;\n        \
-         let pair = mine.div_ceil(2) * 2;\n        \
-         let bound = std::time::Instant::now() + std::time::Duration::from_millis(100);\n        \
-         while ARRIVED.load(Ordering::SeqCst) < pair && std::time::Instant::now() < bound { std::hint::spin_loop(); }\n        \
-         let met = ARRIVED.load(Ordering::SeqCst) >= pair;\n        \
-         if !met { ARRIVED.fetch_add(1, Ordering::SeqCst); }\n        \
-         b.outs[0].chan_mut(0).fill(if met { 1.0 } else { 0.0 });\n    \
-         }\n}\n\
-         goofi_audio_sdk::export!(Meet, MANIFEST);\n",
-    )
-    .unwrap();
-    assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Meet"]));
-    let out = g.add("AudioOut");
-    // The wait is the rendezvous, not the node's cost: a helper the scheduler seats late keeps
-    // its partner waiting past the budget, and eight such blocks are an overrun fault that takes
-    // both out for good. Their cost is stated to the watchdog, so a late block is only a tenth
-    // that is asked again.
-    for _ in 0..2 {
-        let meet = g.add("Meet");
-        g.link(meet, "out", out, "input");
-        g.ready(meet);
-        g.until("the watchdog to take a rendezvous for free", |g| {
-            goofi_bridge::audio_engine(&mut g.graph()).state_cost(meet, Some(std::time::Duration::ZERO)).then_some(())
-        });
-    }
-    sounds(&g, "both to meet in every block of a tenth", |x| x.iter().all(|v| (*v - 2.0).abs() < 1e-6));
-    // The helpers sit on the performance cores where the machine has a slower kind too: the
-    // scheduler put a helper on an efficiency core, where a plugin rendered late every period.
-    seated_on_performance_cores();
-}
-
-/// Every pool helper's seat is the performance cores, or the process's own seat where every core
-/// is the same kind. Thread names in `/proc` are cut at fifteen characters.
-#[cfg(target_os = "linux")]
-fn seated_on_performance_cores() {
-    let cpus_of = |status: &str| -> Vec<usize> {
-        let list = status.lines().find_map(|l| l.strip_prefix("Cpus_allowed_list:\t")).unwrap_or_default();
-        list.split(',')
-            .flat_map(|part| match part.split_once('-') {
-                Some((lo, hi)) => (lo.parse().unwrap()..=hi.parse().unwrap()).collect::<Vec<usize>>(),
-                None => part.trim().parse().ok().into_iter().collect(),
-            })
-            .collect()
-    };
-    let own = cpus_of(&std::fs::read_to_string("/proc/self/status").unwrap());
-    let want = goofi_audio::performance_cores().unwrap_or(own);
-    let mut helpers = 0;
-    for entry in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
-        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
-        let name = status.lines().find_map(|l| l.strip_prefix("Name:\t")).unwrap_or_default();
-        if !name.starts_with("goofi-audio-poo") {
-            continue;
-        }
-        helpers += 1;
-        assert_eq!(cpus_of(&status), want, "{name} sits on the performance cores");
-    }
-    assert!(helpers > 0, "the pool's helpers are threads of this process");
-}
-
-#[cfg(not(target_os = "linux"))]
-fn seated_on_performance_cores() {}

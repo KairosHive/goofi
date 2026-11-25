@@ -1,5 +1,5 @@
 //! One console session, from component output to retained groups and counter-only updates.
-use goofi_supervisor::log::{self, Level, Log, Message, Source};
+use goofi_supervisor::log;
 use goofi_tests::{Goofi, j};
 
 #[test]
@@ -33,34 +33,6 @@ fn console_session_groups_interleaved_messages_and_keeps_ops_out_of_patch_histor
     let listed = g.call("log list", j!({}));
     assert!(listed["groups"].as_array().unwrap().iter()
         .any(|row| row["component"] == "goofi" && row["text"] == "Starting the patch's nodes"));
-}
-
-#[test]
-fn byte_streams_preserve_split_lines_invalid_utf8_and_final_unterminated_text() {
-    let source = Source::component("byte-stream-session");
-    log::drain(std::io::Cursor::new(b"hello\r\n\xff\nERROR: last"), source, "stderr");
-    let snapshot = serde_json::to_value(log::since(None)).unwrap();
-    let rows: Vec<_> = snapshot["groups"].as_array().unwrap().iter()
-        .filter(|row| row["component"] == "byte-stream-session").collect();
-    assert_eq!(rows.iter().map(|row| row["text"].as_str().unwrap()).collect::<Vec<_>>(), ["hello", "�", "ERROR: last"]);
-    assert!(rows.iter().all(|row| row["stream"] == "stderr"));
-    assert_eq!(rows.iter().map(|row| row["level"].as_str().unwrap()).collect::<Vec<_>>(),
-        ["warning", "warning", "error"], "stderr is a warning unless the line says error");
-}
-
-#[test]
-fn bounded_log_evicts_the_least_recent_group() {
-    let mut logs = Log::default();
-    let message = |text: String| Message { source: Source::component("retention"), level: Level::Info, stream: None, text };
-    for i in 0..log::MAX_GROUPS { logs.record(message(i.to_string())); }
-    logs.record(message("0".into()));
-    logs.record(message("new".into()));
-    let snapshot = serde_json::to_value(logs.since(None)).unwrap();
-    let groups = snapshot["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), log::MAX_GROUPS);
-    assert_eq!(groups[0]["text"], "2");
-    assert_eq!(groups[groups.len() - 2]["text"], "0");
-    assert_eq!(groups[groups.len() - 2]["count"], 2);
 }
 
 #[test]

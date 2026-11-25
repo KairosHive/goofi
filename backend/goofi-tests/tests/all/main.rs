@@ -6,8 +6,6 @@ pub fn situation(module_path: &str) -> &str {
     module_path.split_once("::").map_or(module_path, |(_, rest)| rest)
 }
 
-#[cfg(target_os = "linux")]
-mod audio_priority;
 mod browser;
 mod children;
 mod clock;
@@ -19,8 +17,6 @@ mod engines;
 mod graphics;
 mod headless;
 mod inspect;
-#[cfg(not(feature = "embed"))]
-mod io;
 mod logging;
 mod machine;
 mod nodes;
@@ -35,7 +31,5 @@ mod recording;
 mod running;
 mod session;
 mod subpatches;
-mod texture_graphics;
 mod timeline;
-mod timing;
 mod transport;

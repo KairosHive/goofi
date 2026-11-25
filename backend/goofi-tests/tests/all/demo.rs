@@ -72,7 +72,7 @@ async fn a_public_goofi_serves_the_graph_and_none_of_the_host_around_it() {
 
     // The graph itself is untouched by the mode: a node is added, and it runs.
     let osc = g.add("LFO");
-    assert_eq!(g.call("node state", j!({ "node": goofi_tests::hex(osc) }))["error"], j!(null));
+    g.ready(osc);
 
     // A public instance is not empty: it opens the patch named at boot, and `session new` — the
     // only reset a visitor has — brings that patch back rather than the empty canvas. The file

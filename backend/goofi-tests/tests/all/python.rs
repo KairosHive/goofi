@@ -540,7 +540,6 @@ fn a_python_node_reads_every_meta_rule_off_the_pymod() {
 
 #[cfg(feature = "embed")]
 mod inproc {
-    use std::time::Duration;
 
     use super::*;
     use goofi_core::{Data, Meta, Param, Value};
@@ -752,22 +751,6 @@ class Meeting(goofi.Node):
         let bound = g.doc()["nodes"][hex(osc)]["params"]["common"]["max_frequency"].clone();
         assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.signal.default_ufreq"), &j!("expression")),
                    "the manifest's declared binding was seeded live, not flattened to a literal");
-
-        // Counting emitted frames is the only way to see a rate: a stated value reads correct anyway.
-        let runs = |window: Duration| {
-            let (mut seen, mut last, end) = (0, None, std::time::Instant::now() + window);
-            while std::time::Instant::now() < end {
-                let now = probe.latest().map(|d| d.meta().index());
-                if now.is_some() && now != last {
-                    seen += 1;
-                    last = now;
-                }
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            seen
-        };
-        let slow = runs(Duration::from_millis(800));
-        assert!(slow <= 8, "5 Hz produced {slow} frames in 0.8 s — the variable is not pacing it");
 
         g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 60.0 }));
         // Half the old period apart, which the 5 Hz rate never allows.

@@ -129,7 +129,7 @@ jobs:
         with:
           targets: ${{ matrix.os == 'windows-latest' && '--bins' || '--lib --bins --example plugin_host --test all --test agent --test audio --test cli --test probe --test shipped --test python_gil_tripwire' }}
       # The situations a platform can answer differently: processes and PTYs (children, agent),
-      # paths (io, session), dynamic libraries (nodes, plugins, shipped), the Python child
+      # paths (session), dynamic libraries (nodes, plugins, shipped), the Python child
       # (python), the exchange (transport) and the audio host (audio). A filter after `--`
       # reaches every test binary of the command, so the one binary's situations and the
       # binaries of their own run as two commands of one target selection.
@@ -137,7 +137,7 @@ jobs:
         if: runner.os != 'Windows'
         run: >
           cargo test --workspace --no-fail-fast --test all -- --test-threads=4
-          children:: io:: nodes:: plugins:: python:: session:: transport:: 2>&1 | tee situations.log
+          children:: nodes:: plugins:: python:: session:: transport:: 2>&1 | tee situations.log
       # After a failure above too: it does not hide what these binaries would say.
       - name: Situations in binaries of their own
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Windows' }}

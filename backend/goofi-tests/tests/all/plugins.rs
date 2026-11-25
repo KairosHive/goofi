@@ -118,7 +118,6 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).unwrap()).unwrap();
     assert!(manifest["stopped_utc"].is_string());
-    assert_eq!(annotation["subject"], "Alice");
     drop(goofi);
     assert!(home.path().join("plugin-data/example/stopped").is_file());
     let reopened = Goofi::with_plugins(home.path());

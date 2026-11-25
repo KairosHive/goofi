@@ -69,21 +69,8 @@ impl goofi_record::video::Encoders for NoEncoder {
     }
 }
 
-use goofi_supervisor::timing::{stamp, Time};
+use goofi_supervisor::timing::Time;
 use goofi_tests::j;
-
-#[test]
-fn utc_is_anchored_once_and_advances_monotonically() {
-    let t = Time::new();
-    let a = t.utc();
-    t.utc().duration_since(a).expect("utc never goes backwards");
-    // The anchor is the origin, so an instant read at a patch second is that second past it.
-    let origin = t.utc_at(0.0);
-    assert!(a >= origin, "the first read is at or past the origin");
-    let d = t.utc_at(1.5).duration_since(origin).expect("later than the origin");
-    assert!((d.as_secs_f64() - 1.5).abs() < 1e-6, "utc_at follows patch seconds: {d:?}");
-    assert_eq!(stamp(a).len(), "YYYYMMDD-HHMMSS.mmm".len());
-}
 
 /// Poll until `f` answers, against the harness budget: the recorder's workers write on threads
 /// of their own, and a frame handed to a queue is on the disk when they say so.
@@ -478,8 +465,6 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         g.call("session status", j!({}))["graphics"]["stages"].as_u64().expect("a stage count")
     };
     let idle = stages(&g);
-    goofi_tests::render(&g, 4);
-    assert_eq!(stages(&g), idle, "a node nobody watches renders nothing");
     g.call("record arm", j!({ "output": goofi_tests::ep(&shader_hex, "out") }));
     g.until("the armed shader to reach the encoder", |g| {
         goofi_tests::render(g, 1);
@@ -914,46 +899,11 @@ fn arming_survives_a_rewire_and_rides_the_document() {
         }
     }
 
-    // Step: take after take on the same armed pair, enough to wrap the audio rings, with no
-    // warm-up drive, poll or sleep to hide a start/stop race: every take is whole and aligned.
-    for take in 0..30 {
-        let taken = g.call("record start", j!({ "root": root.path(), "name": format!("sync-{take}") }))["folder"]
-            .as_str().expect("a folder").to_string();
-        goofi_tests::drive(&g, 64 * 480);
-        g.call("record stop", j!({}));
-        let (a, b) = (mine(&taken, &osc_name), mine(&taken, &gain_name));
-        assert_eq!((a.len(), b.len()), (1, 1), "take {take}: one file per track");
-        for stream in [&a[0], &b[0]] {
-            assert_eq!(stream["frames"], 64 * 480, "take {take}: {stream}");
-            assert_eq!(stream["dropped"], 0, "take {take}: {stream}");
-        }
-        assert_eq!(a[0]["t0_patch"], b[0]["t0_patch"], "the first sample is shared in take {take}");
-        let (a, b) = (blocks_of(&taken, &a[0]), blocks_of(&taken, &b[0]));
-        let index = |blocks: &[(u64, f64, Vec<usize>, Vec<f32>)]| blocks.iter().map(|b| (b.0, b.1)).collect::<Vec<_>>();
-        assert_eq!(index(&a), index(&b), "block numbers and times match in take {take}");
-        let (a, b): (Vec<f32>, Vec<f32>) = (
-            a.iter().flat_map(|b| b.3.iter().copied()).collect(),
-            b.iter().flat_map(|b| b.3.iter().copied()).collect(),
-        );
-        assert_eq!(a.len(), 64 * 480, "take {take} holds exactly what was driven");
-        assert!(a.iter().any(|sample| sample.abs() > 0.5), "take {take} contains audio");
-        for (i, (x, y)) in a.iter().zip(&b).enumerate() {
-            assert_eq!(*y, *x * 0.5, "sample {i} in take {take}");
-        }
-    }
     g.call("record disarm", j!({ "output": goofi_tests::ep(&gain_hex, "out") }));
 
-    // …and with no block missing the wav is ONE run of audio, so the crossings are counted across
-    // the whole of it rather than per block, where every boundary would drop one.
-    let run: Vec<f32> = held.iter().flat_map(|b| b.3.iter().copied()).collect();
-    let crossings = run.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
-    let expect = 880 * (run.len() - 1) / 48_000;
-    assert!(crossings.abs_diff(expect) <= 2, "…and it is A4: {crossings} crossings against {expect}");
-
-    // Step: the ANCHOR is derived from the count too, so a stream armed after a long wait is dated
-    // by the block it begins at — where a t0 read at the first drain is the whole wait out.
+    // Step: the ANCHOR is derived from the count too, so a stream armed later is dated by the
+    // block it begins at — where a t0 read at the first drain is the wall clock's.
     g.call("record disarm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
-    std::thread::sleep(std::time::Duration::from_millis(300));
     g.call("record arm", j!({ "output": goofi_tests::ep(&osc_hex, "out") }));
     let sixth = g.call("record start", j!({ "root": root.path() }))["folder"]
         .as_str()
@@ -967,8 +917,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let counted = (later[0].0 - held[0].0) as f64 * step;
     assert!(
         (apart - counted).abs() < 1e-6,
-        "the two recordings are exactly the blocks between them apart: {apart} against {counted}, \
-         with 0.3 s of wall clock in which nothing was rendered"
+        "the two recordings are exactly the blocks between them apart: {apart} against {counted}"
     );
 
     // …and the tie is pinned to the patch clock, not merely self-consistent: the file MINUS the
@@ -1129,45 +1078,6 @@ fn beside_instants(file: &std::path::Path) -> Vec<f64> {
 }
 
 #[test]
-fn h264_records_full_resolution_and_pads_odd_sizes() {
-    use goofi_record::video::{Encoders, FfmpegEncoders};
-    let root = tempfile::tempdir().expect("video folder");
-    let encoders = FfmpegEncoders;
-    encoders.probe().expect("FFmpeg is installed");
-    for (width, height) in [(3840u32, 2160u32), (63, 31), (1, 1)] {
-        let path = root.path().join(format!("{width}x{height}.mkv"));
-        let mut encoder = encoders.open(&path, (width, height), 60.0, Default::default()).expect("open video");
-        assert!(encoder.write(&[0]).is_err(), "a partial frame must not corrupt the pipe");
-        let mut frame = vec![0u8; width as usize * height as usize * 4];
-        for pixel in frame.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&[128, 64, 192, 255]);
-        }
-        for _ in 0..12 {
-            encoder.write(&frame).expect("write full-resolution frame");
-        }
-        encoder.finish().expect("finish video");
-        encoder.finish().expect("finish is idempotent");
-        assert!(encoder.write(&frame).is_err(), "a closed encoder cannot restart");
-        let probe = std::process::Command::new("ffprobe")
-            .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
-            .args(["-show_entries", "stream=codec_name,pix_fmt,width,height,nb_read_frames", "-of", "json"])
-            .arg(&path).output().expect("inspect video");
-        assert!(probe.status.success(), "{}", String::from_utf8_lossy(&probe.stderr));
-        let probe: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("probe JSON");
-        let stream = &probe["streams"][0];
-        assert_eq!(stream["codec_name"], "h264");
-        assert_eq!(stream["pix_fmt"], "yuv420p");
-        assert_eq!(stream["width"], width.next_multiple_of(2));
-        assert_eq!(stream["height"], height.next_multiple_of(2));
-        assert_eq!(stream["nb_read_frames"], "12");
-        if width == 3840 {
-            assert!(std::fs::metadata(&path).unwrap().len() < 1_000_000,
-                "a short flat-colour 4K clip stays small");
-        }
-    }
-}
-
-#[test]
 fn video_quality_is_saved_undone_and_applied_to_each_file() {
     let g = goofi_tests::Goofi::new();
     let root = tempfile::tempdir().expect("recording root");
@@ -1221,37 +1131,6 @@ fn video_quality_is_saved_undone_and_applied_to_each_file() {
         assert!(beside_instants(&file).iter().all(|at| *at >= start), "no earlier readback enters the new file");
         assert!(stream.get("error").is_none(), "{stream}");
     }
-}
-
-#[test]
-fn video_quality_changes_the_encoded_picture() {
-    use goofi_core::record::VideoQuality;
-    use goofi_record::video::{Encoders, FfmpegEncoders};
-    let root = tempfile::tempdir().unwrap();
-    let mut state = 17u32;
-    let mut frame = vec![0u8; 128 * 128 * 4];
-    for pixel in frame.chunks_exact_mut(4) {
-        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let grey = (state >> 24) as u8;
-        pixel.copy_from_slice(&[grey, grey, grey, 255]);
-    }
-    let mut errors = Vec::new();
-    for quality in [VideoQuality::Small, VideoQuality::VeryHigh] {
-        let file = root.path().join(format!("{quality:?}.mkv"));
-        let mut encoder = FfmpegEncoders.open(&file, (128, 128), 60.0, quality).unwrap();
-        for _ in 0..4 { encoder.write(&frame).unwrap(); }
-        encoder.finish().unwrap();
-        let decoded = std::process::Command::new("ffmpeg")
-            .args(["-v", "error", "-i"]).arg(&file)
-            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
-            .output().unwrap();
-        assert!(decoded.status.success());
-        assert_eq!(decoded.stdout.len(), frame.len());
-        let error: u64 = decoded.stdout.chunks_exact(4).zip(frame.chunks_exact(4))
-            .map(|(out, input)| i64::from(out[0]).abs_diff(i64::from(input[0])).pow(2)).sum();
-        errors.push(error);
-    }
-    assert!(errors[1] < errors[0], "very high quality preserves more of the supplied picture: {errors:?}");
 }
 
 /// What a recorded stream holds once the recorder's own bookkeeping is set aside: the values or

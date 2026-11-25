@@ -1237,7 +1237,6 @@ dependencies = [
 name = "goofi-tests"
 version = "3.0.0"
 dependencies = [
- "audio_thread_priority",
  "base64",
  "bytes",
  "futures-util",

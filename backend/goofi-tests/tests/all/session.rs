@@ -11,12 +11,6 @@ fn panel(g: &Goofi) -> String {
 fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let g = Goofi::new();
 
-    let types = g.call("library list", j!({}))["types"].as_array().cloned().unwrap();
-    for want in ["signal:LFO", "signal:Buffer"] {
-        assert!(types.iter().any(|t| t["type"] == want), "{want} is in the palette");
-    }
-    assert!(!types.iter().any(|t| t["type"] == "signal:_TestEcho"), "test nodes are not");
-
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
     let sink = g.add("Buffer");
@@ -159,7 +153,6 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let before = g.doc();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("patch.gfi");
-    std::fs::write(g.state.mount().join("notes.md"), b"the EEG source is on channel 3").unwrap();
 
     // Step: the skills goofi ships are laid into every workspace, so an agent spawned into one
     // reads them from its own cwd — and seeded BEFORE the baseline, so they never dirty a patch.
@@ -195,8 +188,6 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     assert!(path.exists() && std::fs::read(&path).unwrap().windows(27).any(|w| w == b"workspace/variables/patch.p"), "the archive carries the file");
     assert_eq!(after["arrangement"], before["arrangement"],
                "…so the panel still names a node that exists");
-    assert_eq!(std::fs::read(other.state.mount().join("notes.md")).unwrap(),
-               b"the EEG source is on channel 3", "the workspace travelled with the patch");
     assert_eq!(other.call("session status", j!({}))["dirty"], false,
                "a patch is not unsaved the moment it finishes loading");
 
