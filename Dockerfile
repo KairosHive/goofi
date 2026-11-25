@@ -36,7 +36,8 @@ COPY . .
 
 # The one setup step, then the build. goofi-init makes both venvs, installs both wheels and the
 # frontend's dependencies; the frontend and every shipped node are compiled INTO the binary.
-RUN cargo run -p goofi-init
+# `--demo` installs no package of a bundle that `demo.toml` withholds: gigabytes the image saves.
+RUN cargo run -p goofi-init -- --demo
 RUN cargo build --release -p goofi-cli
 
 # What the binary needs of the runtime is the venvs and the interpreters. The node build cache and
