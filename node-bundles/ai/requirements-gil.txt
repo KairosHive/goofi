@@ -10,3 +10,5 @@ torch>=2.6
 transformers>=4.56
 # DinoDecode fetches its decoders from the hub by file.
 huggingface_hub
+# Depth runs Apple's Depth Pro 2 from its repository (no release on PyPI); timm brings torchvision.
+depth_pro_2 @ git+https://github.com/apple-aiml-research/ml-depth-pro-2

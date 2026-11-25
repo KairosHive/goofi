@@ -36,10 +36,16 @@ whatever it reads or makes.
 
 ## Remaining work
 
-1. **`ai:Depth`** on `apple/DepthPro2` (S, B, L, H), image and live modes.
-2. **A Rust node the tick calls**, against `goofi_graphics_sdk`.
-3. **A texture as a value.** A bare expression read of a texture output is refused
+1. **A Rust node the tick calls**, against `goofi_graphics_sdk`.
+2. **A texture as a value.** A bare expression read of a texture output is refused
    (`SlotType::is_value`), and a machine's expression reads one as `None`.
+3. **A large 8-bit frame into the graphics engine is slow.** Measured 2026-11-25 with a
+   1440x1920 video at 30 Hz: behind a shader, `graphics:Depth` saw a new picture on one tick in
+   six; wired straight into the node, each frame crosses to the child as pixels and the node held
+   110 to 165% of a 60 Hz frame (the node's own work was 17 ms). Sending such a frame up the
+   shader upload path for a child that shares was tried and held 660 to 750%. The cause is not
+   proven; the upload converts 8-bit texels to `f16` on the CPU, on the half's thread. An 8-bit
+   upload that the GPU converts would serve a shader and a tick node alike.
 4. **The pixel form of a tick node is slow.** At 1920x1080 a tick took 268 to 288 ms through
    pixels and 3.6 to 5.9 ms through shared memory (measured 2026-11-25, debug profile, RTX 4090
    Laptop). The pixel form converts `f16` to `f32` on the CPU and copies the frame through the

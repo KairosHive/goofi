@@ -72,3 +72,37 @@ the linears on the fp8 tensor cores of an Ada or newer GPU, a third faster than 
 indistinguishable from it; elsewhere it is fp16. Each decoder is 1.7 GB from the hub on first use. For a morph between pictures, hold each one's grid and wire them all
 into a `Morph`, whose `position` glides between them, then into `DinoDecode`; an `Operation` or a
 `Math` between the two nodes mixes or moves the latent instead.
+
+## Depth
+
+How far each pixel of a texture on `image` is from the camera, in metres, by Apple's Depth Pro 2,
+drawn as a texture on `out`. `Depth` is a graphics node (`graphics:Depth`): the graphics tick
+calls it between the shaders, so the depth a shader reads is of the picture drawn in the same
+frame, and the node shows its share of the frame as a shader does. On Linux with an NVIDIA GPU
+the picture stays on the GPU both ways. A model too large for the frame rate holds every stage
+back: pick `size` and `resolution` for the rate the patch needs.
+
+`size` is `S`, `B`, `L` or `H` (97 MB, 386 MB, 1.3 GB, 3.5 GB). The weights and the 94 MB focal
+length estimator the sizes share download from the Hugging Face hub (`apple/DepthPro2-S` to `-H`,
+`apple/DepthPro2-focal`) on first use; the node draws nothing while a model loads, and the tick
+goes on. `mode` `image` estimates each picture alone. `live` is the model's stream: each frame
+also reads the `window - 1` frames before it, which keeps a camera or a video steady in time. A
+picture equal to the last one is not estimated again. `resolution` is the short side the picture
+is resized to for the model, and the size of the depth picture; 0 keeps the picture's own size.
+`fov` is the camera's horizontal field of view, which sets the scale in metres; 0 lets the model
+estimate it.
+
+`map` says how the distance is drawn: `auto` near bright, from the nearest to the farthest thing
+in view; `inverse` the same from `near` to `far`; `linear` near dark and even in metres; `metres`
+the distance itself as the texture's value, for a shader that computes with it. Sky and other
+endless distances are the far end.
+
+On an RTX 4090 Laptop GPU (bf16, the GPU clock between 300 and 1305 MHz when sampled), one picture
+at a short side of 384 takes 14 ms with `S` and 22 ms with `B` in `image` mode, 12 and 21 ms in
+`live` mode; at 256 `S` takes 11 and 9 ms. A picture much larger than `resolution` adds its
+resize: from 1440 x 1920, `S` at 384 took 17 ms a picture in the node. A source on another engine
+(a camera, a video) sends each frame to the node as pixels, which is the larger part of the cost
+for a large frame: a 1440 x 1920 video wired straight in held 110 to 165% of a 60 Hz frame, and
+about 30% behind a shader, where the node saw a new picture on one tick in six.
+
+The weights are under the Apple Machine Learning Research Model License: research use only.
