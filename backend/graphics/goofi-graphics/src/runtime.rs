@@ -298,7 +298,8 @@ impl Runtime {
             let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
             self.gpu.queue.write_buffer(&state.resolution, 0, &res);
             if let Some(buf) = &state.params {
-                let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, &state.ranges);
+                let ranges = &state.ranges[..state.ranges.len().min(stage.arrays)];
+                let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, ranges);
                 self.gpu.queue.write_buffer(buf, 0, &bytes);
             }
             if let Some(produced) = &produced {
@@ -331,7 +332,7 @@ impl Runtime {
                     .collect();
                 let state = &self.states[&stage.uid];
                 // After the inputs, one head layout per ARRAY input, in the prelude's order.
-                views.extend((0..stage.cells.uploads.len()).map(|k| {
+                views.extend((0..stage.arrays).map(|k| {
                     state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
                 }));
                 let group0 = state.group0(&self.gpu);

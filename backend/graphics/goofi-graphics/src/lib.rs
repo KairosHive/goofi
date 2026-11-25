@@ -145,8 +145,8 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         }),
         doc: Some(
             "Texture size in pixels; 0 follows the first wired texture input, or the frame \
-             uploaded to the first array input. A node with no texture input follows the \
-             patch's default instead.",
+             uploaded to the first array input. A node with neither follows the patch's \
+             default instead.",
         ),
         section: 0,
         show: &[],
@@ -292,7 +292,18 @@ impl GraphicsEngine {
     /// fed with what the render thread read back.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
         let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
-        goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
+        let manifest = self.live[&uid].class.manifest;
+        let mut desired = goofi_runtime::desired_of(view, uid, nv, &decls_of(manifest), &plane);
+        // A texture input another engine feeds is a frame off the wire, as an ARRAY input's is.
+        let arrays = shader::array_inputs(manifest).count();
+        for (t, slot) in shader::texture_inputs(manifest).enumerate() {
+            for (wire, (producer, out)) in view.wires_into(uid, slot).filter(|(p, _)| !self.live.contains_key(p)).enumerate() {
+                if let Some(service) = goofi_transport::output_of(view, producer, out) {
+                    desired.subs.push(goofi_runtime::Sub::Slot { inbox: arrays + t, wire, service, source: String::new() });
+                }
+            }
+        }
+        desired
     }
 
     /// The size of the monitor a fullscreen window node covers; none for any other node, and none
@@ -424,9 +435,9 @@ impl Engine for GraphicsEngine {
         let base = goofi_transport::service_base(&self.instance, uid, generation);
         let cells = Arc::new(half::Cells {
             params: goofi_runtime::cells_of(params, &decls_of(manifest)).into(),
-            uploads: shader::array_inputs(manifest).map(|_| Mailbox::new()).collect(),
+            uploads: (0..manifest.inputs.len()).map(|_| Mailbox::new()).collect(),
             spent: Stack::new(),
-            uploaded: AtomicU64::new(0),
+            uploaded: (0..manifest.inputs.len()).map(|_| AtomicU64::new(0)).collect(),
             readers: AtomicBool::new(false),
             tap: Mailbox::new(),
             tap_box: AtomicU64::new(0),

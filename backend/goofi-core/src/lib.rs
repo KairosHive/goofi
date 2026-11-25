@@ -623,6 +623,10 @@ impl Data {
     pub fn value(&self) -> &Value {
         &self.0.value
     }
+    /// The same value under `meta`. A texture or a table is shared, never copied.
+    pub fn with_meta(&self, meta: Meta) -> Data {
+        Data(Arc::new(DataInner { value: self.0.value.clone(), meta }))
+    }
     /// Whether the two are ONE frame — the same allocation, not two that say the same thing.
     pub fn same(&self, other: &Data) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -834,8 +838,8 @@ pub enum SlotType {
     /// Audio-rate planar samples that never cross the wire: an audio output feeds an audio input
     /// in its engine, or an ARRAY input through the engine's tap, and nothing feeds it but audio.
     Audio,
-    /// A GPU texture that never crosses the wire: a texture output feeds a texture input in its
-    /// engine, or an ARRAY input through the engine's tap, and nothing feeds it but a texture.
+    /// A picture. Between two shader stages it is a GPU texture the plan carries; on a wire it is
+    /// a texture frame, which any engine makes and any engine reads.
     Texture,
 }
 
@@ -859,15 +863,19 @@ impl SlotType {
         self == into
     }
 
-    /// How a node carrying this kind is written — and, by having an answer at all, that the kind
-    /// lives inside ONE engine and never crosses the wire. `None` for a wire kind. ONE owner of
-    /// both facts, so a third engine-local kind cannot be half-added.
+    /// How a node that makes this kind is written, where ONE engine alone makes it and it never
+    /// crosses the wire. `None` for a kind any engine makes.
     pub fn engine_local(self) -> Option<&'static str> {
         match self {
             SlotType::Audio => Some("audio — an audio node is written against goofi_audio_sdk"),
-            SlotType::Texture => Some("a texture — produced by a graphics node"),
-            SlotType::Array | SlotType::String | SlotType::Table => None,
+            SlotType::Array | SlotType::String | SlotType::Table | SlotType::Texture => None,
         }
+    }
+
+    /// Whether a frame of this kind is a value a param reads. Samples and a picture are not: an
+    /// expression reads such an output on its own plane alone.
+    pub fn is_value(self) -> bool {
+        !matches!(self, SlotType::Audio | SlotType::Texture)
     }
 
     pub fn from_name(name: &str) -> Option<SlotType> {

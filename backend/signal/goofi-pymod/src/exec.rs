@@ -227,6 +227,9 @@ fn value_to_core(
             } else {
                 dict_to_meta(meta_obj.cast::<PyDict>()?)?
             };
+            if let Ok(texture) = arr.cast::<crate::texture::Texture>() {
+                return Ok(texture.borrow().frame.with_meta(meta));
+            }
             if arr.extract::<String>().is_ok() || arr.cast::<PyDict>().is_ok() {
                 return any_to_core(py, &arr, meta);
             }

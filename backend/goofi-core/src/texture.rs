@@ -50,6 +50,28 @@ impl Pixels {
         Ok(())
     }
 
+    /// The pixels as tight-packed 8-bit RGBA, row 0 the top: what a video encoder takes.
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let (channels, unit) = (self.format.channels(), self.format.bytes_per_channel());
+        let row = self.width as usize * channels * unit;
+        let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
+        for line in self.bytes.chunks_exact(self.stride) {
+            for pixel in line[..row].chunks_exact(channels * unit) {
+                for channel in 0..4 {
+                    rgba.push(match (channel < channels, unit) {
+                        (false, _) => 255,
+                        (true, 1) => pixel[channel],
+                        (true, _) => {
+                            let value = f32::from_le_bytes(pixel[channel * 4..channel * 4 + 4].try_into().expect("four bytes"));
+                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+                        }
+                    });
+                }
+            }
+        }
+        rgba
+    }
+
     /// The pixels as the `[H, W, C]` array of values in 0..1 a reader of numbers takes, under `meta`.
     pub fn to_array(&self, meta: crate::Meta) -> Result<crate::Data, String> {
         let (channels, unit) = (self.format.channels(), self.format.bytes_per_channel());

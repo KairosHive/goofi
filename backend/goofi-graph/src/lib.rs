@@ -2930,8 +2930,8 @@ impl Graph {
         }
     }
 
-    /// Why a bare read of a producer cannot feed `param` on `reader`: an engine-local output never
-    /// leaves its plane, so it drives a numeric param of its own engine as a plan edge and nothing
+    /// Why a bare read of a producer cannot feed `param` on `reader`: samples and a picture are not
+    /// values, so such an output drives a numeric param of its own engine as a plan edge and nothing
     /// else. `None` when the read is fine, or when the producer was not found (already reported).
     fn bare_kind_error(&self, reader: Uid, r: &expr_rewrite::VarRef, param: Option<&Param>) -> Option<String> {
         let Target::Node { name, slot } = &r.target else { return None };
@@ -2942,7 +2942,9 @@ impl Graph {
             (None, 1) => outputs.into_iter().next()?,
             (None, _) => return None,
         };
-        kind.engine_local()?;
+        if kind.is_value() {
+            return None;
+        }
         let wants = match param {
             Some(Param::Str { .. }) => goofi_core::SlotType::String,
             _ => goofi_core::SlotType::Array,

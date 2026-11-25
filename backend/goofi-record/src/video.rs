@@ -287,8 +287,8 @@ impl Drop for Ffmpeg {
     }
 }
 
-/// One video file, written as a [`Format`]: the frames one armed graphics slot read back, each
-/// handed to the encoder as it comes. The worker that writes it is this stream's own thread, so
+/// One video file, written as a [`Format`]: the frames an armed texture slot read back or sent,
+/// each handed to the encoder as it comes. The worker that writes it is this stream's own thread, so
 /// an encoder that is slow costs this stream its queue's depth and nobody else anything.
 pub struct Video {
     encoder: Box<dyn Encoder>,
@@ -303,8 +303,13 @@ impl Video {
 
 impl Format for Video {
     fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
-        let Frame::Texels(t) = frame else { return Err("the frame is not the shape this stream holds".into()) };
-        self.encoder.write(&t.rgba)?;
+        match frame {
+            Frame::Texels(t) => self.encoder.write(&t.rgba)?,
+            Frame::Data(d) => match d.as_texture() {
+                Ok(goofi_core::texture::Texture::Pixels(p)) => self.encoder.write(&p.to_rgba8())?,
+                _ => return Err("the frame is not the shape this stream holds".into()),
+            },
+        }
         self.encoded += 1;
         Ok(Added::Rows(1))
     }

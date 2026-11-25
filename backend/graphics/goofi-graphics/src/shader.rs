@@ -21,6 +21,12 @@ pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_
     m.inputs.iter().filter(|s| s.kind != SlotType::Texture).map(|s| s.name)
 }
 
+/// Every TEXTURE input. A wire from another engine feeds one as a frame, and its upload is
+/// numbered after the ARRAY inputs'.
+pub fn texture_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_ {
+    m.inputs.iter().filter(|s| s.kind == SlotType::Texture).map(|s| s.name)
+}
+
 /// The fields the engine adds to `Params` for one ARRAY input: the range its last frame spanned,
 /// which a body cannot reduce for itself, how many channels the frame had, and the power of two
 /// the texels and the range are both over, so a frame past the half floats still fits.

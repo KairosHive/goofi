@@ -231,8 +231,8 @@ impl HostExecutor {
                 let Some(Some(frame)) = outputs.get(slot.name) else { continue };
                 match (slot.kind, frame.value()) {
                     (goofi_core::SlotType::Texture, goofi_core::Value::Texture(texture)) => texture.validate()?,
-                    (goofi_core::SlotType::Texture, _) => return Err(NodeError("TEXTURE output requires a texture submission".into())),
-                    (_, goofi_core::Value::Texture(_)) => return Err(NodeError("texture submissions require a TEXTURE output".into())),
+                    (goofi_core::SlotType::Texture, _) => return Err(NodeError(format!("output `{}` is a TEXTURE: return a texture", slot.name))),
+                    (_, goofi_core::Value::Texture(_)) => return Err(NodeError(format!("output `{}` is not a TEXTURE, and was given a texture", slot.name))),
                     _ => {}
                 }
             }

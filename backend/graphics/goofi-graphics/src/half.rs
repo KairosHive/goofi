@@ -23,14 +23,14 @@ use crate::resources::Readback;
 /// The cells one node's half, the render thread and the engine share, made once at insert.
 pub struct Cells {
     pub params: Arc<[AtomicU64]>,
-    /// Per ARRAY input: the frame the render thread has not uploaded yet. Latest wins: a frame
-    /// that arrives before the last was taken displaces it, and the half frees what it displaced.
+    /// Per input a wire can feed (the ARRAY inputs, then the TEXTURE inputs): the frame the render
+    /// thread has not uploaded yet. Latest wins, and the half frees what a new frame displaced.
     pub uploads: Vec<Mailbox<Upload>>,
     /// The uploads the render thread is done with, so their buffers are freed and reused here.
     pub spent: Stack<Box<Upload>>,
-    /// The size of the last frame uploaded to the first ARRAY input, packed; what a zero axis
-    /// of `common` follows when no texture is wired behind the node.
-    pub uploaded: AtomicU64,
+    /// The size of the last frame uploaded to each of `uploads`, packed, and 0 while no wire
+    /// feeds it; what a zero axis of `common` follows when no stage is behind the node.
+    pub uploaded: Vec<AtomicU64>,
     /// Whether anyone drinks from this output right now: the half writes it each tick.
     pub readers: AtomicBool,
     /// The frame the render thread read back for the viewers, until the half takes it. Latest
@@ -54,7 +54,7 @@ pub struct GraphicsHalf {
     size: usize,
     /// The sizes last seen: asked, and uploaded. Only a settle can re-plan a stage's target, so
     /// the half — which ticks beside the writers of both — is what asks for one when either moves.
-    last: ((u32, u32), u64),
+    last: ((u32, u32), Vec<u64>),
     /// Why the last frame taken could not cross, until one does.
     refused: Option<String>,
     /// Texel buffers the render thread gave back, for the next arrival to fill.
@@ -72,7 +72,7 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 
 impl GraphicsHalf {
     pub fn new(cells: Arc<Cells>, size: usize, producer: Option<(HostExecutor, crate::producer::Source)>) -> GraphicsHalf {
-        GraphicsHalf { producer, produced: None, cells, size, last: ((u32::MAX, u32::MAX), 0), refused: None, spare: Vec::new() }
+        GraphicsHalf { producer, produced: None, cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new() }
     }
 
     /// Whether the render thread left something for this thread to take.
@@ -158,9 +158,16 @@ impl Executor for GraphicsHalf {
         // What the render thread is done with comes back here, where its buffer is freed or
         // filled again: an upload costs the clock a pointer move each way.
         self.spare.extend(self.cells.spent.drain().map(|up| up.texels));
-        if let Some(up) = Upload::of(frame, self.spare.pop().unwrap_or_default()) {
-            if inbox == 0 {
-                self.cells.uploaded.store(pack((up.width, up.height)), Ordering::Relaxed);
+        let made = match frame.value() {
+            goofi_core::Value::Texture(texture) => match &**texture {
+                Texture::Pixels(pixels) => Some(Upload::pixels(pixels)),
+                Texture::Render { .. } => None,
+            },
+            _ => Upload::of(frame, self.spare.pop().unwrap_or_default()),
+        };
+        if let Some(up) = made {
+            if let Some(size) = self.cells.uploaded.get(inbox) {
+                size.store(pack((up.width, up.height)), Ordering::Relaxed);
             }
             if let Some(displaced) = cell.put(Box::new(up)) {
                 self.spare.push(displaced.texels);
@@ -172,8 +179,8 @@ impl Executor for GraphicsHalf {
 
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
         if let Some((producer, _)) = &mut self.producer { producer.rewire(inbox, wires); }
-        if inbox == 0 && wires.is_empty() {
-            self.cells.uploaded.store(0, Ordering::Relaxed);
+        if let (true, Some(size)) = (wires.is_empty(), self.cells.uploaded.get(inbox)) {
+            size.store(0, Ordering::Relaxed);
         }
     }
     fn params_changed(&mut self, values: &[goofi_core::Param]) -> Ticked {
@@ -226,8 +233,12 @@ impl Executor for GraphicsHalf {
         self.cells.readers.store(readers, Ordering::Relaxed);
         self.record(publish);
         self.tap(publish);
-        let seen = (crate::plan::asked(cx.params, self.size), self.cells.uploaded.load(Ordering::Relaxed));
-        ticked.replan |= std::mem::replace(&mut self.last, seen) != seen;
+        let asked = crate::plan::asked(cx.params, self.size);
+        let uploaded = self.cells.uploaded.iter().map(|size| size.load(Ordering::Relaxed));
+        if asked != self.last.0 || !uploaded.clone().eq(self.last.1.iter().copied()) {
+            self.last = (asked, uploaded.collect());
+            ticked.replan = true;
+        }
         ticked
     }
 }

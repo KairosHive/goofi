@@ -1,4 +1,3 @@
-# goofi: graphics
 """Camera — what a lens or a video file is looking at, as a frame the rest of the patch reads.
 
 The one door in from a camera. Everything that reads a picture takes it from here, so a device is
@@ -37,6 +36,7 @@ class Camera(goofi.Node):
     def setup(self):
         self.cap = None
         self.opened = None
+        self.fps = 0.0
 
     def process(self):
         p = self.params.camera
@@ -56,7 +56,7 @@ class Camera(goofi.Node):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         if p.mirror:
             rgb = rgb[:, ::-1]
-        return goofi.Texture(np.ascontiguousarray(rgb))
+        return goofi.Texture(np.ascontiguousarray(rgb)), {"sfreq": self.fps}
 
     def open(self, p, want):
         """The device or file the params now name, in place of whatever was open before."""
@@ -73,6 +73,8 @@ class Camera(goofi.Node):
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, p.width)
         if p.height:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, p.height)
+        # The rate a recording of the picture is filed at: the device's own, or the rate cap.
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or self.params.common.max_frequency
         self.cap = cap
 
     def release(self):

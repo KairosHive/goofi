@@ -56,7 +56,7 @@ pub fn asked(params: &[AtomicU64], base: usize) -> (u32, u32) {
 pub enum Input {
     /// Another stage's output, by index into `Plan::stages`.
     Stage(usize),
-    /// The k-th ARRAY input's upload cell.
+    /// The k-th upload cell: an ARRAY input's frame, or a TEXTURE input's from another engine.
     Upload(usize),
     /// Nothing is wired: the shared transparent texture.
     None,
@@ -73,6 +73,8 @@ pub struct Stage {
     pub inputs: Vec<Input>,
     /// How many state buffers this stage carries between two ticks.
     pub state: usize,
+    /// How many ARRAY inputs it has: the upload cells that carry a range and a head layout.
+    pub arrays: usize,
     pub size: (u32, u32),
     pub natural: (bool, bool),
     pub decls: &'static [ParamDecl],
@@ -190,13 +192,15 @@ pub fn compile(
             if let Some(why) = built.error() { faults.push((*uid, format!("texture program: {why}"))); }
         }
         let manifest = inst.class.manifest;
+        let arrays = crate::shader::array_inputs(manifest).count();
         let inputs = manifest
             .inputs
             .iter()
-            .map(|s| match s.kind {
-                SlotType::Texture => wires.get(&(*uid, s.name)).and_then(|p| at.get(p)).map_or(Input::None, |i| Input::Stage(*i)),
-                // From the settled view: an unwired ARRAY input is transparent black.
+            .map(|s| match (s.kind, wires.get(&(*uid, s.name))) {
+                (SlotType::Texture, Some(p)) => at.get(p).map_or(Input::None, |i| Input::Stage(*i)),
+                // From the settled view: an unwired input is transparent black.
                 _ if view.wires_into(*uid, s.name).next().is_none() => Input::None,
+                (SlotType::Texture, None) => Input::Upload(arrays + crate::shader::texture_inputs(manifest).position(|n| n == s.name).expect("a texture input")),
                 _ => Input::Upload(crate::shader::array_inputs(manifest).position(|n| n == s.name).expect("an array input")),
             })
             .collect();
@@ -208,6 +212,7 @@ pub fn compile(
             },
             inputs,
             state: inst.class.state.len(),
+            arrays,
             size: sizes[uid],
             natural: (inst.asked().0 == 0, inst.asked().1 == 0),
             decls: inst.class.manifest.params,
@@ -231,7 +236,7 @@ fn recorded(view: &GraphView<'_>, uid: Uid, inst: &Instance) -> bool {
     })
 }
 
-/// Every wire between two live nodes, by the input it lands on.
+/// Every wire between two live nodes of this engine, by the input it lands on.
 fn texture_wires<'v>(view: &GraphView<'v>, live: &HashMap<Uid, Instance>) -> HashMap<(Uid, &'v str), Uid> {
     let mut wires = HashMap::new();
     for e in view.edges {
@@ -255,9 +260,9 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 }
 
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
-/// first wired texture input's size on that axis — or, with no texture behind it, the frame its
-/// host made or its first array input uploaded. A chain that follows itself, or one that follows
-/// nothing, takes the patch's default.
+/// first fed texture input's size on that axis: a stage's, or the frame another engine sent. With
+/// no texture behind it, the frame its host made or its first array input uploaded. A chain that
+/// follows itself, or one that follows nothing, takes the patch's default.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
@@ -277,21 +282,18 @@ fn size_of(
     }
     visiting.push(uid);
     if w == 0 || h == 0 {
-        let behind = live.get(&uid).and_then(|inst| {
-            inst.class
-                .manifest
-                .inputs
-                .iter()
-                .filter(|s| s.kind == SlotType::Texture)
-                .find_map(|s| wires.get(&(uid, s.name)).copied())
+        let inst = live.get(&uid);
+        let uploaded = |k: usize| inst.and_then(|i| crate::half::unpack(i.cells.uploaded.get(k)?.load(Ordering::Relaxed)));
+        let arrays = inst.map_or(0, |i| crate::shader::array_inputs(i.class.manifest).count());
+        let textures: Vec<&str> = inst.map_or(Vec::new(), |i| crate::shader::texture_inputs(i.class.manifest).collect());
+        let behind = textures.iter().enumerate().find_map(|(t, slot)| match wires.get(&(uid, *slot)) {
+            Some(p) => Some(size_of(*p, live, wires, fallback, sizes, visiting)),
+            None => uploaded(arrays + t),
         });
-        let (fw, fh) = match behind {
-            Some(p) => size_of(p, live, wires, fallback, sizes, visiting),
-            None => live.get(&uid).and_then(|i| {
-                i.produced.as_ref().map(|f| f.size)
-                    .or_else(|| crate::half::unpack(i.cells.uploaded.load(Ordering::Relaxed)))
-            }).unwrap_or(fallback),
-        };
+        let (fw, fh) = behind
+            .or_else(|| inst.and_then(|i| i.produced.as_ref().map(|f| f.size)))
+            .or_else(|| uploaded(0).filter(|_| arrays > 0))
+            .unwrap_or(fallback);
         answer = (if w == 0 { fw } else { w }, if h == 0 { fh } else { h });
     }
     visiting.pop();

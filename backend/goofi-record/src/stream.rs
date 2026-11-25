@@ -42,7 +42,12 @@ impl Kind {
                 (Value::Array(_), None) => Ok(Kind::Array),
                 (Value::Str(_), _) => Ok(Kind::Text),
                 (Value::Table(map), _) => Ok(Kind::Table { columns: map.keys().cloned().collect() }),
-                (Value::Texture(_), _) => Err("a texture submission is not recorded".into()),
+                // A picture source states its frame rate, which a video file is opened at.
+                (Value::Texture(t), _) => match (&**t, d.meta().sfreq().filter(|fps| *fps > 0.0)) {
+                    (goofi_core::texture::Texture::Pixels(p), Some(fps)) => Ok(Kind::Video { size: (p.width, p.height), fps, quality }),
+                    (goofi_core::texture::Texture::Pixels(_), None) => Err("a texture frame with no `sfreq` names no frame rate to record at".into()),
+                    (goofi_core::texture::Texture::Render { .. }, _) => Err("a texture program is not recorded".into()),
+                },
                 (Value::Functional(_), _) => Err("a functional is not recorded".into()),
             },
         }
@@ -64,6 +69,7 @@ pub fn size(frame: &Frame) -> usize {
     match frame {
         Frame::Data(d) => match d.value() {
             Value::Array(a) => a.as_bytes().len(),
+            Value::Texture(t) => t.size().0 as usize * t.size().1 as usize * 4,
             _ => 0,
         },
         Frame::Texels(t) => t.rgba.len(),

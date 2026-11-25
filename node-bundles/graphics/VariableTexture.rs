@@ -1,13 +1,14 @@
-//! Variable — a variable's texels as a texture. The named variable's wire feeds `value` as a
-//! cable would, and an `[H, W, 4]` or `[H, W, 3]` frame — a pad's sheet — becomes the texture.
+//! VariableTexture — a variable's texels as a texture. The named variable's wire feeds `value` as
+//! a cable would, and an `[H, W, 4]` or `[H, W, 3]` frame — a pad's sheet — becomes the texture.
 
+use goofi_core::texture::{PixelFormat, Pixels, Texture};
 use goofi_core::{Data, Meta, SlotType, Value};
-use goofi_graphics_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, PixelFormat, Pixels, Role, SlotDecl, Tag, Texture};
+use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Role, SlotDecl, Tag};
 
 #[derive(Default)]
-struct Variable;
+struct VariableTexture;
 
-impl Node for Variable {
+impl Node for VariableTexture {
     fn process(&mut self, inp: &Inputs<'_>, out: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {
         let Some(Value::Array(a)) = inp.get("value").map(Data::value) else { return Ok(()) };
         let (h, w, c) = match *a.shape() {
@@ -59,4 +60,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_graphics_sdk::export!(Variable, MANIFEST);
+goofi_signal_sdk::export!(VariableTexture, MANIFEST);
