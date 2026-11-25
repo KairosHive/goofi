@@ -10,6 +10,11 @@ A `.wgsl` file is a graphics node. The graphics engine owns its output texture, 
 textures, its state buffers and its readback buffers. Between two shaders a texture stays on the
 GPU. Read `graphics:Life` for state kept between ticks.
 
+Where a signal node shows its updates per second, a shader shows the time of its pass as a
+percentage of the frame period: a pass of 1/120 s at 60 frames per second is 50%. A shader that
+is not drawn shows 0%. An adapter without timestamp queries shows nothing
+(`session status` has `graphics.timed`).
+
 ## A signal node that makes a texture
 
 Declare a `TEXTURE` output and return `goofi.Texture(pixels)` from `process`:

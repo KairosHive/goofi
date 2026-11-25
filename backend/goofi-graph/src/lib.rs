@@ -172,6 +172,8 @@ struct Health {
     stage: &'static str,
     /// The same number the node stamps as `meta["ufreq"]`. `None` until it has emitted twice.
     ufreq: Option<f64>,
+    /// The fraction of its engine's frame period the node's run took, where its engine times it.
+    frame_share: Option<f64>,
     /// What the node last reported evaluating its bindings to. Kept apart from `params` so a
     /// broken binding still has the authored literal to fall back to.
     evaluated: IndexMap<ParamKey, Param>,
@@ -193,6 +195,7 @@ impl Health {
             error_since: None,
             stage: "creating",
             ufreq: None,
+            frame_share: None,
             evaluated: IndexMap::new(),
             param_errors: IndexMap::new(),
             options: IndexMap::new(),
@@ -1657,6 +1660,12 @@ impl Graph {
     /// has been measured (≥2 emits).
     pub fn node_ufreq(&self, uid: Uid) -> Option<f64> {
         self.health(uid).and_then(|h| h.ufreq)
+    }
+
+    /// The fraction of its engine's frame period the node's run took, as it last reported it.
+    /// `None` for a node on its own pace, and where the engine cannot time a run.
+    pub fn node_frame_share(&self, uid: Uid) -> Option<f64> {
+        self.health(uid).and_then(|h| h.frame_share)
     }
 
     /// Which node INSTANCE this uid holds: bumped on every birth, so a report from the node born at
@@ -4271,6 +4280,7 @@ fn apply_status_to(
     match status {
         Status::Stage { stage } => health.stage = stage.as_str(),
         Status::Ufreq { hz } => health.ufreq = Some(hz),
+        Status::FrameShare { share } => health.frame_share = Some(share),
         // The options are the node's answer to a refresh (§8.5). They land in the health
         // OVERLAY, never a reply or the record: the RPC that asked has already returned.
         Status::RefreshOptions { key, options } => {

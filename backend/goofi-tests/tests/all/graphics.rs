@@ -1002,6 +1002,7 @@ fn shaders_render_on_the_gpu() {
 #[test]
 fn the_engine_draws_on_its_own_clock() {
     let g = Goofi::timed();
+    let mut ev = g.events();
     let c = g.add("graphics:Constant");
     g.ready(c);
     g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
@@ -1013,6 +1014,15 @@ fn the_engine_draws_on_its_own_clock() {
     });
     assert_eq!(idle(&g)["clock"], "internal");
     assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage, whatever the clock does");
+    // Where a signal node says its rate, this one says how much of the frame period its pass
+    // takes. An adapter that keeps no timestamps times nothing, and the node says nothing.
+    let timed = idle(&g)["timed"] == j!(true);
+    let mut share = |what: &str, want: &dyn Fn(f64) -> bool| {
+        if timed {
+            g.until(what, |_| ev.next("node_stats")["stats"][hex(c)]["frame_share"].as_f64().filter(|s| want(*s)));
+        }
+    };
+    share("a node that is not drawn takes none of the frame", &|s| s == 0.0);
 
     // Step: a viewer arrives and the frames it gets were drawn by nobody's hand.
     let probe = g.probe(c, "out");
@@ -1021,6 +1031,9 @@ fn the_engine_draws_on_its_own_clock() {
     let ran = idle(&g);
     assert!(ran["frames"].as_u64().is_some_and(|f| f > start), "{ran}");
     assert!(ran["stages"].as_u64().is_some_and(|s| s > 0), "{ran}");
+    share("a drawn node's pass takes some of the frame", &|s| s > 0.0);
+    drop(probe);
+    share("and none again once the viewer left", &|s| s == 0.0);
 }
 
 /// A viewer asks for the box it can draw, and the ENGINE renders that — a 4K frame is never read

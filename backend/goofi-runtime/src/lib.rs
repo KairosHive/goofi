@@ -154,7 +154,7 @@ impl Shared {
 
     fn report(&self, uid: Uid, born: u64, status: Status) {
         // Values and rates are read on the drain's own paces; the rest are transitions it hears now.
-        let paced = matches!(status, Status::ParamValues { .. } | Status::Ufreq { .. });
+        let paced = matches!(status, Status::ParamValues { .. } | Status::Ufreq { .. } | Status::FrameShare { .. });
         self.reports.lock().push((uid, born, status));
         if !paced {
             self.waker.notify();
@@ -310,6 +310,8 @@ pub struct Ticked {
     pub replan: bool,
     /// The node's measured update rate, when a run emitted.
     pub ufreq: Option<f64>,
+    /// The fraction of its engine's frame period the node's run took, where the engine times it.
+    pub frame_share: Option<f64>,
 }
 
 /// The engine's half of a node's runtime: what an arrival becomes, and what goes out.
@@ -523,7 +525,7 @@ pub fn spawn<E: Executor + 'static>(
                     shared,
                     mail: thread_mail,
                     last_run: Instant::now(),
-                    last_ufreq: None,
+                    last_measured: None,
                     listener,
                     exec: make(),
                     hub,
@@ -609,7 +611,7 @@ struct Runtime<E: Executor> {
     mail: Arc<Mutex<Mail>>,
     last_run: Instant,
     /// When the rate was last REPORTED, which is not when it was last measured.
-    last_ufreq: Option<Instant>,
+    last_measured: Option<Instant>,
     listener: Listener,
     exec: E,
     /// Queues a newer arming replaced, each kept until the recorder has let go of it.
@@ -887,11 +889,12 @@ impl<E: Executor> Runtime<E> {
         if ticked.replan {
             self.shared.ask_settle();
         }
-        if let Some(hz) = ticked.ufreq {
-            let now = Instant::now();
-            if self.last_ufreq.is_none_or(|t| now - t >= UFREQ_REPORT) {
-                self.last_ufreq = Some(now);
-                self.shared.report(self.uid, self.born, Status::Ufreq { hz });
+        let measured = [ticked.ufreq.map(|hz| Status::Ufreq { hz }), ticked.frame_share.map(|share| Status::FrameShare { share })];
+        let now = Instant::now();
+        if measured.iter().any(Option::is_some) && self.last_measured.is_none_or(|t| now - t >= UFREQ_REPORT) {
+            self.last_measured = Some(now);
+            for status in measured.into_iter().flatten() {
+                self.shared.report(self.uid, self.born, status);
             }
         }
     }

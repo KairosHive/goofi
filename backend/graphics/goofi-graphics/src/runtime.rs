@@ -8,7 +8,7 @@
 //! viewers watch.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use goofi_supervisor::sync::{Mailbox, Mutex};
@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use goofi_node::Uid;
 
 use crate::gpu::{padded_row, Gpu, Want};
+use crate::half::Cells;
 use crate::resources::{Readback, Slot, State, FAILED, PENDING, READY};
 use crate::plan::{Input, Plan};
 use crate::shader;
@@ -56,6 +57,88 @@ pub struct Links {
     pub viewer_fps: Arc<AtomicU32>,
 }
 
+/// How many stages one tick times: a begin and an end query each, of the most a set holds.
+const TIMED_MAX: usize = (wgpu::QUERY_SET_MAX_QUERIES / 2) as usize;
+
+/// How far one timed pass moves a stage's share: the readout is a mean, not one tick's pass.
+const SHARE_ALPHA: f64 = 0.1;
+
+/// The pass timer: a begin and an end timestamp per drawn stage, resolved in the tick's encoder
+/// and read a tick or two later. One readout is in flight; a tick that finds it busy times nothing.
+struct Timer {
+    set: wgpu::QuerySet,
+    resolved: wgpu::Buffer,
+    read: wgpu::Buffer,
+    /// The stages the readout in flight timed, in query order; empty while the timer is free.
+    flight: Vec<Arc<Cells>>,
+    ready: Arc<AtomicU8>,
+}
+
+impl Timer {
+    /// None on an adapter that keeps no timestamps: nothing is timed and no share is shown.
+    fn new(gpu: &Gpu) -> Option<Timer> {
+        if !gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return None;
+        }
+        let size = u64::from(wgpu::QUERY_SET_MAX_QUERIES) * 8;
+        let buffer = |label, usage| gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false });
+        Some(Timer {
+            set: gpu.device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("pass times"), ty: wgpu::QueryType::Timestamp, count: wgpu::QUERY_SET_MAX_QUERIES }),
+            resolved: buffer("pass times resolved", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC),
+            read: buffer("pass times read", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ),
+            flight: Vec::new(),
+            ready: Arc::new(AtomicU8::new(PENDING)),
+        })
+    }
+
+    /// The bytes `stages` timed passes resolve to.
+    fn len(stages: usize) -> u64 {
+        stages as u64 * 16
+    }
+
+    /// Resolve the passes this tick timed, into the buffer [`Self::send`] maps after the submit.
+    fn resolve(&self, encoder: &mut wgpu::CommandEncoder, stages: usize) {
+        encoder.resolve_query_set(&self.set, 0..2 * stages as u32, &self.resolved, 0);
+        encoder.copy_buffer_to_buffer(&self.resolved, 0, &self.read, 0, Timer::len(stages));
+    }
+
+    fn send(&mut self, timed: Vec<Arc<Cells>>) {
+        self.ready.store(PENDING, Ordering::Relaxed);
+        let ready = self.ready.clone();
+        self.read.slice(..Timer::len(timed.len())).map_async(wgpu::MapMode::Read, move |r| {
+            ready.store(if r.is_ok() { READY } else { FAILED }, Ordering::Release);
+        });
+        self.flight = timed;
+    }
+
+    /// The readout the device finished, written to each stage as its share of a frame at `fps`.
+    /// False when the device refused the map: the timer is of no more use.
+    fn collect(&mut self, nanos_per_tick: f64, fps: f64) -> bool {
+        if self.flight.is_empty() {
+            return true;
+        }
+        match self.ready.load(Ordering::Acquire) {
+            PENDING => return true,
+            READY => {}
+            _ => return false,
+        }
+        let Ok(times) = self.read.slice(..Timer::len(self.flight.len())).get_mapped_range() else { return false };
+        for (cells, pair) in self.flight.iter().zip(times.chunks_exact(16)) {
+            let stamp = |at: usize| u64::from_le_bytes(pair[at..at + 8].try_into().expect("eight bytes"));
+            // A pair the device left unordered measured nothing.
+            let Some(ticks) = stamp(8).checked_sub(stamp(0)) else { continue };
+            let share = ticks as f64 * nanos_per_tick * 1e-9 * fps;
+            let held = f64::from_bits(cells.frame_share.load(Ordering::Relaxed));
+            let next = if held > 0.0 { held + (share - held) * SHARE_ALPHA } else { share };
+            cells.frame_share.store(next.to_bits(), Ordering::Relaxed);
+        }
+        drop(times);
+        self.read.unmap();
+        self.flight.clear();
+        true
+    }
+}
+
 pub struct Runtime {
     plan: Plan,
     states: HashMap<Uid, State>,
@@ -83,6 +166,7 @@ pub struct Runtime {
     /// What the graph asked for since the last tick. An op sends here and never waits on a
     /// render: a tick is long, and a lock a render holds is a lock an op cannot have.
     inbox: Receiver<Cmd>,
+    timer: Option<Timer>,
     /// Last, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
 }
@@ -91,6 +175,7 @@ impl Runtime {
     pub fn new(gpu: Arc<Gpu>, time: Arc<goofi_supervisor::timing::Time>, links: Links, inbox: Receiver<Cmd>) -> Runtime {
         let Links { stats, troubles, shared, recording, fps, viewer_fps } = links;
         Runtime {
+            timer: Timer::new(&gpu),
             gpu,
             plan: Plan::default(),
             states: HashMap::new(),
@@ -210,6 +295,12 @@ impl Runtime {
         let t = self.time.now();
         let recording = self.recording.load(Ordering::Relaxed);
         let want = self.plan.demanded(recording);
+        if self.timer.is_some() {
+            // A stage no one asks for is not drawn: it takes none of the frame, and says so.
+            for (stage, _) in self.plan.stages.iter().zip(&want).filter(|(_, drawn)| !**drawn) {
+                stage.cells.frame_share.store(0f64.to_bits(), Ordering::Relaxed);
+            }
+        }
         if !want.contains(&true) {
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
             return;
@@ -219,6 +310,14 @@ impl Runtime {
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         // What an earlier tick put on the device and the device has finished since.
         self.take();
+        let (nanos, fps) = (f64::from(self.gpu.queue.get_timestamp_period()), f64::from(self.fps.load(Ordering::Relaxed)));
+        if self.timer.as_mut().is_some_and(|timer| !timer.collect(nanos, fps)) {
+            self.timer = None;
+            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, "graphics: the device refused to map the pass times; no node shows its share of the frame".to_string());
+        }
+        // The set this tick's passes write their times to, while no readout is in flight.
+        let timing = self.timer.as_ref().filter(|timer| timer.flight.is_empty()).map(|timer| timer.set.clone());
+        let mut timed: Vec<Arc<Cells>> = Vec::new();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let mut started: Vec<(Uid, Want, Box<Slot>)> = Vec::new();
         let mut shown: Vec<(goofi_window::Id, wgpu::SurfaceTexture)> = Vec::new();
@@ -301,7 +400,11 @@ impl Runtime {
             // The output, then one target per state buffer — the order the prelude writes them in.
             let targets: Vec<wgpu::TextureView> =
                 std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
-            let mut pass = crate::gpu::clear_pass(&mut encoder, &targets);
+            let query = timing.as_ref().filter(|_| timed.len() < TIMED_MAX).map(|set| (set, 2 * timed.len() as u32));
+            if query.is_some() {
+                timed.push(stage.cells.clone());
+            }
+            let mut pass = crate::gpu::clear_pass(&mut encoder, &targets, query);
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &group0, &[]);
             pass.set_bind_group(1, &group1, &[]);
@@ -349,7 +452,13 @@ impl Runtime {
                 started.push((stage.uid, w, slot));
             }
         }
+        if let (Some(timer), false) = (&self.timer, timed.is_empty()) {
+            timer.resolve(&mut encoder, timed.len());
+        }
         self.gpu.queue.submit([encoder.finish()]);
+        if let (Some(timer), false) = (self.timer.as_mut(), timed.is_empty()) {
+            timer.send(timed);
+        }
         if tapped {
             // The next readback is a period on; a clock that fell behind starts the pace again.
             self.taps.advance();

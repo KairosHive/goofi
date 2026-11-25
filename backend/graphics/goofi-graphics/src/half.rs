@@ -39,6 +39,9 @@ pub struct Cells {
     /// The frames the render thread read back for the recording, until the half hands them to
     /// its queue. Every one: the ring's slots bound how many are ever out at once.
     pub record: Stack<Readback>,
+    /// The fraction of the frame period this node's pass took, as `f64` bits the render thread
+    /// writes: not a number until a pass is timed, and zero while no one asks for the stage.
+    pub frame_share: AtomicU64,
     /// This half's door, rung by the render thread once a readback is in a cell above.
     pub bell: goofi_transport::Doorbell,
 }
@@ -195,6 +198,8 @@ impl Executor for GraphicsHalf {
             self.last = (asked, uploaded.collect());
             ticked.replan = true;
         }
+        let share = f64::from_bits(self.cells.frame_share.load(Ordering::Relaxed));
+        ticked.frame_share = share.is_finite().then_some(share);
         ticked
     }
 }

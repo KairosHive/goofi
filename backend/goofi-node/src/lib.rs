@@ -513,6 +513,9 @@ pub enum Status {
     Fault { fault: Option<NodeFault> },
     /// The node's measured update rate (`meta["ufreq"]`) — a measurement, so it alone is paced.
     Ufreq { hz: f64 },
+    /// How much of its engine's frame period the node's run took, as a fraction: what a node
+    /// the graphics tick runs measures in place of a rate. Paced like one.
+    FrameShare { share: f64 },
     /// The answer to a refresh request; `None` when the node implements no hook for it.
     RefreshOptions { key: ParamKey, options: Option<Vec<String>> },
     /// Per-binding errors, `None` where one cleared.

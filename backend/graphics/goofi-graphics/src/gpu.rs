@@ -167,7 +167,8 @@ impl Gpu {
         let info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("goofi-graphics"),
-            required_features: wgpu::Features::empty(),
+            // What a pass is timed with, where the adapter has it: a node's share of the frame.
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
@@ -336,7 +337,7 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 1, resource: out_size.as_entire_binding() },
             ],
         });
-        let mut pass = clear_pass(encoder, std::slice::from_ref(into));
+        let mut pass = clear_pass(encoder, std::slice::from_ref(into), None);
         pass.set_pipeline(with);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
@@ -427,8 +428,9 @@ pub fn pipeline(
     })
 }
 
-/// A pass that clears each view to transparent and stores what it draws.
-pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView]) -> wgpu::RenderPass<'e> {
+/// A pass that clears each view to transparent and stores what it draws. `timed` is the query
+/// set its begin and end timestamps go to, and the index of the first.
+pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView], timed: Option<(&wgpu::QuerySet, u32)>) -> wgpu::RenderPass<'e> {
     let ops = wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store };
     let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
         .iter()
@@ -438,7 +440,11 @@ pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::Text
         label: None,
         color_attachments: &attachments,
         depth_stencil_attachment: None,
-        timestamp_writes: None,
+        timestamp_writes: timed.map(|(query_set, at)| wgpu::RenderPassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(at),
+            end_of_pass_write_index: Some(at + 1),
+        }),
         occlusion_query_set: None,
         multiview_mask: None,
     })

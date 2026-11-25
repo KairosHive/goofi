@@ -41,6 +41,8 @@ pub use goofi_supervisor::timing::Clock;
 pub struct GraphicsStatus {
     pub adapter: String,
     pub backend: String,
+    /// Whether the adapter times a pass: what a node's share of the frame is read from.
+    pub timed: bool,
     pub clock: &'static str,
     /// The rate the clock paces, as `graphics.fps` last settled.
     pub fps: u32,
@@ -268,6 +270,7 @@ impl GraphicsEngine {
         GraphicsStatus {
             adapter: self.gpu.adapter_name.clone(),
             backend: self.gpu.backend.clone(),
+            timed: self.gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
             clock: self.clock.name(),
             fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
@@ -413,6 +416,7 @@ impl Engine for GraphicsEngine {
             tap: Mailbox::new(),
             tap_box: AtomicU64::new(0),
             record: Stack::new(),
+            frame_share: AtomicU64::new(f64::NAN.to_bits()),
             // The half's own door: the render thread rings it once a readback is in a cell.
             bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
         });

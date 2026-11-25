@@ -597,17 +597,48 @@ const BROADCAST_PERIOD: Duration = Duration::from_millis(500);
 /// on the health period a slider following an expression moved twice a second.
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
 
+/// What a node measures of its own runs: its rate on its own pace, or the share of the frame a
+/// node the graphics tick runs took.
+#[derive(Clone, Copy)]
+pub(crate) enum Measure {
+    Rate(f64),
+    FrameShare(f64),
+}
+
+impl Measure {
+    fn of(g: &goofi_graph::Graph, uid: goofi_node::Uid) -> Option<Measure> {
+        g.node_frame_share(uid).map(Measure::FrameShare).or_else(|| g.node_ufreq(uid).map(Measure::Rate))
+    }
+
+    fn json(self) -> Value {
+        match self {
+            Measure::Rate(hz) => json!({ "updates_per_second": hz }),
+            Measure::FrameShare(share) => json!({ "frame_share": share }),
+        }
+    }
+
+    /// Whether this is another kind of reading than `held`, or more than a percent off it.
+    fn moved_from(self, held: Option<Measure>) -> bool {
+        match (self, held) {
+            (Measure::Rate(now), Some(Measure::Rate(was))) | (Measure::FrameShare(now), Some(Measure::FrameShare(was))) => {
+                (now - was).abs() > 0.01 * was.abs().max(f64::EPSILON)
+            }
+            _ => true,
+        }
+    }
+}
+
 /// The runtime readings a status beat broadcasts, as last sent.
 #[derive(Default)]
 pub(crate) struct Readings {
     pub(crate) live: HashMap<String, Value>,
-    pub(crate) rates: HashMap<String, f64>,
+    pub(crate) measures: HashMap<String, Measure>,
 }
 
 impl Readings {
-    /// Take on `live` and `rates`, answering the entries that moved: a node whose pair left the
-    /// set goes as an empty pair, and a rate moves when it differs by more than a percent.
-    fn advance(&mut self, live: HashMap<String, Value>, rates: HashMap<String, f64>) -> (serde_json::Map<String, Value>, serde_json::Map<String, Value>) {
+    /// Take on `live` and `measures`, answering the entries that moved: a node whose pair left
+    /// the set goes as an empty pair, and a measure moves when it differs by more than a percent.
+    fn advance(&mut self, live: HashMap<String, Value>, measures: HashMap<String, Measure>) -> (serde_json::Map<String, Value>, serde_json::Map<String, Value>) {
         let mut pairs = serde_json::Map::new();
         for (node, pair) in &live {
             if self.live.get(node) != Some(pair) {
@@ -618,21 +649,20 @@ impl Readings {
             pairs.insert(node.clone(), json!({ "values": {}, "errors": {} }));
         }
         let mut stats = serde_json::Map::new();
-        for (node, hz) in &rates {
-            let held = self.rates.get(node).copied();
-            if held.is_none_or(|h| (hz - h).abs() > 0.01 * h.abs().max(f64::EPSILON)) {
-                stats.insert(node.clone(), json!({ "updates_per_second": hz }));
-                self.rates.insert(node.clone(), *hz);
+        for (node, measure) in &measures {
+            if measure.moved_from(self.measures.get(node).copied()) {
+                stats.insert(node.clone(), measure.json());
+                self.measures.insert(node.clone(), *measure);
             }
         }
-        self.rates.retain(|n, _| rates.contains_key(n));
+        self.measures.retain(|n, _| measures.contains_key(n));
         self.live = live;
         (pairs, stats)
     }
 
     /// The whole beat as a seed carries it.
     pub(crate) fn snapshot(&self) -> (Value, Value) {
-        let stats = self.rates.iter().map(|(n, hz)| (n.clone(), json!({ "updates_per_second": hz }))).collect();
+        let stats = self.measures.iter().map(|(n, measure)| (n.clone(), measure.json())).collect();
         (Value::Object(self.live.clone().into_iter().collect()), Value::Object(stats))
     }
 }
@@ -718,13 +748,13 @@ pub fn spawn_workers(state: &AppState) {
                     // this echo is the only way they reach a client.
                     let refreshed = g.take_refreshed();
                     let g = &*g;
-                    let mut rates: Vec<(String, f64)> = Vec::new();
+                    let mut measures: Vec<(String, Measure)> = Vec::new();
                     let mut stages: Vec<(String, bool, NodeState)> = Vec::new();
                     let leaves = g.node_uids();
                     for u in g.all_uids() {
                         let hex = u.to_hex();
-                        if let Some(f) = g.node_ufreq(u) {
-                            rates.push((hex.clone(), f));
+                        if let Some(measure) = Measure::of(g, u) {
+                            measures.push((hex.clone(), measure));
                         }
                         let err = g.last_error(u).map(str::to_string);
                         // The tier rides the TRANSITION channel, not the snapshot alone: a node
@@ -739,7 +769,7 @@ pub fn spawn_workers(state: &AppState) {
                             param_state_update(g, uid, &[(&key.group, &key.name)])
                         })
                         .collect();
-                    Some((rates, stages, refreshed, live_pairs(g)))
+                    Some((measures, stages, refreshed, live_pairs(g)))
                 })
             };
             // A knob turned in a plugin's own window is authoring, and enters by the door every
@@ -764,7 +794,7 @@ pub fn spawn_workers(state: &AppState) {
                 let outbox: Vec<Event> = if changed { state.set_dirty(true).into_iter().collect() } else { Vec::new() };
                 reconcile_and_broadcast(&state, doc, projection, outbox);
             }
-            let Some((rates, stages, refreshed, live)) = collected else { continue };
+            let Some((measures, stages, refreshed, live)) = collected else { continue };
             // From NOW, not the deadline just passed: a worker held off the lock owes no burst of
             // catch-up broadcasts.
             broadcast.reset();
@@ -785,7 +815,7 @@ pub fn spawn_workers(state: &AppState) {
             }
             // What moved since the last beat, each node's pair whole; a new client is seeded with
             // the beat itself, so nothing here is a delta it had to have heard.
-            let (pairs, stats) = state.beat.lock().advance(live.into_iter().collect(), rates.into_iter().collect());
+            let (pairs, stats) = state.beat.lock().advance(live.into_iter().collect(), measures.into_iter().collect());
             if !pairs.is_empty() {
                 events.send(Event::ParamValues { nodes: Value::Object(pairs) });
             }
