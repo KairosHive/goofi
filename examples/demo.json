@@ -21,8 +21,8 @@
 			"blurb": "Channel pairs reduced to a spectrogram that runs with the stream."
 		},
 		{
-			"slug": "chladni-drone",
-			"label": "Chladni drone",
+			"slug": "chladni-neurofeedback",
+			"label": "Chladni neurofeedback",
 			"blurb": "Complexity and alpha power of resting EEG, drawn as a Chladni figure."
 		}
 	]
