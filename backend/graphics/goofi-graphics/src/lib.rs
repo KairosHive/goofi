@@ -10,7 +10,7 @@ use std::sync::Arc;
 use goofi_supervisor::sync::{Mailbox, Stack};
 use std::time::Duration;
 
-use goofi_runtime::{Desired, Handle, HostExecutor, Plane, Shared};
+use goofi_runtime::{Desired, Handle, Plane, Shared};
 use goofi_core::SlotType;
 use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
     ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Uid,
@@ -23,7 +23,6 @@ mod plan;
 mod runtime;
 mod scan;
 mod shader;
-mod producer;
 mod resources;
 
 use gpu::Gpu;
@@ -42,6 +41,8 @@ pub use goofi_supervisor::timing::Clock;
 pub struct GraphicsStatus {
     pub adapter: String,
     pub backend: String,
+    /// Whether the adapter times a pass: what a node's share of the frame is read from.
+    pub timed: bool,
     pub clock: &'static str,
     /// The rate the clock paces, as `graphics.fps` last settled.
     pub fps: u32,
@@ -59,11 +60,6 @@ pub(crate) struct Instance {
     pub(crate) class: Arc<Class>,
     pub(crate) cells: Arc<half::Cells>,
     control: Handle,
-    pub(crate) source: Option<producer::Source>,
-    /// What the host producer last made, as the engine took it: the size a stage follows and
-    /// the render program it compiles.
-    pub(crate) produced: Option<producer::Produced>,
-    program: Option<(Arc<str>, scan::Built)>,
     /// The width and height the settled document holds as constants, per axis; `None` where an
     /// expression drives the axis and the half's evaluation is the one value. A fullscreen
     /// window node's is its monitor's size.
@@ -99,14 +95,13 @@ pub struct GraphicsEngine {
     /// The pace a tap is read back at, written at settle from `system.viewer_fps`.
     viewer_fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
-    pub(crate) python: Option<goofi_python::catalog::Python>,
-    /// The executable whose `host` mode runs a node built after boot, and whether boot is over.
-    pub(crate) host: Option<std::path::PathBuf>,
-    pub(crate) booted: bool,
     pub(crate) classes: HashMap<String, Arc<Class>>,
     /// The file and stamp each class was registered from, so a rescan skips one that did not
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
     pub(crate) stamps: HashMap<String, (std::path::PathBuf, goofi_node::Stamp)>,
+    /// Every pipeline build still on its thread, a replaced class's too: `shutdown` waits for
+    /// them, because a compile inside the driver must not outlive the device or the process.
+    pub(crate) compiles: Vec<scan::Built>,
     live: HashMap<Uid, Instance>,
     /// Whose thread ticks the runtime: the clock's own, or the harness's hand. The runtime is
     /// that thread's alone; nothing else holds it.
@@ -145,8 +140,8 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
         }),
         doc: Some(
             "Texture size in pixels; 0 follows the first wired texture input, or the frame \
-             uploaded to the first array input. A node with no texture input follows the \
-             patch's default instead.",
+             uploaded to the first array input. A node with neither follows the patch's \
+             default instead.",
         ),
         section: 0,
         show: &[],
@@ -221,9 +216,7 @@ impl GraphicsEngine {
             shared,
             classes: HashMap::new(),
             stamps: HashMap::new(),
-            python: None,
-            host: None,
-            booted: false,
+            compiles: Vec::new(),
             live: HashMap::new(),
             inbox,
             stats,
@@ -277,6 +270,7 @@ impl GraphicsEngine {
         GraphicsStatus {
             adapter: self.gpu.adapter_name.clone(),
             backend: self.gpu.backend.clone(),
+            timed: self.gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
             clock: self.clock.name(),
             fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
@@ -292,7 +286,18 @@ impl GraphicsEngine {
     /// fed with what the render thread read back.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
         let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
-        goofi_runtime::desired_of(view, uid, nv, &decls_of(self.live[&uid].class.manifest), &plane)
+        let manifest = self.live[&uid].class.manifest;
+        let mut desired = goofi_runtime::desired_of(view, uid, nv, &decls_of(manifest), &plane);
+        // A texture input another engine feeds is a frame off the wire, as an ARRAY input's is.
+        let arrays = shader::array_inputs(manifest).count();
+        for (t, slot) in shader::texture_inputs(manifest).enumerate() {
+            for (wire, (producer, out)) in view.wires_into(uid, slot).filter(|(p, _)| !self.live.contains_key(p)).enumerate() {
+                if let Some(service) = goofi_transport::output_of(view, producer, out) {
+                    desired.subs.push(goofi_runtime::Sub::Slot { inbox: arrays + t, wire, service, source: String::new() });
+                }
+            }
+        }
+        desired
     }
 
     /// The size of the monitor a fullscreen window node covers; none for any other node, and none
@@ -369,7 +374,6 @@ impl GraphicsEngine {
 }
 
 impl Engine for GraphicsEngine {
-    fn rust_sdk(&self) -> Option<&'static str> { Some("goofi-graphics-sdk") }
     fn id(&self) -> &'static str {
         "graphics"
     }
@@ -385,21 +389,6 @@ impl Engine for GraphicsEngine {
             .collect()
     }
 
-    fn boot_done(&mut self) {
-        self.booted = true;
-    }
-
-    /// The probes a scan of `dir` would spawn, as work for off the lock.
-    fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
-        let python = self.python.clone()?;
-        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, "graphics")
-            .into_iter()
-            .filter(|(p, _, _)| p.extension().is_some_and(|e| e == "py"))
-            .map(|(p, name, _)| (p, name))
-            .collect();
-        (!files.is_empty()).then(|| Box::new(move || goofi_python::catalog::warm(&files, &python)) as Box<dyn FnOnce() + Send>)
-    }
-
     fn scan(&mut self, dir: &Path) -> Vec<ScannedType> {
         scan::scan(self, dir)
     }
@@ -409,11 +398,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-        let mut decls = common_decls(manifest).to_vec();
-        if self.classes.get(manifest.type_name).is_some_and(|c| matches!(c.kind, scan::Kind::Host(_))) {
-            for d in &mut decls { d.expression = None; }
-        }
-        decls
+        common_decls(manifest).to_vec()
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
@@ -424,13 +409,14 @@ impl Engine for GraphicsEngine {
         let base = goofi_transport::service_base(&self.instance, uid, generation);
         let cells = Arc::new(half::Cells {
             params: goofi_runtime::cells_of(params, &decls_of(manifest)).into(),
-            uploads: shader::array_inputs(manifest).map(|_| Mailbox::new()).collect(),
+            uploads: (0..manifest.inputs.len()).map(|_| Mailbox::new()).collect(),
             spent: Stack::new(),
-            uploaded: AtomicU64::new(0),
+            uploaded: (0..manifest.inputs.len()).map(|_| AtomicU64::new(0)).collect(),
             readers: AtomicBool::new(false),
             tap: Mailbox::new(),
             tap_box: AtomicU64::new(0),
             record: Stack::new(),
+            frame_share: AtomicU64::new(f64::NAN.to_bits()),
             // The half's own door: the render thread rings it once a readback is in a cell.
             bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
         });
@@ -446,26 +432,12 @@ impl Engine for GraphicsEngine {
         };
         let shared = cells.clone();
         let size = manifest.params.len();
-        let source = matches!(class.kind, scan::Kind::Host(_)).then(|| Arc::new(producer::Cells::default()));
-        let factory = match &class.kind {
-            scan::Kind::Shader(_) => None,
-            scan::Kind::Host(factory) => Some((factory.clone(), source.clone().expect("host source"), params.clone())),
-        };
-        // The producer is BUILT on the runtime's thread: a Python node's construction executes
-        // its module, and this insert holds the graph mutex.
-        let make = move || {
-            let producer = factory.map(|(f, source, params)| {
-                let build: goofi_runtime::NodeBuild = Box::new(move |p| f(p));
-                (HostExecutor::new(manifest, decls_of(manifest), build, &params), source)
-            });
-            GraphicsHalf::new(shared, size, producer)
-        };
-        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), move || GraphicsHalf::new(shared, size)) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
         self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
-        self.live.insert(uid, Instance { class: class.clone(), cells, control, source, produced: None, program: None, settled_size: (None, None) });
+        self.live.insert(uid, Instance { class: class.clone(), cells, control, settled_size: (None, None) });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -505,22 +477,6 @@ impl Engine for GraphicsEngine {
                 None => (settled(n - 2), settled(n - 1)),
             };
             inst.control.send_if_changed(desired);
-        }
-        // Producers hold CPU descriptions only. Compiled programs belong to the graphics engine.
-        for inst in self.live.values_mut() {
-            if let Some(made) = inst.source.as_ref().and_then(|s| s.to_engine.take()) {
-                inst.produced = Some(*made);
-            }
-            let source = inst.produced.as_ref().and_then(|frame| match &frame.content {
-                producer::Content::Render(text) => Some(text.clone()),
-                producer::Content::Pixels(_) => None,
-            });
-            if inst.program.as_ref().map(|(text, _)| text) == source.as_ref() { continue; }
-            let next = source.map(|text| {
-                let built = scan::shader(&self.gpu, &self.shared, inst.class.manifest, &text, &[]).unwrap_or_else(|why| goofi_supervisor::ready::Ready::done(Err(why)));
-                (text, built)
-            });
-            inst.program = next;
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
         let refused = self.follow_windows(view, &plan::sizes(view, &self.live));
@@ -568,8 +524,8 @@ impl Engine for GraphicsEngine {
         self
     }
 
-    /// Stop the clock and the compiler, then every control half, and WAIT for each to release its
-    /// shared memory.
+    /// Stop the clock, then every control half, and WAIT for each to release its shared memory
+    /// and for every pipeline build to leave the driver.
     fn shutdown(&mut self) {
         // The surfaces go before their windows: the runtime's chains first, then the engine's.
         match self.ticker.take() {
@@ -591,6 +547,9 @@ impl Engine for GraphicsEngine {
         }
         self.live.clear();
         self.classes.clear();
+        for build in self.compiles.drain(..) {
+            build.wait();
+        }
     }
 }
 

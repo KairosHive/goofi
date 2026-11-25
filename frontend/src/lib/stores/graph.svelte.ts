@@ -16,6 +16,7 @@ import {
 import type { OpName } from '$lib/api/ops';
 import { boundaryType, feeds, type SlotDtype } from '$lib/api/vocab';
 import { bareName } from '$lib/editor/typeId';
+import { sameStats } from '$lib/editor/nodeStats';
 import { consoleStore } from './console.svelte';
 import { selection } from './selection.svelte';
 import { workspace } from 'panelty';
@@ -359,7 +360,7 @@ export class GraphStore {
 			case 'node_stats':
 				for (const [uid, stats] of Object.entries(ev.payload.stats)) {
 					const t = this._rt[uid];
-					if (t && t.stats?.updates_per_second !== stats.updates_per_second) t.stats = stats;
+					if (t && !sameStats(t.stats, stats)) t.stats = stats;
 				}
 				break;
 			case 'param_values':

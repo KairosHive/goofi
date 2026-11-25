@@ -64,7 +64,7 @@ fn cell(d: &goofi_core::Data) -> String {
     match d.value() {
         Value::Str(s) => s.to_string(),
         Value::Table(_) => "<table>".into(),
-        Value::Texture(_) => "<texture submission>".into(),
+        Value::Texture(_) => "<texture>".into(),
         Value::Functional(_) => "<functional>".into(),
         Value::Array(a) => match (a.shape().iter().product::<usize>(), a.values().next()) {
             (1, Some(v)) => v.to_string(),

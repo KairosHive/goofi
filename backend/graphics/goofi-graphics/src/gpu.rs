@@ -116,7 +116,7 @@ pub struct Gpu {
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
-    blits: [wgpu::RenderPipeline; 5],
+    blits: [wgpu::RenderPipeline; 4],
     /// The `screen` pass per surface format a window turned out to want, made at its first frame.
     screens: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
     blit_module: wgpu::ShaderModule,
@@ -167,7 +167,8 @@ impl Gpu {
         let info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("goofi-graphics"),
-            required_features: wgpu::Features::empty(),
+            // What a pass is timed with, where the adapter has it: a node's share of the frame.
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
@@ -267,7 +268,6 @@ impl Gpu {
             blit("tap", Want::Tap.format()),
             blit("tap8", Want::TapU8.format()),
             blit("tap8", Want::Record.format()),
-            blit("tap", FORMAT),
         ];
         Ok(Gpu {
             _lease: goofi_supervisor::scope::lease(
@@ -303,17 +303,7 @@ impl Gpu {
         into: &wgpu::TextureView,
         out_size: &wgpu::Buffer,
     ) {
-        self.blit_index(encoder, want as usize, src, into, out_size);
-    }
-
-    pub fn resize(&self, encoder: &mut wgpu::CommandEncoder, src: &wgpu::TextureView,
-                  into: &wgpu::TextureView, size: &wgpu::Buffer) {
-        self.blit_index(encoder, 4, src, into, size);
-    }
-
-    fn blit_index(&self, encoder: &mut wgpu::CommandEncoder, index: usize, src: &wgpu::TextureView,
-                  into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
-        self.blit_with(encoder, &self.blits[index], src, into, out_size);
+        self.blit_with(encoder, &self.blits[want as usize], src, into, out_size);
     }
 
     /// A surface onto a window, from the handles its screen answered. Made where the handles
@@ -347,7 +337,7 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 1, resource: out_size.as_entire_binding() },
             ],
         });
-        let mut pass = clear_pass(encoder, std::slice::from_ref(into));
+        let mut pass = clear_pass(encoder, std::slice::from_ref(into), None);
         pass.set_pipeline(with);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
@@ -438,8 +428,9 @@ pub fn pipeline(
     })
 }
 
-/// A pass that clears each view to transparent and stores what it draws.
-pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView]) -> wgpu::RenderPass<'e> {
+/// A pass that clears each view to transparent and stores what it draws. `timed` is the query
+/// set its begin and end timestamps go to, and the index of the first.
+pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::TextureView], timed: Option<(&wgpu::QuerySet, u32)>) -> wgpu::RenderPass<'e> {
     let ops = wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store };
     let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
         .iter()
@@ -449,7 +440,11 @@ pub fn clear_pass<'e>(encoder: &'e mut wgpu::CommandEncoder, views: &[wgpu::Text
         label: None,
         color_attachments: &attachments,
         depth_stencil_attachment: None,
-        timestamp_writes: None,
+        timestamp_writes: timed.map(|(query_set, at)| wgpu::RenderPassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(at),
+            end_of_pass_write_index: Some(at + 1),
+        }),
         occlusion_query_set: None,
         multiview_mask: None,
     })

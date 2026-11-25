@@ -12,7 +12,7 @@ export const image: ViewerModule = {
 		{ key: 'vmin', label: 'Min', type: 'number', default: 0, step: 0.1, showWhen: manual('auto') },
 		{ key: 'vmax', label: 'Max', type: 'number', default: 1, step: 0.1, showWhen: manual('auto') },
 		{ key: 'log', label: 'Log scale', type: 'toggle', default: false },
-		{ key: 'stretch', label: 'Stretch to fill', type: 'toggle', default: true }
+		{ key: 'stretch', label: 'Stretch to fill', type: 'toggle', default: false }
 	],
 	// 8-bit: an image is drawn through a 256-level LUT or as colour bytes either way, so the
 	// other three quarters of the bandwidth buy nothing. The channel axis is drawn whole.

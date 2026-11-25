@@ -12,7 +12,7 @@
 	import { graph, readExpression } from '$lib/stores/graph.svelte';
 	import { nodeHealth } from './nodeHealth';
 	import { StatusDot, ContextMenu } from '$lib/ui';
-	import { formatUpdateRate } from './nodeStats';
+	import { formatNodeLoad } from './nodeStats';
 	import type { NodeInstanceInfo } from '$lib/api/control';
 	import { provideAnchor } from '$lib/viewers/plotHost';
 
@@ -72,7 +72,8 @@
 	const isError = $derived(health.kind === 'error' || health.kind === 'dead');
 	const isBooting = $derived(health.kind === 'booting');
 	const flashing = $derived(flashStore.active(node?.uid));
-	const rateLabel = $derived(formatUpdateRate(node?.stats));
+	const rateLabel = $derived(formatNodeLoad(node?.stats));
+	const rateTitle = $derived(node?.stats && 'frame_share' in node.stats ? 'pass time, as a share of the frame' : 'update rate');
 
 	const multiInputs = $derived(new Set(node?.input_multi ?? []));
 	const inPorts = $derived(
@@ -125,7 +126,7 @@
 			{#if isBooting}
 				<span class="boot-label" data-testid="boot-label">{health.label}</span>
 			{:else if rateLabel}
-				<span class="rate" title="update rate">{rateLabel}</span>
+				<span class="rate" title={rateTitle}>{rateLabel}</span>
 			{/if}
 		</div>
 

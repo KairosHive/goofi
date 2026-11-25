@@ -84,11 +84,12 @@ between them: a band power off the signal engine can set a filter cutoff on the 
 | --- | --- | --- |
 | `signal` | Array data, at whatever rate the source runs. LSL and OSC in and out, MIDI out, spectra and band powers, complexity measures, and the arithmetic to route what comes out of them. | A thread per node, each scheduling itself. |
 | `audio` | The same node interface at audio rate. Live in and out, oscillators, filters, envelopes and feedback. | One topologically ordered thread. |
-| `graphics` | Pixels from WGSL shaders or Rust/Python sources, with shared GPU textures. Noise and shapes generate images; Camera captures them; blur, displacement, and feedback process them. | The GPU. |
+| `graphics` | Pixels from WGSL shaders, with shared GPU textures. Noise and shapes generate images; blur, displacement, and feedback process them. A signal node (Camera, a model in Python) makes or reads a texture too. | The GPU. |
 
 An `AudioOut` plays on a sound card of the machine goofi runs on, or on the `browser` device:
-the mix is sent to every browser on the app as Opus, and the sound button in the top bar plays
-it in that tab. A goofi on another machine, or a public one, is heard that way.
+the mix is sent to every browser on the app as Opus, and each tab plays it unless the sound
+button in its top bar is off. A goofi on another machine, or a public one, is heard that way.
+The `default` device is the machine's default sound card, and `browser` where it has none.
 
 VST3 is a **format**, not an engine — a plugin runs on the audio engine. Its nodes come off the
 machine the patch is open on, so goofi supports VST3 and ships none.
@@ -140,7 +141,7 @@ docstring is its doc, whose FIRST LINE is the nutshell a catalog shows. `process
 keyword argument per declared input slot and returns `{slot: value}`, or a bare value when there is
 exactly one output. The full contract — every constant, every param type, the Rust and WGSL SDKs —
 is at **[goofi.kairos-hive.org/docs/authoring](https://goofi.kairos-hive.org/docs/authoring/)**.
-See [graphics node authoring](sdk/graphics.md) for Rust and Python texture sources.
+See [textures](sdk/graphics.md) for shaders and for Rust and Python nodes that make or read a texture.
 
 The same Python file runs on either tier, and the file does not choose: a discovery probe imports
 it in a real interpreter and routes it in-process when its imports keep the GIL disabled, else to a

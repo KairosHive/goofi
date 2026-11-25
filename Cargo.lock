@@ -1070,12 +1070,9 @@ name = "goofi-graphics"
 version = "3.0.0"
 dependencies = [
  "bytes",
- "goofi-build",
  "goofi-codec",
  "goofi-core",
- "goofi-host-sdk",
  "goofi-node",
- "goofi-python",
  "goofi-runtime",
  "goofi-supervisor",
  "goofi-transport",
@@ -1086,13 +1083,6 @@ dependencies = [
  "pollster",
  "serde",
  "wgpu",
-]
-
-[[package]]
-name = "goofi-graphics-sdk"
-version = "3.0.0"
-dependencies = [
- "goofi-host-sdk",
 ]
 
 [[package]]

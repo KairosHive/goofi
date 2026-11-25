@@ -491,11 +491,15 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                             }
                         }
                     }
+                    // A texture is read here as the array of its pixels: one conversion serves
+                    // the viewers, a snapshot and a variable that follows the slot.
                     Some(goofi_transport::Payload::Data(frame)) => {
-                        peeked = Some(Peek::of_data(&frame));
-                        made = None;
-                        *latest.lock() = Some(frame);
-                        fresh = true;
+                        if let Ok(frame) = frame.pixels_as_array() {
+                            peeked = Some(Peek::of_data(&frame));
+                            made = None;
+                            *latest.lock() = Some(frame);
+                            fresh = true;
+                        }
                     }
                     None => {}
                 }

@@ -1,4 +1,4 @@
-//! Host submissions for engine-owned textures. No GPU object crosses a process or ABI boundary.
+//! The texture frame: a picture as any engine makes it and any engine reads it.
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SIZE: u32 = 8192;
@@ -49,36 +49,60 @@ impl Pixels {
         }
         Ok(())
     }
+
+    /// The pixels as tight-packed 8-bit RGBA, row 0 the top: what a video encoder takes.
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let (channels, unit) = (self.format.channels(), self.format.bytes_per_channel());
+        let row = self.width as usize * channels * unit;
+        let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
+        for line in self.bytes.chunks_exact(self.stride) {
+            for pixel in line[..row].chunks_exact(channels * unit) {
+                for channel in 0..4 {
+                    rgba.push(match (channel < channels, unit) {
+                        (false, _) => 255,
+                        (true, 1) => pixel[channel],
+                        (true, _) => {
+                            let value = f32::from_le_bytes(pixel[channel * 4..channel * 4 + 4].try_into().expect("four bytes"));
+                            (value.clamp(0.0, 1.0) * 255.0).round() as u8
+                        }
+                    });
+                }
+            }
+        }
+        rgba
+    }
+
+    /// The pixels as the `[H, W, C]` array of values in 0..1 a reader of numbers takes, under `meta`.
+    pub fn to_array(&self, meta: crate::Meta) -> Result<crate::Data, String> {
+        let (channels, unit) = (self.format.channels(), self.format.bytes_per_channel());
+        let row = self.width as usize * channels * unit;
+        let mut buf = Vec::with_capacity(self.width as usize * self.height as usize * channels * 4);
+        for line in self.bytes.chunks_exact(self.stride) {
+            match unit {
+                1 => buf.extend(line[..row].iter().flat_map(|v| (f32::from(*v) / 255.0).to_le_bytes())),
+                _ => buf.extend_from_slice(&line[..row]),
+            }
+        }
+        let shape = vec![self.height as usize, self.width as usize, channels];
+        crate::Data::array_f32(shape, buf, meta).map_err(|e| e.to_string())
+    }
 }
 
+/// Where a texture frame's picture is held. The CPU form is the one form so far.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Texture {
     Pixels(Pixels),
-    /// GPU work encoded against the engine-owned output. The source defines `fn shade(uv: vec2f) -> vec4f`.
-    Render {
-        width: u32,
-        height: u32,
-        source: String,
-    },
 }
 
 impl Texture {
     pub fn size(&self) -> (u32, u32) {
         match self {
             Self::Pixels(p) => (p.width, p.height),
-            Self::Render { width, height, .. } => (*width, *height),
         }
     }
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Pixels(p) => p.validate(),
-            Self::Render { width, height, source } => {
-                dimensions(*width, *height)?;
-                if source.is_empty() || source.len() > 1024 * 1024 {
-                    return Err("texture program must contain 1..1048576 bytes".into());
-                }
-                Ok(())
-            }
         }
     }
 }

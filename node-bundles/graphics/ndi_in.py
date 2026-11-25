@@ -1,4 +1,3 @@
-# goofi: graphics
 """NdiIn — a picture another program sends over the network with NDI, as a texture.
 
 The receiver asks for RGBA whatever the sender encodes, and a frame sync hands over the newest
@@ -59,7 +58,7 @@ class NdiIn(goofi.Node):
         rows = self.frame.get_array().reshape(h, -1)[:, : w * 4].reshape(h, w, 4)
         if self.frame.get_fourcc() == FourCC.RGBX:
             rows = rows[..., :3]
-        return goofi.Texture(np.ascontiguousarray(rows))
+        return goofi.Texture(np.ascontiguousarray(rows)), {"sfreq": float(self.frame.get_frame_rate())}
 
     def connect(self, name):
         """Point the receiver at the source `name` names, once discovery has seen it."""

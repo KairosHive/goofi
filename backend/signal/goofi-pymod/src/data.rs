@@ -118,13 +118,14 @@ impl Data {
         Ok(out)
     }
 
-    /// The array as a fresh numpy `<f4` array of the stored shape.
+    /// The array as a fresh numpy `<f4` array of the stored shape; a texture frame as its `Texture`.
     #[getter]
     fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Value::Array(store) = self.inner.value() else {
-            return Err(pyo3::exceptions::PyTypeError::new_err("Data is not an array"));
-        };
-        numpy_f32(py, store.shape(), store.as_bytes())
+        match self.inner.value() {
+            Value::Array(store) => numpy_f32(py, store.shape(), store.as_bytes()),
+            Value::Texture(_) => Ok(Bound::new(py, crate::texture::Texture { frame: self.inner.clone() })?.into_any()),
+            _ => Err(pyo3::exceptions::PyTypeError::new_err("Data is not an array")),
+        }
     }
 
     /// The meta as a Python dict (builtins present; channels nested).

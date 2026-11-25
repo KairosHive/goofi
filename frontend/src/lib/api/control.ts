@@ -47,9 +47,9 @@ export interface ScanDiff {
 	removed: string[];
 }
 
-export interface NodeStats {
-	updates_per_second: number;
-}
+/** What a node measures of its runs: its rate on its own pace, or, for a node the graphics tick
+ * runs, the fraction of the frame period its pass took. */
+export type NodeStats = { updates_per_second: number } | { frame_share: number };
 
 export interface NodeInstanceInfo
 	extends Pick<NodeTypeInfo, 'type' | 'doc' | 'editor' | 'input_slots' | 'input_multi' | 'output_slots' | 'params'> {

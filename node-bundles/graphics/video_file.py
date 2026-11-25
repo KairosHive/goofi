@@ -1,4 +1,3 @@
-# goofi: graphics
 """VideoFile — a video on disk played back as a texture, on its own clock.
 
 The playhead runs in video seconds at `speed` times real time, so the picture keeps the file's
@@ -87,7 +86,7 @@ class VideoFile(goofi.Node):
             raise ValueError(f"could not decode frame {wanted} of {p.file!r}")
         self.next = wanted + 1
         self.shown = wanted
-        return goofi.Texture(np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+        return goofi.Texture(np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))), {"sfreq": self.fps}
 
     def duration(self):
         return self.count / self.fps

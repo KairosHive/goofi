@@ -11,7 +11,7 @@ publish = false
 # Forwards to goofi-python's, which LINKS libpython. On by default: goofi-cli's `python` feature
 # turns the same crates' `embed` on in every workspace build, so the suite agrees with it.
 default = ["embed"]
-embed = ["goofi-python/embed", "goofi-signal/embed", "goofi-graphics/embed", "dep:pyo3"]
+embed = ["goofi-python/embed", "goofi-signal/embed", "dep:pyo3"]
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }

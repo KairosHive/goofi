@@ -95,15 +95,20 @@ fn shaders_render_on_the_gpu() {
     g.set_param(c, "common", "height", 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
-    // Step: a pad's sheet reaches the GPU through a Variable node: the `[H, W, 4]` variable is the
-    // texture, top row first, so the red painted over the top half is red there and clear below.
+    // Step: a pad's sheet reaches the GPU through a VariableTexture node, a signal node whose
+    // texture a shader takes off the wire: top row first, so the red painted over the top half is
+    // red there and clear below. The shader is wired first; the sheet is sent once.
     g.call("control add", j!({ "group": "paint", "kind": "paint", "element": "pad", "resolution": 4 }));
     g.call("control paint", j!({ "group": "paint", "element": "pad", "ops": "fill #ff0000 : M 0 0 L 1000 0 L 1000 500 L 0 500 Z" }));
-    let var = g.add("graphics:Variable");
+    let var = g.add("signal:VariableTexture");
+    let sheet = g.add("graphics:Math");
     g.ready(var);
+    g.ready(sheet);
+    g.link(var, "out", sheet, "input");
     g.set_param(var, "variable", "group", "paint");
     g.set_param(var, "variable", "element", "pad");
-    drawn(&g, var, "the pad as a texture", |d| shape(d) == vec![4, 4, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]) && px(d, 3, 3)[3] < 0.01);
+    drawn(&g, sheet, "the pad as a texture", |d| shape(d) == vec![4, 4, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]) && px(d, 3, 3)[3] < 0.01);
+    g.call("node remove", j!({ "node": hex(sheet) }));
     g.call("node remove", j!({ "node": hex(var) }));
     g.call("variable entry remove", j!({ "name": "paint.pad" }));
 
@@ -997,6 +1002,7 @@ fn shaders_render_on_the_gpu() {
 #[test]
 fn the_engine_draws_on_its_own_clock() {
     let g = Goofi::timed();
+    let mut ev = g.events();
     let c = g.add("graphics:Constant");
     g.ready(c);
     g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
@@ -1008,6 +1014,15 @@ fn the_engine_draws_on_its_own_clock() {
     });
     assert_eq!(idle(&g)["clock"], "internal");
     assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage, whatever the clock does");
+    // Where a signal node says its rate, this one says how much of the frame period its pass
+    // takes. An adapter that keeps no timestamps times nothing, and the node says nothing.
+    let timed = idle(&g)["timed"] == j!(true);
+    let mut share = |what: &str, want: &dyn Fn(f64) -> bool| {
+        if timed {
+            g.until(what, |_| ev.next("node_stats")["stats"][hex(c)]["frame_share"].as_f64().filter(|s| want(*s)));
+        }
+    };
+    share("a node that is not drawn takes none of the frame", &|s| s == 0.0);
 
     // Step: a viewer arrives and the frames it gets were drawn by nobody's hand.
     let probe = g.probe(c, "out");
@@ -1016,6 +1031,9 @@ fn the_engine_draws_on_its_own_clock() {
     let ran = idle(&g);
     assert!(ran["frames"].as_u64().is_some_and(|f| f > start), "{ran}");
     assert!(ran["stages"].as_u64().is_some_and(|s| s > 0), "{ran}");
+    share("a drawn node's pass takes some of the frame", &|s| s > 0.0);
+    drop(probe);
+    share("and none again once the viewer left", &|s| s == 0.0);
 }
 
 /// A viewer asks for the box it can draw, and the ENGINE renders that — a 4K frame is never read
@@ -1170,21 +1188,27 @@ fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
     g.until("readback error clears", |g| g.error(node).is_none().then_some(()));
 }
 
+/// A signal node makes a texture. A Rust one authored after boot runs hosted; its frame is a
+/// texture on its own wire, and a shader takes it off that wire as its input.
 #[test]
-fn host_pixels_use_shared_textures_and_explicit_readback() {
+fn a_rust_node_makes_a_texture_a_shader_reads() {
     let g = Goofi::new();
-    let dir = g.state.mount().join("nodes_graphics");
+    let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
     g.call("library refresh", j!({}));
-    let source = g.add("graphics:TextureHost");
+    let r = g.call("library get", j!({ "type": "signal:TextureHost" }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
+    let source = g.add("signal:TextureHost");
     let math = g.add("graphics:Math");
     let readback = g.add("signal:GraphicsIn");
     for uid in [source, math, readback] { g.ready(uid); }
+    let direct = g.probe(source, "out");
     g.link(source, "out", math, "input");
     g.link(math, "out", readback, "input");
     let probe = g.probe(readback, "out");
-    let frame = g.until("host texture reaches a CPU consumer without a viewer", |g| {
+    g.until("the texture on its own wire, as a viewer reads it", |_| direct.latest().filter(|d| shape(d) == vec![2, 2, 3]));
+    let frame = g.until("the node's texture reaches a CPU consumer through a shader", |g| {
         render(g, 1);
         probe.latest().filter(|d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]))
     });
@@ -1193,17 +1217,19 @@ fn host_pixels_use_shared_textures_and_explicit_readback() {
     assert!(close(px(&frame, 1, 1), [1.0; 4]));
 }
 
+/// A Python signal node makes a texture: the shader behind it follows the frame's size, keeps the
+/// last frame while the node fails, and sizes itself when it is told to.
 #[test]
-fn python_texture_sources_resize_and_restart() {
+fn a_python_node_makes_a_texture_a_shader_follows() {
     let _python = goofi_tests::require_python();
     let g = Goofi::new();
-    let dir = g.state.mount().join("nodes_graphics");
+    let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("texture_python.py"), include_str!("../fixtures/texture_python.py")).unwrap();
     g.call("library refresh", j!({}));
-    let row = g.call("library get", j!({"type": "graphics:TexturePython"}));
+    let row = g.call("library get", j!({"type": "signal:TexturePython"}));
     assert_eq!(row["tier"], if goofi_signal::Python::new(_python.py.clone()).free_threaded.is_some() { "in-process" } else { "subprocess" }, "{row}");
-    let source = g.add("graphics:TexturePython");
+    let source = g.add("signal:TexturePython");
     let math = g.add("graphics:Math");
     g.ready(source);
     g.ready(math);
@@ -1211,51 +1237,22 @@ fn python_texture_sources_resize_and_restart() {
     drawn(&g, math, "Python float pixels", |d| shape(d) == vec![2, 3, 4] && close(px(d, 0, 0), [0.25, 0.5, 0.75, 0.5]));
     g.set_param(source, "image", "width", 7);
     g.set_param(source, "image", "red", 0.75);
-    drawn(&g, math, "new natural size propagates", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    drawn(&g, math, "the frame's new size propagates", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
     g.set_param(source, "image", "invalid", true);
     g.until("invalid texture reports a process error", |g| g.error(source));
     drawn(&g, math, "a failed source keeps its last texture", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
     g.set_param(source, "image", "invalid", false);
     g.until("valid texture clears the process error", |g| g.error(source).is_none().then_some(()));
     g.call("node param request", j!({ "node": hex(source), "param": "image/flip", "request": "pulse" }));
-    drawn(&g, math, "pulse reaches the host worker", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 1.0, 0.75, 0.5]));
+    drawn(&g, math, "pulse reaches the node", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 1.0, 0.75, 0.5]));
     g.call("node restart", j!({"node": hex(source)}));
     g.ready(source);
-    drawn(&g, math, "replacement producer retains params", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
-    g.set_param(source, "common", "width", 5);
-    drawn(&g, math, "explicit dimensions resize the upload", |d| shape(d) == vec![2, 5, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
-}
-
-#[test]
-fn native_host_program_writes_the_shared_output() {
-    let g = Goofi::new();
-    let dir = g.state.mount().join("nodes_graphics");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs")).unwrap();
-    g.call("library refresh", j!({}));
-    // Authored after boot, so it runs HOSTED, as a signal node does: its library in a child of
-    // goofi's own binary, listed while the instance lives, and never in this process.
-    let r = g.call("library get", j!({ "type": "graphics:TextureHost" }));
-    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
-    let source = g.add("graphics:TextureHost");
-    let math = g.add("graphics:Math");
-    g.ready(source);
-    g.ready(math);
-    g.link(source, "out", math, "input");
-    g.set_param(source, "image", "mode", "render");
-    let hosts = |g: &Goofi| -> Vec<String> {
-        g.call("session status", j!({}))["resources"].as_array().into_iter().flatten()
-            .filter(|e| e["kind"] == "child")
-            .filter_map(|e| e["name"].as_str()).filter(|n| n.starts_with("native node TextureHost")).map(str::to_string).collect()
-    };
-    g.until("one host child for the one instance", |g| (hosts(g).len() == 1).then_some(()));
-    let frame = drawn(&g, math, "host GPU program sampled downstream", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [0.25, 0.25, 0.5, 1.0]));
-    assert!(close(px(&frame, 1, 1), [0.75, 0.75, 0.5, 1.0]));
-    g.set_param(source, "image", "mode", "broken");
-    g.until("invalid host GPU program reports a fault", |g| g.error(source));
-    g.set_param(source, "image", "mode", "pixels");
-    drawn(&g, math, "CPU submission replaces the failed GPU program", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
-    g.until("CPU submission clears the GPU program fault", |g| g.error(source).is_none().then_some(()));
+    drawn(&g, math, "the restarted node retains its params", |d| shape(d) == vec![2, 7, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.set_param(math, "common", "width", 5);
+    drawn(&g, math, "the shader's own size resizes what it drew from the frame", |d| shape(d) == vec![2, 5, 4] && close(px(d, 0, 0), [0.75, 0.5, 0.75, 0.5]));
+    g.call("link remove", j!({ "from": ep(hex(source), "out"), "to": ep(hex(math), "input") }));
+    g.set_param(math, "common", "width", 0);
+    drawn(&g, math, "an unwired shader leaves the frame's size for the patch's default", |d| shape(d).len() == 3 && shape(d)[1] != 7 && shape(d)[1] != 5);
 }
 
 /// A texture that crosses to the signal plane is stamped with the tick that drew it, so a node

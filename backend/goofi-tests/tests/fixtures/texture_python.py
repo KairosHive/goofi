@@ -1,4 +1,3 @@
-# goofi: graphics
 import goofi
 import numpy as np
 

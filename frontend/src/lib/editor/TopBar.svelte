@@ -38,12 +38,13 @@
 	const hs = harnesses();
 	const pr = presence();
 
-	// The patch's clock is the browser device: this tab can play it, once a press turns it on.
+	// The patch's clock is the browser device: this tab plays it, unless its button said not to.
 	const ear = listen();
 	watchVariables(() => ['audio.device']);
 	const heard = $derived(variableValue('audio.device') === 'browser');
 	$effect(() => {
 		if (!heard && ear.on) ear.stop();
+		else if (heard && ear.wanted && !ear.on && !ear.error) void ear.start();
 	});
 
 	// The recording, as the backend last pushed it — the elapsed time is READ, never counted here.
@@ -389,14 +390,14 @@
 				onclick={openAgents}><Icon name="bot" />{hs.instances.length}</Button
 			>
 		{/if}
-		<!-- The browser device plays in this tab once it is turned on here: a browser needs the press. -->
+		<!-- The browser device plays in this tab unless it is turned off here. -->
 		{#if heard}
 			<IconButton
 				variant="ghost"
 				style={ear.on ? '--panelty-btn-ink: var(--accent)' : ''}
 				data-testid="topbar-listen"
 				aria-pressed={ear.on}
-				label={ear.error ? `Sound stopped: ${ear.error}. Press to play again` : ear.on ? 'Sound on: this tab plays the patch' : 'Sound off: press to hear the patch in this tab'}
+				label={ear.error ? `Sound stopped: ${ear.error}. Press to play again` : ear.waiting ? 'Sound on: it starts at the first click or key in this tab' : ear.on ? 'Sound on: this tab plays the patch' : 'Sound off: press to hear the patch in this tab'}
 				onclick={() => ear.toggle()}><Icon name={ear.on ? 'volume-2' : 'volume-x'} /></IconButton
 			>
 		{/if}

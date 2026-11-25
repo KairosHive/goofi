@@ -104,9 +104,12 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 - Pitch is Hz on the signal plane and volts per octave on the audio plane (0 V is C4). Scales
   come from `goofi_core::scale`.
 - Rust nodes are `.rs` files built against an engine SDK. `goofi_build` opens every dynamic library
-  and reads its entry symbols. A signal or graphics node built after the boot scan runs hosted in
+  and reads its entry symbols. A signal node built after the boot scan runs hosted in
   `goofi host`, over the exchange the Python subprocess tier uses; audio loads its library
-  in-process. Graphics also takes `.wgsl` shaders and Python sources marked `# goofi: graphics`.
+  in-process. The graphics engine runs `.wgsl` shaders.
+- A node's engine is its clock, not its kinds. A `TEXTURE` slot carries a texture frame on every
+  wire, and a node of any engine makes or reads one; between two shaders it is a GPU texture the
+  plan carries. `AUDIO` is the audio engine's alone.
 - A `.gfi` patch is an archive of its document and workspace. Recordings are native data files
   with metadata sidecars.
 - `goofi_supervisor::layout` owns every path and tool: the home (`~/.goofi`, what the user keeps),

@@ -258,7 +258,7 @@ export const boundaryType = (type: string): BoundaryTypeInfo | undefined =>
 export const FEEDS: ReadonlySet<string> = new Set(['ARRAY>ARRAY', 'STRING>STRING', 'TABLE>TABLE', 'AUDIO>AUDIO', 'TEXTURE>TEXTURE']);
 export const feeds = (out: SlotDtype, into: SlotDtype): boolean => FEEDS.has(`${out}>${into}`);
 /** The kinds that live inside one engine: a node of that engine reads one as a plan edge. */
-export const ENGINE_LOCAL: ReadonlySet<SlotDtype> = new Set(['AUDIO', 'TEXTURE']);
+export const ENGINE_LOCAL: ReadonlySet<SlotDtype> = new Set(['AUDIO']);
 
 /** The kind a slot of each dtype opens with, before a viewer has stored one of its own. */
 export const DEFAULT_KIND: Record<SlotDtype, ViewerKind> = {

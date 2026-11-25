@@ -479,6 +479,8 @@ impl Executor for AudioHalf {
     /// One frame into the crossing that resamples it by its `speed`, or that enters its values as
     /// they are for an oscillator to sound.
     fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
+        // A texture crosses as the numbers its pixels are.
+        let Ok(frame) = &frame.pixels_as_array() else { return false };
         let rate = self.audio.rate();
         let entry = self.playback.entry(&self.params);
         self.refused = None;

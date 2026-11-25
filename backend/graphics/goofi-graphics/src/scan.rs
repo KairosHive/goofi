@@ -20,13 +20,8 @@ pub struct Class {
     pub window: bool,
     /// The buffers this type carries between two ticks, in the order the prelude binds them.
     pub state: Vec<String>,
-    pub kind: Kind,
+    pub pipeline: Built,
     pub isolation: &'static goofi_node::IsolationCell,
-}
-
-pub enum Kind {
-    Shader(Built),
-    Host(crate::producer::Factory),
 }
 
 pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> {
@@ -65,14 +60,17 @@ impl GraphicsEngine {
     /// One file: its header is the manifest, its text plus the prelude is what naga judges, and
     /// only then does a pipeline get asked for.
     pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
+        // `# goofi: graphics` and `goofi_graphics_sdk` are kept for a node the tick runs.
         if path.extension().is_some_and(|ext| ext != "wgsl") {
-            return self.register_host(path, type_name);
+            return Err("the graphics engine runs shaders; a Python or Rust node that makes a texture is a signal node".into());
         }
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
         let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Texture))?;
         let pipeline = shader(&self.gpu, &self.shared, manifest, &source, &intro.state)?;
-        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER }))
+        self.compiles.retain(|build| !build.is_ready());
+        self.compiles.push(pipeline.clone());
+        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, pipeline, isolation: &goofi_node::SHADER }))
     }
 }
 

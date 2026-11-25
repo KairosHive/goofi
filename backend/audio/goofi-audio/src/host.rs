@@ -146,6 +146,15 @@ pub(crate) fn named(kind: Kind) -> Vec<(String, cpal::Device)> {
     out
 }
 
+/// Whether the platform's default device of `kind` answers its config: what tells a machine with
+/// a sound card from one with none, where a host names a default that nothing stands behind.
+pub(crate) fn has_default(kind: Kind) -> bool {
+    kind.default_of(&cpal::default_host()).is_some_and(|device| match kind {
+        Kind::Input => device.default_input_config().is_ok(),
+        Kind::Output => device.default_output_config().is_ok(),
+    })
+}
+
 /// The device `name` names, `default` being the platform host's own default. The host in a name is
 /// a choice, so the device is resolved in that host alone.
 pub(crate) fn device(kind: Kind, name: &str) -> Result<cpal::Device, String> {

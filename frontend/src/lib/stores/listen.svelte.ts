@@ -1,6 +1,7 @@
 /* Hearing the browser device: the mix the engine sends on `/audio`, decoded here and played by one
- * worklet. It is off until a press, because a browser starts no sound without one. Opus where
- * the browser decodes it, 16-bit PCM where it does not. */
+ * worklet. It is on unless the tab's sound button turned it off. A browser starts no sound before
+ * a click or a key in the tab, so until one the player waits and the frames are let go. Opus
+ * where the browser decodes it, 16-bit PCM where it does not. */
 import playerUrl from '$lib/audio/player.worklet.ts?worker&url';
 import { wsUrl } from '$lib/api/wsUrl';
 
@@ -20,6 +21,10 @@ async function decodesOpus(): Promise<boolean> {
 export class ListenStore {
 	/** Whether this tab plays the browser device. */
 	on = $state(false);
+	/** What the sound button says: sound, until a press there says none. */
+	wanted = $state(true);
+	/** The browser holds the sound back until a click or a key in this tab. */
+	waiting = $state(false);
 	/** Why it could not, where it could not. */
 	error = $state<string | null>(null);
 	/** The frames given to the player since it was turned on. Raw: nothing draws it. */
@@ -29,11 +34,12 @@ export class ListenStore {
 	private decoder: AudioDecoder | null = null;
 
 	toggle(): void {
+		this.wanted = !this.on;
 		if (this.on) this.stop();
 		else void this.start();
 	}
 
-	/** Open the context, the player and the socket. Called from a press. */
+	/** Open the context, the player and the socket. */
 	async start(): Promise<void> {
 		this.stop();
 		this.on = true;
@@ -48,9 +54,12 @@ export class ListenStore {
 			const player = new AudioWorkletNode(ctx, 'goofi-player', { numberOfInputs: 0, outputChannelCount: [CHANNELS] });
 			player.connect(ctx.destination);
 			const play = (frames: Float32Array): void => {
+				// A context that waits for its gesture plays nothing: its frames would only pile up.
+				if (ctx.state !== 'running') return;
 				this.frames += frames.length / CHANNELS;
 				player.port.postMessage(frames, [frames.buffer]);
 			};
+			this.unlock(ctx);
 			if (opus) this.decoder = this.opusDecoder(play);
 			const ws = (this.ws = new WebSocket(`${wsUrl(['audio'])}?codec=${opus ? 'opus' : 'pcm'}`));
 			ws.binaryType = 'arraybuffer';
@@ -68,10 +77,28 @@ export class ListenStore {
 		}
 	}
 
+	/** Where the browser holds `ctx` back, a click, a touch or a key in the tab lets it run. */
+	private unlock(ctx: AudioContext): void {
+		this.waiting = ctx.state !== 'running';
+		if (!this.waiting) return;
+		const gestures = ['pointerdown', 'pointerup', 'keydown'] as const;
+		// A gesture the browser does not count leaves the context held: the next one asks again.
+		const resume = (): void => void ctx.resume().catch(() => {});
+		const settled = (): void => {
+			if (ctx.state === 'suspended') return;
+			gestures.forEach((g) => window.removeEventListener(g, resume, true));
+			ctx.removeEventListener('statechange', settled);
+			if (this.ctx === ctx) this.waiting = false;
+		};
+		gestures.forEach((g) => window.addEventListener(g, resume, true));
+		ctx.addEventListener('statechange', settled);
+	}
+
 	stop(): void {
 		const [ws, decoder, ctx] = [this.ws, this.decoder, this.ctx];
 		this.ws = this.decoder = this.ctx = null;
 		this.on = false;
+		this.waiting = false;
 		ws?.close();
 		if (decoder && decoder.state !== 'closed') decoder.close();
 		void ctx?.close();
