@@ -163,9 +163,9 @@ describe('resolveSettings', () => {
 	it('returns pure defaults when overrides are absent', () => {
 		expect(resolveSettings('image', undefined)).toEqual(resolveSettings('image', {}));
 	});
-	it('image stretches to fill by default; keeping the aspect is the override', () => {
-		expect(resolveSettings('image', {}).stretch).toBe(true);
-		expect(resolveSettings('image', { stretch: false }).stretch).toBe(false);
+	it('image keeps its aspect by default; stretching to fill is the override', () => {
+		expect(resolveSettings('image', {}).stretch).toBe(false);
+		expect(resolveSettings('image', { stretch: true }).stretch).toBe(true);
 	});
 	it('image asks the f32 only under a log scale, whose low end texels would lose', () => {
 		expect(viewSpecForKind('image', 100, 100, { log: false }).depth).toBe('u8');
