@@ -222,6 +222,23 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 		});
 
 		await test.step('a hover near the line reads the point under it, and nothing away from it', async () => {
+			// The LFO's short blocks move on every frame. Zoomed out, the pointer's reach (in screen
+			// pixels) spans enough of the card to stay on the line while the scan reads it.
+			const before = (await card.boundingBox())!.width;
+			const wheelTo = async (ratio: (r: number) => boolean, dy: number) => {
+				await expect
+					.poll(async () => {
+						const r = (await card.boundingBox())!.width / before;
+						if (!ratio(r)) await page.mouse.wheel(0, dy);
+						return ratio(r);
+					})
+					.toBe(true);
+			};
+			const at = (await card.boundingBox())!;
+			await page.mouse.move(at.x + 4, at.y + 4);
+			await wheelTo((r) => r < 0.28, 100);
+			await wheelTo((r) => r > 0.4, -100);
+			await expect.poll(() => frameSummary(page, osc)).not.toBeNull();
 			const box = (await body.boundingBox())!;
 			// The readout is portalled to <body>, so it is found from the page.
 			const readout = page.locator('.viewer-hover-readout');
