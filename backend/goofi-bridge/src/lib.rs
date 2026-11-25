@@ -91,11 +91,18 @@ include!(concat!(env!("OUT_DIR"), "/spa.rs"));
 pub struct Mode {
     /// The API alone: no app is served, and the layout group leaves the vocabulary.
     pub headless: bool,
-    /// A PUBLIC goofi: no terminal, no agents, no filesystem, no save or load, no audio. It is NOT
-    /// a sandbox — a param expression is still Python.
+    /// A PUBLIC goofi: it withholds what `demo.toml` names. It is NOT a sandbox — a param
+    /// expression is still Python.
     pub demo: bool,
     /// Serve `/mcp`. Off unless asked: a door with no auth that only an MCP client needs.
     pub mcp: bool,
+}
+
+impl Mode {
+    /// Whether this server withholds `module`: a demo withholds the ones `demo.toml` names.
+    pub fn withholds(&self, module: goofi_init::demo::Module) -> bool {
+        self.demo && goofi_init::demo::demo().module(module)
+    }
 }
 
 #[derive(Clone)]
@@ -261,7 +268,7 @@ impl AppState {
             beat: Arc::new(Mutex::new(Readings::default())),
             history: Arc::new(Mutex::new(goofi_graph::History::new())),
             data_liveness: DataLiveness::DEFAULT,
-            roots: materialise_shipped(),
+            roots: materialise_shipped(mode),
             custom: goofi_supervisor::layout::custom_nodes(),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(Some(mount))),
@@ -540,30 +547,34 @@ fn routes(state: AppState) -> Router {
             }),
         )
         .with_state(state.clone())
-        // A demo serves the graph and nothing around it: the patch file, the two op doors and a
-        // terminal are ABSENT rather than refused.
-        .merge(match state.mode.demo {
-            true => Router::new(),
-            false => local_routes(state),
-        })
+        .merge(host_routes(state))
 }
 
-/// The routes a demo does not mount — the ones that reach the host rather than the graph.
-fn local_routes(state: AppState) -> Router {
-    let mcp = state.mode.mcp;
-    let router = Router::new()
+/// The routes that reach the host rather than the graph. One a mode withholds is ABSENT, not
+/// refused: there is no handler to answer from.
+fn host_routes(state: AppState) -> Router {
+    use goofi_init::demo::Module;
+    let mode = state.mode;
+    let mut router = Router::new();
+    if !mode.withholds(Module::PatchFile) {
         // The body limit is lifted: axum caps at 2 MB and a patch with a workspace is larger.
-        .route(
+        router = router.route(
             "/patch.gfi",
             get(patchfile::download)
                 .post(patchfile::upload)
                 .layer(axum::extract::DefaultBodyLimit::disable()),
-        )
+        );
+    }
+    if !mode.withholds(Module::Exec) {
         // The CLI's door: the same lines, parse and batch semantics as `goofi_exec`.
-        .route("/exec", post(exec_endpoint))
-        .route("/plugins/{id}/{*file}", get(plugins::asset))
+        router = router.route("/exec", post(exec_endpoint));
+    }
+    if !mode.withholds(Module::Plugins) {
+        router = router.route("/plugins/{id}/{*file}", get(plugins::asset));
+    }
+    if !mode.withholds(Module::Terminal) {
         // A spawned harness's terminal: binary frames are PTY bytes, text frames JSON control.
-        .route(
+        router = router.route(
             "/term/{instance}",
             any(|Path(instance): Path<String>,
                  ws: WebSocketUpgrade,
@@ -571,7 +582,10 @@ fn local_routes(state: AppState) -> Router {
                 ws.on_upgrade(move |socket| handle_term(socket, state, instance))
             }),
         );
-    let router = if mcp { router.route("/mcp", post(mcp::endpoint)) } else { router };
+    }
+    if mode.mcp && !mode.withholds(Module::Mcp) {
+        router = router.route("/mcp", post(mcp::endpoint));
+    }
     router.with_state(state)
 }
 
@@ -922,12 +936,24 @@ pub fn seed_skills(mount: &std::path::Path) {
 }
 
 /// The shipped bundles, written once into the runtime, keyed by the embed's content, beside the
-/// artifacts goofi's build made, so a shipped node loads with no toolchain.
-fn materialise_shipped() -> Vec<PathBuf> {
+/// artifacts goofi's build made, so a shipped node loads with no toolchain. A demo has a tree of
+/// its own, without the bundles and the node types `demo.toml` names.
+fn materialise_shipped(mode: Mode) -> Vec<PathBuf> {
     let runtime = goofi_supervisor::layout::runtime();
-    let tree = runtime.shipped().join(SHIPPED_KEY);
+    let demo = mode.demo.then(goofi_init::demo::demo);
+    let key = match demo {
+        Some(d) => goofi_build::digest(std::iter::once(SHIPPED_KEY).chain(d.bundles.iter().chain(&d.nodes).map(String::as_str)).map(str::as_bytes)),
+        None => SHIPPED_KEY.to_string(),
+    };
+    let tree = runtime.shipped().join(key);
+    let withheld = |rel: &str, bytes: &[u8]| {
+        let Some(demo) = demo else { return false };
+        let path = std::path::Path::new(rel);
+        let node = || Some((goofi_node::engine_in(path, std::str::from_utf8(bytes).ok()?)?, goofi_node::type_name_of(path)?));
+        demo.bundle(rel.split('/').next().unwrap_or(rel)) || node().is_some_and(|(engine, name)| demo.node(&engine, &name))
+    };
     let mut roots = Vec::new();
-    for (rel, bytes) in SHIPPED_SOURCES {
+    for (rel, bytes) in SHIPPED_SOURCES.iter().filter(|(rel, bytes)| !withheld(rel, bytes)) {
         goofi_build::write_if_changed(&tree.join(rel), bytes);
         let bundle = tree.join(rel.split('/').next().unwrap_or(rel));
         if !roots.contains(&bundle) {

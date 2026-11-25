@@ -5,7 +5,9 @@ use goofi_screen::{banner, say, Color, Screen};
 
 fn main() {
     let screen = Screen::begin();
-    match goofi_init::init(&goofi_init::repo_root()) {
+    // A demo's runtime, by the flag or by the variable the binary reads for the same mode.
+    let demo = std::env::args().any(|arg| arg == "--demo") || matches!(std::env::var("GOOFI_DEMO").as_deref(), Ok("1") | Ok("true"));
+    match goofi_init::init(&goofi_init::repo_root(), demo) {
         Ok(()) => {
             screen.close(true);
             banner(Color::Green, "");

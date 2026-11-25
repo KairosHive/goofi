@@ -387,7 +387,7 @@ fn run(command: &mut Command) -> Result<(), String> {
 impl Plugins {
     /// Discover and prepare packages before the initial node scan.
     pub fn load(state: &mut AppState, home: &Path, python: &Path) -> Result<(), String> {
-        if state.mode.demo {
+        if state.mode.withholds(goofi_init::demo::Module::Plugins) {
             return Ok(());
         }
         let home = std::path::absolute(home).map_err(|e| e.to_string())?;

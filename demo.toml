@@ -1,0 +1,57 @@
+# What a public demo does not have: `goofi --demo`, and the image the `demo` branch builds.
+#
+# This file is the one list. The op table, the server's doors, the library and `goofi-init --demo`
+# read it through `goofi_init::demo`, and nothing else names a thing a demo lacks. To give a
+# demo something back, remove its line here; to withhold more, add a line.
+
+# Ops. A full name withholds one op; a group withholds every op under it. Withheld ops are absent
+# from `op list`, from completion and from dispatch. `session new` stays: it is the visitor's reset.
+ops = [
+    "dir",
+    "agent",
+    "record",
+    "session save",
+    "session load",
+    "session recoverable",
+    "session recover",
+    "session discard",
+    "library save",
+]
+
+# Parts of the server that reach the host. The names are the variants of `demo::Module`.
+#   patch-file   the `/patch.gfi` download and upload
+#   exec         the CLI's `/exec` door
+#   terminal     the `/term` socket of an agent's terminal
+#   mcp          the `/mcp` endpoint, also when `--mcp` asks for it
+#   plugins      the plugins of the host's home, and their assets
+#   vst3         the VST3 plugins of the host
+#   sound-card   every audio device but `browser`
+#   windows      native windows: a `Window` node is a pass-through
+modules = [
+    "patch-file",
+    "exec",
+    "terminal",
+    "mcp",
+    "plugins",
+    "vst3",
+    "sound-card",
+    "windows",
+]
+
+# Bundles left out whole: `goofi-init --demo` installs none of their packages and the library lists
+# none of their types. These need gigabytes of packages for models a container with no GPU cannot run.
+bundles = [
+    "ai",
+    "computer-vision",
+    "image",
+    "image-generation",
+    "ml",
+    "texture",
+]
+
+# Node types left out of the bundles that stay, as `engine:Type`. These two open a device or a file
+# of the host through OpenCV, which the image does not carry.
+nodes = [
+    "graphics:Camera",
+    "graphics:VideoFile",
+]

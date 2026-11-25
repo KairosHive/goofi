@@ -72,7 +72,7 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 ## Architecture
 
 - One binary serves the app and acts as its CLI (`goofi help`). It prints the URL without opening
-  a browser; `--headless` serves only the API; `--demo` withholds the host-touching ops; `--mcp`
+  a browser; `--headless` serves only the API; `--demo` withholds what `demo.toml` names; `--mcp`
   mounts `/mcp`, off by default. goofi is development-only: it builds with `cargo`, `npm` and `uv`
   from PATH, and ships no installer.
 - The manager owns the graph and document. Browser documents are read-only replicas, updated with

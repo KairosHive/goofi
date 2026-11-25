@@ -1113,7 +1113,9 @@ version = "3.0.0"
 dependencies = [
  "goofi-screen",
  "goofi-supervisor",
+ "serde",
  "sha2",
+ "toml",
 ]
 
 [[package]]
