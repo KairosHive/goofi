@@ -1,15 +1,21 @@
 //! A texture frame in Python: made from pixels by a node that returns one, read as pixels by a
-//! node that takes one. Both execution tiers use the same codec and validation.
-use goofi_core::texture::{PixelFormat, Pixels, Texture as Frame};
+//! node that takes one. Both execution tiers use the same codec and validation. `goofi.gpu`
+//! (`gpu.py`) is the CUDA side: a picture made from CUDA memory, and read as CUDA memory.
+use goofi_core::texture::{PixelFormat, Pixels, Shared, Texture as Frame};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::PyByteArray;
+
+fn gpu<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    py.import("goofi")?.getattr("gpu")
+}
 
 impl Texture {
-    fn pixels(&self) -> PyResult<&Pixels> {
-        match self.frame.as_texture() {
-            Ok(Frame::Pixels(p)) => Ok(p),
-            Err(why) => Err(pyo3::exceptions::PyTypeError::new_err(why)),
-        }
+    fn held(&self) -> PyResult<&Frame> {
+        self.frame.as_texture().map_err(pyo3::exceptions::PyTypeError::new_err)
+    }
+
+    fn of(frame: Frame) -> PyResult<Self> {
+        Ok(Self { frame: goofi_core::Data::texture(frame, Default::default()).map_err(pyo3::exceptions::PyValueError::new_err)? })
     }
 }
 
@@ -20,9 +26,22 @@ pub struct Texture {
 
 #[pymethods]
 impl Texture {
-    /// Top-row-first RGB/RGBA uint8 or float32 pixels with straight alpha.
+    /// Top-row-first RGB/RGBA uint8 or float32 pixels with straight alpha: a numpy array, or an
+    /// array in CUDA memory (a torch tensor, anything with `__cuda_array_interface__`). In a node
+    /// the graphics tick calls, a CUDA picture stays in device memory.
     #[new]
     fn new(py: Python<'_>, pixels: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let gpu = gpu(py)?;
+        let delivered;
+        let pixels = if gpu.call_method1("on_cuda", (pixels,))?.extract()? {
+            delivered = gpu.call_method1("deliver", (pixels,))?;
+            if let Ok((id, width, height, pitch)) = delivered.extract::<(u64, u32, u32, u32)>() {
+                return Self::of(Frame::Shared(Shared { id, width, height, pitch }));
+            }
+            &delivered
+        } else {
+            pixels
+        };
         let array = py.import("numpy")?.call_method1("ascontiguousarray", (pixels,))?;
         let shape: Vec<usize> = array.getattr("shape")?.extract()?;
         let [height, width, channels] = shape.as_slice() else {
@@ -42,23 +61,23 @@ impl Texture {
         };
         let width = u32::try_from(*width).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let height = u32::try_from(*height).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let bytes = array.call_method0("tobytes")?.cast::<PyBytes>()?.as_bytes().to_vec();
-        let frame = Frame::Pixels(Pixels {
+        let bytes = array.call_method0("tobytes")?.cast::<pyo3::types::PyBytes>()?.as_bytes().to_vec();
+        Self::of(Frame::Pixels(Pixels {
             width,
             height,
             stride: width as usize * channels * format.bytes_per_channel(),
             format,
             bytes,
-        });
-        Ok(Self {
-            frame: goofi_core::Data::texture(frame, Default::default())
-                .map_err(pyo3::exceptions::PyValueError::new_err)?,
-        })
+        }))
     }
 
-    /// The pixels as a fresh numpy array `[height, width, 3 or 4]`, `uint8` or `float32` as held.
+    /// The pixels as a numpy array of its own, `[height, width, 3 or 4]`, `uint8` or `float32`
+    /// as held. A picture in device memory is copied out as RGBA `float32`.
     fn numpy<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let p = self.pixels()?;
+        let p = match self.held()? {
+            Frame::Pixels(p) => p,
+            Frame::Shared(s) => return gpu(py)?.call_method1("download", (s.id,)),
+        };
         let (channels, unit) = (p.format.channels(), p.format.bytes_per_channel());
         let row = p.width as usize * channels * unit;
         let dtype = if unit == 1 { "|u1" } else { "<f4" };
@@ -69,15 +88,44 @@ impl Texture {
             packed = p.bytes.chunks_exact(p.stride).flat_map(|line| &line[..row]).copied().collect();
             &packed
         };
-        let flat = py.import("numpy")?.getattr("frombuffer")?.call1((PyBytes::new(py, bytes), dtype))?;
+        let flat = py.import("numpy")?.getattr("frombuffer")?.call1((PyByteArray::new(py, bytes), dtype))?;
         flat.call_method1("reshape", ((p.height as usize, p.width as usize, channels),))
+    }
+
+    /// The picture in CUDA memory, as an object with `__cuda_array_interface__`. A picture in
+    /// device memory is that memory, RGBA `float16` rows at a pitch, with no copy; pixels are
+    /// copied up as they are held.
+    fn cuda<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self.held()? {
+            Frame::Shared(s) => gpu(py)?.call_method1("view", (s.id,)),
+            Frame::Pixels(_) => gpu(py)?.call_method1("cuda", (self.numpy(py)?,)),
+        }
+    }
+
+    /// The picture as a torch tensor `[height, width, channels]`: on its device memory with no
+    /// copy (RGBA `float16`, on CUDA), else of its pixels on the CPU. `device` moves it.
+    #[pyo3(signature = (device=None))]
+    fn torch<'py>(&self, py: Python<'py>, device: Option<&Bound<'py, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+        let source = match self.held()? {
+            Frame::Shared(s) => gpu(py)?.call_method1("view", (s.id,))?,
+            Frame::Pixels(_) => self.numpy(py)?,
+        };
+        gpu(py)?.call_method1("tensor", (source, device))
+    }
+
+    /// Whether the picture is in device memory this node shares with the graphics engine.
+    #[getter]
+    fn shared(&self) -> PyResult<bool> {
+        Ok(matches!(self.held()?, Frame::Shared(_)))
     }
 
     /// `(height, width, channels)`.
     #[getter]
     fn shape(&self) -> PyResult<(usize, usize, usize)> {
-        let p = self.pixels()?;
-        Ok((p.height as usize, p.width as usize, p.format.channels()))
+        Ok(match self.held()? {
+            Frame::Pixels(p) => (p.height as usize, p.width as usize, p.format.channels()),
+            Frame::Shared(s) => (s.height as usize, s.width as usize, 4),
+        })
     }
 
     /// numpy's protocol, so `np.asarray(texture)` is `texture.numpy()`.

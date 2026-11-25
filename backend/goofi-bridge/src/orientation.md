@@ -114,6 +114,9 @@ Rust node that makes a picture is a signal node: a `goofi.DataType.TEXTURE` outp
 takes as its input. A `TEXTURE` input reads `data.numpy()`. `signal:GraphicsIn` is a texture as
 an array. The same Python file with `# goofi: graphics` as its first line, in `nodes_graphics/`,
 is a graphics node: the render thread calls it inside the tick and waits for its picture.
+`data.torch()` and `goofi.Texture(tensor)` keep such a node's pictures in CUDA memory where the
+device shares it; `data.cuda()`, `goofi.gpu.cuda(array)` and `goofi.gpu.numpy(tensor)` convert
+in any node.
 
 ## Workspace
 

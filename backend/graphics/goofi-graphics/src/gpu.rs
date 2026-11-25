@@ -112,6 +112,8 @@ const TAP_MAX: u32 = 16;
 pub struct Gpu {
     pub adapter_name: String,
     pub backend: String,
+    /// The device as CUDA names it, where a buffer's memory can go to a node's child.
+    pub shares: Option<[u8; 16]>,
     pub sampler: wgpu::Sampler,
     /// What an unwired texture input reads: present, transparent, never an error.
     pub blank: wgpu::TextureView,
@@ -269,6 +271,7 @@ impl Gpu {
             blit("tap8", Want::TapU8.format()),
             blit("tap8", Want::Record.format()),
         ];
+        let shares = crate::share::device_uuid(&device);
         Ok(Gpu {
             _lease: goofi_supervisor::scope::lease(
                 goofi_supervisor::scope::Kind::Device,
@@ -280,6 +283,7 @@ impl Gpu {
             adapter,
             adapter_name: info.name.clone(),
             backend: info.backend.to_string(),
+            shares,
             sampler,
             blank,
             blits,

@@ -305,8 +305,8 @@ impl Format for Video {
     fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
         match frame {
             Frame::Texels(t) => self.encoder.write(&t.rgba)?,
-            Frame::Data(d) => match d.as_texture() {
-                Ok(goofi_core::texture::Texture::Pixels(p)) => self.encoder.write(&p.to_rgba8())?,
+            Frame::Data(d) => match d.as_texture().and_then(|texture| texture.pixels()) {
+                Ok(p) => self.encoder.write(&p.to_rgba8())?,
                 Err(_) => return Err("the frame is not the shape this stream holds".into()),
             },
         }

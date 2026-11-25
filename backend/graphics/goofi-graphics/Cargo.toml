@@ -22,3 +22,8 @@ naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
 half = "2"
 serde = { version = "1", features = ["derive"] }
+
+# A picture in memory the child of a node maps: the raw Vulkan buffer, and its descriptor's send.
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+libc = "0.2"

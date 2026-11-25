@@ -26,6 +26,8 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let source = std::ffi::CString::new(include_str!("geometry.py"))?;
     let geometry = PyModule::from_code(m.py(), source.as_c_str(), c"goofi.geometry", c"goofi.geometry")?;
     m.add_submodule(&geometry)?;
+    let source = std::ffi::CString::new(include_str!("gpu.py"))?;
+    m.add_submodule(&PyModule::from_code(m.py(), source.as_c_str(), c"goofi.gpu", c"goofi.gpu")?)?;
     m.add_submodule(&agent::module(m.py())?)?;
     m.add_class::<data::Data>()?;
     m.add_class::<data::Ndims>()?;

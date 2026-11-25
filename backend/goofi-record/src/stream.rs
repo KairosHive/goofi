@@ -43,9 +43,9 @@ impl Kind {
                 (Value::Str(_), _) => Ok(Kind::Text),
                 (Value::Table(map), _) => Ok(Kind::Table { columns: map.keys().cloned().collect() }),
                 // A picture source states its frame rate, which a video file is opened at.
-                (Value::Texture(t), _) => match (&**t, d.meta().sfreq().filter(|fps| *fps > 0.0)) {
-                    (goofi_core::texture::Texture::Pixels(p), Some(fps)) => Ok(Kind::Video { size: (p.width, p.height), fps, quality }),
-                    (goofi_core::texture::Texture::Pixels(_), None) => Err("a texture frame with no `sfreq` names no frame rate to record at".into()),
+                (Value::Texture(t), _) => match (t.pixels()?, d.meta().sfreq().filter(|fps| *fps > 0.0)) {
+                    (p, Some(fps)) => Ok(Kind::Video { size: (p.width, p.height), fps, quality }),
+                    (_, None) => Err("a texture frame with no `sfreq` names no frame rate to record at".into()),
                 },
                 (Value::Functional(_), _) => Err("a functional is not recorded".into()),
             },

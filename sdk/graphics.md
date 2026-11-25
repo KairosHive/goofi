@@ -69,6 +69,29 @@ def process(self, image):
 In Rust, `frame.as_texture()` gives the texture, and `frame.pixels_as_array()` gives the
 `[H, W, C]` array of values in 0..1. `signal:GraphicsIn` is that crossing as a node.
 
+## Textures, CUDA and numpy
+
+In Python, a picture has three forms, and each one converts to each other one:
+
+| from | to a texture | to numpy | to CUDA |
+| --- | --- | --- | --- |
+| a `goofi.Texture` | | `texture.numpy()` | `texture.cuda()`, `texture.torch()` |
+| a numpy array | `goofi.Texture(array)` | | `goofi.gpu.cuda(array)` |
+| CUDA memory | `goofi.Texture(tensor)` | `goofi.gpu.numpy(tensor)` | |
+
+- CUDA memory is a torch tensor on a CUDA device, a cupy array, or any object with
+  `__cuda_array_interface__`. `texture.cuda()` and `goofi.gpu.cuda(array)` give such an object;
+  its `.torch()` is a tensor on the same memory.
+- `texture.numpy()` gives an array of its own that the node can write.
+- `texture.torch()` gives a tensor `[height, width, channels]`. `texture.torch('cuda')` moves it.
+- `goofi.Texture(tensor)` takes `[height, width, 3 or 4]`, `uint8` or a float type. A plane
+  `[height, width]` is grey.
+- `texture.shared` says whether the picture is in device memory that the node shares with the
+  graphics engine. That is so only in a node the graphics tick calls (see below). In a signal
+  node, each conversion to or from CUDA is one copy between the CPU and the GPU.
+- CUDA support needs Linux and the NVIDIA driver (`libcuda.so.1`). torch is needed only for
+  `torch()`.
+
 ## How a texture crosses
 
 - A shader's output that another engine reads is read back from the GPU and sent as `RGBA`
@@ -100,6 +123,17 @@ class Invert(goofi.Node):
         return goofi.Texture(1.0 - pixels)
 ```
 
+With torch, the same node keeps the picture on the GPU where the machine shares memory, and
+works on the CPU where it does not:
+
+```python
+    def process(self, image):
+        if image is None:
+            return None
+        pixels = image.data.torch()          # [height, width, 4]; no copy where it is shared
+        return goofi.Texture(1.0 - pixels)
+```
+
 - At the node's place in the tick, the engine finishes the stages before it, calls `process`
   and waits for the answer. The picture the node returns is the output the next stages read, in
   the same tick. A node that takes 1/120 s at 60 frames per second shows 50%; a node that takes
@@ -108,6 +142,15 @@ class Invert(goofi.Node):
   It has no `common` width or height. An input takes one wire.
 - An input that a shader feeds is read back from the GPU as `RGBA` `float32`. An input that
   another engine feeds is the frame that engine sent.
+- On Linux, when the graphics device is an NVIDIA GPU and the node's interpreter finds the CUDA
+  driver for the same GPU, the pictures stay on the GPU. The engine copies a shader's output
+  into a buffer whose memory CUDA maps in the node's process: `image.data.torch()` is a tensor
+  on that memory with no copy, `RGBA` `float16`. `goofi.Texture(tensor)` copies the result,
+  CUDA to CUDA, into a second such buffer, which the engine copies into the node's output. The
+  first picture of each new size crosses as pixels. `session status` counts these nodes as
+  `graphics.shared`.
+- The memory behind an input holds that picture for one `process` call. Copy the tensor to keep
+  it for a later call.
 - `process` that returns `None` keeps the last picture. A raise is the node's error, and the
   last picture stays.
 - The node runs in a child process of the subprocess interpreter. Load a model in `setup`: the

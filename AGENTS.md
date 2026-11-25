@@ -110,7 +110,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
   `# goofi: graphics`: the render thread calls such a node at its place in the tick and waits.
 - A node's engine is its clock, not its kinds. A `TEXTURE` slot carries a texture frame on every
   wire, and a node of any engine makes or reads one; between two shaders it is a GPU texture the
-  plan carries. `AUDIO` is the audio engine's alone.
+  plan carries, and a Python node the tick calls maps it with CUDA where the device shares
+  memory. `AUDIO` is the audio engine's alone.
 - A `.gfi` patch is an archive of its document and workspace. Recordings are native data files
   with metadata sidecars.
 - `goofi_supervisor::layout` owns every path and tool: the home (`~/.goofi`, what the user keeps),

@@ -145,6 +145,8 @@ pub(crate) struct State {
     pub(crate) uploads: Vec<Option<Target>>,
     /// Per input of a node the tick calls: the buffer its producer's output is read into.
     pub(crate) downloads: Vec<Option<(wgpu::Buffer, (u32, u32))>>,
+    /// For a node the tick calls whose child joined: the buffers the two share.
+    pub(crate) link: Option<crate::share::Link>,
     /// Beside each upload, the head layout of its channels; `None` binds the blank texel.
     pub(crate) layouts: Vec<Option<Target>>,
     /// The range, channel count and scale of each upload, in the uniform's own order.
@@ -173,6 +175,7 @@ impl State {
             recorded: 0,
             uploads: Vec::new(),
             downloads: Vec::new(),
+            link: None,
             layouts: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),
@@ -270,11 +273,21 @@ impl State {
 
     /// A node's output: its new picture where the run made one, which sets the size, else the
     /// picture it holds; and a readback for each reader that is there now.
-    pub(crate) fn show(&mut self, gpu: &Gpu, picture: Option<&Upload>, wants: [Option<(u32, u32)>; 4]) -> Result<(), String> {
-        let Some(size) = picture.map(|p| (p.width, p.height)).or(self.out.as_ref().map(|out| out.size)) else { return Ok(()) };
+    pub(crate) fn show(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, picture: Option<&Made>, wants: [Option<(u32, u32)>; 4]) -> Result<(), String> {
+        let Some(size) = picture.map(Made::size).or(self.out.as_ref().map(|out| out.size)) else { return Ok(()) };
         self.ensure_out(gpu, size, wants, 0)?;
-        if let Some(picture) = picture {
-            write_texels(gpu, &self.out.as_ref().expect("ensure_out made it").texture, size, &picture.texels);
+        let out = &self.out.as_ref().expect("ensure_out made it").texture;
+        match picture {
+            Some(Made::Texels(picture)) => write_texels(gpu, out, size, &picture.texels),
+            Some(Made::Shared(buffer, shared)) => encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(shared.pitch), rows_per_image: None },
+                },
+                out.as_image_copy(),
+                wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            ),
+            None => {}
         }
         Ok(())
     }
@@ -364,6 +377,21 @@ impl State {
             layout: gpu.group0(self.params.is_some()),
             entries: &entries,
         })
+    }
+}
+
+/// The picture a node made: texels this process holds, or a buffer the node's child wrote.
+pub(crate) enum Made {
+    Texels(Upload),
+    Shared(wgpu::Buffer, goofi_core::texture::Shared),
+}
+
+impl Made {
+    pub(crate) fn size(&self) -> (u32, u32) {
+        match self {
+            Made::Texels(picture) => (picture.width, picture.height),
+            Made::Shared(_, shared) => (shared.width, shared.height),
+        }
     }
 }
 

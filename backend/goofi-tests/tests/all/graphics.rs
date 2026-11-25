@@ -1360,5 +1360,60 @@ fn a_python_node_runs_on_the_graphics_tick() {
     drawn(&g, fed, "a signal node's picture through the tick node", |d| shape(d) == vec![2, 3, 4] && close(px(d, 0, 0), [0.25, 0.5, 0.75, 0.5]));
 
     // Step: where a shader says how long its pass took, the node says how long its call took.
-    g.until("the node's share of the frame", |_| ev.next("node_stats")["stats"][hex(node)]["frame_share"].as_f64().filter(|share| *share > 0.0));
+    let viewer = g.probe(node, "out");
+    g.until("the node's share of the frame", |g| {
+        render(g, 1);
+        ev.next("node_stats")["stats"][hex(node)]["frame_share"].as_f64().filter(|share| *share > 0.0)
+    });
+    drop(viewer);
+}
+
+/// Where the device and the node's CUDA driver are one GPU, a tick node's pictures never leave
+/// it: the input arrives in memory both map and the output goes back the same way. Anywhere
+/// else the same node gets and gives pixels, and the pictures are the same.
+#[test]
+fn a_tick_node_keeps_its_pictures_on_the_device() {
+    let _python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("texture_cuda.py"), include_str!("../fixtures/texture_cuda.py")).unwrap();
+    std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
+    std::fs::write(dir.join("Apart.wgsl"), APART).unwrap();
+    g.call("library refresh", j!({}));
+    let (count, node, apart) = (g.add("graphics:Count"), g.add("graphics:TextureCuda"), g.add("graphics:Apart"));
+    for uid in [count, node, apart] {
+        g.ready(uid);
+    }
+    g.set_param(count, "common", "width", 8);
+    g.set_param(count, "common", "height", 4);
+    g.link(count, "out", node, "image");
+    g.link(count, "out", apart, "a");
+    g.link(node, "out", apart, "b");
+
+    let idle = |g: &Goofi| g.call("session status", j!({}))["graphics"].clone();
+    // The child joins before its first run, so two ticks past its first picture settle the form.
+    drawn(&g, node, "the node's first picture", |d| shape(d) == vec![4, 8, 4]);
+    render(&g, 2);
+    let shares = idle(&g)["shared"] == j!(1);
+    let flag = if shares { 1.0 } else { 0.0 };
+
+    for width in [8, 16] {
+        // Step: both ways are the form the machine has, and stay it when the size moves.
+        g.set_param(count, "common", "width", width);
+        drawn(&g, node, "the picture in the form this machine has", |d| {
+            let [_, came, left, _] = px(d, 0, 0);
+            shape(d) == vec![4, width, 4] && (came, left) == (flag, flag)
+        });
+        // Step: the picture a shader reads off the node is of the tick that drew the node's input.
+        let mut last = 0.0;
+        for _ in 0..3 {
+            let frame = drawn(&g, apart, "a later tick through the node", |d| shape(d) == vec![4, width, 4] && px(d, 0, 0)[2] > last);
+            let [_, direct, through, _] = px(&frame, 0, 0);
+            assert_eq!(through, direct * 0.5, "the node's picture is of the tick that drew its input");
+            last = through;
+        }
+    }
+    assert_eq!(idle(&g)["shared"] == j!(1), shares, "the form holds");
+    assert_eq!(g.error(node), None);
 }

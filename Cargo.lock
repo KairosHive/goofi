@@ -1069,6 +1069,7 @@ dependencies = [
 name = "goofi-graphics"
 version = "3.0.0"
 dependencies = [
+ "ash",
  "bytes",
  "goofi-codec",
  "goofi-core",
@@ -1081,6 +1082,7 @@ dependencies = [
  "goofi-view",
  "goofi-window",
  "half",
+ "libc",
  "naga",
  "pollster",
  "serde",

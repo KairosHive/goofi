@@ -752,9 +752,7 @@ impl Data {
     /// A texture frame as the `[H, W, C]` array of its pixels, stamps kept; any other frame as it is.
     pub fn pixels_as_array(&self) -> std::result::Result<Data, String> {
         match &self.0.value {
-            Value::Texture(t) => match &**t {
-                texture::Texture::Pixels(p) => p.to_array(self.0.meta.clone()),
-            },
+            Value::Texture(t) => t.pixels()?.to_array(self.0.meta.clone()),
             _ => Ok(self.clone()),
         }
     }

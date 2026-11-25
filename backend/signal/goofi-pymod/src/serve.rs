@@ -27,6 +27,9 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("no node source on stdin: {e}")))?;
 
+    // A node the graphics tick calls joins that engine here, before its module runs.
+    py.import("goofi")?.getattr("gpu")?.call_method0("connect")?;
+
     let module = module_from_source(py, "goofi_node_main", &source)?;
     let instance = find_node_class(py, &module)?.call0()?;
     let out_slots = slot_names(&instance, "OUTPUTS")?;

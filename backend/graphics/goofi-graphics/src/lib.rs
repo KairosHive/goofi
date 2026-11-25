@@ -22,6 +22,7 @@ mod montage;
 mod plan;
 mod runtime;
 mod scan;
+mod share;
 mod shader;
 mod resources;
 
@@ -44,6 +45,8 @@ pub struct GraphicsStatus {
     pub backend: String,
     /// Whether the adapter times a pass: what a node's share of the frame is read from.
     pub timed: bool,
+    /// How many nodes the tick calls hold their pictures in device memory their child maps.
+    pub shared: u64,
     pub clock: &'static str,
     /// The rate the clock paces, as `graphics.fps` last settled.
     pub fps: u32,
@@ -175,8 +178,13 @@ impl GraphicsEngine {
 
     /// What builds the executor of a node the tick calls, on the node's own thread: the child
     /// that runs its source, and its `setup`. None for a shader.
-    fn node_build(&self, class: &Class, params: &ParamGroups) -> Option<impl FnOnce() -> (goofi_runtime::HostExecutor, Vec<usize>) + Send + 'static> {
+    fn node_build(&self, class: &Class, params: &ParamGroups, cells: &half::Cells) -> Option<impl FnOnce() -> (goofi_runtime::HostExecutor, Vec<usize>) + Send + 'static> {
         let scan::Kind::Node { python, source } = &class.kind else { return None };
+        // Where the device shares memory, the child learns the door to join and the device to match.
+        let door = cells.node.as_ref().and_then(|meeting| meeting.door.as_ref()).zip(self.gpu.shares);
+        let env: Vec<(&'static str, String)> = door
+            .map(|(door, uuid)| vec![(share::DOOR, door.name().to_string()), (share::DEVICE, uuid.iter().map(|byte| format!("{byte:02x}")).collect())])
+            .unwrap_or_default();
         let (hub, python, source, params) = (self.hub.clone(), python.clone(), source.clone(), params.clone());
         let (manifest, decls) = (class.manifest, decls_of(class));
         // The half's inboxes are the ARRAY inputs, then the TEXTURE ones; a node reads by slot.
@@ -184,7 +192,7 @@ impl GraphicsEngine {
         let slots: Vec<usize> = shader::array_inputs(manifest).chain(shader::texture_inputs(manifest)).map(declared).collect();
         Some(move || {
             let build: goofi_runtime::NodeBuild = Box::new(move |_| {
-                let child = goofi_python::subproc::subproc(hub, python, source);
+                let child = goofi_python::subproc::subproc_in(hub, python, source, env);
                 Box::new(goofi_python::subproc::RemoteNode::new(child, goofi_host_sdk::host::in_slots(manifest)))
             });
             (goofi_runtime::HostExecutor::new(manifest, decls, build, &params), slots)
@@ -301,6 +309,7 @@ impl GraphicsEngine {
             adapter: self.gpu.adapter_name.clone(),
             backend: self.gpu.backend.clone(),
             timed: self.gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
+            shared: self.live.values().filter(|inst| inst.cells.node.as_ref().is_some_and(|meeting| meeting.linked.load(Ordering::Relaxed))).count() as u64,
             clock: self.clock.name(),
             fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
@@ -459,7 +468,7 @@ impl Engine for GraphicsEngine {
             tap_box: AtomicU64::new(0),
             record: Stack::new(),
             frame_share: AtomicU64::new(f64::NAN.to_bits()),
-            node: class.node().then(half::Meeting::default),
+            node: class.node().then(|| half::Meeting::new(self.gpu.shares.and_then(|_| share::Door::open()))),
             produced: AtomicU64::new(0),
             // The half's own door: the render thread rings it once a readback is in a cell.
             bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
@@ -476,7 +485,7 @@ impl Engine for GraphicsEngine {
         };
         let shared = cells.clone();
         let size = manifest.params.len();
-        let node = self.node_build(&class, params);
+        let node = self.node_build(&class, params, &cells);
         let make = move || GraphicsHalf::new(shared, size, node.map(|build| build()));
         let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
             Ok(handle) => handle,
@@ -525,6 +534,8 @@ impl Engine for GraphicsEngine {
             let inst = self.live.get_mut(&uid).expect("listed above");
             inst.settled_size = match covered {
                 Some((w, h)) => (Some(w), Some(h)),
+                // A node the tick calls has no size params: its picture is the size it makes.
+                None if inst.class.node() => (None, None),
                 None => (settled(n - 2), settled(n - 1)),
             };
             inst.control.send_if_changed(desired);

@@ -7,8 +7,8 @@ whatever it reads or makes.
 ## Decisions
 
 - **One frame form.** A `TEXTURE` slot carries `Value::Texture` on every wire. `Texture::Pixels`
-  is the CPU form; the GPU form is a second variant beside it, and every reader that
-  converts through `Pixels::to_array` today then reads the GPU form through one readback.
+  is the CPU form and the one a wire carries. `Texture::Shared` exists only between the graphics
+  engine and the child of a node its tick calls; every other reader refuses it.
 - **The graphics engine runs what its tick runs.** A detached node is a signal node. A Python
   file marked `# goofi: graphics` is a stage the render thread calls and waits for. A Rust file
   against `goofi_graphics_sdk` is refused; the crate name is kept for the Rust form.
@@ -20,6 +20,13 @@ whatever it reads or makes.
 - **A shader input fed from another engine uploads per consumer.** Fan-out from one signal
   texture to several shaders uploads once for each. A GPU frame makes that a GPU copy.
 - **`AUDIO` stays the audio engine's alone.** `audio:SignalIn` is the crossing.
+- **A tick node's GPU frame is a shared buffer.** `Texture::Shared` names a Vulkan buffer whose
+  memory the node's child maps with CUDA (`goofi-graphics/src/share.rs`, `goofi.gpu`). The engine
+  copies a stage's output into it and the node's picture out of a second one; an image cannot be
+  mapped as a tensor, so one GPU copy each way stays. The child joins the engine's socket only
+  when its CUDA driver has the engine's device; anywhere else the pictures cross as pixels.
+- **Synchronisation is two waits.** The render thread waits for its submission before it calls
+  the node, and the child waits for its CUDA context before it answers. No semaphore crosses.
 - **CUDA maps Vulkan memory from another process.** Probed 2026-11-25 on an RTX 4090 Laptop
   (driver 620.70.06, torch 2.14.1+cu130), five runs of five: a device-local buffer's memory,
   exported as an opaque fd and sent over a Unix socket (`SCM_RIGHTS`) to a Python process that
@@ -29,27 +36,22 @@ whatever it reads or makes.
 
 ## Remaining work
 
-1. **GPU frames for a tick node.** Today a tick node's input is read back to the CPU and its
-   picture is uploaded. `Texture` gains a GPU form: an exportable Vulkan buffer the engine copies
-   a stage's output into, sent to the child as an fd over a Unix socket and mapped by CUDA. The
-   node reads it as a torch tensor at the mapped pointer and writes its picture into a second
-   such buffer, which the engine copies into the stage's output. The CPU form stays for a device
-   that cannot share and for a child without CUDA.
-2. **Helpers.** `goofi.Texture` converts a texture, a CUDA buffer (anything with
-   `__cuda_array_interface__`) and a numpy array in every direction, for a tick node and a
-   signal node alike. `numpy()` answers a read-only array today; make it writable.
-3. **`ai:Depth`** on `apple/DepthPro2` (S, B, L, H), image and live modes.
-4. **A Rust node the tick calls**, against `goofi_graphics_sdk`.
-5. **A texture as a value.** A bare expression read of a texture output is refused
+1. **`ai:Depth`** on `apple/DepthPro2` (S, B, L, H), image and live modes.
+2. **A Rust node the tick calls**, against `goofi_graphics_sdk`.
+3. **A texture as a value.** A bare expression read of a texture output is refused
    (`SlotType::is_value`), and a machine's expression reads one as `None`.
+4. **The pixel form of a tick node is slow.** At 1920x1080 a tick took 268 to 288 ms through
+   pixels and 3.6 to 5.9 ms through shared memory (measured 2026-11-25, debug profile, RTX 4090
+   Laptop). The pixel form converts `f16` to `f32` on the CPU and copies the frame through the
+   codec each way. It is the fallback on a machine without CUDA; make it faster if such a
+   machine needs a tick node.
 
 ## Open questions
 
 - **A node that stalls.** A param edit that makes a node reload a model holds the tick for as
   long as the reload takes. Whether such a node should answer with its last picture meanwhile.
-- **Synchronisation.** External semaphores need the device opened through
-  `open_with_callback` (wgpu-hal does not enable `VK_KHR_external_semaphore_fd`); the other way
-  is a submission wait on the node's side before it rings the child.
+- **A node that writes its target in place.** `goofi.Texture(tensor)` copies the tensor into the
+  shared target. A node that renders straight into the target would save that copy.
 - **Platforms without CUDA.** macOS has no documented way to share a Metal buffer with PyTorch
   MPS; the CPU form is the fallback everywhere.
 - **The viewer of a camera.** The bridge reducer turns an 8-bit texture into `f32` before it

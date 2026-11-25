@@ -58,6 +58,10 @@ pub type Asked = Vec<(usize, Option<Data>)>;
 pub struct Meeting {
     /// Whether the node is built and takes calls; until then the tick passes its stage by.
     pub ready: AtomicBool,
+    /// Where the node's child joins, on a device that shares memory with it.
+    pub door: Option<crate::share::Door>,
+    /// Whether the child joined: its pictures then stay in device memory.
+    pub linked: AtomicBool,
     asked: Mailbox<Asked>,
     answer: Mutex<Answer>,
     answered: Condvar,
@@ -71,13 +75,18 @@ struct Answer {
     closed: bool,
 }
 
-impl Default for Meeting {
-    fn default() -> Meeting {
-        Meeting { ready: AtomicBool::new(false), asked: Mailbox::new(), answer: Mutex::new(Answer::default()), answered: Condvar::new() }
-    }
-}
-
 impl Meeting {
+    pub fn new(door: Option<crate::share::Door>) -> Meeting {
+        Meeting {
+            ready: AtomicBool::new(false),
+            door,
+            linked: AtomicBool::new(false),
+            asked: Mailbox::new(),
+            answer: Mutex::new(Answer::default()),
+            answered: Condvar::new(),
+        }
+    }
+
     /// Run the node on `inputs` and wait for its picture. None where it made none, where the
     /// run failed (the node says why), or where the meeting is closed.
     pub fn call(&self, bell: &goofi_transport::Doorbell, inputs: Asked) -> Option<Data> {
@@ -251,9 +260,7 @@ impl Executor for GraphicsHalf {
         // filled again: an upload costs the clock a pointer move each way.
         self.spare.extend(self.cells.spent.drain().map(|up| up.texels));
         let made = match frame.value() {
-            goofi_core::Value::Texture(texture) => match &**texture {
-                Texture::Pixels(pixels) => Some(Upload::pixels(pixels)),
-            },
+            goofi_core::Value::Texture(texture) => texture.pixels().ok().map(Upload::pixels),
             _ => Upload::of(frame, self.spare.pop().unwrap_or_default()),
         };
         if let Some(up) = made {

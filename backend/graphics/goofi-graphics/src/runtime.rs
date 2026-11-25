@@ -21,6 +21,8 @@ use crate::gpu::{padded_row, Gpu, Want};
 use crate::half::Cells;
 use crate::resources::{Readback, Slot, State, FAILED, PENDING, READY};
 use crate::plan::{Input, Pass, Plan};
+use crate::resources::Made;
+use goofi_core::texture::Texture;
 use crate::shader;
 
 /// What the graph asks of the render thread. Applied at the top of a tick, so no op waits on one.
@@ -302,9 +304,25 @@ impl Runtime {
         let Some(meeting) = cells.node.as_ref().filter(|meeting| meeting.ready.load(Ordering::Acquire)) else {
             return shows(&self.states);
         };
+        // The child joins where its CUDA device is this device: its pictures then stay there. A
+        // child that started again joins again, and the buffers are made for it anew.
+        if let (Some(door), Some(state)) = (&meeting.door, self.states.get_mut(&uid)) {
+            if let Some(joined) = crate::share::Link::accept(door) {
+                state.link = Some(joined);
+                meeting.linked.store(true, Ordering::Relaxed);
+            }
+        }
+        let stamped = |texture: Texture| {
+            let mut meta = goofi_core::Meta::new();
+            meta.set_procstart(Some(t));
+            meta.set_procend(Some(t));
+            goofi_core::Data::texture(texture, meta)
+        };
         let mut inputs: crate::half::Asked = Vec::new();
         let mut copies: Vec<(wgpu::Buffer, (u32, u32))> = Vec::new();
         let mut copied: Vec<usize> = Vec::new();
+        // What went wrong in this turn, and whether it was the link that failed.
+        let (mut wrong, mut broken): (Option<String>, bool) = (None, false);
         for (slot, input) in self.plan.stages[i].inputs.iter().enumerate() {
             let behind = match input {
                 Input::Stage(j) => self.states.get(&self.plan.stages[*j].uid).and_then(|state| state.out.as_ref()).map(|out| (out.texture.clone(), out.size)),
@@ -312,48 +330,77 @@ impl Runtime {
                 // A frame off another engine's wire is the half's already.
                 Input::Upload(_) => continue,
             };
-            match (behind, self.states.get_mut(&uid)) {
-                (Some((texture, size)), Some(state)) => {
+            let (Some((texture, size)), Some(state)) = (behind, self.states.get_mut(&uid)) else {
+                inputs.push((slot, None));
+                continue;
+            };
+            // Into memory the child maps, where the two share; else into a buffer this thread maps.
+            match state.link.as_mut().map(|link| link.input(&self.gpu, slot, size)) {
+                Some(Ok((buffer, shared))) => {
+                    crate::resources::copy_out(encoder, &texture, &buffer, size);
+                    inputs.push((slot, stamped(Texture::Shared(shared)).ok()));
+                }
+                Some(Err(why)) => {
+                    (wrong, broken) = (Some(why), true);
+                    break;
+                }
+                None => {
                     let buffer = state.download(&self.gpu, slot, size);
                     crate::resources::copy_out(encoder, &texture, &buffer, size);
                     copies.push((buffer, size));
                     copied.push(slot);
                 }
-                _ => inputs.push((slot, None)),
             }
         }
-        if !copies.is_empty() {
+        let linked = self.states.get(&uid).is_some_and(|state| state.link.is_some());
+        if wrong.is_none() && (linked || !copies.is_empty()) {
             // The node reads what is drawn, so everything encoded so far goes to the device now.
+            // A child that shares writes where the last tick's copy read, so that is done first.
             let drawn = std::mem::replace(encoder, self.gpu.device.create_command_encoder(&Default::default()));
-            self.gpu.queue.submit([drawn.finish()]);
+            let index = self.gpu.queue.submit([drawn.finish()]);
+            if linked {
+                let _ = self.gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+            }
             for (slot, picture) in copied.into_iter().zip(crate::resources::pictures(&self.gpu, &copies)) {
-                let mut meta = goofi_core::Meta::new();
-                meta.set_procstart(Some(t));
-                meta.set_procend(Some(t));
-                match picture.and_then(|pixels| goofi_core::Data::texture(goofi_core::texture::Texture::Pixels(pixels), meta)) {
+                match picture.and_then(|pixels| stamped(Texture::Pixels(pixels))) {
                     Ok(frame) => inputs.push((slot, Some(frame))),
-                    Err(why) => {
-                        self.trouble(uid, Some(format!("readback: {why}")));
-                        return shows(&self.states);
-                    }
+                    Err(why) => wrong = Some(format!("readback: {why}")),
                 }
             }
         }
-        let made = meeting.call(&cells.bell, inputs);
-        let picture = match made.as_ref().map(|frame| frame.value()) {
-            Some(goofi_core::Value::Texture(texture)) => {
-                let goofi_core::texture::Texture::Pixels(pixels) = &**texture;
-                Some(crate::resources::Upload::pixels(pixels))
-            }
-            _ => None,
+        let made = if wrong.is_none() { meeting.call(&cells.bell, inputs) } else { None };
+        let texture = made.as_ref().and_then(|frame| frame.as_texture().ok());
+        let link = self.states.get_mut(&uid).and_then(|state| state.link.as_mut());
+        let picture = match (texture, link) {
+            (Some(Texture::Pixels(pixels)), _) => Some(Made::Texels(crate::resources::Upload::pixels(pixels))),
+            (Some(Texture::Shared(named)), link) => match link.and_then(|link| link.buffer(named.id)) {
+                Some((buffer, shared)) => Some(Made::Shared(buffer, shared)),
+                None => {
+                    wrong = Some("the node returned a texture in memory this engine does not share with it".into());
+                    None
+                }
+            },
+            (None, _) => None,
         };
-        if let Some(picture) = &picture {
-            cells.produced.store(crate::half::pack((picture.width, picture.height)), Ordering::Relaxed);
+        // What the child asked for in this run: a target of the size of the pictures it makes.
+        if let Some(Err(why)) = self.states.get_mut(&uid).and_then(|state| state.link.as_mut()).map(|link| link.asked(&self.gpu)) {
+            (wrong, broken) = (Some(why), true);
         }
-        match self.states.get_mut(&uid).map(|state| state.show(&self.gpu, picture.as_ref(), wants)) {
-            Some(Err(error)) => self.trouble(uid, Some(error)),
-            _ if self.troubles.contains_key(&uid) => self.trouble(uid, None),
-            _ => {}
+        if let Some(picture) = &picture {
+            cells.produced.store(crate::half::pack(picture.size()), Ordering::Relaxed);
+        }
+        if let Some(state) = self.states.get_mut(&uid) {
+            if let Err(why) = state.show(&self.gpu, encoder, picture.as_ref(), wants) {
+                wrong = Some(why);
+            }
+            // A link that failed is gone: the node's pictures cross as pixels from the next tick.
+            if broken {
+                state.link = None;
+                meeting.linked.store(false, Ordering::Relaxed);
+            }
+        }
+        if wrong.is_some() || self.troubles.contains_key(&uid) {
+            self.trouble(uid, wrong);
         }
         note_share(&cells, began.elapsed().as_secs_f64() * f64::from(self.fps.load(Ordering::Relaxed)));
         shows(&self.states)

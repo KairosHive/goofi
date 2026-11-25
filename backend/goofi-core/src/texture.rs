@@ -88,21 +88,48 @@ impl Pixels {
     }
 }
 
-/// Where a texture frame's picture is held. The CPU form is the one form so far.
+/// Where a texture frame's picture is held.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Texture {
     Pixels(Pixels),
+    Shared(Shared),
+}
+
+/// A picture in device memory that the graphics engine and the child of a node its tick calls
+/// both map: RGBA `f16` rows, `pitch` bytes apart. It names a buffer of that pair, and no wire
+/// carries it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Shared {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pitch: u32,
 }
 
 impl Texture {
     pub fn size(&self) -> (u32, u32) {
         match self {
             Self::Pixels(p) => (p.width, p.height),
+            Self::Shared(s) => (s.width, s.height),
         }
     }
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Pixels(p) => p.validate(),
+            Self::Shared(s) => {
+                dimensions(s.width, s.height)?;
+                if u64::from(s.pitch) < u64::from(s.width) * 8 {
+                    return Err(format!("a shared texture's pitch {} is under its row of {} texels", s.pitch, s.width));
+                }
+                Ok(())
+            }
+        }
+    }
+    /// The CPU pixels, which a picture in shared device memory has none of outside its pair.
+    pub fn pixels(&self) -> Result<&Pixels, String> {
+        match self {
+            Self::Pixels(p) => Ok(p),
+            Self::Shared(_) => Err("a texture in shared device memory has no pixels outside the graphics engine and its node".into()),
         }
     }
 }
