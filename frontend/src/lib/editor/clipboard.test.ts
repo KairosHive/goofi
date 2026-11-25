@@ -26,7 +26,7 @@ describe('clipboard — the payload is the manager’s own fragment, carried ver
 			parseClipboard(JSON.stringify({ __goofi_clip__: 2, doc: fragment() })),
 			'an older payload shape is refused rather than half-read'
 		).toBeNull();
-		expect(parseClipboard(JSON.stringify({ __goofi_clip__: 3, doc: {} })), 'no nodes map').toBeNull();
+		expect(parseClipboard(JSON.stringify({ __goofi_clip__: 4, doc: {} })), 'no nodes map').toBeNull();
 	});
 
 	it('centres a fragment on its ROOTS, so a paste anchors where the user is looking', () => {

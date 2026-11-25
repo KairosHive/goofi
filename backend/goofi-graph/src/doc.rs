@@ -37,6 +37,26 @@ pub struct PatchDoc {
     pub arrangement: Option<Value>,
 }
 
+/// What a copy reads and a paste takes: the records, and the cables that feed them from outside.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Fragment {
+    #[serde(flatten)]
+    pub doc: PatchDoc,
+    /// The graph the copy was read from: the one place its outside cables are restored.
+    #[serde(default)]
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputLink>,
+}
+
+/// A cable into a fragment from a node outside it, and that node's name to know it by.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InputLink {
+    #[serde(flatten)]
+    pub link: Link,
+    pub name: String,
+}
+
 /// One variable as the document carries it: `{control?, expression?, lock?}`. The replica carries no
 /// value — a value is a frame on the data plane. The manifest carries a narrow one as a literal;
 /// a wide array is a file beside it.

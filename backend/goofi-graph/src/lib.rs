@@ -3698,6 +3698,43 @@ impl Graph {
         doc::PatchDoc { nodes, links, ..Default::default() }
     }
 
+    /// What a copy reads: the fragment of `uids`, and every cable into it from a node outside.
+    pub fn copy(&self, uids: &[Uid]) -> doc::Fragment {
+        let want: HashSet<Uid> = uids.iter().copied().collect();
+        let inputs = self
+            .patch
+            .links
+            .values()
+            .filter(|l| want.contains(&l.node_in) && !want.contains(&l.node_out))
+            .map(|l| doc::InputLink {
+                link: link_record(l).1,
+                name: self.name(l.node_out).unwrap_or_default().to_string(),
+            })
+            .collect();
+        doc::Fragment { doc: self.fragment(uids), origin: self.runtime.instance.clone(), inputs }
+    }
+
+    /// Wire a pasted fragment's outside cables to the copies `rename` names; answers the dropped.
+    /// A cable is dropped when its source is not this graph's node, or the paste's scope refuses it.
+    pub fn link_inputs(&mut self, fragment: &doc::Fragment, rename: &HashMap<String, String>) -> Vec<String> {
+        let here = fragment.origin == self.runtime.instance;
+        let mut dropped = Vec::new();
+        for input in &fragment.inputs {
+            let l = &input.link;
+            let source = Uid::from_hex(&l.node_out).filter(|u| here && self.name(*u) == Some(input.name.as_str()));
+            let copy = rename.get(&l.node_in).and_then(|u| Uid::from_hex(u));
+            let wired = match (source, copy) {
+                (Some(from), Some(to)) => self.add_link(from, &l.slot_out, to, &l.slot_in),
+                (None, _) => Err("its source is not in this patch".to_string()),
+                (_, None) => Err("its input is not in the fragment".to_string()),
+            };
+            if let Err(why) = wired {
+                dropped.push(format!("cable {}.{} > {}.{} dropped: {why}", input.name, l.slot_out, l.node_in, l.slot_in));
+            }
+        }
+        dropped
+    }
+
     /// One node's record as the document carries it. `kept` says whether a scope rides: a
     /// fragment drops a parent it does not carry, a projection carries every parent.
     fn node_record(&self, uid: Uid, e: &NodeEntry, kept: &dyn Fn(Uid) -> bool) -> doc::NodeRecord {

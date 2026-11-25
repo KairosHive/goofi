@@ -675,7 +675,8 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
 
     let before_nodes = g.nodes().len();
     let fragment = g.call("nodes copy", j!({ "nodes": [outer] }))["doc"].clone();
-    // A fragment is SELF-CONTAINED: it holds the whole subtree and no cable that reaches out of it.
+    // A fragment holds the whole subtree, and beside it the one cable that feeds it from outside.
+    assert_eq!(fragment["inputs"].as_array().map(Vec::len), Some(1), "the LFO's cable into the facade: {fragment}");
     let held = fragment["nodes"].as_object().expect("a nodes map").len();
     assert_eq!(held, 9, "two facades, their four ports, and the three leaves inside: {fragment}");
     assert!(fragment["links"].as_object().is_some_and(|l| !l.is_empty()), "…and its inner wiring: {fragment}");
@@ -706,12 +707,18 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     uniq.dedup();
     assert_eq!(uniq.len(), names.len(), "no two nodes wear one name after a copy: {names:?}");
 
-    // Wiring INSIDE the copy is the original's; wiring to the patch AROUND it is not, because a copy
-    // is a new node and a new node arrives unconnected.
+    // Wiring INSIDE the copy is the original's, and every INPUT keeps its cable: the LFO outside
+    // the copy feeds the copy as it feeds the original. An output's cable is not copied.
     let links = doc["links"].as_object().map(|l| l.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
     let touches = |uid: &str| links.iter().filter(|l| l["node_out"] == uid || l["node_in"] == uid).count();
-    assert_eq!(touches(&copy), 0, "the copied facade is not wired into the patch: {links:?}");
-    assert!(touches(&leaf) > 0, "but its innards are wired to each other: {links:?}");
+    assert!(touches(&leaf) > 0, "its innards are wired to each other: {links:?}");
+    let fed_by_osc: Vec<&str> = links.iter().filter(|l| l["node_out"] == hex(osc))
+        .filter_map(|l| l["node_in"].as_str()).collect();
+    assert_eq!(fed_by_osc.len(), 2, "the LFO feeds the original and the copy: {links:?}");
+    assert!(fed_by_osc.iter().any(|port| g.ports(&copy).iter().any(|p| p == port)),
+            "…the copy through its own port: {links:?}");
+    assert_eq!(links.iter().filter(|l| l["node_in"] == hex(sink)).count(), 1,
+               "the copy's output is wired to nothing: {links:?}");
 
     // An expression INSIDE the copy names the copy's own node. A fragment carries display names,
     // and a paste mints fresh ones — so a source left spelling the original's name binds the copy
@@ -741,7 +748,16 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
 
     // A fragment outlives the patch it was read from, which is what makes a paste into a SECOND
     // goofi work — the clipboard carries the shape, never a uid the other side has to still hold.
+    // Its outside cable stays behind: the node there with the LFO's uid and name is another node.
     let elsewhere = Goofi::new();
+    let twin = elsewhere.add("LFO");
+    assert_eq!((hex(twin), elsewhere.doc()["nodes"][hex(twin)]["name"].clone()),
+               (hex(osc), g.doc()["nodes"][hex(osc)]["name"].clone()), "the twin wears the LFO's uid and name");
+    let pasted = elsewhere.call("nodes paste", j!({ "doc": g.call("nodes copy", j!({ "nodes": [outer] }))["doc"] }));
+    assert_eq!(pasted["warnings"].as_array().map(Vec::len), Some(1), "the outside cable is reported dropped: {pasted}");
+    let there = elsewhere.doc();
+    assert!(there["links"].as_object().is_some_and(|l| l.values().all(|l| l["node_out"] != hex(twin))),
+            "…and the twin feeds nothing: {}", there["links"]);
     let landed = elsewhere.call("nodes paste", j!({ "doc": g.call("nodes copy", j!({ "nodes": [inner] }))["doc"] }))
         ["rename"].clone();
     let there = landed[&inner].as_str().expect("the sub-patch landed").to_string();
@@ -763,7 +779,6 @@ fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
     let nested = elsewhere.call("nodes paste", j!({ "doc": g.call("nodes copy", j!({ "nodes": [inner] }))["doc"],
                                                     "inst_id": host }))["rename"][&inner].as_str().unwrap().to_string();
     assert!(elsewhere.members(&host).contains(&nested), "the pasted root went inside: {:?}", elsewhere.members(&host));
-    let _ = (osc, sink);
 }
 
 #[test]

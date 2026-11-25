@@ -1,6 +1,6 @@
 /** The clipboard payload: a graph fragment in the shape a `.gfi` carries, and its version. Putting
  * it on the platform clipboard is `$lib/clipboard`'s job; this module is only the shape. */
-const CLIP_VERSION = 3; // bumped on a shape change, so an older tab's text is refused
+const CLIP_VERSION = 4; // bumped on a shape change, so an older tab's text is refused
 
 export interface Clipboard {
 	__goofi_clip__: number;
@@ -10,6 +10,9 @@ export interface Clipboard {
 export interface GraphFragment {
 	nodes: Record<string, { pos?: [number, number]; scope?: string }>;
 	links?: Record<string, unknown>;
+	/** The cables that feed the fragment from outside, and the patch they are restored in. */
+	inputs?: unknown[];
+	origin?: string;
 }
 
 export function serializeClipboard(doc: GraphFragment): Clipboard {

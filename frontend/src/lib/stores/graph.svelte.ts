@@ -798,7 +798,7 @@ export class GraphStore {
 	}
 
 	/** Read `uids` and everything they hold — members, ports and nested sub-patches, to any depth —
-	 * as a self-contained fragment in the shape a `.gfi` carries. */
+	 * as a fragment in the shape a `.gfi` carries, with the cables that feed it from outside. */
 	async copyNodes(uids: string[]): Promise<GraphFragment> {
 		const r = await this.ctl.call<{ doc: GraphFragment }>('nodes copy', { nodes: uids });
 		return r.doc;

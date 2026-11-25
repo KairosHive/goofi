@@ -98,15 +98,15 @@ op!(NodesInspect, "nodes inspect", 1, NodesInspectArgs {
 op!(NodesCopy, "nodes copy", 1, NodesCopyArgs {
     pub nodes: Vec<NodeRef>,
 },
-    "Read `nodes` and everything they hold — a sub-patch's members, their ports and the nested sub-patches below them, to any depth — as a self-contained fragment. A link rides only when BOTH its ends are in the fragment. The shape is the `.gfi`'s own, so a fragment is a patch's worth of nodes in the format a patch is written in, and `nodes paste` is what puts one back.",
-    "{doc: {nodes, links}} — the fragment: node records keyed by uid, links keyed by `out.slot>in.slot`");
+    "Read `nodes` and everything they hold — a sub-patch's members, their ports and the nested sub-patches below them, to any depth — as a fragment. `links` holds the cables with BOTH ends in the fragment; `inputs` holds the cables that feed it from a node outside. The shape is the `.gfi`'s own beside `inputs` and `origin`, so a fragment is a patch's worth of nodes in the format a patch is written in, and `nodes paste` is what puts one back.",
+    "{doc: {nodes, links, inputs, origin}} — the fragment: node records keyed by uid, links keyed by `out.slot>in.slot`, each outside cable as a link with its source's `name`, and the patch it was read from");
 
 op!(NodesPaste, "nodes paste", 0, NodesPasteArgs {
     pub doc: Value,
     pub pos: Option<[f64; 2]>,
     pub inst_id: Option<NodeRef>,
 },
-    "Add a `nodes copy` fragment on FRESH uids and fresh names, so it lands beside whatever it was copied from rather than colliding with it. `pos` shifts the whole fragment by that offset; `inst_id` puts its roots inside that sub-patch, absent = root. A record naming a scope that is IN the fragment keeps the shape it was copied with. One command, so it is one undo step.",
+    "Add a `nodes copy` fragment on FRESH uids and fresh names, so it lands beside whatever it was copied from rather than colliding with it. `pos` shifts the whole fragment by that offset; `inst_id` puts its roots inside that sub-patch, absent = root. A record naming a scope that is IN the fragment keeps the shape it was copied with. Every input keeps its cable: a source in the fragment is its copy, a source outside is the original node. An outside cable is dropped in another patch, or where the target sub-patch cannot reach its source. One command, so it is one undo step.",
     "{rename: {old_uid: new_uid}, warnings: string[]} — every record's uid in the fragment mapped to the one it was created at, and what the paste dropped");
 
 op!(NodesGroup, "nodes group", 1, NodesGroupArgs {
@@ -520,7 +520,7 @@ impl ReadOp for NodesInspect {
 impl ReadOp for NodesCopy {
     fn run(tx: &mut Txn, a: NodesCopyArgs) -> Result<Value, String> {
         let uids = NodeRef::resolve_all(&a.nodes, &tx.g)?;
-        Ok(json!({ "doc": tx.g.fragment(&tx.g.subtree_of(&uids)) }))
+        Ok(json!({ "doc": tx.g.copy(&tx.g.subtree_of(&uids)) }))
     }
 }
 
@@ -528,9 +528,11 @@ impl WriteOp for NodesPaste {
     const LABEL: &str = "Paste nodes";
     fn run(tx: &mut Txn, a: NodesPasteArgs) -> Result<Value, String> {
         let scope = a.inst_id.map(|s| s.resolve(&tx.g)).transpose()?;
-        let doc = serde_json::from_value(a.doc).map_err(|e| format!("doc: {e}"))?;
-        let (doc, warnings) = tx.g.admit(doc)?;
-        let rename = tx.g.import_fragment(&doc, scope, a.pos.unwrap_or([0.0, 0.0]))?;
+        let mut fragment: goofi_graph::doc::Fragment = serde_json::from_value(a.doc).map_err(|e| format!("doc: {e}"))?;
+        let mut warnings;
+        (fragment.doc, warnings) = tx.g.admit(fragment.doc)?;
+        let rename = tx.g.import_fragment(&fragment.doc, scope, a.pos.unwrap_or([0.0, 0.0]))?;
+        warnings.extend(tx.g.link_inputs(&fragment, &rename));
         for uid in rename.values() {
             tx.emit(Event::NodeAdded { uid: uid.clone() });
         }
