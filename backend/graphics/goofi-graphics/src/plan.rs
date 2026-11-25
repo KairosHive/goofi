@@ -11,7 +11,7 @@ use goofi_node::{GraphView, ParamDecl, Uid};
 
 use crate::gpu::{Gpu, Want};
 use crate::half::Cells;
-use crate::scan::Built;
+use crate::scan::{Built, Kind};
 use crate::Instance;
 
 /// What a slot's readers asked for, in the ONE cell [`Stage::wants`] reads: the box on two 16-bit
@@ -53,6 +53,14 @@ pub fn asked(params: &[AtomicU64], base: usize) -> (u32, u32) {
     (axis(0), axis(1))
 }
 
+/// What a stage is at its turn in the tick.
+pub enum Pass {
+    /// A shader's render pass, once its pipeline is built.
+    Shader(Built),
+    /// A node the render thread calls and waits for: its picture is the stage's output.
+    Node,
+}
+
 pub enum Input {
     /// Another stage's output, by index into `Plan::stages`.
     Stage(usize),
@@ -64,7 +72,7 @@ pub enum Input {
 
 pub struct Stage {
     pub uid: Uid,
-    pub pass: Built,
+    pub pass: Pass,
     pub inputs: Vec<Input>,
     /// How many state buffers this stage carries between two ticks.
     pub state: usize,
@@ -179,8 +187,8 @@ pub fn compile(
     let mut stages = Vec::with_capacity(order.len());
     for uid in &order {
         let inst = &live[uid];
-        if let Some(why) = inst.class.pipeline.error() {
-            faults.push((*uid, format!("shader: {why}")));
+        if let Some(why) = inst.class.refusal() {
+            faults.push((*uid, why));
         }
         let manifest = inst.class.manifest;
         let arrays = crate::shader::array_inputs(manifest).count();
@@ -197,7 +205,10 @@ pub fn compile(
             .collect();
         stages.push(Stage {
             uid: *uid,
-            pass: inst.class.pipeline.clone(),
+            pass: match &inst.class.kind {
+                Kind::Shader(built) => Pass::Shader(built.clone()),
+                Kind::Node { .. } => Pass::Node,
+            },
             inputs,
             state: inst.class.state.len(),
             arrays,
@@ -249,7 +260,8 @@ pub fn sizes(view: &GraphView<'_>, live: &HashMap<Uid, Instance>) -> HashMap<Uid
 /// A node's size: what `common/width` and `common/height` hold, and for a zero on an axis the
 /// first fed texture input's size on that axis: a stage's, or the frame another engine sent. With
 /// no texture behind it, the frame its first array input uploaded. A chain that follows itself,
-/// or one that follows nothing, takes the patch's default.
+/// or one that follows nothing, takes the patch's default. A node the tick calls is the size of
+/// the picture it last made.
 fn size_of(
     uid: Uid,
     live: &HashMap<Uid, Instance>,
@@ -260,6 +272,11 @@ fn size_of(
 ) -> (u32, u32) {
     if let Some(known) = sizes.get(&uid) {
         return *known;
+    }
+    if let Some(inst) = live.get(&uid).filter(|inst| inst.class.node()) {
+        let made = crate::half::unpack(inst.cells.produced.load(Ordering::Relaxed)).unwrap_or(fallback);
+        sizes.insert(uid, made);
+        return made;
     }
     let (w, h) = live.get(&uid).map_or((0, 0), Instance::asked);
     let mut answer = (w, h);

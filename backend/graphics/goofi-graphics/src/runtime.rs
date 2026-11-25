@@ -20,7 +20,7 @@ use goofi_node::Uid;
 use crate::gpu::{padded_row, Gpu, Want};
 use crate::half::Cells;
 use crate::resources::{Readback, Slot, State, FAILED, PENDING, READY};
-use crate::plan::{Input, Plan};
+use crate::plan::{Input, Pass, Plan};
 use crate::shader;
 
 /// What the graph asks of the render thread. Applied at the top of a tick, so no op waits on one.
@@ -127,16 +127,20 @@ impl Timer {
             let stamp = |at: usize| u64::from_le_bytes(pair[at..at + 8].try_into().expect("eight bytes"));
             // A pair the device left unordered measured nothing.
             let Some(ticks) = stamp(8).checked_sub(stamp(0)) else { continue };
-            let share = ticks as f64 * nanos_per_tick * 1e-9 * fps;
-            let held = f64::from_bits(cells.frame_share.load(Ordering::Relaxed));
-            let next = if held > 0.0 { held + (share - held) * SHARE_ALPHA } else { share };
-            cells.frame_share.store(next.to_bits(), Ordering::Relaxed);
+            note_share(cells, ticks as f64 * nanos_per_tick * 1e-9 * fps);
         }
         drop(times);
         self.read.unmap();
         self.flight.clear();
         true
     }
+}
+
+/// One more measured turn of a stage, as a share of the frame period, into its smoothed readout.
+fn note_share(cells: &Cells, share: f64) {
+    let held = f64::from_bits(cells.frame_share.load(Ordering::Relaxed));
+    let next = if held > 0.0 { held + (share - held) * SHARE_ALPHA } else { share };
+    cells.frame_share.store(next.to_bits(), Ordering::Relaxed);
 }
 
 pub struct Runtime {
@@ -282,9 +286,77 @@ impl Runtime {
         if let Some(held) = &stage.pipeline {
             return Some(held.clone());
         }
-        let Some(Ok(pipeline)) = stage.pass.peek() else { return None };
+        let Pass::Shader(built) = &stage.pass else { return None };
+        let Some(Ok(pipeline)) = built.peek() else { return None };
         stage.pipeline = Some(pipeline.clone());
         Some(pipeline)
+    }
+
+    /// A node's turn in the tick. What the stages before it drew goes to the device and is read
+    /// back; the node's half runs it while this thread waits; the picture it made is uploaded as
+    /// the stage's output. False while the stage has no output to show.
+    fn call(&mut self, i: usize, encoder: &mut wgpu::CommandEncoder, wants: [Option<(u32, u32)>; 4], t: f64) -> bool {
+        let began = Instant::now();
+        let (uid, cells) = (self.plan.stages[i].uid, self.plan.stages[i].cells.clone());
+        let shows = |states: &HashMap<Uid, State>| states.get(&uid).is_some_and(|state| state.out.is_some());
+        let Some(meeting) = cells.node.as_ref().filter(|meeting| meeting.ready.load(Ordering::Acquire)) else {
+            return shows(&self.states);
+        };
+        let mut inputs: crate::half::Asked = Vec::new();
+        let mut copies: Vec<(wgpu::Buffer, (u32, u32))> = Vec::new();
+        let mut copied: Vec<usize> = Vec::new();
+        for (slot, input) in self.plan.stages[i].inputs.iter().enumerate() {
+            let behind = match input {
+                Input::Stage(j) => self.states.get(&self.plan.stages[*j].uid).and_then(|state| state.out.as_ref()).map(|out| (out.texture.clone(), out.size)),
+                Input::None => None,
+                // A frame off another engine's wire is the half's already.
+                Input::Upload(_) => continue,
+            };
+            match (behind, self.states.get_mut(&uid)) {
+                (Some((texture, size)), Some(state)) => {
+                    let buffer = state.download(&self.gpu, slot, size);
+                    crate::resources::copy_out(encoder, &texture, &buffer, size);
+                    copies.push((buffer, size));
+                    copied.push(slot);
+                }
+                _ => inputs.push((slot, None)),
+            }
+        }
+        if !copies.is_empty() {
+            // The node reads what is drawn, so everything encoded so far goes to the device now.
+            let drawn = std::mem::replace(encoder, self.gpu.device.create_command_encoder(&Default::default()));
+            self.gpu.queue.submit([drawn.finish()]);
+            for (slot, picture) in copied.into_iter().zip(crate::resources::pictures(&self.gpu, &copies)) {
+                let mut meta = goofi_core::Meta::new();
+                meta.set_procstart(Some(t));
+                meta.set_procend(Some(t));
+                match picture.and_then(|pixels| goofi_core::Data::texture(goofi_core::texture::Texture::Pixels(pixels), meta)) {
+                    Ok(frame) => inputs.push((slot, Some(frame))),
+                    Err(why) => {
+                        self.trouble(uid, Some(format!("readback: {why}")));
+                        return shows(&self.states);
+                    }
+                }
+            }
+        }
+        let made = meeting.call(&cells.bell, inputs);
+        let picture = match made.as_ref().map(|frame| frame.value()) {
+            Some(goofi_core::Value::Texture(texture)) => {
+                let goofi_core::texture::Texture::Pixels(pixels) = &**texture;
+                Some(crate::resources::Upload::pixels(pixels))
+            }
+            _ => None,
+        };
+        if let Some(picture) = &picture {
+            cells.produced.store(crate::half::pack((picture.width, picture.height)), Ordering::Relaxed);
+        }
+        match self.states.get_mut(&uid).map(|state| state.show(&self.gpu, picture.as_ref(), wants)) {
+            Some(Err(error)) => self.trouble(uid, Some(error)),
+            _ if self.troubles.contains_key(&uid) => self.trouble(uid, None),
+            _ => {}
+        }
+        note_share(&cells, began.elapsed().as_secs_f64() * f64::from(self.fps.load(Ordering::Relaxed)));
+        shows(&self.states)
     }
 
     /// One tick: upload what arrived, write the uniforms, draw every demanded stage, and read
@@ -295,9 +367,10 @@ impl Runtime {
         let t = self.time.now();
         let recording = self.recording.load(Ordering::Relaxed);
         let want = self.plan.demanded(recording);
-        if self.timer.is_some() {
-            // A stage no one asks for is not drawn: it takes none of the frame, and says so.
-            for (stage, _) in self.plan.stages.iter().zip(&want).filter(|(_, drawn)| !**drawn) {
+        // A stage no one asks for is not drawn: it takes none of the frame, and says so where
+        // its turn is timed (a pass by the device's timestamps, a node's call by this clock).
+        for (stage, _) in self.plan.stages.iter().zip(&want).filter(|(_, drawn)| !**drawn) {
+            if self.timer.is_some() || matches!(stage.pass, Pass::Node) {
                 stage.cells.frame_share.store(0f64.to_bits(), Ordering::Relaxed);
             }
         }
@@ -337,80 +410,87 @@ impl Runtime {
             if !self.states.contains_key(&uid) {
                 continue;
             }
-            let Some(pipeline) = self.pipeline(i) else { continue };
-            let readied = match self.states.get_mut(&uid) {
-                Some(state) => state.ensure_out(&self.gpu, size, wants, buffers),
-                None => continue,
-            };
-            if let Err(error) = readied {
-                self.trouble(uid, Some(error));
-                continue;
-            }
-            if self.troubles.get(&uid).is_some_and(|why| why.starts_with("readback:")) {
-                self.trouble(uid, None);
+            if matches!(self.plan.stages[i].pass, Pass::Node) {
+                if !self.call(i, &mut encoder, wants, t) {
+                    continue;
+                }
+            } else {
+                let Some(pipeline) = self.pipeline(i) else { continue };
+                let readied = match self.states.get_mut(&uid) {
+                    Some(state) => state.ensure_out(&self.gpu, size, wants, buffers),
+                    None => continue,
+                };
+                if let Err(error) = readied {
+                    self.trouble(uid, Some(error));
+                    continue;
+                }
+                if self.troubles.get(&uid).is_some_and(|why| why.starts_with("readback:")) {
+                    self.trouble(uid, None);
+                }
+                let stage = &self.plan.stages[i];
+                let Some(state) = self.states.get_mut(&stage.uid) else { continue };
+                for (k, cell) in stage.cells.uploads.iter().enumerate() {
+                    if let Some(up) = cell.take() {
+                        state.upload(&self.gpu, k, &up);
+                        // Back to the half, which frees it or fills it again: not this thread's.
+                        stage.cells.spent.push(up);
+                    }
+                }
+                self.gpu.queue.write_buffer(&state.time, 0, &(self.time.position_at(t) as f32).to_le_bytes());
+                self.gpu.queue.write_buffer(&state.frame, 0, &state.count.to_le_bytes());
+                let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
+                self.gpu.queue.write_buffer(&state.resolution, 0, &res);
+                if let Some(buf) = &state.params {
+                    let ranges = &state.ranges[..state.ranges.len().min(stage.arrays)];
+                    let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, ranges);
+                    self.gpu.queue.write_buffer(buf, 0, &bytes);
+                }
+                // Cloned handles, so reading another stage's output ends the borrow of `states`.
+                let mut views: Vec<wgpu::TextureView> = stage
+                    .inputs
+                    .iter()
+                    .map(|input| match input {
+                        Input::Stage(j) => self
+                            .states
+                            .get(&self.plan.stages[*j].uid)
+                            .and_then(|s| s.out.as_ref())
+                            .map_or(&self.gpu.blank, |t| &t.view),
+                        Input::Upload(k) => self.states[&stage.uid]
+                            .uploads
+                            .get(*k)
+                            .and_then(|u| u.as_ref())
+                            .map_or(&self.gpu.blank, |t| &t.view),
+                        Input::None => &self.gpu.blank,
+                    })
+                    .cloned()
+                    .collect();
+                let state = &self.states[&stage.uid];
+                // After the inputs, one head layout per ARRAY input, in the prelude's order.
+                views.extend((0..stage.arrays).map(|k| {
+                    state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
+                }));
+                let group0 = state.group0(&self.gpu);
+                let group1 = self.gpu.bind_textures(&stage.layouts.0, &views);
+                let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
+                let group2 = self.gpu.bind_textures(&stage.layouts.1, &held);
+                // Cloned, so the readback below may take `states` mutably.
+                let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
+                // The output, then one target per state buffer — the order the prelude writes them in.
+                let targets: Vec<wgpu::TextureView> =
+                    std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
+                let query = timing.as_ref().filter(|_| timed.len() < TIMED_MAX).map(|set| (set, 2 * timed.len() as u32));
+                if query.is_some() {
+                    timed.push(stage.cells.clone());
+                }
+                let mut pass = crate::gpu::clear_pass(&mut encoder, &targets, query);
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group0, &[]);
+                pass.set_bind_group(1, &group1, &[]);
+                pass.set_bind_group(2, &group2, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
             }
             let stage = &self.plan.stages[i];
-            let Some(state) = self.states.get_mut(&stage.uid) else { continue };
-            for (k, cell) in stage.cells.uploads.iter().enumerate() {
-                if let Some(up) = cell.take() {
-                    state.upload(&self.gpu, k, &up);
-                    // Back to the half, which frees it or fills it again: not this thread's.
-                    stage.cells.spent.push(up);
-                }
-            }
-            self.gpu.queue.write_buffer(&state.time, 0, &(self.time.position_at(t) as f32).to_le_bytes());
-            self.gpu.queue.write_buffer(&state.frame, 0, &state.count.to_le_bytes());
-            let res = [(stage.size.0 as f32).to_le_bytes(), (stage.size.1 as f32).to_le_bytes()].concat();
-            self.gpu.queue.write_buffer(&state.resolution, 0, &res);
-            if let Some(buf) = &state.params {
-                let ranges = &state.ranges[..state.ranges.len().min(stage.arrays)];
-                let bytes = shader::uniform_bytes(stage.decls, &stage.cells.params, ranges);
-                self.gpu.queue.write_buffer(buf, 0, &bytes);
-            }
-            // Cloned handles, so reading another stage's output ends the borrow of `states`.
-            let mut views: Vec<wgpu::TextureView> = stage
-                .inputs
-                .iter()
-                .map(|input| match input {
-                    Input::Stage(j) => self
-                        .states
-                        .get(&self.plan.stages[*j].uid)
-                        .and_then(|s| s.out.as_ref())
-                        .map_or(&self.gpu.blank, |t| &t.view),
-                    Input::Upload(k) => self.states[&stage.uid]
-                        .uploads
-                        .get(*k)
-                        .and_then(|u| u.as_ref())
-                        .map_or(&self.gpu.blank, |t| &t.view),
-                    Input::None => &self.gpu.blank,
-                })
-                .cloned()
-                .collect();
-            let state = &self.states[&stage.uid];
-            // After the inputs, one head layout per ARRAY input, in the prelude's order.
-            views.extend((0..stage.arrays).map(|k| {
-                state.layouts.get(k).and_then(|t| t.as_ref()).map_or(&self.gpu.blank, |t| &t.view).clone()
-            }));
-            let group0 = state.group0(&self.gpu);
-            let group1 = self.gpu.bind_textures(&stage.layouts.0, &views);
-            let held: Vec<wgpu::TextureView> = state.buffers.iter().map(|b| b[0].view.clone()).collect();
-            let group2 = self.gpu.bind_textures(&stage.layouts.1, &held);
-            // Cloned, so the readback below may take `states` mutably.
-            let out_view = state.out.as_ref().expect("ensure_out made it").view.clone();
-            // The output, then one target per state buffer — the order the prelude writes them in.
-            let targets: Vec<wgpu::TextureView> =
-                std::iter::once(out_view.clone()).chain(state.buffers.iter().map(|b| b[1].view.clone())).collect();
-            let query = timing.as_ref().filter(|_| timed.len() < TIMED_MAX).map(|set| (set, 2 * timed.len() as u32));
-            if query.is_some() {
-                timed.push(stage.cells.clone());
-            }
-            let mut pass = crate::gpu::clear_pass(&mut encoder, &targets, query);
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &group0, &[]);
-            pass.set_bind_group(1, &group1, &[]);
-            pass.set_bind_group(2, &group2, &[]);
-            pass.draw(0..3, 0..1);
-            drop(pass);
             let out_view = self.states[&stage.uid].out.as_ref().expect("output allocated").view.clone();
             self.stats.stages.fetch_add(1, Ordering::Relaxed);
             self.states.get_mut(&stage.uid).expect("just borrowed").advance();

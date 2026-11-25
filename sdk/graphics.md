@@ -1,8 +1,8 @@
 # Textures
 
 A `TEXTURE` slot carries a picture. A node's engine says how the node is scheduled, not which
-kinds it carries: a shader runs on the graphics tick, and a Python or Rust node that makes or reads
-a picture is a signal node on its own pace.
+kinds it carries. A graphics node runs on the graphics tick: a shader, or a Python node the tick
+calls. A Python or Rust node that makes or reads a picture on its own pace is a signal node.
 
 ## Shaders
 
@@ -80,6 +80,38 @@ In Rust, `frame.as_texture()` gives the texture, and `frame.pixels_as_array()` g
 - A shader whose `common` width or height is zero follows the first texture input that is fed: a
   shader's size, or the size of the frame a signal node sent.
 
-A file that starts with `# goofi: graphics`, or a Rust file against `goofi_graphics_sdk`, is
-reserved for a node that the graphics tick runs. The graphics engine refuses it until that kind
-exists (`roadmap/texture-plane.md`).
+## A Python node the graphics tick calls
+
+Put `# goofi: graphics` on the first line of a Python file in `nodes_graphics/`. The node is a
+stage of the render plan, as a shader is:
+
+```python
+# goofi: graphics
+import goofi
+
+class Invert(goofi.Node):
+    INPUTS = {'image': goofi.InputSlot(goofi.DataType.TEXTURE)}
+    OUTPUTS = {'out': goofi.DataType.TEXTURE}
+
+    def process(self, image):
+        if image is None:
+            return None
+        pixels = image.data.numpy()          # [height, width, 4], float32
+        return goofi.Texture(1.0 - pixels)
+```
+
+- At the node's place in the tick, the engine finishes the stages before it, calls `process`
+  and waits for the answer. The picture the node returns is the output the next stages read, in
+  the same tick. A node that takes 1/120 s at 60 frames per second shows 50%; a node that takes
+  longer than the frame period holds every stage back, and shows more than 100%.
+- The node has one output, a `TEXTURE`, and its output is the size of the picture it returns.
+  It has no `common` width or height. An input takes one wire.
+- An input that a shader feeds is read back from the GPU as `RGBA` `float32`. An input that
+  another engine feeds is the frame that engine sent.
+- `process` that returns `None` keeps the last picture. A raise is the node's error, and the
+  last picture stays.
+- The node runs in a child process of the subprocess interpreter. Load a model in `setup`: the
+  tick passes the stage by until `setup` is done.
+
+A Rust file against `goofi_graphics_sdk` is refused: that name is kept for a Rust node the tick
+calls (`roadmap/texture-plane.md`).

@@ -4,16 +4,17 @@
 //! Every crossing between this thread and the render thread is a cell with no lock on either
 //! side: the render thread hands a readback over as the mapped GPU buffer it is, and this thread
 //! copies it out, encodes it and publishes it. What a reader costs is paid here, never on the
-//! clock that draws.
+//! clock that draws. The one crossing that waits is a [`Meeting`]: a node the tick calls runs
+//! here, and the tick stands at its place until it has.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use goofi_runtime::{Cx, Executor, Fault, Out, Ticked};
+use goofi_runtime::{Cx, Executor, Fault, HostExecutor, Out, Ticked};
 use goofi_core::texture::{PixelFormat, Pixels, Texture};
 use goofi_core::{Data, Meta};
-use goofi_supervisor::sync::{Mailbox, Stack};
+use goofi_supervisor::sync::{Condvar, Mailbox, Mutex, Stack};
 pub use crate::resources::Upload;
 use crate::gpu::Want;
 use crate::resources::Readback;
@@ -42,8 +43,61 @@ pub struct Cells {
     /// The fraction of the frame period this node's pass took, as `f64` bits the render thread
     /// writes: not a number until a pass is timed, and zero while no one asks for the stage.
     pub frame_share: AtomicU64,
-    /// This half's door, rung by the render thread once a readback is in a cell above.
+    /// For a node the tick calls: where the render thread asks for a run and waits for it.
+    pub node: Option<Meeting>,
+    /// The size of the picture such a node last made, packed; 0 until it makes one.
+    pub produced: AtomicU64,
+    /// This half's door, rung by the render thread once a readback or a call is in a cell above.
     pub bell: goofi_transport::Doorbell,
+}
+
+/// One run's inputs: per input another stage feeds, its frame, or none where it is unwired.
+pub type Asked = Vec<(usize, Option<Data>)>;
+
+/// Where the render thread calls a node's half and waits for the run.
+pub struct Meeting {
+    /// Whether the node is built and takes calls; until then the tick passes its stage by.
+    pub ready: AtomicBool,
+    asked: Mailbox<Asked>,
+    answer: Mutex<Answer>,
+    answered: Condvar,
+}
+
+#[derive(Default)]
+struct Answer {
+    /// What the run made; `Some(None)` where it made no picture.
+    made: Option<Option<Data>>,
+    /// The half is gone or the engine stops: no answer comes, and a waiting tick goes on.
+    closed: bool,
+}
+
+impl Default for Meeting {
+    fn default() -> Meeting {
+        Meeting { ready: AtomicBool::new(false), asked: Mailbox::new(), answer: Mutex::new(Answer::default()), answered: Condvar::new() }
+    }
+}
+
+impl Meeting {
+    /// Run the node on `inputs` and wait for its picture. None where it made none, where the
+    /// run failed (the node says why), or where the meeting is closed.
+    pub fn call(&self, bell: &goofi_transport::Doorbell, inputs: Asked) -> Option<Data> {
+        self.answer.lock().made = None;
+        drop(self.asked.put(Box::new(inputs)));
+        bell.ring(0);
+        let mut answer = self.answered.wait_while(self.answer.lock(), |answer| answer.made.is_none() && !answer.closed);
+        answer.made.take().flatten()
+    }
+
+    fn answer(&self, made: Option<Data>) {
+        self.answer.lock().made = Some(made);
+        self.answered.notify_all();
+    }
+
+    /// End the meeting: a tick that waits goes on with nothing, and so does every later call.
+    pub fn close(&self) {
+        self.answer.lock().closed = true;
+        self.answered.notify_all();
+    }
 }
 
 pub struct GraphicsHalf {
@@ -57,6 +111,8 @@ pub struct GraphicsHalf {
     refused: Option<String>,
     /// Texel buffers the render thread gave back, for the next arrival to fill.
     spare: Vec<Vec<u8>>,
+    /// The node the tick calls, built on this thread, and the declared input behind each inbox.
+    node: Option<(HostExecutor, Vec<usize>)>,
 }
 
 /// The upload size as one atomic word, and back; 0 is no upload yet.
@@ -69,13 +125,38 @@ pub(crate) fn unpack(word: u64) -> Option<(u32, u32)> {
 }
 
 impl GraphicsHalf {
-    pub fn new(cells: Arc<Cells>, size: usize) -> GraphicsHalf {
-        GraphicsHalf { cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new() }
+    pub fn new(cells: Arc<Cells>, size: usize, node: Option<(HostExecutor, Vec<usize>)>) -> GraphicsHalf {
+        if let Some(meeting) = &cells.node {
+            meeting.ready.store(true, Ordering::Release);
+        }
+        GraphicsHalf { cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new(), node }
     }
 
     /// Whether the render thread left something for this thread to take.
     fn owed(&self) -> bool {
-        !self.cells.tap.is_empty() || !self.cells.record.is_empty()
+        !self.cells.tap.is_empty() || !self.cells.record.is_empty() || self.cells.node.as_ref().is_some_and(|meeting| !meeting.asked.is_empty())
+    }
+
+    /// The run the render thread asked for and waits on: its inputs in, the picture back.
+    fn meet(&mut self, cx: &Cx<'_>, ticked: &mut Ticked) {
+        let (Some((node, _)), Some(meeting)) = (self.node.as_mut(), self.cells.node.as_ref()) else { return };
+        let Some(inputs) = meeting.asked.take() else { return };
+        for (slot, frame) in *inputs {
+            match frame {
+                Some(frame) => {
+                    node.arrive(slot, 0, &frame);
+                }
+                None => node.rewire(slot, &[]),
+            }
+        }
+        let mut made = None;
+        let ran = node.run(cx, &mut |_, out| {
+            if let Out::Frame(frame) = out {
+                made = Some(frame.clone());
+            }
+        });
+        ticked.errors = ran.errors;
+        meeting.answer(made);
     }
 
     /// Every readback for the recording, oldest first, as the frames the recorder files.
@@ -143,14 +224,28 @@ impl GraphicsHalf {
     }
 }
 
+impl Drop for GraphicsHalf {
+    fn drop(&mut self) {
+        if let Some(meeting) = &self.cells.node {
+            meeting.close();
+        }
+    }
+}
+
 impl Executor for GraphicsHalf {
     fn latest_only(&self) -> bool {
         true
     }
 
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
-    /// crossing into a scheduled engine is.
-    fn arrive(&mut self, inbox: usize, _wire: usize, frame: &Data) -> bool {
+    /// crossing into a scheduled engine is. A node the tick calls holds the frame for its next run.
+    fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {
+        if let Some((node, slots)) = self.node.as_mut() {
+            if let Some(slot) = slots.get(inbox) {
+                node.arrive(*slot, wire, frame);
+            }
+            return false;
+        }
         let Some(cell) = self.cells.uploads.get(inbox) else { return false };
         // What the render thread is done with comes back here, where its buffer is freed or
         // filled again: an upload costs the clock a pointer move each way.
@@ -174,26 +269,45 @@ impl Executor for GraphicsHalf {
     }
 
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
+        if let Some((node, slots)) = self.node.as_mut() {
+            if let Some(slot) = slots.get(inbox) {
+                node.rewire(*slot, wires);
+            }
+            return;
+        }
         if let (true, Some(size)) = (wires.is_empty(), self.cells.uploaded.get(inbox)) {
             size.store(0, Ordering::Relaxed);
         }
+    }
+    fn params_changed(&mut self, values: &[goofi_core::Param]) -> Ticked {
+        self.node.as_mut().map_or_else(Ticked::default, |(node, _)| node.params_changed(values))
+    }
+    fn pulse(&mut self, param: usize) -> Ticked {
+        self.node.as_mut().map_or_else(Ticked::default, |(node, _)| node.pulse(param))
+    }
+    fn refresh(&mut self, param: usize) -> Option<Vec<String>> {
+        self.node.as_mut().and_then(|(node, _)| node.refresh(param))
+    }
+    fn stage(&self) -> goofi_node::NodeStage {
+        self.node.as_ref().map_or(goofi_node::NodeStage::Ready, |(node, _)| node.stage())
     }
     /// Now, while the render thread has left a readback to take; else the tap's pace.
     fn next_wake(&self, last_run: Instant) -> Option<Instant> {
         Some(if self.owed() { last_run } else { last_run + goofi_runtime::TICK })
     }
     fn fault(&self) -> Option<Fault> {
-        self.refused.clone().map(Fault::Process)
+        self.node.as_ref().and_then(|(node, _)| node.fault()).or_else(|| self.refused.clone().map(Fault::Process))
     }
     fn run(&mut self, cx: &Cx<'_>, publish: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
         let mut ticked = Ticked::default();
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.cells.readers.store(readers, Ordering::Relaxed);
+        self.meet(cx, &mut ticked);
         self.record(publish);
         self.tap(publish);
         let asked = crate::plan::asked(cx.params, self.size);
-        let uploaded = self.cells.uploaded.iter().map(|size| size.load(Ordering::Relaxed));
+        let uploaded = self.cells.uploaded.iter().chain([&self.cells.produced]).map(|size| size.load(Ordering::Relaxed));
         if asked != self.last.0 || !uploaded.clone().eq(self.last.1.iter().copied()) {
             self.last = (asked, uploaded.collect());
             ticked.replan = true;

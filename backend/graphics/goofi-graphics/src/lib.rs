@@ -29,6 +29,7 @@ use gpu::Gpu;
 use half::GraphicsHalf;
 use runtime::{Runtime, Stats};
 use scan::Class;
+pub use goofi_python::catalog::Python;
 
 /// What `graphics.fps`, the clock's pace, is held to. A tick the clock did not pace — the
 /// harness's `render` — is why every frame's instant is written beside the video.
@@ -95,6 +96,8 @@ pub struct GraphicsEngine {
     /// The pace a tap is read back at, written at settle from `system.viewer_fps`.
     viewer_fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
+    /// The interpreters a Python node is probed with, and the one its child runs in.
+    pub(crate) python: Option<Python>,
     pub(crate) classes: HashMap<String, Arc<Class>>,
     /// The file and stamp each class was registered from, so a rescan skips one that did not
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
@@ -149,19 +152,45 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
     }
 }
 
-/// The universal `common` group every graphics node carries; a third param is added here and
-/// nowhere else.
-fn common_decls(m: &NodeManifest) -> [ParamDecl; 2] {
-    [size_decl("width", "vars.graphics.default_width", m), size_decl("height", "vars.graphics.default_height", m)]
+/// The universal `common` group every shader carries; a third param is added here and nowhere
+/// else. A node the tick calls has none: its output is the size of the picture it makes.
+fn common_decls(class: &Class) -> Vec<ParamDecl> {
+    if class.node() {
+        return Vec::new();
+    }
+    let m = class.manifest;
+    vec![size_decl("width", "vars.graphics.default_width", m), size_decl("height", "vars.graphics.default_height", m)]
 }
 
 /// Every param a graphics node holds: the author's, then the engine's universal group. ONE order
 /// — the param atomics, the desired consts and every binding index are all read against it.
-fn decls_of(manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-    manifest.params.iter().copied().chain(common_decls(manifest)).collect()
+fn decls_of(class: &Class) -> Vec<ParamDecl> {
+    class.manifest.params.iter().copied().chain(common_decls(class)).collect()
 }
 
 impl GraphicsEngine {
+    pub fn set_python(&mut self, python: Python) {
+        self.python = Some(python);
+    }
+
+    /// What builds the executor of a node the tick calls, on the node's own thread: the child
+    /// that runs its source, and its `setup`. None for a shader.
+    fn node_build(&self, class: &Class, params: &ParamGroups) -> Option<impl FnOnce() -> (goofi_runtime::HostExecutor, Vec<usize>) + Send + 'static> {
+        let scan::Kind::Node { python, source } = &class.kind else { return None };
+        let (hub, python, source, params) = (self.hub.clone(), python.clone(), source.clone(), params.clone());
+        let (manifest, decls) = (class.manifest, decls_of(class));
+        // The half's inboxes are the ARRAY inputs, then the TEXTURE ones; a node reads by slot.
+        let declared = |name: &str| manifest.inputs.iter().position(|slot| slot.name == name).expect("an input of this manifest");
+        let slots: Vec<usize> = shader::array_inputs(manifest).chain(shader::texture_inputs(manifest)).map(declared).collect();
+        Some(move || {
+            let build: goofi_runtime::NodeBuild = Box::new(move |_| {
+                let child = goofi_python::subproc::subproc(hub, python, source);
+                Box::new(goofi_python::subproc::RemoteNode::new(child, goofi_host_sdk::host::in_slots(manifest)))
+            });
+            (goofi_runtime::HostExecutor::new(manifest, decls, build, &params), slots)
+        })
+    }
+
     /// Open the device and start the engine, or say why this machine has none.
     pub fn open(
         hub: Arc<goofi_transport::Hub>,
@@ -214,6 +243,7 @@ impl GraphicsEngine {
             viewer_fps,
             gpu,
             shared,
+            python: None,
             classes: HashMap::new(),
             stamps: HashMap::new(),
             compiles: Vec::new(),
@@ -287,7 +317,7 @@ impl GraphicsEngine {
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
         let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
         let manifest = self.live[&uid].class.manifest;
-        let mut desired = goofi_runtime::desired_of(view, uid, nv, &decls_of(manifest), &plane);
+        let mut desired = goofi_runtime::desired_of(view, uid, nv, &decls_of(&self.live[&uid].class), &plane);
         // A texture input another engine feeds is a frame off the wire, as an ARRAY input's is.
         let arrays = shader::array_inputs(manifest).count();
         for (t, slot) in shader::texture_inputs(manifest).enumerate() {
@@ -389,6 +419,17 @@ impl Engine for GraphicsEngine {
             .collect()
     }
 
+    /// The probes a scan of `dir` would spawn, as work for off the lock.
+    fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
+        let python = self.python.clone()?;
+        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, "graphics")
+            .into_iter()
+            .filter(|(path, _, _)| path.extension().is_some_and(|ext| ext == "py"))
+            .map(|(path, name, _)| (path, name))
+            .collect();
+        (!files.is_empty()).then(|| Box::new(move || goofi_python::catalog::warm(&files, &python)) as Box<dyn FnOnce() + Send>)
+    }
+
     fn scan(&mut self, dir: &Path) -> Vec<ScannedType> {
         scan::scan(self, dir)
     }
@@ -398,7 +439,7 @@ impl Engine for GraphicsEngine {
     }
 
     fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<ParamDecl> {
-        common_decls(manifest).to_vec()
+        self.classes.get(manifest.type_name).map(|class| common_decls(class)).unwrap_or_default()
     }
 
     fn insert(&mut self, uid: Uid, type_name: &str, generation: u64, params: &ParamGroups) -> Option<String> {
@@ -407,8 +448,9 @@ impl Engine for GraphicsEngine {
         };
         let manifest = class.manifest;
         let base = goofi_transport::service_base(&self.instance, uid, generation);
+        let decls = decls_of(&class);
         let cells = Arc::new(half::Cells {
-            params: goofi_runtime::cells_of(params, &decls_of(manifest)).into(),
+            params: goofi_runtime::cells_of(params, &decls).into(),
             uploads: (0..manifest.inputs.len()).map(|_| Mailbox::new()).collect(),
             spent: Stack::new(),
             uploaded: (0..manifest.inputs.len()).map(|_| AtomicU64::new(0)).collect(),
@@ -417,6 +459,8 @@ impl Engine for GraphicsEngine {
             tap_box: AtomicU64::new(0),
             record: Stack::new(),
             frame_share: AtomicU64::new(f64::NAN.to_bits()),
+            node: class.node().then(half::Meeting::default),
+            produced: AtomicU64::new(0),
             // The half's own door: the render thread rings it once a readback is in a cell.
             bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
         });
@@ -426,17 +470,20 @@ impl Engine for GraphicsEngine {
             instance: self.instance.clone(),
             base,
             manifest,
-            decls: decls_of(manifest),
+            decls,
             params: cells.params.clone(),
             time: self.time.clone(),
         };
         let shared = cells.clone();
         let size = manifest.params.len();
-        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), move || GraphicsHalf::new(shared, size)) {
+        let node = self.node_build(&class, params);
+        let make = move || GraphicsHalf::new(shared, size, node.map(|build| build()));
+        let control = match goofi_runtime::spawn(&self.hub, spawn, self.shared.clone(), make) {
             Ok(handle) => handle,
             Err(e) => return Some(e),
         };
-        self.ask(runtime::Cmd::Insert(uid, runtime::params_len(manifest)));
+        // A node's params are its child's; only a shader has a uniform block of them.
+        self.ask(runtime::Cmd::Insert(uid, if class.node() { 0 } else { runtime::params_len(manifest) }));
         self.live.insert(uid, Instance { class: class.clone(), cells, control, settled_size: (None, None) });
         self.dirty = true;
         self.shared.waker.notify();
@@ -445,6 +492,10 @@ impl Engine for GraphicsEngine {
 
     fn remove(&mut self, uid: Uid) {
         if let Some(inst) = self.live.remove(&uid) {
+            // Before the half is stopped: a tick that waits on its node must not wait on.
+            if let Some(meeting) = &inst.cells.node {
+                meeting.close();
+            }
             inst.control.stop();
             self.ask(runtime::Cmd::Remove(uid));
             drop(inst);
@@ -527,6 +578,10 @@ impl Engine for GraphicsEngine {
     /// Stop the clock, then every control half, and WAIT for each to release its shared memory
     /// and for every pipeline build to leave the driver.
     fn shutdown(&mut self) {
+        // A tick that waits on a node goes on, or the clock's thread would never be joined.
+        for meeting in self.live.values().filter_map(|inst| inst.cells.node.as_ref()) {
+            meeting.close();
+        }
         // The surfaces go before their windows: the runtime's chains first, then the engine's.
         match self.ticker.take() {
             Some(Ticker::Clock { stop, thread }) => {

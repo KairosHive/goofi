@@ -143,6 +143,8 @@ pub(crate) struct State {
     /// Readbacks taken for the recording, numbered from one.
     pub(crate) recorded: u64,
     pub(crate) uploads: Vec<Option<Target>>,
+    /// Per input of a node the tick calls: the buffer its producer's output is read into.
+    pub(crate) downloads: Vec<Option<(wgpu::Buffer, (u32, u32))>>,
     /// Beside each upload, the head layout of its channels; `None` binds the blank texel.
     pub(crate) layouts: Vec<Option<Target>>,
     /// The range, channel count and scale of each upload, in the uniform's own order.
@@ -170,6 +172,7 @@ impl State {
             count: 0,
             recorded: 0,
             uploads: Vec::new(),
+            downloads: Vec::new(),
             layouts: Vec::new(),
             time: uniform("time", 4),
             frame: uniform("frame", 4),
@@ -245,6 +248,35 @@ impl State {
             buffer.swap(0, 1);
         }
         self.count = self.count.wrapping_add(1);
+    }
+
+    /// The buffer input `slot`'s producer is read into for a node, made again when the
+    /// producer's size moves.
+    pub(crate) fn download(&mut self, gpu: &Gpu, slot: usize, size: (u32, u32)) -> wgpu::Buffer {
+        if self.downloads.len() <= slot {
+            self.downloads.resize_with(slot + 1, || None);
+        }
+        if !self.downloads[slot].as_ref().is_some_and(|(_, held)| *held == size) {
+            let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("node input"),
+                size: u64::from(padded_row(size.0, 8)) * u64::from(size.1),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.downloads[slot] = Some((buffer, size));
+        }
+        self.downloads[slot].as_ref().expect("made above").0.clone()
+    }
+
+    /// A node's output: its new picture where the run made one, which sets the size, else the
+    /// picture it holds; and a readback for each reader that is there now.
+    pub(crate) fn show(&mut self, gpu: &Gpu, picture: Option<&Upload>, wants: [Option<(u32, u32)>; 4]) -> Result<(), String> {
+        let Some(size) = picture.map(|p| (p.width, p.height)).or(self.out.as_ref().map(|out| out.size)) else { return Ok(()) };
+        self.ensure_out(gpu, size, wants, 0)?;
+        if let Some(picture) = picture {
+            write_texels(gpu, &self.out.as_ref().expect("ensure_out made it").texture, size, &picture.texels);
+        }
+        Ok(())
     }
 
     /// The output texture at `size`, the state buffers beside it, and one readback per reader
@@ -333,6 +365,59 @@ impl State {
             entries: &entries,
         })
     }
+}
+
+/// Encode the copy of an RGBA16F `texture` of `size` into `buffer`, at the row pitch a copy takes.
+pub(crate) fn copy_out(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, buffer: &wgpu::Buffer, size: (u32, u32)) {
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded_row(size.0, 8)), rows_per_image: None },
+        },
+        wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+    );
+}
+
+/// What submitted [`copy_out`]s left in `buffers`, each as an RGBA `f32` picture. This waits for
+/// the device: it is how a node the tick calls reads what the stages before it drew.
+pub(crate) fn pictures(gpu: &Gpu, buffers: &[(wgpu::Buffer, (u32, u32))]) -> Vec<Result<goofi_core::texture::Pixels, String>> {
+    let mapped: Vec<_> = buffers
+        .iter()
+        .map(|(buffer, _)| {
+            let (done, answer) = std::sync::mpsc::channel();
+            buffer.slice(..).map_async(wgpu::MapMode::Read, move |mapped| {
+                let _ = done.send(mapped.is_ok());
+            });
+            answer
+        })
+        .collect();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    buffers
+        .iter()
+        .zip(mapped)
+        .map(|((buffer, size), answer)| {
+            if answer.try_recv() != Ok(true) {
+                return Err("the device refused to map a node's input".to_string());
+            }
+            let texels = buffer.slice(..).get_mapped_range().map_err(|e| format!("a node's input: {e:?}"))?;
+            let mut bytes = Vec::with_capacity(size.0 as usize * size.1 as usize * 16);
+            for row in texels.chunks_exact(padded_row(size.0, 8) as usize) {
+                for half in row[..size.0 as usize * 8].chunks_exact(2) {
+                    bytes.extend(half::f16::from_bits(u16::from_le_bytes([half[0], half[1]])).to_f32().to_le_bytes());
+                }
+            }
+            drop(texels);
+            buffer.unmap();
+            Ok(goofi_core::texture::Pixels {
+                width: size.0,
+                height: size.1,
+                stride: size.0 as usize * 16,
+                format: goofi_core::texture::PixelFormat::Rgba32Float,
+                bytes,
+            })
+        })
+        .collect()
 }
 
 /// RGBA16F texels, `size` of them, into a texture of that size.

@@ -1,6 +1,7 @@
 //! The engine's scan of one `nodes_graphics/` folder, and the pipeline built for what it
 //! registered. A driver takes its time over a compile, so no op and no tick waits on one: the
 //! class holds a cell a thread of its own fills, and the plan picks it up at the tick after.
+//! A Python file is a node the tick calls: its class holds the source its child runs.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,6 +14,13 @@ use crate::{shader, GraphicsEngine};
 /// A pipeline once its compile answers, or why the device refused it.
 pub type Built = goofi_supervisor::ready::Ready<Arc<wgpu::RenderPipeline>>;
 
+/// What a class draws its stage with.
+pub enum Kind {
+    Shader(Built),
+    /// A Python node the tick calls: its source, and the interpreter of the child that runs it.
+    Node { python: String, source: String },
+}
+
 /// One graphics source as the engine holds it.
 pub struct Class {
     pub manifest: &'static NodeManifest,
@@ -20,8 +28,23 @@ pub struct Class {
     pub window: bool,
     /// The buffers this type carries between two ticks, in the order the prelude binds them.
     pub state: Vec<String>,
-    pub pipeline: Built,
+    pub kind: Kind,
     pub isolation: &'static goofi_node::IsolationCell,
+}
+
+impl Class {
+    /// Whether the tick calls this class's node, where a shader's stage is a pass.
+    pub fn node(&self) -> bool {
+        matches!(self.kind, Kind::Node { .. })
+    }
+
+    /// Why a stage of this class cannot draw: a shader the device refused.
+    pub fn refusal(&self) -> Option<String> {
+        match &self.kind {
+            Kind::Shader(built) => built.error().map(|why| format!("shader: {why}")),
+            Kind::Node { .. } => None,
+        }
+    }
 }
 
 pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> {
@@ -60,9 +83,11 @@ impl GraphicsEngine {
     /// One file: its header is the manifest, its text plus the prelude is what naga judges, and
     /// only then does a pipeline get asked for.
     pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
-        // `# goofi: graphics` and `goofi_graphics_sdk` are kept for a node the tick runs.
-        if path.extension().is_some_and(|ext| ext != "wgsl") {
-            return Err("the graphics engine runs shaders; a Python or Rust node that makes a texture is a signal node".into());
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("wgsl") => {}
+            Some("py") => return self.register_node(path, type_name),
+            // `goofi_graphics_sdk` is kept for a Rust node the tick calls.
+            _ => return Err("the graphics engine runs shaders and Python nodes; a Rust node that makes a texture is a signal node".into()),
         }
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
@@ -70,7 +95,29 @@ impl GraphicsEngine {
         let pipeline = shader(&self.gpu, &self.shared, manifest, &source, &intro.state)?;
         self.compiles.retain(|build| !build.is_ready());
         self.compiles.push(pipeline.clone());
-        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, pipeline, isolation: &goofi_node::SHADER }))
+        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER }))
+    }
+
+    /// A Python file marked `# goofi: graphics`: a node the tick calls, run in a child of the
+    /// subprocess interpreter. It makes one picture, and each of its inputs takes one wire.
+    fn register_node(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
+        use goofi_python::catalog::Probed;
+        let found = match goofi_python::catalog::probed(path, type_name, self.python.as_ref()) {
+            Some(Probed::InProcess(found) | Probed::Subprocess(found)) => found,
+            Some(Probed::Unavailable(reason)) => return Err(reason),
+            None => return Err("no Python interpreter provisioned — run `cargo run -p goofi-init`".into()),
+        };
+        let manifest = found.manifest;
+        if manifest.outputs.len() != 1 || manifest.outputs[0].kind != goofi_core::SlotType::Texture {
+            return Err("a graphics node has one output, a TEXTURE".into());
+        }
+        if manifest.inputs.iter().any(|slot| slot.multi) {
+            return Err("an input of a graphics node takes one wire".into());
+        }
+        let python = self.python.as_ref().map(|python| python.subproc.clone()).unwrap_or_default();
+        let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let isolation = goofi_node::IsolationCell::leak(goofi_node::Isolation::Subprocess);
+        Ok(Arc::new(Class { manifest, feedback: false, window: false, state: Vec::new(), kind: Kind::Node { python, source }, isolation }))
     }
 }
 

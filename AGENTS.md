@@ -106,7 +106,8 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 - Rust nodes are `.rs` files built against an engine SDK. `goofi_build` opens every dynamic library
   and reads its entry symbols. A signal node built after the boot scan runs hosted in
   `goofi host`, over the exchange the Python subprocess tier uses; audio loads its library
-  in-process. The graphics engine runs `.wgsl` shaders.
+  in-process. The graphics engine runs `.wgsl` shaders, and Python files marked
+  `# goofi: graphics`: the render thread calls such a node at its place in the tick and waits.
 - A node's engine is its clock, not its kinds. A `TEXTURE` slot carries a texture frame on every
   wire, and a node of any engine makes or reads one; between two shaders it is a GPU texture the
   plan carries. `AUDIO` is the audio engine's alone.

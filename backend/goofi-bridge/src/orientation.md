@@ -112,7 +112,8 @@ built on refresh where `cargo` exists and run in a child of goofi's own binary; 
 Rust node that makes a picture is a signal node: a `goofi.DataType.TEXTURE` output, returning
 `goofi.Texture(pixels)` for RGB/RGBA uint8 or float32 (`signal:Camera` is one), which a shader
 takes as its input. A `TEXTURE` input reads `data.numpy()`. `signal:GraphicsIn` is a texture as
-an array.
+an array. The same Python file with `# goofi: graphics` as its first line, in `nodes_graphics/`,
+is a graphics node: the render thread calls it inside the tick and waits for its picture.
 
 ## Workspace
 

@@ -124,7 +124,10 @@ pub fn boot(config: Config) -> Result<Manager, String> {
         }
         // Handed to the engines before anything scans, so the boot scan and every rescan share it.
         if let Some(python) = python {
-            crate::signal_engine(&mut g).set_python(goofi_signal::Python::new(python));
+            crate::signal_engine(&mut g).set_python(goofi_signal::Python::new(python.clone()));
+            if let Some(graphics) = crate::try_graphics_engine(&mut g) {
+                graphics.set_python(goofi_signal::Python::new(python));
+            }
         }
         if let Some(host) = &host {
             crate::signal_engine(&mut g).set_host(host.clone());

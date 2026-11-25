@@ -62,6 +62,9 @@ const BROKEN: &str = "/* goofi\n{ \"doc\": \"does not compile\" }\n*/\nfn shade(
 
 const COUNT: &str = "/* goofi\n{ \"doc\": \"counts a tenth a tick in a buffer of its own\", \"state\": [\"acc\"] }\n*/\nfn at(uv: vec2f) -> vec2i { return vec2i(floor(uv * resolution)); }\nfn next_acc(uv: vec2f) -> vec4f {\n    if frame == 0u { return vec4f(0.1, 0.75, 0.0, 1.0); }\n    let held = textureLoad(acc, at(uv), 0);\n    return vec4f(held.r + 0.1, held.g, 0.0, 1.0);\n}\nfn shade(uv: vec2f) -> vec4f { return vec4f(textureLoad(acc, at(uv), 0).rgb, 1.0); }\n";
 
+/// How far apart two pictures are in red, beside the red of each.
+const APART: &str = "/* goofi\n{ \"doc\": \"two pictures side by side\", \"inputs\": [{\"name\": \"a\", \"kind\": \"TEXTURE\"}, {\"name\": \"b\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let x = textureSample(a, samp, uv); let y = textureSample(b, samp, uv); return vec4f(abs(x.r - y.r), x.r, y.r, 1.0); }\n";
+
 const HALF: &str = "/* goofi\n{ \"doc\": \"half of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.5, c.a); }\n";
 
 const QUARTER: &str = "/* goofi\n{ \"doc\": \"a quarter of the input\", \"inputs\": [{\"name\": \"input\", \"kind\": \"TEXTURE\"}] }\n*/\nfn shade(uv: vec2f) -> vec4f { let c = textureSample(input, samp, uv); return vec4f(c.rgb * 0.25, c.a); }\n";
@@ -1287,4 +1290,75 @@ fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
         render(g, 1);
         read.latest().map(|d| f32s(&d)[0]).filter(|at| *at > first)
     });
+}
+
+/// A Python file marked `# goofi: graphics` is a stage of the plan. The tick calls it at its
+/// place and waits, so the picture it makes is of the same tick as the stages around it.
+#[test]
+fn a_python_node_runs_on_the_graphics_tick() {
+    let _python = goofi_tests::require_python();
+    let g = Goofi::new();
+    let mut ev = g.events();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("texture_tick.py"), include_str!("../fixtures/texture_tick.py")).unwrap();
+    std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
+    std::fs::write(dir.join("Apart.wgsl"), APART).unwrap();
+    let signal = g.state.mount().join("nodes_signal");
+    std::fs::create_dir_all(&signal).unwrap();
+    std::fs::write(signal.join("texture_python.py"), include_str!("../fixtures/texture_python.py")).unwrap();
+    g.call("library refresh", j!({}));
+    let row = g.call("library get", j!({"type": "graphics:TextureTick"}));
+    assert_eq!(row["tier"], "subprocess", "{row}");
+    assert!(row["params"].get("common").is_none(), "its picture is the size the node makes it: {row}");
+    let (count, node, apart) = (g.add("graphics:Count"), g.add("graphics:TextureTick"), g.add("graphics:Apart"));
+    for uid in [count, node, apart] {
+        g.ready(uid);
+    }
+    g.set_param(count, "common", "width", 8);
+    g.set_param(count, "common", "height", 4);
+    g.link(count, "out", node, "image");
+    g.link(count, "out", apart, "a");
+    g.link(node, "out", apart, "b");
+
+    // Step: the count moves at every tick, and the node's picture of it is never a tick behind:
+    // a frame of `Apart` holds the count as drawn and as the node passed it on, and they agree.
+    let mut last = 0.0;
+    for _ in 0..3 {
+        let frame = drawn(&g, apart, "a later tick through the node", |d| shape(d) == vec![4, 8, 4] && px(d, 0, 0)[2] > last);
+        let [gap, direct, through, _] = px(&frame, 0, 0);
+        assert_eq!((gap, through), (0.0, direct), "the node's picture is of the tick that drew its input");
+        last = through;
+    }
+
+    // Step: a param reaches the node, and its picture is the output a shader reads.
+    g.set_param(node, "look", "gain", 0.5);
+    drawn(&g, apart, "the gain", |d| {
+        let [_, direct, through, _] = px(d, 0, 0);
+        (through - direct * 0.5).abs() < 1e-3
+    });
+
+    // Step: a raise is the node's error, its last picture stays, and it runs again once it can.
+    g.set_param(node, "look", "fail", true);
+    let why = g.until("the node's raise is its error", |g| {
+        render(g, 1);
+        g.error(node)
+    });
+    assert!(why.contains("asked to fail"), "{why}");
+    drawn(&g, node, "a failed node keeps its last picture", |d| shape(d) == vec![4, 8, 4] && px(d, 0, 0)[0] > 0.0);
+    g.set_param(node, "look", "fail", false);
+    g.until("the error clears", |g| {
+        render(g, 1);
+        g.error(node).is_none().then_some(())
+    });
+
+    // Step: a picture a signal node made reaches the node as the frame that node sent.
+    let (source, fed) = (g.add("signal:TexturePython"), g.add("graphics:TextureTick"));
+    g.ready(source);
+    g.ready(fed);
+    g.link(source, "out", fed, "image");
+    drawn(&g, fed, "a signal node's picture through the tick node", |d| shape(d) == vec![2, 3, 4] && close(px(d, 0, 0), [0.25, 0.5, 0.75, 0.5]));
+
+    // Step: where a shader says how long its pass took, the node says how long its call took.
+    g.until("the node's share of the frame", |_| ev.next("node_stats")["stats"][hex(node)]["frame_share"].as_f64().filter(|share| *share > 0.0));
 }
