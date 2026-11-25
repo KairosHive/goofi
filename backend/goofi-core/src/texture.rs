@@ -96,14 +96,35 @@ pub enum Texture {
 }
 
 /// A picture in device memory that the graphics engine and the child of a node its tick calls
-/// both map: RGBA `f16` rows, `pitch` bytes apart. It names a buffer of that pair, and no wire
-/// carries it.
+/// both map: RGBA rows of `texel`, `pitch` bytes apart. It names a buffer of that pair, and no
+/// wire carries it.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Shared {
     pub id: u64,
     pub width: u32,
     pub height: u32,
     pub pitch: u32,
+    pub texel: SharedTexel,
+}
+
+/// What one texel of a shared picture is: four `f16`, or four bytes read as 0..1.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SharedTexel {
+    Half,
+    Byte,
+}
+
+impl SharedTexel {
+    pub fn bytes(self) -> u32 {
+        match self {
+            Self::Half => 8,
+            Self::Byte => 4,
+        }
+    }
+    /// The texel that takes `bytes` each, as the child of a node names it.
+    pub fn of(bytes: u32) -> Option<SharedTexel> {
+        [Self::Half, Self::Byte].into_iter().find(|texel| texel.bytes() == bytes)
+    }
 }
 
 impl Texture {
@@ -118,7 +139,7 @@ impl Texture {
             Self::Pixels(p) => p.validate(),
             Self::Shared(s) => {
                 dimensions(s.width, s.height)?;
-                if u64::from(s.pitch) < u64::from(s.width) * 8 {
+                if u64::from(s.pitch) < u64::from(s.width) * u64::from(s.texel.bytes()) {
                     return Err(format!("a shared texture's pitch {} is under its row of {} texels", s.pitch, s.width));
                 }
                 Ok(())

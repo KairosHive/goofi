@@ -1,7 +1,7 @@
 //! A texture frame in Python: made from pixels by a node that returns one, read as pixels by a
 //! node that takes one. Both execution tiers use the same codec and validation. `goofi.gpu`
 //! (`gpu.py`) is the CUDA side: a picture made from CUDA memory, and read as CUDA memory.
-use goofi_core::texture::{PixelFormat, Pixels, Shared, Texture as Frame};
+use goofi_core::texture::{PixelFormat, Pixels, Shared, SharedTexel, Texture as Frame};
 use pyo3::prelude::*;
 use pyo3::types::PyByteArray;
 
@@ -16,6 +16,12 @@ impl Texture {
 
     fn of(frame: Frame) -> PyResult<Self> {
         Ok(Self { frame: goofi_core::Data::texture(frame, Default::default()).map_err(pyo3::exceptions::PyValueError::new_err)? })
+    }
+
+    /// What `goofi.gpu` answers where it put a picture into memory the graphics engine shares.
+    fn shared_of(delivered: &Bound<'_, PyAny>) -> Option<Frame> {
+        let (id, width, height, pitch, bytes) = delivered.extract::<(u64, u32, u32, u32, u32)>().ok()?;
+        Some(Frame::Shared(Shared { id, width, height, pitch, texel: SharedTexel::of(bytes)? }))
     }
 }
 
@@ -35,8 +41,8 @@ impl Texture {
         let delivered;
         let pixels = if gpu.call_method1("on_cuda", (pixels,))?.extract()? {
             delivered = gpu.call_method1("deliver", (pixels,))?;
-            if let Ok((id, width, height, pitch)) = delivered.extract::<(u64, u32, u32, u32)>() {
-                return Self::of(Frame::Shared(Shared { id, width, height, pitch }));
+            if let Some(shared) = Self::shared_of(&delivered) {
+                return Self::of(shared);
             }
             &delivered
         } else {
@@ -61,7 +67,15 @@ impl Texture {
         };
         let width = u32::try_from(*width).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         let height = u32::try_from(*height).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let bytes = array.call_method0("tobytes")?.cast::<pyo3::types::PyBytes>()?.as_bytes().to_vec();
+        // In a node the graphics tick calls, 8-bit RGBA goes into memory the engine shares.
+        if format == PixelFormat::Rgba8 {
+            if let Some(shared) = Self::shared_of(&gpu.call_method1("host", (&array,))?) {
+                return Self::of(shared);
+            }
+        }
+        let (at, len): (usize, usize) = (array.getattr("ctypes")?.getattr("data")?.extract()?, array.getattr("nbytes")?.extract()?);
+        // SAFETY: `array` is contiguous, holds `nbytes` bytes at that address, and lives past the copy.
+        let bytes = unsafe { std::slice::from_raw_parts(at as *const u8, len) }.to_vec();
         Self::of(Frame::Pixels(Pixels {
             width,
             height,
@@ -72,7 +86,7 @@ impl Texture {
     }
 
     /// The pixels as a numpy array of its own, `[height, width, 3 or 4]`, `uint8` or `float32`
-    /// as held. A picture in device memory is copied out as RGBA `float32`.
+    /// as held. A picture in device memory is copied out as RGBA, `float32` or `uint8`.
     fn numpy<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let p = match self.held()? {
             Frame::Pixels(p) => p,

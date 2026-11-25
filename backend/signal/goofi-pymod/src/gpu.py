@@ -10,8 +10,10 @@ import os
 import struct
 
 # One message of the engine's: its kind, a buffer's id, its allocation size, and its picture's
-# width, height and row pitch. An input or a target comes with the memory's file descriptor.
-_MESSAGE = struct.Struct("<QQQIII4x")
+# width, height, row pitch and bytes a texel (8 is RGBA float16, 4 is RGBA uint8). An input or a
+# target comes with the memory's file descriptor.
+_MESSAGE = struct.Struct("<QQQIIII")
+_HALF, _BYTE = 8, 4
 _INPUT, _TARGET, _FORGET = 1, 2, 3
 _HOST, _DEVICE = 1, 2
 _OPAQUE_FD = 1
@@ -254,7 +256,7 @@ def _drain():
         _fds.extend(fds)
     while len(_bytes) >= _MESSAGE.size:
         head, _bytes = _bytes[:_MESSAGE.size], _bytes[_MESSAGE.size:]
-        kind, ident, allocation, width, height, pitch = _MESSAGE.unpack(head)
+        kind, ident, allocation, width, height, pitch, texel = _MESSAGE.unpack(head)
         if kind == _FORGET:
             held = _maps.pop(ident, None)
             if _target == ident:
@@ -263,12 +265,12 @@ def _drain():
                 with _Current() as lib:
                     lib.cuDestroyExternalMemory(held["memory"])
         else:
-            _maps[ident] = _map(_fds.pop(0), allocation, width, height, pitch)
+            _maps[ident] = _map(_fds.pop(0), allocation, width, height, pitch, texel)
             if kind == _TARGET:
                 _target = ident
 
 
-def _map(fd, allocation, width, height, pitch):
+def _map(fd, allocation, width, height, pitch, texel):
     """The device address of the engine's buffer behind `fd`. CUDA owns the fd from here."""
     import ctypes
 
@@ -289,24 +291,60 @@ def _map(fd, allocation, width, height, pitch):
     with _Current() as lib:
         _check(lib.cuImportExternalMemory(ctypes.byref(imported), ctypes.byref(memory)))
         _check(lib.cuExternalMemoryGetMappedBuffer(ctypes.byref(ptr), imported, ctypes.byref(Buffer(size=pitch * height))))
-    return {"ptr": ptr.value, "memory": imported, "width": width, "height": height, "pitch": pitch}
+    return {"ptr": ptr.value, "memory": imported, "width": width, "height": height, "pitch": pitch, "texel": texel}
 
 
 def view(ident):
-    """The engine's buffer `ident` as RGBA float16 `[height, width, 4]`, with no copy."""
+    """The engine's buffer `ident` as RGBA `[height, width, 4]`, float16 or uint8, with no copy."""
     if ident not in _maps:
         _drain()
     held = _maps.get(ident)
     if held is None:
         raise RuntimeError("the graphics engine sent no memory for this texture")
-    return Cuda(held["ptr"], (held["height"], held["width"], 4), "<f2", (held["pitch"], 8, 2))
+    typestr, strides = ("<f2", (held["pitch"], 8, 2)) if held["texel"] == _HALF else ("|u1", (held["pitch"], 4, 1))
+    return Cuda(held["ptr"], (held["height"], held["width"], 4), typestr, strides)
 
 
 def download(ident):
-    """The engine's buffer `ident` as a numpy array, RGBA float32 `[height, width, 4]`."""
+    """The engine's buffer `ident` as a numpy array `[height, width, 4]`, float32 or uint8."""
     import numpy as np
 
-    return numpy(view(ident)).astype(np.float32)
+    pixels = numpy(view(ident))
+    return pixels if pixels.dtype == np.uint8 else pixels.astype(np.float32)
+
+
+def _output(width, height, texel):
+    """The buffer the engine shares for the node's output, where it has this size and texel.
+
+    Where it has not, the engine is asked for one, and makes it for the next tick.
+    """
+    held = _maps.get(_target)
+    if held is not None and (held["width"], held["height"], held["texel"]) == (width, height, texel):
+        return held
+    _sock.setblocking(True)
+    _sock.sendall(struct.pack("<III", width, height, texel))
+    _sock.setblocking(False)
+    return None
+
+
+def host(pixels):
+    """An RGBA uint8 numpy picture, in a node the graphics tick calls: copied once, CPU to GPU,
+    into the buffer the engine shares for the node's output.
+
+    The answer is that buffer's `(id, width, height, pitch, bytes a texel)`, or None where the
+    picture crosses as pixels: in any other node, and until the buffer has the picture's size.
+    """
+    if _sock is None:
+        return None
+    _drain()
+    if _sock is None or pixels.ndim != 3 or pixels.shape[2] != 4 or pixels.dtype.str != "|u1":
+        return None
+    height, width = pixels.shape[0], pixels.shape[1]
+    held = _output(width, height, _BYTE)
+    if held is None:
+        return None
+    _copy(pixels.ctypes.data, width * 4, held["ptr"], held["pitch"], width * 4, height, src_kind=_HOST)
+    return (_target, width, height, held["pitch"], _BYTE)
 
 
 def _picture(array):
@@ -325,9 +363,9 @@ def deliver(array):
     """What `goofi.Texture` holds for a picture in CUDA memory.
 
     In a node the graphics tick calls, the picture is copied, CUDA to CUDA, into the buffer the
-    engine shares for the node's output: the answer is that buffer's `(id, width, height, pitch)`.
-    Until that buffer has the picture's size, and in every other node, the answer is the picture
-    as numpy pixels.
+    engine shares for the node's output: the answer is that buffer's `(id, width, height, pitch,
+    bytes a texel)`. Until that buffer has the picture's size, and in every other node, the
+    answer is the picture as numpy pixels.
     """
     import numpy as np
 
@@ -348,15 +386,11 @@ def deliver(array):
         shape = tuple(spec["shape"])
         if len(shape) == 3 and shape[2] == 4 and spec["typestr"] == "<f2":
             height, width = shape[0], shape[1]
-            held = _maps.get(_target)
-            if held is not None and (held["width"], held["height"]) == (width, height):
+            held = _output(width, height, _HALF)
+            if held is not None:
                 ptr, pitch, row, rows = _rows(spec)
                 _copy(ptr, pitch, held["ptr"], held["pitch"], row, rows)
-                return (_target, width, height, held["pitch"])
-            # The engine makes a target of this size for the next tick.
-            _sock.setblocking(True)
-            _sock.sendall(struct.pack("<II", width, height))
-            _sock.setblocking(False)
+                return (_target, width, height, held["pitch"], _HALF)
     if _is_torch(array):
         import torch
 

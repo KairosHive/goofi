@@ -143,6 +143,9 @@ pub(crate) struct State {
     /// Readbacks taken for the recording, numbered from one.
     pub(crate) recorded: u64,
     pub(crate) uploads: Vec<Option<Target>>,
+    /// For a node the tick calls: the 8-bit picture it made, which a pass draws into its output,
+    /// and that pass's size uniform.
+    pub(crate) staged: Option<(Target, wgpu::Buffer)>,
     /// Per input of a node the tick calls: the buffer its producer's output is read into.
     pub(crate) downloads: Vec<Option<(wgpu::Buffer, (u32, u32))>>,
     /// For a node the tick calls whose child joined: the buffers the two share.
@@ -174,6 +177,7 @@ impl State {
             count: 0,
             recorded: 0,
             uploads: Vec::new(),
+            staged: None,
             downloads: Vec::new(),
             link: None,
             layouts: Vec::new(),
@@ -273,23 +277,60 @@ impl State {
 
     /// A node's output: its new picture where the run made one, which sets the size, else the
     /// picture it holds; and a readback for each reader that is there now.
-    pub(crate) fn show(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, picture: Option<&Made>, wants: [Option<(u32, u32)>; 4]) -> Result<(), String> {
+    pub(crate) fn show(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, picture: Option<&Made<'_>>, wants: [Option<(u32, u32)>; 4]) -> Result<(), String> {
         let Some(size) = picture.map(Made::size).or(self.out.as_ref().map(|out| out.size)) else { return Ok(()) };
         self.ensure_out(gpu, size, wants, 0)?;
         let out = &self.out.as_ref().expect("ensure_out made it").texture;
+        // 8-bit texels go up as they are, and the device makes the engine's texels of them.
+        let bytes: Option<&[u8]> = match picture {
+            Some(Made::Texels(Upload { texels, texel: Texel::Byte, .. })) => Some(texels),
+            Some(Made::Bytes(texels, _)) => Some(texels),
+            _ => None,
+        };
+        if let Some(texels) = bytes {
+            let (staged, uniform) = self.staged(gpu, size);
+            write_texels(gpu, &staged.texture, size, texels, Texel::Byte);
+            gpu.widen(encoder, &staged.view, &self.out.as_ref().expect("ensure_out made it").view, &uniform);
+            return Ok(());
+        }
         match picture {
-            Some(Made::Texels(picture)) => write_texels(gpu, out, size, &picture.texels),
-            Some(Made::Shared(buffer, shared)) => encoder.copy_buffer_to_texture(
-                wgpu::TexelCopyBufferInfo {
+            Some(Made::Texels(picture)) => write_texels(gpu, out, size, &picture.texels, Texel::Half),
+            Some(Made::Shared(buffer, shared)) => {
+                let rows = wgpu::TexelCopyBufferInfo {
                     buffer,
                     layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(shared.pitch), rows_per_image: None },
-                },
-                out.as_image_copy(),
-                wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-            ),
-            None => {}
+                };
+                let extent = wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 };
+                match shared.texel {
+                    goofi_core::texture::SharedTexel::Half => encoder.copy_buffer_to_texture(rows, out.as_image_copy(), extent),
+                    goofi_core::texture::SharedTexel::Byte => {
+                        let (staged, uniform) = self.staged(gpu, size);
+                        encoder.copy_buffer_to_texture(rows, staged.texture.as_image_copy(), extent);
+                        gpu.widen(encoder, &staged.view, &self.out.as_ref().expect("ensure_out made it").view, &uniform);
+                    }
+                }
+            }
+            Some(Made::Bytes(..)) | None => {}
         }
         Ok(())
+    }
+
+    /// The 8-bit texture a node's picture of `size` lands in, and the size uniform of the pass
+    /// that draws it into the output.
+    fn staged(&mut self, gpu: &Gpu, size: (u32, u32)) -> (Target, wgpu::Buffer) {
+        if !self.staged.as_ref().is_some_and(|(held, _)| held.size == size) {
+            let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            let uniform = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("out_size"),
+                size: 8,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            gpu.queue.write_buffer(&uniform, 0, &[(size.0 as f32).to_le_bytes(), (size.1 as f32).to_le_bytes()].concat());
+            self.staged = Some((Target::new(gpu, "node picture", size, Texel::Byte.format(), usage), uniform));
+        }
+        let (target, uniform) = self.staged.as_ref().expect("made above");
+        (Target { view: target.view.clone(), texture: target.texture.clone(), size }, uniform.clone())
     }
 
     /// The output texture at `size`, the state buffers beside it, and one readback per reader
@@ -345,18 +386,18 @@ impl State {
         }
         self.ranges[k] = [up.lo, up.hi, up.channels as f32, up.scale];
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
-        let size = (up.width, up.height);
-        if self.uploads[k].as_ref().is_none_or(|t| t.size != size) {
-            self.uploads[k] = Some(Target::new(gpu, "upload", size, crate::gpu::FORMAT, usage));
+        let (size, format) = ((up.width, up.height), up.texel.format());
+        if self.uploads[k].as_ref().is_none_or(|t| t.size != size || t.texture.format() != format) {
+            self.uploads[k] = Some(Target::new(gpu, "upload", size, format, usage));
         }
-        write_texels(gpu, &self.uploads[k].as_ref().expect("just made").texture, size, &up.texels);
+        write_texels(gpu, &self.uploads[k].as_ref().expect("just made").texture, size, &up.texels, up.texel);
         match &up.layout {
             Some((n, texels)) => {
                 let size = (*n, 1);
                 if self.layouts[k].as_ref().is_none_or(|t| t.size != size) {
                     self.layouts[k] = Some(Target::new(gpu, "layout", size, crate::gpu::FORMAT, usage));
                 }
-                write_texels(gpu, &self.layouts[k].as_ref().expect("just made").texture, size, texels);
+                write_texels(gpu, &self.layouts[k].as_ref().expect("just made").texture, size, texels, Texel::Half);
             }
             None => self.layouts[k] = None,
         }
@@ -380,16 +421,26 @@ impl State {
     }
 }
 
-/// The picture a node made: texels this process holds, or a buffer the node's child wrote.
-pub(crate) enum Made {
+/// The picture a node made: texels this process holds, the node's own RGBA bytes where they
+/// need no conversion, or a buffer the node's child wrote.
+pub(crate) enum Made<'a> {
     Texels(Upload),
+    Bytes(&'a [u8], (u32, u32)),
     Shared(wgpu::Buffer, goofi_core::texture::Shared),
 }
 
-impl Made {
+impl<'a> Made<'a> {
+    pub(crate) fn of(pixels: &'a goofi_core::texture::Pixels) -> Made<'a> {
+        if pixels.format == goofi_core::texture::PixelFormat::Rgba8 && pixels.stride == pixels.width as usize * 4 {
+            return Made::Bytes(&pixels.bytes, (pixels.width, pixels.height));
+        }
+        Made::Texels(Upload::pixels(pixels))
+    }
+
     pub(crate) fn size(&self) -> (u32, u32) {
         match self {
             Made::Texels(picture) => (picture.width, picture.height),
+            Made::Bytes(_, size) => *size,
             Made::Shared(_, shared) => (shared.width, shared.height),
         }
     }
@@ -420,12 +471,14 @@ pub(crate) fn pictures(gpu: &Gpu, buffers: &[(wgpu::Buffer, (u32, u32))]) -> Vec
             answer
         })
         .collect();
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let drawn = gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_ok();
     buffers
         .iter()
         .zip(mapped)
         .map(|((buffer, size), answer)| {
-            if answer.try_recv() != Ok(true) {
+            // Another thread's poll of the one device can hold the answer, so this waits for it.
+            if !drawn || answer.recv() != Ok(true) {
+                buffer.unmap();
                 return Err("the device refused to map a node's input".to_string());
             }
             let texels = buffer.slice(..).get_mapped_range().map_err(|e| format!("a node's input: {e:?}"))?;
@@ -448,18 +501,40 @@ pub(crate) fn pictures(gpu: &Gpu, buffers: &[(wgpu::Buffer, (u32, u32))]) -> Vec
         .collect()
 }
 
-/// RGBA16F texels, `size` of them, into a texture of that size.
-fn write_texels(gpu: &Gpu, texture: &wgpu::Texture, size: (u32, u32), texels: &[u8]) {
+/// Texels, `size` of them, into a texture of that size and that texel's format.
+fn write_texels(gpu: &Gpu, texture: &wgpu::Texture, size: (u32, u32), texels: &[u8], texel: Texel) {
     gpu.queue.write_texture(
         texture.as_image_copy(),
         texels,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.0 * 8), rows_per_image: None },
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size.0 * texel.bytes()), rows_per_image: None },
         wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
     );
 }
 
+/// How an upload holds a texel: four `f16`, or four bytes the device reads as 0..1.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Texel {
+    Half,
+    Byte,
+}
+
+impl Texel {
+    pub fn format(self) -> wgpu::TextureFormat {
+        match self {
+            Texel::Half => crate::gpu::FORMAT,
+            Texel::Byte => wgpu::TextureFormat::Rgba8Unorm,
+        }
+    }
+    fn bytes(self) -> u32 {
+        match self {
+            Texel::Half => 8,
+            Texel::Byte => 4,
+        }
+    }
+}
+
 use goofi_core::{Data, Value};
-/// One arrival as the render thread takes it: `width * height * 4` f16 texels, row 0 the top,
+/// One arrival as the render thread takes it: `width * height` RGBA texels, row 0 the top,
 /// and the range the frame's own values spanned — what a body needs to draw the frame to scale,
 /// and the one thing a shader cannot work out for itself without reading every texel at every
 /// texel. The values and the range are both over `scale`, so a frame past the half floats fits.
@@ -467,6 +542,7 @@ pub struct Upload {
     pub width: u32,
     pub height: u32,
     pub texels: Vec<u8>,
+    pub texel: Texel,
     pub lo: f32,
     pub hi: f32,
     /// The power of two the values are divided by: 1 for a frame the half floats hold as it is.
@@ -479,27 +555,37 @@ pub struct Upload {
 }
 
 impl Upload {
+    /// A picture's pixels. 8-bit ones stay bytes, which the device reads as 0..1; floats become
+    /// the engine's `f16`.
     pub fn pixels(p: &goofi_core::texture::Pixels) -> Self {
         let channels = p.format.channels();
         let unit = p.format.bytes_per_channel();
-        let mut texels = Vec::with_capacity(p.width as usize * p.height as usize * 8);
-        for row in p.bytes.chunks_exact(p.stride) {
-            for pixel in row[..p.width as usize * channels * unit].chunks_exact(channels * unit) {
-                for channel in 0..4 {
-                    let value = if channel >= channels {
-                        1.0
-                    } else if unit == 1 {
-                        pixel[channel] as f32 / 255.0
-                    } else {
-                        f32::from_le_bytes(pixel[channel * 4..channel * 4 + 4].try_into().unwrap())
-                    };
-                    texels.extend(
-                        half::f16::from_f32(if value.is_finite() { value } else { 0.0 }).to_bits().to_le_bytes(),
-                    );
+        let width = p.width as usize;
+        let (texel, texels) = if unit == 1 {
+            let mut texels = vec![255; width * p.height as usize * 4];
+            for (row, out) in p.bytes.chunks_exact(p.stride).zip(texels.chunks_exact_mut(width * 4)) {
+                if channels == 4 {
+                    out.copy_from_slice(&row[..width * 4]);
+                } else {
+                    for (pixel, texel) in row[..width * 3].chunks_exact(3).zip(out.chunks_exact_mut(4)) {
+                        texel[..3].copy_from_slice(pixel);
+                    }
                 }
             }
-        }
-        Self { width: p.width, height: p.height, texels, lo: 0.0, hi: 1.0, scale: 1.0, channels: channels as u32, layout: None }
+            (Texel::Byte, texels)
+        } else {
+            let mut texels = Vec::with_capacity(width * p.height as usize * 8);
+            for row in p.bytes.chunks_exact(p.stride) {
+                for pixel in row[..width * channels * 4].chunks_exact(channels * 4) {
+                    for channel in 0..4 {
+                        let value = if channel >= channels { 1.0 } else { f32::from_le_bytes(pixel[channel * 4..channel * 4 + 4].try_into().unwrap()) };
+                        texels.extend(half::f16::from_f32(if value.is_finite() { value } else { 0.0 }).to_bits().to_le_bytes());
+                    }
+                }
+            }
+            (Texel::Half, texels)
+        };
+        Self { width: p.width, height: p.height, texels, texel, lo: 0.0, hi: 1.0, scale: 1.0, channels: channels as u32, layout: None }
     }
 
     /// A frame as RGBA texels, unclamped. `[N]` is one row; `[H, W]` is gray; `[H, W, C]` fills
@@ -543,6 +629,6 @@ impl Upload {
             );
         }
         let layout = crate::montage::layout_of(frame);
-        Some(Upload { width: w as u32, height: h as u32, texels, lo: over(lo), hi: over(hi), scale, channels: c as u32, layout })
+        Some(Upload { width: w as u32, height: h as u32, texels, texel: Texel::Half, lo: over(lo), hi: over(hi), scale, channels: c as u32, layout })
     }
 }

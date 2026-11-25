@@ -20,7 +20,7 @@ mod linux {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use ash::vk;
-    use goofi_core::texture::Shared;
+    use goofi_core::texture::{Shared, SharedTexel};
     use wgpu::hal::api::Vulkan;
 
     use crate::gpu::{padded_row, Gpu};
@@ -100,7 +100,7 @@ mod linux {
                 self.inputs.resize_with(slot + 1, || None);
             }
             if !self.inputs[slot].as_ref().is_some_and(|held| (held.shared.width, held.shared.height) == size) {
-                let made = self.make(gpu, INPUT, size)?;
+                let made = self.make(gpu, INPUT, size, SharedTexel::Half)?;
                 if let Some(old) = self.inputs[slot].replace(made) {
                     self.forget(old)?;
                 }
@@ -116,24 +116,27 @@ mod linux {
             Some((held.buffer.clone(), held.shared))
         }
 
-        /// Take what the child asked for: a target of the size of the pictures it makes.
+        /// Take what the child asked for: a target of the size and texel of the pictures it makes.
         pub fn asked(&mut self, gpu: &Gpu) -> Result<(), String> {
-            let mut asks = [0u8; 8];
+            let mut asks = [0u8; 12];
             let mut last = None;
+            let word = |asks: &[u8; 12], at: usize| u32::from_le_bytes([asks[at], asks[at + 1], asks[at + 2], asks[at + 3]]);
             loop {
                 match self.stream.read(&mut asks) {
-                    Ok(8) => last = Some((u32::from_le_bytes([asks[0], asks[1], asks[2], asks[3]]), u32::from_le_bytes([asks[4], asks[5], asks[6], asks[7]]))),
+                    Ok(12) => last = Some(((word(&asks, 0), word(&asks, 4)), word(&asks, 8))),
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     _ => return Err("the node's child left the texture socket".into()),
                 }
             }
-            let Some(size) = last.filter(|size| !self.target.as_ref().is_some_and(|held| (held.shared.width, held.shared.height) == *size)) else {
+            let Some((size, bytes)) = last else { return Ok(()) };
+            let texel = SharedTexel::of(bytes).ok_or_else(|| format!("the node asked for a picture of {bytes} bytes a texel"))?;
+            if self.target.as_ref().is_some_and(|held| (held.shared.width, held.shared.height, held.shared.texel) == (size.0, size.1, texel)) {
                 return Ok(());
-            };
+            }
             if size.0 == 0 || size.1 == 0 || size.0 > goofi_core::texture::MAX_SIZE || size.1 > goofi_core::texture::MAX_SIZE {
                 return Err(format!("the node asked for a picture of {}x{}", size.0, size.1));
             }
-            let made = self.make(gpu, TARGET, size)?;
+            let made = self.make(gpu, TARGET, size, texel)?;
             if let Some(old) = self.target.replace(made) {
                 self.forget(old)?;
             }
@@ -144,9 +147,9 @@ mod linux {
             send(&self.stream, &message(FORGET, &old.shared, 0), None)
         }
 
-        /// A buffer of `size` whose memory the child has from now on.
-        fn make(&mut self, gpu: &Gpu, kind: u64, size: (u32, u32)) -> Result<Buffer, String> {
-            let shared = Shared { id: self.next, width: size.0, height: size.1, pitch: padded_row(size.0, 8) };
+        /// A buffer of `size` texels whose memory the child has from now on.
+        fn make(&mut self, gpu: &Gpu, kind: u64, size: (u32, u32), texel: SharedTexel) -> Result<Buffer, String> {
+            let shared = Shared { id: self.next, width: size.0, height: size.1, pitch: padded_row(size.0, texel.bytes()), texel };
             self.next += 1;
             let (buffer, allocation, fd) = export(&gpu.device, u64::from(shared.pitch) * u64::from(shared.height))?;
             send(&self.stream, &message(kind, &shared, allocation), Some(&fd))?;
@@ -162,6 +165,7 @@ mod linux {
         out[24..28].copy_from_slice(&shared.width.to_le_bytes());
         out[28..32].copy_from_slice(&shared.height.to_le_bytes());
         out[32..36].copy_from_slice(&shared.pitch.to_le_bytes());
+        out[36..40].copy_from_slice(&shared.texel.bytes().to_le_bytes());
         out
     }
 

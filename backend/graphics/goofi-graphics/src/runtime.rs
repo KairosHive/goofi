@@ -372,7 +372,7 @@ impl Runtime {
         let texture = made.as_ref().and_then(|frame| frame.as_texture().ok());
         let link = self.states.get_mut(&uid).and_then(|state| state.link.as_mut());
         let picture = match (texture, link) {
-            (Some(Texture::Pixels(pixels)), _) => Some(Made::Texels(crate::resources::Upload::pixels(pixels))),
+            (Some(Texture::Pixels(pixels)), _) => Some(Made::of(pixels)),
             (Some(Texture::Shared(named)), link) => match link.and_then(|link| link.buffer(named.id)) {
                 Some((buffer, shared)) => Some(Made::Shared(buffer, shared)),
                 None => {

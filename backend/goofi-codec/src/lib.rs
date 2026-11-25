@@ -85,6 +85,21 @@ impl<'a> Out<'a> for Vec<u8> {
     }
 }
 
+/// `value` packed into `out` piece by piece: a texture's pixels are never gathered first.
+fn stream<'a, T: serde::Serialize + ?Sized>(what: &str, value: &T, out: &mut impl Out<'a>) -> Result<(), EncodeError> {
+    struct Pieces<'o, O>(&'o mut O);
+    impl<'a, O: Out<'a>> std::io::Write for Pieces<'_, O> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.put(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    rmp_serde::encode::write(&mut Pieces(out), value).map_err(|e| EncodeError::Serialize(format!("{what}: {e}")))
+}
+
 /// A sink that only counts: how a frame's length is known before its loan is taken.
 struct Count(usize);
 
@@ -202,7 +217,8 @@ enum Body<'a> {
     /// [`array_head_bytes`], then the samples themselves.
     Array { head: Vec<u8>, samples: &'a [u8] },
     Str(&'a [u8]),
-    Texture(Vec<u8>),
+    /// The texture, and the length its packed form takes.
+    Texture { texture: &'a goofi_core::texture::Texture, len: usize },
     Functional(&'a [u8]),
     /// Per entry: the key's length, the value frame's length, and that frame's length as bytes.
     Table { map: &'a indexmap::IndexMap<String, Data>, count: [u8; 4], heads: Vec<([u8; 2], usize, [u8; 4])> },
@@ -211,7 +227,11 @@ enum Body<'a> {
 impl<'a> Body<'a> {
     fn of(d: &'a Data) -> Result<Body<'a>, EncodeError> {
         Ok(match d.value() {
-            Value::Texture(t) => Body::Texture(packed("texture", &**t)?),
+            Value::Texture(t) => {
+                let mut count = Count(0);
+                stream("texture", &**t, &mut count)?;
+                Body::Texture { texture: t, len: count.0 }
+            }
             Value::Array(store) => Body::Array { head: array_head_bytes(b"<f4", store.shape())?, samples: store.as_bytes() },
             Value::Str(s) => Body::Str(s.as_bytes()),
             Value::Functional(code) => Body::Functional(code),
@@ -230,7 +250,7 @@ impl<'a> Body<'a> {
         match self {
             Body::Array { head, samples } => head.len() + samples.len(),
             Body::Str(s) | Body::Functional(s) => s.len(),
-            Body::Texture(t) => t.len(),
+            Body::Texture { len, .. } => *len,
             Body::Table { map, heads, .. } => 4 + map.keys().zip(heads).map(|(k, (_, len, _))| 2 + k.len() + 4 + len).sum::<usize>(),
         }
     }
@@ -242,7 +262,7 @@ impl<'a> Body<'a> {
                 out.put_samples(samples);
             }
             Body::Str(s) | Body::Functional(s) => out.put(s),
-            Body::Texture(t) => out.put(&t),
+            Body::Texture { texture, .. } => stream("texture", texture, out)?,
             Body::Table { map, count, heads } => {
                 out.put(&count);
                 for ((key, value), (klen, _, vlen)) in map.iter().zip(heads) {

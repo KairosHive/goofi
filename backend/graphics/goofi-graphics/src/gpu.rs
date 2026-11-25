@@ -119,6 +119,8 @@ pub struct Gpu {
     pub blank: wgpu::TextureView,
     /// One conversion pipeline per [`Want`], and the layout the source texture binds through.
     blits: [wgpu::RenderPipeline; 4],
+    /// The pass that draws an 8-bit picture into a stage's output, in the engine's own format.
+    widen: wgpu::RenderPipeline,
     /// The `screen` pass per surface format a window turned out to want, made at its first frame.
     screens: Mutex<HashMap<wgpu::TextureFormat, Arc<wgpu::RenderPipeline>>>,
     blit_module: wgpu::ShaderModule,
@@ -271,6 +273,7 @@ impl Gpu {
             blit("tap8", Want::TapU8.format()),
             blit("tap8", Want::Record.format()),
         ];
+        let widen = blit("tap", FORMAT);
         let shares = crate::share::device_uuid(&device);
         Ok(Gpu {
             _lease: goofi_supervisor::scope::lease(
@@ -287,6 +290,7 @@ impl Gpu {
             sampler,
             blank,
             blits,
+            widen,
             screens: Mutex::new(HashMap::new()),
             blit_module: module,
             blit_layout,
@@ -308,6 +312,12 @@ impl Gpu {
         out_size: &wgpu::Buffer,
     ) {
         self.blit_with(encoder, &self.blits[want as usize], src, into, out_size);
+    }
+
+    /// One pass, encoded: the 8-bit picture `src` into the stage output `into`, of the same size
+    /// that `out_size` holds.
+    pub fn widen(&self, encoder: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, into: &wgpu::TextureView, out_size: &wgpu::Buffer) {
+        self.blit_with(encoder, &self.widen, src, into, out_size);
     }
 
     /// A surface onto a window, from the handles its screen answered. Made where the handles

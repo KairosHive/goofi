@@ -1416,4 +1416,30 @@ fn a_tick_node_keeps_its_pictures_on_the_device() {
     }
     assert_eq!(idle(&g)["shared"] == j!(1), shares, "the form holds");
     assert_eq!(g.error(node), None);
+
+    // Step: a source's 8-bit picture is the same picture on the device: bytes over 255. RGBA
+    // leaves in the form this machine has; RGB crosses as pixels, opaque; a new size is followed.
+    const BYTES: &str = include_str!("../fixtures/texture_bytes.py");
+    std::fs::write(dir.join("texture_bytes.py"), BYTES).unwrap();
+    let signal = g.state.mount().join("nodes_signal");
+    std::fs::create_dir_all(&signal).unwrap();
+    std::fs::write(signal.join("texture_bytes.py"), BYTES.replacen("# goofi: graphics\n", "", 1)).unwrap();
+    g.call("library refresh", j!({}));
+    let source = g.add("graphics:TextureBytes");
+    g.ready(source);
+    for width in [3, 5] {
+        g.set_param(source, "picture", "width", width);
+        drawn(&g, source, "an 8-bit RGBA picture off the tick", |d| shape(d) == vec![2, width, 4] && close(px(d, 1, width - 1), [0.2, 0.4, flag, 128.0 / 255.0]));
+    }
+    g.set_param(source, "picture", "alpha", false);
+    drawn(&g, source, "an 8-bit RGB picture off the tick", |d| close(px(d, 0, 0), [0.2, 0.4, 0.0, 1.0]));
+    assert_eq!(g.error(source), None);
+
+    // Step: a shader reads a signal node's 8-bit picture and the tick node's as the same values.
+    let (other, both) = (g.add("signal:TextureBytes"), g.add("graphics:Apart"));
+    g.ready(other);
+    g.ready(both);
+    g.link(other, "out", both, "a");
+    g.link(source, "out", both, "b");
+    drawn(&g, both, "the two 8-bit pictures side by side", |d| close(px(d, 0, 0), [0.0, 0.2, 0.2, 1.0]));
 }
