@@ -104,6 +104,16 @@ export function axisWindow(lo: number, hi: number, log: boolean, pad = 0.05): [n
 	return [a - p, b + p];
 }
 
+/** An autoscaled window lets go of the one it held when the fit fills less than this much of it. */
+const HOLD = 0.7;
+
+/** The window an autoscaled axis shows for the fit `want`, given the one it `held`: the held one
+ * while the fit stays inside it and fills most of it, so noise on the extent moves no label. */
+export function settled(held: [number, number] | null, want: [number, number]): [number, number] {
+	if (!held || want[0] < held[0] || want[1] > held[1]) return want;
+	return want[1] - want[0] >= HOLD * (held[1] - held[0]) ? held : want;
+}
+
 /** Grid positions in `[a, b]` as fractions of the span: 1-2-5 steps near `target` lines on a
  * linear axis, decades with minor lines at the mantissas 2..9 on a log axis. */
 export function gridLines(a: number, b: number, log: boolean, target = 4): { major: number[]; minor: number[] } {

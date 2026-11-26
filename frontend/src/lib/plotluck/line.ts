@@ -5,6 +5,7 @@ import {
 	layoutSeries,
 	perRow,
 	rgba,
+	settled,
 	unmapped,
 	axisWindow,
 	gridLines,
@@ -105,6 +106,8 @@ export class LinePlot {
 	private scalarHi = -Infinity;
 	private xw: [number, number] = [0, 1];
 	private yw: [number, number] = [0, 1];
+	/** The autoscaled window the last fit showed; null when the next fit starts afresh. */
+	private auto: [number, number] | null = null;
 	private grid = gridSegments([], []);
 	private minor = gridSegments([], []);
 	private gpu: LineGpu | null = null;
@@ -125,6 +128,7 @@ export class LinePlot {
 	}
 	setSettings(s: Partial<LineSettings>): void {
 		this.settings = { ...this.settings, ...s };
+		this.auto = null;
 		this.fitWindows();
 		this.invalidate();
 	}
@@ -137,6 +141,7 @@ export class LinePlot {
 		this.buf = null;
 		this.m = 0;
 		this.scalar = false;
+		this.auto = null;
 		if (this.gpu) this.gpu.uploaded = null;
 		this.invalidate();
 	}
@@ -200,6 +205,7 @@ export class LinePlot {
 		} else if (square) {
 			const e = yAuto ? (extent(buf) ?? [-1, 1]) : [yMin, yMax];
 			this.xw = axisWindow(e[0], e[1], false, yAuto ? 0.05 : 0);
+			if (yAuto) this.xw = this.auto = settled(this.auto, this.xw);
 			this.yw = this.xw;
 		} else {
 			// Point k sits at buf[(k + 1) * 2]: the pad comes first.
@@ -207,7 +213,7 @@ export class LinePlot {
 			this.xw = axisWindow(x[0], x[1], logX, 0);
 			if (yAuto) {
 				const e = extent(buf, 1, 2, logY) ?? [-1, 1];
-				this.yw = axisWindow(e[0], e[1], logY);
+				this.yw = this.auto = settled(this.auto, axisWindow(e[0], e[1], logY));
 			} else {
 				this.yw = axisWindow(yMin, yMax, logY, 0);
 			}

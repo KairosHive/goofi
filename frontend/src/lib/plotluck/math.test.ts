@@ -10,7 +10,8 @@ import {
 	layoutSeries,
 	logSafe,
 	meets,
-	rgba
+	rgba,
+	settled
 } from './math';
 
 describe('rects', () => {
@@ -63,6 +64,17 @@ describe('windows', () => {
 		expect(axisWindow(0, 10, false)).toEqual([-0.5, 10.5]);
 		expect(axisWindow(3, 3, false)).toEqual([2, 4]);
 		expect(axisWindow(10, 0, false, 0)).toEqual([0, 10]);
+	});
+	it('holds an autoscaled window while the fit stays inside it and fills most of it', () => {
+		const held: [number, number] = [-1, 1];
+		expect(settled(null, [-1, 1])).toEqual([-1, 1]);
+		// Noise on the extent: the window, and so every label read from it, stays.
+		expect(settled(held, [-0.9, 0.95])).toBe(held);
+		// A value past either bound takes the new fit at once; a line is never cut.
+		expect(settled(held, [-0.9, 1.01])).toEqual([-0.9, 1.01]);
+		expect(settled(held, [-1.2, 0.5])).toEqual([-1.2, 0.5]);
+		// A signal that fell well inside the window gets its own.
+		expect(settled(held, [-0.5, 0.5])).toEqual([-0.5, 0.5]);
 	});
 	it('works in log10 space for a log axis', () => {
 		const [lo, hi] = axisWindow(1, 1000, true, 0);
