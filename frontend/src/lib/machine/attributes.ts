@@ -2,6 +2,7 @@
  * value with the param widget of the attribute's kind. */
 import type { Attribute, AttributeKind, Literal } from '$lib/api/generated';
 import type { ParamDescriptor } from '$lib/api/types';
+import type { ControlView } from '$lib/crdt/graphDoc';
 import { KIND, bornValue } from '$lib/panels/controlLayout';
 
 export type Face = 'number' | 'vector' | 'color' | 'envelope' | 'toggle' | 'text' | 'select';
@@ -75,6 +76,22 @@ export function descriptorFor(a: Attribute, value: Literal): ParamDescriptor {
 		default:
 			return { ...base, type: 'string', value: String(value), options: k.options ?? null };
 	}
+}
+
+/** A control widget's value as a param, driven by `expression` where the manager computes it;
+ * null for a pad, whose sheet no param face draws. */
+export function controlDescriptor(c: ControlView, value: Literal | null, expression?: string, error?: string): ParamDescriptor | null {
+	const draws = KIND[c.kind].draws;
+	if (draws === 'image') return null;
+	const kind: AttributeKind =
+		draws === 'text'
+			? { type: 'string', options: c.kind === 'dropdown' ? (c.options ?? []) : undefined }
+			: draws === 'any'
+				? { type: 'bool' }
+				: { ...num(draws === 'color' || draws === 'envelope' ? draws : 'plain', draws === 'envelope' ? 10 : 1), ...(draws === 'color' ? {} : { vmin: c.min ?? 0, vmax: c.max ?? (draws === 'envelope' ? 10 : 1) }) };
+	const held = value ?? bornValue(KIND[c.kind]);
+	const d = descriptorFor({ name: '', default: held, kind, curve: 'linear' } as Attribute, held);
+	return expression === undefined ? d : ({ ...d, mode: 'expression', expression, error: error ?? null } as ParamDescriptor);
 }
 
 /** What a param widget's commit becomes in the document: a bool is the number it reads as. */

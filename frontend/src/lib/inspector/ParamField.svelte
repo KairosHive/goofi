@@ -1,6 +1,7 @@
 <!-- One param row, every part of it named by `rowPlan`: the face control, disabled when a source
      drives it, and the open region with the list or the entries, the source editor and the foot.
-     A row with no descriptor has no face: its label and `more` alone, as a transition's row is. -->
+     A row with no descriptor has no face: its label and `more` alone, as a transition's row is.
+     A row that takes a source owns its menu, its hover keys and its drops, wherever it is drawn. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
@@ -16,12 +17,17 @@
 		TextInput,
 		Button,
 		Icon,
-		Segmented
+		Segmented,
+		ContextMenu
 	} from '$lib/ui';
+	import { createLongPress, type MenuItem } from 'panelty';
+	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import { ui } from '$lib/stores/ui.svelte';
+	import { graph } from '$lib/stores/graph.svelte';
+	import { selection } from '$lib/stores/selection.svelte';
 	import { drag, dropTarget, takes, type DragSource, type DragTag, type DropTargetOptions } from '$lib/drag';
 	import { stepOf } from '$lib/ui/knob';
-	import { elementName as nameOf, isNumeric, rowPlan, type RowPlan } from './controlKind';
+	import { elementName as nameOf, isList, isNumeric, rowPlan, type RowPlan } from './controlKind';
 	import { numValue, numValues } from '$lib/api/types';
 	import { MODE_FACE, sourceForMode } from './paramSeed';
 	import ExprEditor from './expr/ExprEditor.svelte';
@@ -42,6 +48,7 @@
 		onSetElementSource,
 		onRefresh,
 		onPulse,
+		onReset,
 		refreshing = false,
 		selfName,
 		machine,
@@ -72,6 +79,8 @@
 		onSetElementSource?: (index: number, source: SourcePatch) => void;
 		onRefresh?: () => void;
 		onPulse?: () => void;
+		/** Put the value back where it started: what the `r` key asks for. */
+		onReset?: () => void;
 		refreshing?: boolean;
 		/** The node's display name, handed to the expression editor as `me`. */
 		selfName?: string;
@@ -99,9 +108,9 @@
 	/** A row with nothing of its own to show. */
 	const NONE: Omit<RowPlan, 'face'> & { face: null } = { face: null, viewSwitch: false, disabled: false, list: false, elements: false, source: false, foot: false };
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
-	const plan = $derived(descriptor ? rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }) : NONE);
+	const plan = $derived(descriptor ? rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal, entrySources: onSetElementSource !== undefined }) : NONE);
 	/** The form the row takes a dropped value in: a text, one number, or a list for a whole vector. */
-	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : plan.viewSwitch ? 'list' : 'number');
+	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : descriptor && isList(descriptor) ? 'list' : 'number');
 	/** What lands a dropped value's expression: the whole's source, or one entry's. */
 	const lands = (set: (source: SourcePatch) => void): DropTargetOptions['onDrop'] => async ({ source, tag, at }) => {
 		const expression = await source.expression?.(tag, at);
@@ -157,9 +166,120 @@
 	function choose(mode: ParamMode): void {
 		if (descriptor && mode !== descriptor.mode) onSetSource?.(sourceForMode(descriptor, mode));
 	}
+
+	const g = graph();
+	function modulate(kind: 'lfo' | 'nse'): void {
+		onSetSource?.({ expression: `${kind}(freq=${0.01 + Math.random() * 0.19})` });
+	}
+	/** The expression the app-wide pick gives this row, or null where the row may not take it. */
+	function pickedSource(d: ParamDescriptor): SourcePatch | null {
+		const pick = selection().reference;
+		if (!pick) return null;
+		if ('variable' in pick) {
+			const held = g.variables.some((v) => v.name === pick.variable) && (accept?.({ key: pick.variable, tags: [tag] }) ?? true);
+			return held ? { expression: `vars.${pick.variable}` } : null;
+		}
+		const expression = (accept?.({ key: pick.node, tags: ['node'] }) ?? true) ? g.readFor(pick.node, d.type, pick.slot) : null;
+		return expression ? { expression } : null;
+	}
+	/** The row's menu, from a right click or a held touch: LFO and Noise on a numeric row, and the pick. */
+	function menuItems(): MenuItem[] {
+		if (literal || !descriptor || !onSetSource) return [];
+		const items: MenuItem[] = isNumeric(descriptor)
+			? [
+					{ label: 'LFO', action: () => modulate('lfo') },
+					{ label: 'Noise', action: () => modulate('nse') }
+				]
+			: [];
+		const source = pickedSource(descriptor);
+		if (source) items.push({ label: `Reference selection: ${source.expression}`, icon: 'circle-dot', action: () => onSetSource(source) });
+		return items;
+	}
+	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
+	function openMenu(x: number, y: number): boolean {
+		const items = menuItems();
+		if (items.length) menu = { x, y, items };
+		return items.length > 0;
+	}
+	// One hold for the row: movement cancels it, and the click its release fires is swallowed.
+	let held = false;
+	const press = createLongPress((at) => {
+		held = true;
+		openMenu(at.clientX, at.clientY);
+	});
+
+	/** The hover keys: c and e pick the source, l and n modulate, x draws a value, r resets. They
+	 * act on the row under the pointer, or failing that the one holding the focus. */
+	function onKey(event: KeyboardEvent): void {
+		const d = descriptor;
+		if (literal || !d || !row || menu) return;
+		if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
+		const key = event.key;
+		if (!['l', 'n', 'r', 'x', 'c', 'e'].includes(key) || isTextEditingTarget(event.target)) return;
+		const hovered = row.matches(':hover') && !row.querySelector('.pf-param:hover');
+		const focused = (event.target as Element | null)?.closest?.('.pf-param') === row && !document.querySelector('.pf-param:hover');
+		if (!hovered && !focused) return;
+		if (key === 'c' || key === 'e') {
+			if (!onSetSource) return;
+			event.preventDefault();
+			choose(key === 'c' ? 'constant' : 'expression');
+		} else if (key === 'r') {
+			if (d.type === 'pulse' || !onReset) return;
+			event.preventDefault();
+			onReset();
+		} else if (!isNumeric(d)) {
+			return;
+		} else if (key === 'x') {
+			const min = d.int ? Math.ceil(d.vmin) : d.vmin;
+			const max = d.int ? Math.floor(d.vmax) : d.vmax;
+			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
+			event.preventDefault();
+			const draw = (): number => {
+				const fraction = Math.random();
+				return d.int ? Math.min(max, min + Math.floor(fraction * (max - min + 1))) : min * (1 - fraction) + max * fraction;
+			};
+			onCommit(Array.isArray(d.value) ? d.value.map(draw) : draw());
+		} else if (onSetSource) {
+			event.preventDefault();
+			modulate(key === 'l' ? 'lfo' : 'nse');
+		}
+	}
 </script>
 
-<div class="pf-param" bind:this={row} use:dropTarget={target} class:armed class:over class:open {...rest}>
+<svelte:window onkeydown={onKey} />
+
+{#if menu}
+	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
+{/if}
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	class="pf-param"
+	bind:this={row}
+	use:dropTarget={target}
+	class:armed
+	class:over
+	class:open
+	{...rest}
+	oncontextmenu={(e) => {
+		if (!openMenu(e.clientX, e.clientY)) return;
+		e.preventDefault();
+		e.stopPropagation();
+	}}
+	onpointerdown={(e) => {
+		held = false;
+		if (e.pointerType !== 'mouse' && menuItems().length) press.start(e);
+	}}
+	onpointermove={press.move}
+	onpointerup={press.cancel}
+	onpointercancel={press.cancel}
+	onclickcapture={(e) => {
+		if (!held) return;
+		held = false;
+		e.preventDefault();
+		e.stopPropagation();
+	}}
+>
 	<!-- Which face a vector wears, L or I: one list with one source (a colour's picker over it), or
 	     one row per entry with a source each. It sits at the row's end in both, so it stays put. -->
 	{#snippet viewSwitch()}

@@ -59,12 +59,17 @@ export type RowView = {
 	individual: boolean;
 	/** The value may take a source; false is a literal alone, with no foot and no entry sources. */
 	sources?: boolean;
+	/** Each entry may take a source of its own; false is a list with one source for all. */
+	entrySources?: boolean;
 };
+
+/** Whether the value is a list of numbers: what a drop onto the whole of it must give. */
+export const isList = (d: ParamDescriptor): boolean => LISTS.includes(controlKind(d));
 
 export function rowPlan(d: ParamDescriptor, view: RowView): RowPlan {
 	const kind = controlKind(d);
 	const sources = view.sources !== false;
-	const entries = sources && LISTS.includes(kind);
+	const entries = sources && view.entrySources !== false && LISTS.includes(kind);
 	const individual = entries && view.individual;
 	const driven = d.mode !== 'constant';
 	const anyEntryDriven = (d.elements ?? []).some((e) => e.mode !== 'constant');

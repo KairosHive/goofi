@@ -10,26 +10,20 @@
 <script lang="ts">
 	import { numValue, PARAM_MODES, type ParamDescriptor, type ParamMode, type SourcePatch } from '$lib/api/types';
 	import { getControl, type NodeInstanceInfo } from '$lib/api/control';
-	import type { MenuItem } from 'panelty';
-	import { createLongPress } from 'panelty';
-	import { ContextMenu } from '$lib/ui';
 	import { graph, paramLive } from '$lib/stores/graph.svelte';
 	import { ui } from '$lib/stores/ui.svelte';
-	import { selection } from '$lib/stores/selection.svelte';
 	import { notify } from '$lib/stores/notify.svelte';
 	import { isValidName } from '$lib/crdt/graphDoc';
 	import { formatName } from '$lib/editor/categoryColor';
 	import { bareName } from '$lib/editor/typeId';
 	import { nodeHealth } from '$lib/editor/nodeHealth';
-	import { isTextEditingTarget } from '$lib/ui/textEditing';
 	import type { DragSource } from '$lib/drag';
 	import ParamField from './ParamField.svelte';
 	import ColormapField from './ColormapField.svelte';
 	import type { Stop } from './colormap';
 	import IdentityBar from './IdentityBar.svelte';
 	import RenameField from './RenameField.svelte';
-	import { isNumeric } from './controlKind';
-	import { MODE_FACE, sourceForMode } from './paramSeed';
+	import { MODE_FACE } from './paramSeed';
 	import SubPatchInspector from '$lib/editor/SubPatchInspector.svelte';
 	import MetadataPanel from '$lib/editor/MetadataPanel.svelte';
 	import { matchParams, type ParamHit } from './paramSearch';
@@ -132,57 +126,6 @@
 	// A row takes a dropped value of its own type from anything but the node it belongs to, so a
 	// drop never binds what the manager would refuse.
 	const notSelf = (source: DragSource): boolean => !(source.tags.includes('node') && source.key === node?.uid);
-	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-
-	function modulate(group: string, name: string, kind: 'lfo' | 'nse'): void {
-		const freq = 0.01 + Math.random() * 0.19;
-		setSource(group, name, { expression: `${kind}(freq=${freq})` });
-	}
-
-	/** The expression the app-wide pick gives this param, or null where the param may not take it. */
-	function pickedSource(d: ParamDescriptor): SourcePatch | null {
-		const pick = selection().reference;
-		if (!pick) return null;
-		if ('variable' in pick) {
-			return g.variables.some((v) => v.name === pick.variable) ? { expression: `vars.${pick.variable}` } : null;
-		}
-		const expression = pick.node === node?.uid ? null : g.readFor(pick.node, d.type, pick.slot);
-		return expression ? { expression } : null;
-	}
-
-	/** A row's menu, from a right click or a held touch: LFO and Noise on a numeric row, and the pick. */
-	function rowItems({ group, name, descriptor }: ParamHit): MenuItem[] {
-		const items: MenuItem[] = isNumeric(descriptor)
-			? [
-					{ label: 'LFO', action: () => modulate(group, name, 'lfo') },
-					{ label: 'Noise', action: () => modulate(group, name, 'nse') }
-				]
-			: [];
-		const source = pickedSource(descriptor);
-		if (source) {
-			const label = `Reference selection: ${source.expression}`;
-			items.push({ label, icon: 'circle-dot', action: () => setSource(group, name, source) });
-		}
-		return items;
-	}
-	function rowMenu(x: number, y: number, hit: ParamHit): boolean {
-		const items = rowItems(hit);
-		if (items.length) menu = { x, y, items };
-		return items.length > 0;
-	}
-
-	// One hold for the form: movement cancels it, and the click its release fires is swallowed.
-	let pressed = false;
-	let pressHit: ParamHit | undefined;
-	const press = createLongPress((at) => {
-		pressed = true;
-		if (pressHit) rowMenu(at.clientX, at.clientY, pressHit);
-	});
-	function release(): void {
-		activeParam = null;
-		press.cancel();
-	}
-
 	/** Move between the main value controls in the displayed parameter rows. */
 	function paramTabOrder(el: HTMLElement): { destroy(): void } {
 		const keydown = (event: KeyboardEvent): void => {
@@ -201,50 +144,6 @@
 		};
 		el.addEventListener('keydown', keydown);
 		return { destroy: () => el.removeEventListener('keydown', keydown) };
-	}
-
-	function onParamKey(event: KeyboardEvent): void {
-		if (
-			event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey ||
-			event.altKey || event.shiftKey || event.isComposing || menu || isTextEditingTarget(event.target)
-		) return;
-		const key = event.key;
-		if (!['l', 'n', 'r', 'x', 'c', 'e'].includes(key)) return;
-		// The row under the pointer, or failing that the one holding the focus.
-		const row =
-			document.querySelector<HTMLElement>(`[data-param-form="${formId}"]:hover`) ??
-			(event.target as HTMLElement | null)?.closest<HTMLElement>(`[data-param-form="${formId}"]`) ??
-			null;
-		const hit = rows.find((r) => paramKey(r.group, r.name) === row?.dataset.paramKey);
-		if (!hit) return;
-		const { group, name, descriptor: d } = hit;
-		if (key === 'c' || key === 'e') {
-			event.preventDefault();
-			const mode = key === 'c' ? 'constant' : 'expression';
-			if (d.mode !== mode) setSource(group, name, sourceForMode(d, mode));
-			return;
-		}
-		if (key === 'r') {
-			if (d.type === 'pulse') return;
-			event.preventDefault();
-			send('reset', (uid) => g.resetParam(uid, group, name, zero(d, node?.baseline, group, name)));
-			return;
-		}
-		if (!isNumeric(d)) return;
-		if (key === 'x') {
-			const min = d.int ? Math.ceil(d.vmin) : d.vmin;
-			const max = d.int ? Math.floor(d.vmax) : d.vmax;
-			if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return;
-			event.preventDefault();
-			const draw = (): number => {
-				const fraction = Math.random();
-				return d.int ? Math.min(max, min + Math.floor(fraction * (max - min + 1))) : min * (1 - fraction) + max * fraction;
-			};
-			setValue(group, name, Array.isArray(d.value) ? d.value.map(draw) : draw());
-		} else {
-			event.preventDefault();
-			modulate(group, name, key === 'l' ? 'lfo' : 'nse');
-		}
 	}
 
 	// A group whose every param is hidden has no tab.
@@ -287,7 +186,6 @@
 			filters = SHOW_ALL;
 			activeParam = null;
 			nonDefault = new Map();
-			menu = null; // its items act on the node it opened on
 		}
 	});
 	$effect(() => {
@@ -403,20 +301,12 @@
 </script>
 
 <svelte:window
-	onkeydown={onParamKey}
 	onpointerdown={(e) => {
 		const row = (e.target as Element).closest<HTMLElement>('[data-param-key]');
 		activeParam = row?.dataset.paramNode === node?.uid ? row?.dataset.paramKey ?? null : null;
-		pressed = false;
-		const hit = row?.dataset.paramForm === formId ? rows.find((r) => paramKey(r.group, r.name) === row.dataset.paramKey) : undefined;
-		if (e.pointerType !== 'mouse' && hit && rowItems(hit).length) {
-			pressHit = hit;
-			press.start(e);
-		}
 	}}
-	onpointermove={press.move}
-	onpointerup={release}
-	onpointercancel={release}
+	onpointerup={() => (activeParam = null)}
+	onpointercancel={() => (activeParam = null)}
 />
 
 <ScrollArea>
@@ -562,12 +452,6 @@
 					role={tabItems.length > 0 && !searching ? 'tabpanel' : undefined}
 					aria-label={searching ? undefined : (activeGroup ?? undefined)}
 					data-testid="param-rows"
-					onclickcapture={(e) => {
-						if (!pressed) return;
-						pressed = false;
-						e.preventDefault();
-						e.stopPropagation();
-					}}
 				>
 					{#if rows.length === 0}
 						<div class="pf-empty-group" data-testid={searching ? 'param-no-matches' : 'param-empty-group'}>
@@ -588,14 +472,8 @@
 								class:pf-count={role?.as === 'count' && !role.widget}
 								role="group"
 								aria-label={paramName}
-								data-param-form={formId}
 								data-param-node={node?.uid}
 								data-param-key={paramKey(group, paramName)}
-								oncontextmenu={(e) => {
-									if (!rowMenu(e.clientX, e.clientY, { group, name: paramName, descriptor })) return;
-									e.preventDefault();
-									e.stopPropagation();
-								}}
 							>
 								{#if searching}
 									<span class="pf-row-group" data-testid={`param-hit-group-${paramName}`}>{group}</span>
@@ -656,6 +534,7 @@
 										onSetElementSource={(i, source) => setSource(group, `${paramName}[${i}]`, source)}
 										onRefresh={() => send('refresh', (uid) => g.refreshParam(uid, group, paramName))}
 										onPulse={() => send('pulse', (uid) => g.pulse(uid, group, paramName))}
+										onReset={() => send('reset', (uid) => g.resetParam(uid, group, paramName, zero(descriptor, node?.baseline, group, paramName)))}
 									/>
 								{/if}
 							</div>
@@ -732,9 +611,6 @@
 		{/if}
 	</section>
 
-	{#if menu}
-		<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
-	{/if}
 
 	<ConfirmDialog
 		open={!!replacing}

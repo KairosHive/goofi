@@ -1148,6 +1148,26 @@ test('a widget moves through its own settings, which stand down for the drag', a
 		await page.mouse.up();
 		await expect.poll(async () => (await cell()).y, 'the widget landed lower').toBeGreaterThan(0);
 		await expect(props, 'the settings return once the drag lands').toBeVisible();
+
+		// Out of edit mode the name is the door to the same settings, and the value in them is a
+		// param's row: its hover keys and its source are the ones a node's param has.
+		await page.keyboard.press('Escape');
+		await page.getByTestId('control-edit-toggle').click();
+		await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'false');
+		await expect(props).toHaveCount(0);
+		await widget.locator('.label').click();
+		await expect(props).toBeVisible();
+		const value = props.getByTestId('control-props-value');
+		const expression = async () => (await backendDoc(page)).variables['desk.level'].expression;
+		await value.hover({ position: { x: 2, y: 2 } });
+		await page.keyboard.press('l');
+		await expect.poll(expression).toMatch(/^lfo\(freq=/);
+		await expect(value.getByTestId('param-number'), 'a computed widget is not set by hand').toBeDisabled();
+		await expect(value.getByTestId('param-expr-input')).toBeVisible();
+		await page.keyboard.press('c');
+		await expect.poll(expression).toBeUndefined();
+		await expect(value.getByTestId('param-number')).toBeEnabled();
+		await page.getByTestId('control-edit-toggle').click();
 	} finally {
 		await handBack(
 			() => closeSplit(page),

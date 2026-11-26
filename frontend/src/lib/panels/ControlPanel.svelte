@@ -15,6 +15,8 @@
 	import MidiLearn from '$lib/inspector/MidiLearn.svelte';
 	import { midiLearn } from '$lib/stores/midiLearn.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
+	import ParamField from '$lib/inspector/ParamField.svelte';
+	import { controlDescriptor, literalOf } from '$lib/machine/attributes';
 	import {
 		Chip,
 		EmptyState,
@@ -24,7 +26,6 @@
 		NumberInput,
 		Popover,
 		ScrollArea,
-		Segmented,
 		Select,
 		TextInput,
 		isTextEditingTarget
@@ -334,7 +335,9 @@
 		}
 	}
 
+	/** The name is edited in place, and the settings its first click opened stand down for it. */
 	async function startRename(gv: VariableView, cell: Element | null): Promise<void> {
+		picked = null;
 		renaming = gv.name;
 		await tick();
 		const input = cell?.querySelector<HTMLInputElement>('[data-testid="control-rename"]');
@@ -345,14 +348,12 @@
 	const learn = (gv: VariableView) => (variable: string, index: number) =>
 		void g.computeControl(group, gv.element, `${variable}[${index}]`).catch(() => {});
 
-	// A widget is either set by hand or COMPUTED by an expression. `computing` is the expression
-	// segment lit before one is written, so the editor shows with nothing to show yet.
-	let computingFor = $state<string | null>(null);
-	const computing = $derived(!!pickedView && computingFor === picked && pickedView.expression === undefined);
+	/** The value's row in the settings starts open, so its source shows without a click. */
+	let valueOpen = $state(true);
 
+	/** A widget is set by hand, or COMPUTED by an expression; an empty one hands it back. */
 	function setExpression(pv: VariableView, expression: string): void {
 		if (midiLearn.target === `control:${pv.name}`) midiLearn.stop();
-		computingFor = null;
 		void g.computeControl(group, pv.element, expression).catch(() => {});
 	}
 </script>
@@ -398,7 +399,7 @@
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 					<div
 						class="cell"
-						class:picked={edit && picked === gv.name}
+						class:picked={picked === gv.name}
 						data-testid={`control-${group}-${gv.element}`}
 						style={`grid-column: ${at.x + 1} / span ${at.w}; grid-row: ${at.y + 1} / span ${at.h}`}
 						tabindex={edit ? 0 : undefined}
@@ -406,6 +407,7 @@
 							source: () => lift(gv),
 							allow: allowed,
 							onPress: (e) => press(e, gv),
+							onTap: () => (picked = gv.name),
 							onHold: (at) => elementMenu(at.x, at.y, gv.name),
 							onEnd: landMove
 						}}
@@ -439,15 +441,17 @@
 									{#if variableForm(gv.name) === 'number'}
 										<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
 									{/if}
-									<IconButton variant="ghost" size="sm" data-testid="control-delete" label={`Delete ${gv.element}`} onclick={() => void g.removeControl(group, gv.element)}
-										><Icon name="x" /></IconButton
+									<span class="zap"
+										><IconButton variant="ghost" size="sm" data-testid="control-delete" label={`Delete ${gv.element}`} onclick={() => void g.removeControl(group, gv.element)}
+											><Icon name="x" /></IconButton
+										></span
 									>
 								</div>
 							{/if}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<span
 								class="label"
-								title="Drag onto a parameter to set its expression. Double-click to rename"
+								title="Click for its settings. Drag onto a parameter to set its expression. Double-click to rename"
 								ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).closest('.cell'))}>{gv.element}</span
 							>
 						</div>
@@ -498,10 +502,11 @@
 
 	<!-- The settings stand down while a widget is moved or resized: they sit outside the panel, so
 	     a pointer over them would read as carried beyond it, and they hide the board it lands on. -->
-	{#if edit && pickedView && !moving && !resizing}
+	{#if pickedView && !moving && !resizing}
 		{@const pv = pickedView}
 		{@const pc = pv.control as ControlView}
 		{@const pheld = effectiveLock(pv, groupLock)}
+		{@const descriptor = controlDescriptor(pc, variableValue(pv.name), pv.expression, pv.error)}
 		{#key `${pv.name}:${placed(pv).x},${placed(pv).y}`}
 			<!-- No catcher: the widget these settings are of is dragged, on the board and onto a param,
 			     while they are open. -->
@@ -539,37 +544,32 @@
 								onChange={(v) => setControl(pv, { kind: v as Kind })}
 							/>
 						</Field>
-						<Field label="source">
-							<Segmented
-								value={pv.expression !== undefined || computing ? 'expression' : 'value'}
-								segments={[
-									{ id: 'value', label: 'value', title: 'Set by hand, on the widget itself', testid: 'control-source-value' },
-									{
-										id: 'expression',
-										label: 'expr',
-										title: "Computed by an expression — a node's output or a MIDI controller's knob copied as it comes, or Python over them. Drop a node onto the widget, learn, or write it",
-										testid: 'control-source-expression'
-									}
-								]}
-								onChange={(id) => (id === 'expression' ? (computingFor = picked) : pv.expression !== undefined ? setExpression(pv, '') : (computingFor = null))}
-								aria-label="source"
-								data-testid="control-source"
+						{#if descriptor}
+							<!-- The value as a param: its face, its source, and every way a param takes one. -->
+							<ParamField
+								paramName={pv.element}
+								label="value"
+								{descriptor}
+								viewKey={`control/${pv.name}`}
+								open={valueOpen}
+								onToggle={() => (valueOpen = !valueOpen)}
+								accept={(source) => source.key !== pv.name}
+								data-testid="control-props-value"
+								onCommit={(v) => commitValue(pv, literalOf(v))}
+								onPreview={(v) => g.previewVariableValue(pv.name, v)}
+								onSetSource={(source) => setExpression(pv, source.expression ?? (source.mode === 'constant' ? '' : (pv.expression ?? '')))}
 							/>
-						</Field>
-						{#if pv.expression !== undefined || computing}
-							<Field label="expression" doc="What computes the widget; a node dropped onto the widget lands here, and learn writes the controller's element">
+						{:else}
+							<Field label="expression" doc="What computes the pad; empty, it is drawn by hand">
 								<ExprEditor
 									value={pv.expression ?? ''}
 									error={pv.error ?? null}
 									onCommit={(e) => setExpression(pv, e)}
 									label={`${pv.element} expression`}
-									placeholder="nd('midi0').out.cc[74]"
+									placeholder="nd('noise0').out"
 									testid="control-props-expression"
 								/>
 							</Field>
-						{/if}
-						{#if pv.error}
-							<p class="error-text" role="alert" data-testid="control-source-error">{pv.error}</p>
 						{/if}
 						{#if variableForm(pv.name) === 'number' || pc.kind === 'vector'}
 							<Field label="range" doc="min, max and step">
@@ -740,7 +740,8 @@
 		flex-shrink: 0;
 		--panelty-hit: var(--label-h);
 	}
-	.tools > :global(.ui-icon-btn) {
+	.zap {
+		display: inline-flex;
 		--panelty-text: var(--danger);
 	}
 	.label {
@@ -756,6 +757,12 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		border-radius: var(--radius-sm);
+	}
+	/* The name is the door to the widget's settings, in either mode. */
+	.label:hover {
+		color: var(--text);
+		background: var(--hover-fill);
 	}
 	.rename {
 		position: absolute;
