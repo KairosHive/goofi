@@ -5,6 +5,8 @@
 export type OpName =
 	| `plugin ${string}`
 	| 'plugin list'
+	| 'plugin state list'
+	| 'plugin state edit'
 	| 'session status'
 	| 'session state'
 	| 'session manifest'
@@ -113,6 +115,8 @@ export type OpName =
 /** A write is a history step; a read touches nothing; an effect owns its consequences. */
 export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {
 	'plugin list': 'read',
+	'plugin state list': 'read',
+	'plugin state edit': 'write',
 	'session status': 'read',
 	'session state': 'read',
 	'session manifest': 'read',

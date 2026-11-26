@@ -1,14 +1,25 @@
-//! The host's own doors: plugins, the filesystem, the log and the agent harnesses. None of
-//! them touches the graph.
+//! The host's own doors: plugins, the filesystem, the log and the agent harnesses. A plugin's
+//! state is the one thing here the patch holds.
 
 use serde_json::{json, Value};
 
-use super::{op, EffectOp, NoArgs, ReadOp};
+use super::{op, Any, EffectOp, NoArgs, ReadOp, WriteOp};
 use crate::{fsbrowse, AppState, Caller, Event, Txn};
 
 op!(PluginList, "plugin list", 0, NoArgs,
     "List installed plugins and their status.",
     "{plugins}");
+
+op!(PluginStateList, "plugin state list", 0, NoArgs,
+    "What each plugin keeps with the patch, by plugin id. The `.gfi` carries it, and an undo takes an edit of it back.",
+    "{states: {<plugin>: any}}");
+
+op!(PluginStateEdit, "plugin state edit", 2, PluginStateEditArgs {
+    pub plugin: String,
+    pub value: Option<Any>,
+},
+    "Keep a JSON value with the patch for a plugin, at most 1 MiB; no `value`, or null, removes the plugin's record. The plugin's `on_state` hook hears what the patch holds after every change: this edit, a load, a new patch, an undo.",
+    "{plugin, state}");
 
 op!(DirStat, "dir stat", 1, DirStatArgs {
     pub path: String,
@@ -58,6 +69,30 @@ op!(AgentStop, "agent stop", 1, AgentStopArgs {
 impl ReadOp for PluginList {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
         crate::plugins::list(tx)
+    }
+}
+
+impl ReadOp for PluginStateList {
+    fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
+        Ok(json!({ "states": tx.g.plugin_states() }))
+    }
+}
+
+impl WriteOp for PluginStateEdit {
+    fn run(tx: &mut Txn, a: PluginStateEditArgs) -> Result<Value, String> {
+        if !crate::plugins::valid_id(&a.plugin) {
+            return Err(format!("`{}` is not a plugin id", a.plugin));
+        }
+        let state = a.value.map_or(Value::Null, |v| v.0);
+        if state.to_string().len() > 1 << 20 {
+            return Err("a plugin's state is at most 1 MiB".into());
+        }
+        tx.g.set_plugin_state(&a.plugin, state.clone());
+        Ok(json!({ "plugin": a.plugin, "state": state }))
+    }
+
+    fn label(a: &PluginStateEditArgs, _: &Value) -> String {
+        format!("Edit {} state", a.plugin)
     }
 }
 

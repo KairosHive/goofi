@@ -44,6 +44,7 @@ struct Cut {
     links: bool,
     arrangement: bool,
     machines: bool,
+    plugins: bool,
     variables: Vec<String>,
     groups: bool,
 }
@@ -60,6 +61,7 @@ impl Cut {
         self.links |= !Arc::ptr_eq(&p.links, &q.links);
         self.arrangement |= !Arc::ptr_eq(&p.arrangement, &q.arrangement);
         self.machines |= !Arc::ptr_eq(&p.stepped, &q.stepped);
+        self.plugins |= !Arc::ptr_eq(&p.plugins, &q.plugins);
         let (names, groups) = before.variables.differing(&after.variables);
         for name in names {
             if !self.variables.contains(&name) {
@@ -76,6 +78,7 @@ impl Cut {
             links: self.links && !other.links,
             arrangement: self.arrangement && !other.arrangement,
             machines: self.machines && !other.machines,
+            plugins: self.plugins && !other.plugins,
             variables: self.variables.iter().filter(|n| !other.variables.contains(n)).cloned().collect(),
             groups: self.groups && !other.groups,
         }
@@ -101,6 +104,9 @@ impl Cut {
         }
         if self.machines {
             into.patch.stepped = from.patch.stepped.clone();
+        }
+        if self.plugins {
+            into.patch.plugins = from.patch.plugins.clone();
         }
         into.variables.take(&from.variables, &self.variables, self.groups);
     }

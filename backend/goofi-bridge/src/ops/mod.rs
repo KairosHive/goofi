@@ -394,6 +394,10 @@ use Entry::{Group, Leaf};
 pub static TREE: &[Entry] = &[
     Group("plugin", "installed plugin services and UI", &[
         Leaf(read::<host::PluginList>()),
+        Group("state", "what a plugin keeps with the patch", &[
+            Leaf(read::<host::PluginStateList>()),
+            Leaf(write::<host::PluginStateEdit>()),
+        ]),
     ]),
     Group("session", "the goofi instance as a whole — identity, the open patch, save and load", &[
         Leaf(read::<session::Status>()),

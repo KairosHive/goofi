@@ -4,6 +4,7 @@ goofi reaches a cable through PipeWire's PulseAudio server: the sink is the outp
 its monitor is the input device. A cable is one `pw-cli -m create-node` child. PipeWire owns a created node for as long as the
 client that made it lives, so the cable's life is the child's: `remove` kills it, and so does
 `on_stop`. The service dying takes every child with it (PDEATHSIG), so a crash leaves nothing.
+The patch keeps each cable's name and width, so a load makes its cables again.
 Windows and macOS have no public API that creates a virtual device; there the panel says so.
 """
 from __future__ import annotations
@@ -27,6 +28,8 @@ POSITIONS = {1: "MONO", 2: "FL FR", 4: "FL FR RL RR", 6: "FL FR FC LFE RL RR", 8
 MAX_CHANNELS = 64
 
 cables: dict[str, "Cable"] = {}
+# One at a time: an op and the patch's state both make and close cables.
+lock = asyncio.Lock()
 
 
 @dataclass
@@ -163,6 +166,32 @@ def prune() -> None:
         del cables[name]
 
 
+def kept() -> dict | None:
+    """What the patch keeps: each cable's name and width, or nothing when there is none."""
+    return {"cables": [{"name": c.name, "channels": c.channels} for c in cables.values()]} if cables else None
+
+
+@plugin.on_state
+async def restore(ctx, state):
+    """Hold the cables the patch keeps and no other: after a load, a new patch, an undo."""
+    wanted = {c["name"]: c["channels"] for c in (state or {}).get("cables", [])}
+    async with lock:
+        prune()
+        for name in [n for n, c in cables.items() if wanted.get(n) != c.channels]:
+            await close(cables.pop(name))
+        reason = unsupported()
+        for name, channels in wanted.items():
+            if name in cables:
+                continue
+            if reason:
+                ctx.log(f"Cable `{name}` not restored: {reason}", "warning")
+                continue
+            try:
+                cables[name] = await spawn(name, channels)
+            except RuntimeError as error:
+                ctx.log(str(error), "warning")
+
+
 @plugin.on_stop
 async def stop(ctx):
     for cable in list(cables.values()):
@@ -190,11 +219,13 @@ async def create(ctx, args: Create) -> dict:
         raise ValueError("a cable name cannot contain `: `")
     if not 1 <= args.channels <= MAX_CHANNELS:
         raise ValueError(f"channels must be between 1 and {MAX_CHANNELS}")
-    prune()
-    if name in cables or any(c.node_name == node_name(name) for c in cables.values()):
-        raise ValueError(f"a cable named `{name}` exists")
-    cable = await spawn(name, args.channels)
-    cables[name] = cable
+    async with lock:
+        prune()
+        if name in cables or any(c.node_name == node_name(name) for c in cables.values()):
+            raise ValueError(f"a cable named `{name}` exists")
+        cable = await spawn(name, args.channels)
+        cables[name] = cable
+        await ctx.set_state(kept())
     ctx.log(f"Cable `{name}` created with {args.channels} channels")
     return cable.describe()
 
@@ -202,10 +233,12 @@ async def create(ctx, args: Create) -> dict:
 @plugin.op("remove", kind="effect")
 async def remove(ctx, args: Remove) -> dict:
     """Remove a cable. A node that named its device keeps the name and reports the device gone."""
-    cable = cables.pop(args.name, None)
-    if cable is None:
-        return {"removed": False}
-    await close(cable)
+    async with lock:
+        cable = cables.pop(args.name, None)
+        if cable is None:
+            return {"removed": False}
+        await close(cable)
+        await ctx.set_state(kept())
     ctx.log(f"Cable `{args.name}` removed")
     return {"removed": True}
 

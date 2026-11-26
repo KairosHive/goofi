@@ -70,6 +70,9 @@ struct Contributions {
     ops: Vec<Operation>,
     pre_op: Vec<String>,
     post_op: Vec<String>,
+    /// Whether the package has an `on_state` hook: it is told what the patch keeps for it.
+    #[serde(default)]
+    state: bool,
 }
 
 struct Package {
@@ -100,6 +103,9 @@ struct Service {
     pending: Pending,
     sequence: AtomicU64,
     output: Mutex<Option<BufReader<std::process::ChildStdout>>>,
+    /// The states the patch settled on for this plugin, in order, for the thread that tells it.
+    states: Mutex<Option<mpsc::Sender<Value>>>,
+    settled: Mutex<Option<mpsc::Receiver<Value>>>,
     /// Its stdin writer, its stdout reader and every call thread: joined once the child is stopped.
     scope: goofi_supervisor::scope::Scope,
 }
@@ -140,7 +146,7 @@ fn log(id: &str, message: &str) {
     );
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 80
         && id
@@ -209,12 +215,15 @@ impl Service {
         let pending: Pending = Arc::default();
         let replies = pending.clone();
         let (sender, messages) = mpsc::channel::<Value>();
+        let (states, settled) = mpsc::channel::<Value>();
         let service = Arc::new(Self {
             input: Mutex::new(Some(sender)),
             child: Mutex::new(child),
             pending,
             sequence: AtomicU64::new(1),
             output: Mutex::new(Some(reader)),
+            states: Mutex::new(Some(states)),
+            settled: Mutex::new(Some(settled)),
             scope: goofi_supervisor::scope::Scope::default(),
         });
         // Pipe writes can block. Keep them off request threads so the deadline can kill a
@@ -252,6 +261,17 @@ impl Service {
         else {
             return;
         };
+        // A settle only queues a state: the hook runs off the graph lock, one state after another.
+        if let Some(settled) = self.settled.lock().take() {
+            let (service, id) = (self.clone(), plugin_id.clone());
+            self.scope.spawn("goofi-plugin-state", move || {
+                for state in settled {
+                    if let Err(error) = service.request("state", json!({"state": state}), &id) {
+                        log(&id, &format!("on_state: {error}"));
+                    }
+                }
+            });
+        }
         let pending = self.pending.clone();
         let service = self.clone();
         self.scope.spawn("goofi-plugin-stdout", move || {
@@ -303,6 +323,7 @@ impl Service {
             // The service is dead from here: close its input, fail what waits, and leave the
             // join to `kill`, which this thread must not call on itself.
             service.input.lock().take();
+            service.states.lock().take();
             for (_, tx) in pending
                 .lock()
                 .drain()
@@ -354,6 +375,7 @@ impl Service {
     /// its data gets to; a service that stopped answering gets no longer than that.
     fn kill(&self) {
         self.input.lock().take();
+        self.states.lock().take();
         self.child
             .lock()
             .stop(Duration::from_secs(2));
@@ -515,7 +537,21 @@ impl Plugins {
                 }
             }
         }
+        // A patch opened before the services started: each is told what it holds for them.
+        let states = state.graph.lock().plugin_states().clone();
+        if !states.is_empty() {
+            state.plugins.follow(&states);
+        }
         Ok(())
+    }
+
+    /// Tell each service with an `on_state` hook what the settled patch keeps for it.
+    pub fn follow(&self, states: &BTreeMap<String, Value>) {
+        for package in self.packages.iter().filter(|p| p.contributions.state) {
+            if let Some(sender) = package.service.as_ref().and_then(|s| s.states.lock().clone()) {
+                let _ = sender.send(states.get(&package.manifest.id).cloned().unwrap_or(Value::Null));
+            }
+        }
     }
 
     /// Every plugin's op rows, built once at load.

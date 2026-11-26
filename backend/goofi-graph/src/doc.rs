@@ -35,6 +35,9 @@ pub struct PatchDoc {
     pub timeline: IndexMap<String, crate::timeline::Track>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrangement: Option<Value>,
+    /// What each plugin keeps with the patch, by plugin id; a plugin this host lacks keeps its own.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub plugins: IndexMap<String, Value>,
 }
 
 /// What a copy reads and a paste takes: the records, and the cables that feed them from outside.

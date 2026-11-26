@@ -1,7 +1,7 @@
 //! The graph, and the nodes that schedule themselves.
 
 use goofi_core::record::RecordedOutput;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -118,9 +118,11 @@ struct Diff {
     rewired: Vec<Edge>,
     /// Whether the links root moved at all: what a stream read through a port follows.
     relinked: bool,
-    /// Whether the machines root, or the arrangement, moved: what their followers read.
+    /// Whether the machines root, the arrangement, or the plugins' state moved: what their
+    /// followers read.
     machines: bool,
     arrangement: bool,
+    plugins: bool,
 }
 
 impl Diff {
@@ -131,6 +133,7 @@ impl Diff {
             && !self.relinked
             && !self.machines
             && !self.arrangement
+            && !self.plugins
     }
 }
 
@@ -147,6 +150,8 @@ pub struct Marks {
     pub armed: bool,
     /// A source, a feed or a variable moved: what the MIDI watch reads for the groups it opens.
     pub groups: bool,
+    /// A plugin's state moved: what each plugin service is told.
+    pub plugins: bool,
 }
 
 /// What one drain of the engines' reports landed.
@@ -577,6 +582,8 @@ struct Patch {
     /// and each track is a group of variables its owner writes, held in step with this model by
     /// [`Graph::sync_owned`].
     stepped: Arc<Stepped>,
+    /// What each plugin keeps with the patch, by plugin id: the doc root `plugins`.
+    plugins: Arc<BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Clone, Default)]
@@ -712,6 +719,7 @@ impl Graph {
             arrangement: Arc::new(layout::Layout::default()),
             variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
             stepped: Arc::default(),
+            plugins: Arc::default(),
         };
         Graph {
             patch: patch.clone(),
@@ -736,6 +744,7 @@ impl Graph {
                     arrangement: Arc::new(layout::Layout::default()),
                     variables: patch.variables.clone(),
                     stepped: Arc::default(),
+                    plugins: Arc::default(),
                 },
                 projected_vars: 0,
                 binds_moved: false,
@@ -1672,6 +1681,26 @@ impl Graph {
     /// a uid is distinguishable from its predecessor's last one.
     pub fn node_generation(&self, uid: Uid) -> u64 {
         self.runtime.generations.get(&uid).copied().unwrap_or(0)
+    }
+
+    /// What each plugin keeps with the patch, by plugin id.
+    pub fn plugin_states(&self) -> &BTreeMap<String, serde_json::Value> {
+        &self.patch.plugins
+    }
+
+    /// Keep `state` with the patch for plugin `id`; a null takes its record away. A state that
+    /// equals the one held writes nothing.
+    pub fn set_plugin_state(&mut self, id: &str, state: serde_json::Value) {
+        let held = self.patch.plugins.get(id).unwrap_or(&serde_json::Value::Null);
+        if *held == state {
+            return;
+        }
+        let plugins = Arc::make_mut(&mut self.patch.plugins);
+        if state.is_null() {
+            plugins.remove(id);
+        } else {
+            plugins.insert(id.to_string(), state);
+        }
     }
 
     /// The flat arrangement — pages, splits and panels. Reads plan against this; writes go through
@@ -3330,6 +3359,7 @@ impl Graph {
         self.runtime.epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         self.runtime.revision += 1;
         self.runtime.marks.machines |= diff.machines || (redeliver && !self.patch.stepped.tracks.is_empty());
+        self.runtime.marks.plugins |= diff.plugins;
         // Every arming the batch left unnumbered gets its serial, before the snapshot is kept.
         for uid in &diff.rearmed {
             self.mint_serials(*uid);
@@ -3508,6 +3538,7 @@ impl Graph {
         d.relinked = !Arc::ptr_eq(&prev.links, &next.links);
         d.machines = !Arc::ptr_eq(&prev.stepped, &next.stepped);
         d.arrangement = !Arc::ptr_eq(&prev.arrangement, &next.arrangement);
+        d.plugins = !Arc::ptr_eq(&prev.plugins, &next.plugins);
         if d.relinked || !d.changed.is_empty() || !d.removed.is_empty() {
             // A port's wires resolve to leaves, so a wire that moved shows as a resolved edge
             // that one settle's walk found and the other's did not.
@@ -3648,8 +3679,12 @@ impl Graph {
         // An un-echoed refresh names a node the patch no longer holds — and a load restores uids,
         // so that number can come back and the echo be read as an answer nobody asked for.
         self.runtime.refreshed.clear();
-        // Variables, machines and tracks are patch CONTENT, so a load starts from a fresh seeded store.
+        // Variables, machines, tracks and plugin state are patch CONTENT, so a load starts from a
+        // fresh seeded store.
         self.patch.stepped = Arc::default();
+        if !self.patch.plugins.is_empty() {
+            self.patch.plugins = Arc::default();
+        }
         self.variables().reset();
         // Time belongs to the PATCH: one loaded an hour in must read what it would at boot. Every
         // engine holds this same object, so there is nothing to push.
@@ -3824,6 +3859,7 @@ impl Graph {
             || !Arc::ptr_eq(&self.patch.links, &p.links)
             || !Arc::ptr_eq(&self.patch.stepped, &p.stepped)
             || !Arc::ptr_eq(&self.patch.arrangement, &p.arrangement)
+            || !Arc::ptr_eq(&self.patch.plugins, &p.plugins)
             || self.patch.nodes.iter().any(|(u, e)| !p.nodes.get(u).is_some_and(|q| Arc::ptr_eq(q, e)))
             || self.variables().version() != s.variables.version
     }
@@ -3863,6 +3899,9 @@ impl Graph {
         }
         if !Arc::ptr_eq(&prev.arrangement, &self.patch.arrangement) {
             out.roots.push(("arrangement", self.patch.arrangement.to_json()));
+        }
+        if !Arc::ptr_eq(&prev.plugins, &self.patch.plugins) {
+            out.roots.push(("plugins", serde_json::to_value(&*self.patch.plugins).expect("a plain record")));
         }
         self.runtime.projected = self.patch.clone();
         self.runtime.projected_vars = vars_version;
@@ -4023,6 +4062,7 @@ impl Graph {
         patch.timeline = self.patch.stepped.tracks.clone();
         // The flat arrangement always exists (at worst the default), so it always rides.
         patch.arrangement = Some(self.patch.arrangement.to_json());
+        patch.plugins = self.patch.plugins.iter().map(|(id, state)| (id.clone(), state.clone())).collect();
         patch
     }
 
@@ -4032,7 +4072,7 @@ impl Graph {
         let document = self.document();
         let variables = self.variables_root(&document.variables);
         let mut doc = serde_json::to_value(document).expect("a plain record");
-        for root in ["nodes", "links", "variables", "variable_groups", "machines", "timeline"] {
+        for root in ["nodes", "links", "variables", "variable_groups", "machines", "timeline", "plugins"] {
             doc[root] = doc.get(root).cloned().unwrap_or_else(|| serde_json::json!({}));
         }
         doc["variables"] = variables;
@@ -4168,6 +4208,9 @@ impl Graph {
             }
         }
         self.viewpoint = archive.viewpoint.unwrap_or(serde_json::Value::Null);
+        if !doc.plugins.is_empty() {
+            self.patch.plugins = Arc::new(doc.plugins.iter().map(|(id, state)| (id.clone(), state.clone())).collect());
+        }
         // A corrupt arrangement costs the CHROME, never the patch. The reason is kept for the load
         // reply; an ABSENT arrangement is not a corrupt one and warns about nothing.
         self.patch.arrangement = Arc::new(match doc.arrangement.as_ref().map(layout::Layout::from_json) {

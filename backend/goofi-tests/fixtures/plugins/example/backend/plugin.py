@@ -7,6 +7,7 @@ from goofi_plugin import plugin
 subject = "none"
 mode = "normal"
 completed = []
+heard = []
 
 @dataclass
 class Empty:
@@ -20,6 +21,10 @@ class Select:
 @dataclass
 class Mode:
     mode: str
+
+@dataclass
+class Keep:
+    note: str
 
 @plugin.on_start
 async def start(ctx):
@@ -45,7 +50,17 @@ async def select(ctx, args: Select) -> dict:
 
 @plugin.op("status", kind="read")
 async def status(ctx, args: Empty) -> dict:
-    return {"subject": subject, "completed": completed}
+    return {"subject": subject, "completed": completed, "heard": heard, "kept": await ctx.state()}
+
+@plugin.op("keep", kind="effect")
+async def keep(ctx, args: Keep) -> dict:
+    """Keep a note with the patch; an empty note removes it."""
+    await ctx.set_state({"note": args.note} if args.note else None)
+    return {"kept": await ctx.state()}
+
+@plugin.on_state
+async def follow(ctx, state):
+    heard.append(state)
 
 @plugin.op("mode", kind="effect")
 async def set_mode(ctx, args: Mode) -> dict:

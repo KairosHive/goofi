@@ -75,6 +75,23 @@ The context exposes:
 - `ctx.log(message, level="info")`: write an application log entry. Levels are `info`, `warning`,
   and `error`. Goofi adds the plugin identity. Ordinary Python prints are captured from stderr.
 - `ctx.plugin_id`, `ctx.package_dir`, `ctx.data_dir`, `ctx.cache_dir`.
+- `await ctx.state()` and `await ctx.set_state(value)`: the JSON value the open patch keeps for
+  this plugin, at most 1 MiB. `None` removes it.
+
+Patch state is part of the patch: the `.gfi` carries it, and an undo takes an edit of it back.
+`ctx.data_dir` is for data that belongs to the machine and not to a patch. A plugin that owns
+resources for its patch state registers one hook:
+
+```python
+@plugin.on_state
+async def restore(ctx, state):
+    ...  # make the resources match `state`; it is None when the patch keeps nothing
+```
+
+Goofi calls it with the settled value after every change to this plugin's state: a load, a new
+patch, an undo or redo, and an edit, the plugin's own included. Calls arrive one at a time, in
+order. The handler must reach the same result when it gets the same state again. The ops are
+`plugin state list` and `plugin state edit`; do not store credentials there.
 
 Use ordinary `asyncio` tasks for background work and close owned resources in `on_stop`.
 Goofi cancels in-flight operation handlers before `on_stop`; plugin-created background tasks

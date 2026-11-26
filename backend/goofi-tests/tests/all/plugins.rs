@@ -1,5 +1,6 @@
 //! A folder plugin prepares recordings through the same operations as every client.
 use goofi_tests::{hex, j, require_python, Goofi};
+use serde_json::Value;
 use std::path::Path;
 
 #[test]
@@ -54,6 +55,27 @@ fn a_folder_plugin_registers_ops_nodes_hooks_and_persistent_sessions() {
         .unwrap_err()
         .contains("recursive"));
     assert_eq!(goofi.call("plugin example host", j!({}))["running"], false);
+
+    // Step: a plugin keeps state with the patch and hears every change of it: an edit, an undo,
+    // a new patch and a load.
+    let hears = |want: Value| {
+        goofi.until("the plugin hears its state", |g| (g.call("plugin example status", j!({}))["heard"].as_array().and_then(|h| h.last()) == Some(&want)).then_some(()))
+    };
+    assert_eq!(goofi.call("plugin example keep", j!({"note": "first"}))["kept"], j!({"note": "first"}));
+    goofi.call("plugin example keep", j!({"note": "second"}));
+    assert_eq!(goofi.call("plugin state list", j!({}))["states"], j!({"example": {"note": "second"}}));
+    hears(j!({"note": "second"}));
+    goofi.call("undo", j!({}));
+    hears(j!({"note": "first"}));
+    let kept = home.path().join("kept.gfi");
+    goofi.call("session save", j!({"path": kept.to_string_lossy()}));
+    goofi.call("session new", j!({}));
+    hears(Value::Null);
+    assert_eq!(goofi.call("plugin state list", j!({}))["states"], j!({}));
+    goofi.call("session load", j!({"path": kept.to_string_lossy()}));
+    hears(j!({"note": "first"}));
+    assert_eq!(goofi.call("plugin example status", j!({}))["kept"], j!({"note": "first"}));
+    assert!(goofi.refuse("plugin state edit", j!({"plugin": "Not An Id", "value": 1})).contains("not a plugin id"));
     goofi.call("library refresh", j!({}));
     let node = goofi.call("node add", j!({"type": "signal:PluginNumber"}))["uid"]
         .as_str()
@@ -237,6 +259,17 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     assert_eq!(doc["nodes"][hex(inn)]["params"]["audio"]["device"]["value"], j!(input));
     let signal = goofi.add("signal:Constant");
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(signal), "cable": cable})).contains("not an AudioIn"));
+
+    // Step: the patch keeps the cable: a new patch closes it, and a load makes it again.
+    let held = |want: Value| {
+        goofi.until("the session's cables follow the patch", |g| (g.call("plugin virtual-cables list", j!({}))["cables"].as_array().map(|c| c.iter().map(|c| c["name"].clone()).collect::<Vec<_>>()) == Some(want.as_array().cloned().unwrap())).then_some(()))
+    };
+    let kept = home.path().join("cables.gfi");
+    goofi.call("session save", j!({"path": kept.to_string_lossy()}));
+    goofi.call("session new", j!({}));
+    held(j!([]));
+    goofi.call("session load", j!({"path": kept.to_string_lossy()}));
+    held(j!([cable]));
 
     assert_eq!(goofi.call("plugin virtual-cables remove", j!({"name": cable}))["removed"], true);
     assert_eq!(goofi.call("plugin virtual-cables list", j!({}))["cables"], j!([]));

@@ -113,7 +113,11 @@ nodes: { [key in string]: NodeRecord },
 /**
  * Keyed `out.slot>in.slot`, which is derived from the link and never read back.
  */
-links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, machines: { [key in string]: Machine }, timeline: { [key in string]: Track }, arrangement?: JsonValue, };
+links: { [key in string]: Link }, variables: { [key in string]: VariableRecord }, variable_groups: { [key in string]: Group }, machines: { [key in string]: Machine }, timeline: { [key in string]: Track }, arrangement?: JsonValue, 
+/**
+ * What each plugin keeps with the patch, by plugin id; a plugin this host lacks keeps its own.
+ */
+plugins: { [key in string]: JsonValue }, };
 export type Archive = { version: number, goofi: string, patch: PatchDoc, viewpoint?: JsonValue, };
 export type Op = { "op": "put", path: Array<string>, value: JsonValue, } | { "op": "del", path: Array<string>, };
 export type ParamShow = { group: string, name: string, any_of: Array<string>, };

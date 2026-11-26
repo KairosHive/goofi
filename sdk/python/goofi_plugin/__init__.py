@@ -113,6 +113,14 @@ class Context:
         finally:
             _pending.pop(request_id, None)
 
+    async def state(self):
+        """What this plugin keeps with the open patch, or None."""
+        return (await self.call("plugin state list"))["states"].get(self.plugin_id)
+
+    async def set_state(self, value):
+        """Keep a JSON value with the open patch; None removes it."""
+        await self.call("plugin state edit", {"plugin": self.plugin_id, "value": value})
+
     def log(self, message, level="info"):
         if level not in ("info", "warning", "error"):
             raise ValueError("log level must be info, warning, or error")
@@ -128,6 +136,7 @@ class Plugin:
         self._hooks = {"pre_op": {}, "post_op": {}}
         self._start = None
         self._stop = None
+        self._state = None
 
     def op(self, name, *, kind="effect"):
         def register(fn):
@@ -165,6 +174,12 @@ class Plugin:
         self._stop = fn
         return fn
 
+    def on_state(self, fn):
+        if self._state is not None:
+            raise ValueError("duplicate on_state")
+        self._state = fn
+        return fn
+
     def _describe(self):
         ops = []
         for name, (fn, kind) in self._ops.items():
@@ -178,7 +193,7 @@ class Plugin:
                 ty = typing.get_type_hints(annotation)[field.name]
                 fields.append(f"{field.name}:{_schema_type(ty)}{'!' if required else ''}")
             ops.append({"name": name, "kind": kind, "args": " ".join(fields), "doc": inspect.getdoc(fn) or "", "result": str(hints.get("return", "json"))})
-        return {"ops": ops, **{phase: list(hooks) for phase, hooks in self._hooks.items()}}
+        return {"ops": ops, "state": self._state is not None, **{phase: list(hooks) for phase, hooks in self._hooks.items()}}
 
 
 plugin = Plugin()
@@ -212,6 +227,8 @@ async def _serve(config):
                     task.cancel()
                 await asyncio.gather(*active, return_exceptions=True)
                 result = await _invoke(plugin._stop, ctx)
+            elif method == "state":
+                result = await _invoke(plugin._state, ctx, data.get("state"))
             elif method == "op":
                 fn, _ = plugin._ops[data["name"]]
                 hints = typing.get_type_hints(fn)

@@ -1682,8 +1682,8 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
     });
 }
 
-/// Hand the follower every variable expression, the reducers every slot one reads and the
-/// machines their model, from settled state — each on the mark that says its input moved.
+/// Hand the follower every variable expression, the reducers every slot one reads, the machines
+/// their model and the plugins their state, from settled state — each on the mark that says its input moved.
 fn sync_followers(state: &AppState, g: &Graph, marks: goofi_graph::Marks) {
     if marks.machines {
         state.machines.configure(g);
@@ -1691,6 +1691,9 @@ fn sync_followers(state: &AppState, g: &Graph, marks: goofi_graph::Marks) {
     if marks.groups {
         let (closed, _) = state.midi.resync(g);
         drop(closed);
+    }
+    if marks.plugins {
+        state.plugins.follow(g.plugin_states());
     }
     if !marks.ringers {
         return;
