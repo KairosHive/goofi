@@ -28,6 +28,8 @@ struct Shared {
     /// and after every item of it is done.
     job: UnsafeCell<Option<*const (dyn Work + 'static)>>,
     stop: AtomicBool,
+    /// The clock thread has no level to give until its next callback: an idle helper parks at once.
+    rest: AtomicBool,
     parked: Vec<AtomicBool>,
     /// Frames in the high half and rate in the low, once the clock's thread is real-time.
     realtime: AtomicU64,
@@ -82,6 +84,7 @@ impl Pool {
             done: AtomicUsize::new(0),
             job: UnsafeCell::new(None),
             stop: AtomicBool::new(false),
+            rest: AtomicBool::new(false),
             parked: (0..helpers).map(|_| AtomicBool::new(false)).collect(),
             realtime: AtomicU64::new(0),
             panicked: AtomicBool::new(false),
@@ -126,6 +129,7 @@ impl Pool {
         shared.count.store(count, Ordering::Relaxed);
         shared.done.store(0, Ordering::Relaxed);
         self.generation = self.generation.wrapping_add(1);
+        shared.rest.store(false, Ordering::SeqCst);
         shared.next.store(u64::from(self.generation) << 32, Ordering::SeqCst);
         for (k, thread) in self.threads.iter().enumerate().take(count - 1) {
             if shared.parked[k].load(Ordering::SeqCst) {
@@ -145,6 +149,14 @@ impl Pool {
         if shared.panicked.swap(false, Ordering::Relaxed) {
             panic!("a render helper panicked");
         }
+    }
+}
+
+impl Pool {
+    /// The callback's last level is done: the helpers park now, where a spin would burn a core
+    /// until the next callback.
+    pub fn rest(&self) {
+        self.shared.rest.store(true, Ordering::SeqCst);
     }
 }
 
@@ -181,7 +193,7 @@ fn help(shared: &Shared, k: usize) {
             }
             continue;
         }
-        if idle.elapsed() < SPIN {
+        if idle.elapsed() < SPIN && !shared.rest.load(Ordering::SeqCst) {
             std::hint::spin_loop();
             continue;
         }

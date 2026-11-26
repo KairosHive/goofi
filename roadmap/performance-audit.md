@@ -61,14 +61,12 @@ not measured.
 - `Pool::run` waits for every helper with no bound, and the overrun check runs after `process`
   returns: the clock cannot finish a block while a helper is descheduled. Measure the pool's
   crossover for cheap nodes, deep chains and wide graphs before adding helpers.
-- Any level of two or more stages unparks helpers, with no cost threshold, and each spins 200 µs
-  (`pool.rs` `SPIN`) after the callback's last level: an estimated 3.75% of a core per helper at
-  256 frames, 15% at 64. Dispatch a level only above a cost threshold; park the helpers at the
-  end of `render_into`.
-- Every output of every stage is written to its tap ring and its record ring each block, read or
-  not, and the control half drains both before it checks `readers` and `recorded`
-  (`control.rs`). Gate each output by an atomic the half sets from its readers and the armed set.
-  A MidiIn at 4 voices holds about 4.8 MB of rings (estimate).
+- Any level of two or more stages unparks helpers, with no cost threshold. Dispatch a level only
+  above a cost threshold, once the pool's crossover is measured.
+- Every output of every stage is written to its tap ring each block, read or not, and the control
+  half drains it before it checks `readers` (`control.rs`). A gate the half sets loses the blocks
+  rendered between a reader's arrival and the half's next run; the audio thread must read the
+  slot's reader count itself. A MidiIn at 4 voices holds about 4.8 MB of rings (estimate).
 - A bound functional runs at 17 points every tick even when no block moved; skip when the first
   block, the epoch and the code are unchanged.
 - Every control-rate param gets a 64-sample region and a glide check each block (a VST3 plugin

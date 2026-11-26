@@ -453,6 +453,8 @@ pub(crate) struct Instance {
     /// What each inbox ring and each output's rings were minted for; a plan or a frame past it
     /// re-mints them.
     minted: Minted,
+    /// Per output, whether it is armed: the audio thread fills its record ring only then.
+    armed: Arc<[AtomicBool]>,
     /// A plugin's params as its window was last told them, from the declared defaults on.
     shown: Vec<f64>,
     /// The audio thread's tally of this occupant's `process` cost.
@@ -482,6 +484,7 @@ struct Unborn {
     blocks: rtrb::Consumer<f32>,
     taps: Vec<rtrb::Producer<f32>>,
     recs: Vec<rtrb::Producer<f32>>,
+    armed: Arc<[AtomicBool]>,
     spent: Arc<runtime::Spent>,
 }
 
@@ -498,6 +501,7 @@ impl Unborn {
             blocks: self.blocks,
             taps: self.taps,
             recs: self.recs,
+            armed: self.armed,
             dead: false,
             overruns: 0,
             cost: None,
@@ -1180,6 +1184,7 @@ impl Engine for AudioEngine {
         let minted = Minted { inboxes: vec![control::INBOX_SEED; inbox_chans.len()], outs: vec![1; manifest.outputs.len()] };
         let spent = Arc::new(runtime::Spent::default());
         let born = Arc::new(AtomicBool::new(false));
+        let armed: Arc<[AtomicBool]> = manifest.outputs.iter().map(|_| AtomicBool::new(false)).collect();
         let control_birth = control::Birth {
             uid,
             manifest,
@@ -1242,12 +1247,13 @@ impl Engine for AudioEngine {
             blocks: blocks_out,
             taps: tap_in,
             recs: rec_in,
+            armed: armed.clone(),
             spent: spent.clone(),
         };
         let twin = make(nodes::Birth { chans, ..Default::default() });
         let shown = plugin.map(|d| d.params.iter().map(|k| k.default).collect()).unwrap_or_default();
         let making = Some(Making { node, rate, unborn, born });
-        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, shown, spent, making });
+        self.live.insert(uid, Instance { idx, serial, manifest, twin, control, chans: inbox_chans, param_chans, wanted, minted, armed, shown, spent, making });
         self.dirty = true;
         self.shared.waker.notify();
         None
@@ -1289,6 +1295,10 @@ impl Engine for AudioEngine {
         self.shared.replan.store(false, Ordering::Release);
         for uid in changed.iter().copied().filter(|u| self.live.contains_key(u)).collect::<Vec<_>>() {
             let Some(nv) = view.nodes.get(&uid) else { continue };
+            // Before the op that armed it returns, so no block after it misses the ring.
+            for (o, armed) in nv.manifest.outputs.iter().zip(self.live[&uid].armed.iter()) {
+                armed.store(nv.recorded.iter().any(|r| r.slot == o.name), Ordering::Relaxed);
+            }
             let desired = self.desired_of(view, uid, nv);
             let values = self.plugin_values(uid, &desired.consts);
             if !self.live[&uid].control.send_if_changed(desired) {

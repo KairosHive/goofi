@@ -50,6 +50,8 @@ pub struct Slot {
     pub taps: Vec<rtrb::Producer<f32>>,
     /// One per output: every block, whole, for the recorder.
     pub recs: Vec<rtrb::Producer<f32>>,
+    /// One per output: whether it is armed, as the last settle found it.
+    pub armed: Arc<[AtomicBool]>,
     /// Out of the plan: it panicked or the watchdog took it, and its outputs are zero until the
     /// settle that re-plans without it.
     pub dead: bool,
@@ -803,6 +805,7 @@ impl Runtime {
         while self.fifo.len() < out.len() {
             self.render_block();
         }
+        self.pool.rest();
         out.copy_from_slice(&self.fifo[..out.len()]);
         self.fifo.drain(..out.len());
     }
@@ -1093,7 +1096,9 @@ unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch:
         if let Some(tap) = slot.taps.get_mut(k) {
             publish(tap, &[*channels as f32], out);
         }
-        if let Some(rec) = slot.recs.get_mut(k) {
+        // An output that is not armed has no recorder: its blocks are not copied for one.
+        let armed = slot.armed.get(k).is_some_and(|armed| armed.load(Ordering::Relaxed));
+        if let Some(rec) = slot.recs.get_mut(k).filter(|_| armed) {
             // A block that does not fit is simply not there: its NUMBER is the gap the
             // recorder counts, so nothing here has to remember that it was lost.
             let (lo, hi) = number_out(n);
