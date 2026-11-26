@@ -655,6 +655,14 @@ test('a box dropped on a param maps an attribute, Tab completes, and Delete take
 		await rawCall(page, 'machine playhead add', { machine: 'machine0', name: 'beat', start: 'state0' });
 		const card = page.getByTestId('state-card-state0');
 		await expect(card).toBeVisible();
+		// A resting playhead's sweep is an animation the browser runs, and a paused clock pauses it.
+		await rawCall(page, 'machine state edit', { machine: 'machine0', name: 'state0', interval: 30 });
+		const sweep = page.locator('[data-testid="score-sweep"][data-playhead="beat"]');
+		const run = (): Promise<string[]> => sweep.evaluate((el) => el.getAnimations().map((a) => a.playState));
+		await expect.poll(run).toEqual(['running']);
+		await rawCall(page, 'clock set', { playing: false });
+		await expect.poll(run).toEqual(['paused']);
+		await rawCall(page, 'clock set', { playing: true });
 		const placed = async (): Promise<number[]> => (await machineNamed(page, 'machine0')).states.state0.pos;
 		const before = await placed();
 

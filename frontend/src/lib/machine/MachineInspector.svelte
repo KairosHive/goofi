@@ -139,7 +139,8 @@
 	// ---- the playheads: a dot at the head of the column each rests in, and a line sweeping the
 	// column from its arrival to its next beat, timed from the frame that told of the arrival.
 	const playheads = $derived(Object.values(m.playheads).map((p) => p.name));
-	watchVariables(() => playheads.flatMap((p) => [`${p}.state`, `${p}.progress`]));
+	watchVariables(() => ['clock.playing', ...playheads.flatMap((p) => [`${p}.state`, `${p}.progress`])]);
+	const playing = $derived(Number(variableValue('clock.playing') ?? 1) !== 0);
 	const heads = $derived(
 		Object.entries(m.playheads).map(([id, { name: p, color }], i) => {
 			const state = stateOf(m, id);
@@ -150,35 +151,13 @@
 			return { id, p, color: dotColor(color, i), state, flying: prev !== '' && progress < 1, arrived };
 		})
 	);
-	const landed = new Map<string, { arrived: number; at: number }>();
-	let clock = $state(0);
-	$effect(() => {
-		for (const h of heads) {
-			const was = landed.get(h.id);
-			if (!was || was.arrived !== h.arrived) landed.set(h.id, { arrived: h.arrived, at: performance.now() });
-		}
-	});
-	$effect(() => {
-		if (playheads.length === 0) return;
-		let frame = 0;
-		const tick = (): void => {
-			clock = performance.now();
-			frame = requestAnimationFrame(tick);
-		};
-		frame = requestAnimationFrame(tick);
-		return () => cancelAnimationFrame(frame);
-	});
-	/** Where a resting head's sweep stands across its column, 0..1; null with no beat to sweep to. */
-	function sweep(h: (typeof heads)[number]): number | null {
+	/** A resting head's sweep: the column it crosses and the seconds it takes, from the arrival
+	 * that made the element; null with no beat to sweep to. The browser animates it. */
+	const sweep = (h: (typeof heads)[number]): { left: number; run: number; seconds: number } | null => {
 		const s = m.states[h.state];
-		const at = landed.get(h.id)?.at;
-		if (h.flying || !s || !(s.interval > 0) || at === undefined) return null;
-		return Math.min(1, (clock - at) / 1000 / s.interval);
-	}
-	const sweepX = (h: (typeof heads)[number]): number | null => {
 		const i = order.indexOf(h.state);
-		const f = sweep(h);
-		return i < 0 || f === null ? null : lefts[i] + f * cols[i];
+		if (h.flying || !s || !(s.interval > 0) || i < 0) return null;
+		return { left: lefts[i], run: cols[i], seconds: s.interval };
 	};
 
 	// ---- the popovers: a cell's value, a row's attribute, a column's state, an arc's transition.
@@ -366,9 +345,12 @@
 			<!-- The sweeps: a line per resting playhead, over the rows of its column. -->
 			<div class="sweeps" style={`left: ${SCORE.gutter}px; top: ${SCORE.lane + SCORE.head}px; height: ${attrs.length * SCORE.row}px`}>
 				{#each heads as h (h.id)}
-					{@const x = sweepX(h)}
-					{#if x !== null}
-						<div class="sweep" style={`left: ${x}px; background: ${h.color}`} data-testid="score-sweep" data-playhead={h.p}></div>
+					{@const s = sweep(h)}
+					{#if s}
+						{#key `${h.state} ${h.arrived}`}
+							<div class="sweep" data-testid="score-sweep" data-playhead={h.p}
+								style={`left: ${s.left}px; --run: ${s.run}px; animation-duration: ${s.seconds}s; animation-play-state: ${playing ? 'running' : 'paused'}; background: ${h.color}`}></div>
+						{/key}
 					{/if}
 				{/each}
 			</div>
@@ -743,6 +725,12 @@
 		bottom: 0;
 		width: 2px;
 		opacity: 0.8;
+		animation: sweep linear forwards;
+	}
+	@keyframes sweep {
+		to {
+			transform: translateX(var(--run));
+		}
 	}
 	/* The popovers: a form on the pane's step, the inspector's field rows. */
 	.pop {
