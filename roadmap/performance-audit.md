@@ -23,6 +23,10 @@ stack samples and headless Chrome on the GPU (`--use-angle=vulkan`; without it S
 Audio was not measured (it plays through the speakers; use the null sink). A release build was
 not measured.
 
+On 2026-11-26, with the render clock parked while nothing is drawn, the empty headless patch
+measured 0.36 to 0.39% and 66 wakeups/s over three 10 s windows of the debug build (follower 34,
+status drain 25, MIDI 5, machines 2). The other rows were not measured again.
+
 ## Measure again
 
 - The audit's probes on the new data plane: the hop (`hop_latency`), the producer cap table
