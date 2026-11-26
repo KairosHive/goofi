@@ -25,7 +25,7 @@
 	function lift(entry: VariableView, form: Form): DragSource {
 		return {
 			key: entry.name,
-			tags: [form === 'text' ? 'text' : 'number'],
+			tags: [form === 'image' ? 'list' : form],
 			label: `vars.${entry.name}`,
 			expression: () => `vars.${entry.name}`
 		};

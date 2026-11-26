@@ -5,8 +5,9 @@
  * drag is the owner's own move and no target is sought, so ONE gesture repositions within a panel
  * and references beyond it. */
 
-/** What flows across a drop: a node to bind, a value expression of a form, a widget kind to bear. */
-export type DragTag = 'node' | 'number' | 'text' | 'widget';
+/** What flows across a drop: a node to bind, a widget kind to bear, or a value expression of a
+ * form: one number, a list of numbers, or a text. */
+export type DragTag = 'node' | 'number' | 'list' | 'text' | 'widget';
 
 export interface Point {
 	x: number;

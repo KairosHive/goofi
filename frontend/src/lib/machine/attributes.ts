@@ -29,6 +29,12 @@ export function faceOf(a: Attribute): Face {
 	return Array.isArray(a.default) && a.default.length > 1 ? 'vector' : 'number';
 }
 
+/** The form an attribute's value has for a drag: a text, one number, or a list of them. */
+export function formOf(a: Attribute): 'number' | 'list' | 'text' {
+	const face = faceOf(a);
+	return face === 'text' || face === 'select' ? 'text' : face === 'vector' || face === 'color' || face === 'envelope' ? 'list' : 'number';
+}
+
 /** The part of a constant param's descriptor that is the same for every literal. */
 const constant = (fallback: Literal | null) => ({
 	doc: null,

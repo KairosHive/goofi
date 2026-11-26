@@ -253,8 +253,9 @@
 	let stack = $state<HTMLElement | null>(null);
 	function lift(id: string): DragSource {
 		const t = g.timeline[id];
-		const reads = `vars.${t.name}.${t.kind === 'curve' ? 'value' : 'notes'}`;
-		return { key: id, tags: ['number'], label: reads, home: stack, expression: () => reads };
+		const curve = t.kind === 'curve';
+		const reads = `vars.${t.name}.${curve ? 'value' : 'notes'}`;
+		return { key: id, tags: [curve ? 'number' : 'list'], label: reads, home: stack, expression: () => reads };
 	}
 	function place(id: string, outcome: Outcome | null): void {
 		const onto = outcome?.inHome ? document.elementFromPoint(outcome.at.x, outcome.at.y)?.closest<HTMLElement>('[data-track]')?.dataset.track : undefined;

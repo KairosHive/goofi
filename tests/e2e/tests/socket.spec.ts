@@ -1256,9 +1256,9 @@ test('a variables row drags its variable onto a parameter of its own form', asyn
 		const row = page.getByTestId('param-field-frequency');
 		const source = async () => (await backendDoc(page)).nodes[osc].params.lfo.frequency;
 		const original = await source();
-		async function dragGrip(name: string): Promise<void> {
+		async function dragGrip(name: string, onto = row): Promise<void> {
 			const grip = (await desk.locator(`[data-name="${name}"]`).getByTestId('variable-grip').boundingBox())!;
-			const target = (await row.boundingBox())!;
+			const target = (await onto.boundingBox())!;
 			await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
 			await page.mouse.down();
 			await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });
@@ -1275,10 +1275,43 @@ test('a variables row drags its variable onto a parameter of its own form', asyn
 		await expect.poll(async () => (await source()).expression).toBe('vars.desk.level');
 		await undo(page);
 		await expect.poll(source).toEqual(original);
+
+		// A list param is one target for a list while it has one source. Opened as entries, each
+		// entry is a target for a number, and the row itself is none.
+		const thr = await addNode(page, 'graphics:Threshold', [400, 300]);
+		await waitForNode(page, thr);
+		await page.evaluate(() => (window as any).goofi.commands.addVariable('desk.tint', [1, 0, 0, 1]));
+		await expect(desk.locator('[data-name="desk.tint"]').getByTestId('variable-type').locator('select')).toHaveValue('list');
+		await selectNode(page, thr);
+		const above = page.getByTestId('param-field-above');
+		const text = async () => (await rawCall(page, 'node state', { node: thr })).result.text as string;
+		await dragGrip('desk.level', above);
+		await expect(above).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		await dragGrip('desk.tint', above);
+		await expect(above).toHaveClass(/over/);
+		await page.mouse.up();
+		await expect.poll(text).toMatch(/threshold\.above = expr: vars\.desk\.tint/);
+		await undo(page);
+		await expect.poll(text).not.toMatch(/above = expr:/);
+		await above.getByTestId('param-view-individual').click();
+		const green = above.locator('.pf-entry').nth(1);
+		await dragGrip('desk.tint', green);
+		await expect(above.locator('.armed, .over')).toHaveCount(0);
+		await expect(above).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		await dragGrip('desk.level', green);
+		await expect(green).toHaveClass(/over/);
+		await expect(above).not.toHaveClass(/armed|over/);
+		await page.mouse.up();
+		await expect.poll(text).toMatch(/threshold\.above\[1\] = expr: vars\.desk\.level/);
+		await expect.poll(text).not.toMatch(/above = expr:/);
+		await above.getByTestId('param-view-list').click();
 	} finally {
 		await handBack(
 			() => clearGraph(page),
 			() => closeSplit(page),
+			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.tint')),
 			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.level')),
 			() => page.evaluate(() => (window as any).goofi.commands.removeVariable('desk.title'))
 		);

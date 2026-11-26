@@ -28,6 +28,7 @@
 	import { camera } from '$lib/editor/camera';
 	import { eventPoint } from '$lib/editor/eventPoint';
 	import { drag, type DragSource, type DragTag } from '$lib/drag';
+	import { formOf } from '$lib/machine/attributes';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
 	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import FlowApi from '$lib/editor/FlowApi.svelte';
@@ -356,12 +357,11 @@
 		const m = machine;
 		if (!m) return [];
 		const set = Object.keys(m.states[state]?.values ?? {});
-		return (set.length > 0 ? set : Object.keys(m.attributes)).filter((a) => (m.attributes[a]?.kind.type === 'string') === (tag === 'text')).map((a) => m.attributes[a]?.name ?? a);
+		return (set.length > 0 ? set : Object.keys(m.attributes)).filter((a) => m.attributes[a] && formOf(m.attributes[a]) === tag).map((a) => m.attributes[a]?.name ?? a);
 	}
 	function stateSource(state: string): DragSource {
 		const tags: DragTag[] = [];
-		if (attrsFor(state, 'number').length) tags.push('number');
-		if (attrsFor(state, 'text').length) tags.push('text');
+		for (const tag of ['number', 'list', 'text'] as const) if (attrsFor(state, tag).length) tags.push(tag);
 		return {
 			key: state,
 			tags,

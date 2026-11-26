@@ -89,23 +89,6 @@
 	const uiStore = ui();
 	let row = $state<HTMLDivElement>();
 	const engine = drag();
-	/** The form the row takes a dropped value in: text for a string, a number for the rest. */
-	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : 'number');
-	const target = $derived<DropTargetOptions | null>(
-		literal || !descriptor
-			? null
-			: {
-					tags: [tag],
-					accept,
-					onDrop: async ({ source, tag, at }) => {
-						const expression = await source.expression?.(tag, at);
-						if (expression) onSetSource?.({ expression });
-					}
-				}
-	);
-	const armed = $derived(target !== null && engine.source !== null && takes(target, engine.source) !== null);
-	const over = $derived(row !== undefined && engine.isOver(row));
-
 	let ownOpen = $state(false);
 	const open = $derived(onToggle ? opened === true : ownOpen);
 	function toggle(): void {
@@ -117,6 +100,24 @@
 	const NONE: Omit<RowPlan, 'face'> & { face: null } = { face: null, viewSwitch: false, disabled: false, list: false, elements: false, source: false, foot: false };
 	/** Every part the row shows, from the descriptor and the reader's view; see `rowPlan`. */
 	const plan = $derived(descriptor ? rowPlan(descriptor, { individual: uiStore.paramView[viewKey] === 'individual', sources: !literal }) : NONE);
+	/** The form the row takes a dropped value in: a text, one number, or a list for a whole vector. */
+	const tag = $derived<DragTag>(descriptor?.type === 'string' ? 'text' : plan.viewSwitch ? 'list' : 'number');
+	/** What lands a dropped value's expression: the whole's source, or one entry's. */
+	const lands = (set: (source: SourcePatch) => void): DropTargetOptions['onDrop'] => async ({ source, tag, at }) => {
+		const expression = await source.expression?.(tag, at);
+		if (expression) set({ expression });
+	};
+	/** The row is one target while it has one source; opened as entries, each entry is its own. */
+	const target = $derived<DropTargetOptions | null>(
+		literal || !descriptor || plan.elements ? null : { tags: [tag], accept, onDrop: lands((s) => onSetSource?.(s)) }
+	);
+	const armed = $derived(target !== null && engine.source !== null && takes(target, engine.source) !== null);
+	const over = $derived(row !== undefined && engine.isOver(row));
+	/** Entry `i` as a target of one number, on the face (`face`) or on its open row (`row`). */
+	const entryId = (i: number, where: 'face' | 'row'): string => `${learnId}:${where}:${i}`;
+	const entryTarget = (i: number, where: 'face' | 'row'): DropTargetOptions | null =>
+		plan.elements ? { id: entryId(i, where), tags: ['number'], accept, onDrop: lands((s) => onSetElementSource?.(i, s)) } : null;
+
 	/** Whether the label has anything to open. */
 	const openable = $derived(plan.list || plan.elements || plan.source || plan.foot || more !== undefined);
 	const dims = $derived(descriptor && isNumeric(descriptor) ? numValues(descriptor).length : 1);
@@ -220,15 +221,17 @@
 				     the whole vector. -->
 				<div class="pf-vector" data-testid="param-vector">
 					{#each numValues(num) as held, i (i)}
-						<NumberInput
-							class="pf-fill"
-							value={held}
-							onChange={(v) => onCommit(withDim(i, v))}
-							{step}
-							disabled={elementDisabled(i)}
-							data-param-edit
-							data-testid={`param-number-${i}`}
-						/>
+						{@const id = entryId(i, 'face')}
+						<div class="pf-fill pf-entry" use:dropTarget={entryTarget(i, 'face')} class:armed={engine.takes(id) !== null} class:over={engine.isOver(id)}>
+							<NumberInput
+								value={held}
+								onChange={(v) => onCommit(withDim(i, v))}
+								{step}
+								disabled={elementDisabled(i)}
+								data-param-edit
+								data-testid={`param-number-${i}`}
+							/>
+						</div>
 					{/each}
 				</div>
 				{#if plan.viewSwitch}{@render viewSwitch()}{/if}
@@ -314,7 +317,8 @@
 				<div class="pf-elements" data-testid="param-elements">
 					{#each numValues(num) as held, i (i)}
 						{@const el = elements[i]}
-						<div class="pf-element" data-testid={`param-element-${i}`}>
+						{@const id = entryId(i, 'row')}
+						<div class="pf-element" data-testid={`param-element-${i}`} use:dropTarget={entryTarget(i, 'row')} class:armed={engine.takes(id) !== null} class:over={engine.isOver(id)}>
 							<div class="pf-element-row">
 								<span class="pf-element-name">{elementName(i)}</span>
 								<NumberInput
@@ -450,11 +454,15 @@
 	}
 	/* An `outline` rather than a border: a row that becomes a target must not move the rows under it.
 	   It draws inside the box, which is the drop area, so the outlines of adjacent rows never overlap. */
-	.pf-param.armed {
+	.pf-param.armed,
+	.pf-entry.armed,
+	.pf-element.armed {
 		outline: 1px dashed var(--border-strong);
 		outline-offset: -1px;
 	}
-	.pf-param.over {
+	.pf-param.over,
+	.pf-entry.over,
+	.pf-element.over {
 		outline: 1px solid var(--accent);
 		background: var(--accent-fill);
 	}
@@ -536,10 +544,14 @@
 		--number-width: 100%;
 	}
 	/* A number that shares its row: the picker's bar fills the row, so its numbers do too. */
-	.pf-vector :global(.pf-fill),
+	.pf-vector .pf-fill,
 	.pf-element-row :global(.pf-fill) {
 		flex: 1 1 0;
 		min-width: 0;
+	}
+	.pf-entry {
+		display: flex;
+		border-radius: var(--radius-sm);
 	}
 	.pf-elements {
 		flex: 1 1 100%;

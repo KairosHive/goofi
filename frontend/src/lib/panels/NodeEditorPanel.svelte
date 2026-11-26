@@ -491,7 +491,8 @@
 	 * the form to a param or a widget. The canvas is its home, where the drag is a move. */
 	function nodeSource(uid: string): DragSource {
 		const tags: DragTag[] = ['node'];
-		if (g.readFor(uid, 'float')) tags.push('number');
+		// An ARRAY output is one number or many: only its frames say which.
+		if (g.readFor(uid, 'float')) tags.push('number', 'list');
 		if (g.readFor(uid, 'string')) tags.push('text');
 		return {
 			key: uid,

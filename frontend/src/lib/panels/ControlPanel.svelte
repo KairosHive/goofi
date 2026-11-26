@@ -202,8 +202,11 @@
 		menu = { x, y, items: selection().referenceItems({ variable: name }, `vars.${name}`) };
 	}
 
-	/** The form a widget's expression takes and gives: text for a text widget, a number otherwise. */
-	const tagOf = (c: ControlView): 'text' | 'number' => (KIND[c.kind].draws === 'text' ? 'text' : 'number');
+	/** The form a widget's expression takes and gives: a text, one number, or a list of them. */
+	function tagOf(c: ControlView): 'text' | 'number' | 'list' {
+		const draws = KIND[c.kind].draws;
+		return draws === 'text' ? 'text' : draws === 'number' || draws === 'any' ? 'number' : 'list';
+	}
 
 	/** What a press on a widget lifts: the variable, carried as `vars.<name>`; in edit mode the
 	 * panel is its home, where the drag is a move. */
