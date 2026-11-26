@@ -32,7 +32,7 @@
 	import type { Literal } from '$lib/api/generated';
 	import { CONTROL_COLUMNS, CONTROL_KINDS } from '$lib/api/vocab';
 	import { variableForm, variableImage, variableValue, watchVariables } from '$lib/stores/variableValues.svelte';
-	import { KIND, bornValue, cellAt, kindFits, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
+	import { KIND, bornValue, cellAt, kindFits, minRows, movedBy, resizedBy, sameCell, type Cell, type Kind, type Units } from './controlLayout';
 	import ControlWidget from './ControlWidget.svelte';
 	import InstanceBar from './InstanceBar.svelte';
 
@@ -268,9 +268,10 @@
 		e.stopPropagation();
 		e.preventDefault();
 		const [from, units, start] = [cellOf(gv), unitsOf(board), { x: e.clientX, y: e.clientY }];
+		const rows = minRows((gv.control as ControlView).kind);
 		resizing = { name: gv.name, to: from };
 		beginDrag(e.currentTarget as HTMLElement, e.pointerId, {
-			move: (m) => (resizing = { name: gv.name, to: resizedBy(from, m.clientX - start.x, m.clientY - start.y, units, CONTROL_COLUMNS) }),
+			move: (m) => (resizing = { name: gv.name, to: resizedBy(from, m.clientX - start.x, m.clientY - start.y, units, CONTROL_COLUMNS, rows) }),
 			commit: () => {
 				const r = resizing;
 				resizing = null;

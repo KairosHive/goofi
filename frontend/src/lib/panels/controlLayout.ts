@@ -78,8 +78,14 @@ export function movedBy(origin: Cell, dx: number, dy: number, units: Units, colu
 	return inside(snap({ ...origin, x: origin.x + dx / units.x, y: origin.y + dy / units.y }), columns);
 }
 
-/** The cell a resize drag lands on. The origin's x and y stay: a resize moves the far edge only. */
-export function resizedBy(origin: Cell, dx: number, dy: number, units: Units, columns: number): Cell {
+/** The fewest rows a widget of `kind` resizes to: a slider's track needs two under its label. */
+export function minRows(kind: Kind): number {
+	return kind === 'slider' ? 2 : 1;
+}
+
+/** The cell a resize drag lands on, never under `rows` tall. The origin's x and y stay: a resize
+ * moves the far edge only. */
+export function resizedBy(origin: Cell, dx: number, dy: number, units: Units, columns: number, rows: number): Cell {
 	const cell = snap({ ...origin, w: origin.w + dx / units.x, h: origin.h + dy / units.y });
-	return { ...cell, w: Math.min(cell.w, columns - cell.x) };
+	return { ...cell, w: Math.min(cell.w, columns - cell.x), h: Math.max(cell.h, rows) };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cellAt, movedBy, resizedBy, sameCell, snap, type Cell } from './controlLayout';
+import { cellAt, minRows, movedBy, resizedBy, sameCell, snap, type Cell } from './controlLayout';
 import { turnedBy } from '$lib/ui/knob';
 
 /* The control panel's decisions, driven the way the component drives them. The component cannot
@@ -50,8 +50,13 @@ describe('a drag in edit mode', () => {
 	});
 
 	it('resizes the far edge and leaves the near one where it is', () => {
-		expect(resizedBy(origin, 48, 0, square, 8)).toEqual({ x: 1, y: 1, w: 3, h: 2 });
-		expect(resizedBy(origin, 4000, 0, square, 8)).toEqual({ x: 1, y: 1, w: 7, h: 2 });
+		expect(resizedBy(origin, 48, 0, square, 8, 1)).toEqual({ x: 1, y: 1, w: 3, h: 2 });
+		expect(resizedBy(origin, 4000, 0, square, 8, 1)).toEqual({ x: 1, y: 1, w: 7, h: 2 });
+	});
+
+	it('stops a slider at two rows and any other widget at one', () => {
+		expect(resizedBy(origin, 0, -4000, square, 8, minRows('slider'))).toEqual({ x: 1, y: 1, w: 2, h: 2 });
+		expect(resizedBy(origin, 0, -4000, square, 8, minRows('knob'))).toEqual({ x: 1, y: 1, w: 2, h: 1 });
 	});
 });
 
