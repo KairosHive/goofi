@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
 	axisWindow,
+	clipped,
+	damage,
 	deviceRect,
 	extent,
 	fitImage,
 	gridLines,
 	layoutSeries,
 	logSafe,
-	rgba,
-	visible
+	meets,
+	rgba
 } from './math';
 
 describe('rects', () => {
@@ -21,12 +23,28 @@ describe('rects', () => {
 		const b = deviceRect({ x: 10.3, y: 0, w: 10.3, h: 10 }, { ...view, zoom: 1, dpr: 1, x: 0, y: 0 });
 		expect(a.x + a.w).toBe(b.x);
 	});
-	it('culls a rect that leaves the pane on any side, and one with no area', () => {
-		expect(visible({ x: -10, y: -10, w: 20, h: 20 }, view)).toBe(true);
-		expect(visible({ x: -30, y: 0, w: 20, h: 20 }, view)).toBe(false);
-		expect(visible({ x: 1600, y: 0, w: 20, h: 20 }, view)).toBe(false);
-		expect(visible({ x: 0, y: 1200, w: 20, h: 20 }, view)).toBe(false);
-		expect(visible({ x: 0, y: 0, w: 0, h: 20 }, view)).toBe(false);
+	it('keeps the part of a rect inside the pane, and culls one with none or with no area', () => {
+		expect(clipped({ x: -10, y: -10, w: 20, h: 20 }, 1600, 1200)).toEqual({ x: 0, y: 0, w: 10, h: 10 });
+		expect(clipped({ x: 1590, y: 1190, w: 20, h: 20 }, 1600, 1200)).toEqual({ x: 1590, y: 1190, w: 10, h: 10 });
+		expect(clipped({ x: -30, y: 0, w: 20, h: 20 }, 1600, 1200)).toBeNull();
+		expect(clipped({ x: 1600, y: 0, w: 20, h: 20 }, 1600, 1200)).toBeNull();
+		expect(clipped({ x: 0, y: 1200, w: 20, h: 20 }, 1600, 1200)).toBeNull();
+		expect(clipped({ x: 0, y: 0, w: 0, h: 20 }, 1600, 1200)).toBeNull();
+	});
+	it('repaints each changed rect once, a neighbour that shares a pixel with it, and nothing else', () => {
+		const a = { x: 0, y: 0, w: 100, h: 50 };
+		const moved = { x: 40, y: 0, w: 100, h: 50 };
+		const inner = { x: 10, y: 10, w: 20, h: 20 };
+		// A plot that pushed is one rect; one that moved is where it was and where it is.
+		expect(damage([a, a])).toEqual([a]);
+		expect(damage([a, moved])).toEqual([a, moved]);
+		// A rect another holds whole is drawn with it, whichever came first.
+		expect(damage([inner, a])).toEqual([a]);
+		expect(damage([a, inner])).toEqual([a]);
+		expect(damage([])).toEqual([]);
+		expect(meets(a, moved)).toBe(true);
+		expect(meets(a, { x: 100, y: 0, w: 100, h: 50 }), 'a shared edge is no shared pixel').toBe(false);
+		expect(meets(a, { x: 0, y: 50, w: 100, h: 50 })).toBe(false);
 	});
 	it('letterboxes an image inside its rect unless stretched', () => {
 		const d = { x: 10, y: 10, w: 200, h: 100 };

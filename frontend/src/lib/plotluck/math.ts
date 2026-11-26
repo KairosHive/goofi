@@ -27,16 +27,31 @@ export function deviceRect(r: Rect, v: View): Rect {
 	return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-/** Whether a device rect meets the pane at all. */
-export function visible(d: Rect, v: View): boolean {
-	return (
-		d.w > 0 &&
-		d.h > 0 &&
-		d.x < v.width * v.dpr &&
-		d.y < v.height * v.dpr &&
-		d.x + d.w > 0 &&
-		d.y + d.h > 0
-	);
+/** The part of device rect `d` inside a `w` by `h` pane; `null` when no pixel of it is. */
+export function clipped(d: Rect, w: number, h: number): Rect | null {
+	const x = Math.max(d.x, 0);
+	const y = Math.max(d.y, 0);
+	const cw = Math.min(d.x + d.w, w) - x;
+	const ch = Math.min(d.y + d.h, h) - y;
+	return cw > 0 && ch > 0 ? { x, y, w: cw, h: ch } : null;
+}
+
+/** Whether two device rects share a pixel. */
+export function meets(a: Rect, b: Rect): boolean {
+	return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** The rects a frame repaints for `stale`: each once, and none that another holds whole. */
+export function damage(stale: Rect[]): Rect[] {
+	const holds = (a: Rect, b: Rect): boolean =>
+		a.x <= b.x && a.y <= b.y && a.x + a.w >= b.x + b.w && a.y + a.h >= b.y + b.h;
+	const out: Rect[] = [];
+	for (const r of stale) {
+		if (out.some((o) => holds(o, r))) continue;
+		for (let i = out.length - 1; i >= 0; i--) if (holds(r, out[i])) out.splice(i, 1);
+		out.push(r);
+	}
+	return out;
 }
 
 /** The window a log scale may be given: positive and finite, or log10 makes the scale NaN. */

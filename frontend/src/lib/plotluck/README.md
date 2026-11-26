@@ -29,9 +29,10 @@ plotluck is a part of goofi's frontend library. It imports nothing from the rest
 A renderer is one WebGL2 context, and every surface it makes is drawn by it: a browser allows a
 thread sixteen contexts and a worker four, so a page of panels cannot pay one per canvas. A frame
 draws the surfaces that changed side by side on one atlas canvas, and one bitmap handover brings
-each surface its picture on its own canvas, which holds a 2D context for that. Five surfaces of
-mixed size cost about half a millisecond a frame on a laptop GPU, and a surface that did not
-change costs nothing.
+each surface its picture on its own canvas, which holds a 2D context for that. A frame draws only
+the rects that changed: a plot that took a push is drawn again with the plots that overlap it, a
+plot that moved also clears where it was, and a new view draws the whole pane. A surface that did
+not change costs nothing.
 
 `setView` takes the pane in CSS pixels, a camera in world units and the device pixel ratio. Every
 plot's rect is in world units, so a host with a pan-and-zoom canvas moves the camera and the plots

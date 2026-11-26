@@ -2,7 +2,7 @@ import { FieldPlot } from './field';
 import { program, type Program } from './gl';
 import { ImagePlot } from './image';
 import { LinePlot } from './line';
-import { deviceRect, visible, type View } from './math';
+import { clipped, damage, deviceRect, meets, type Rect, type View } from './math';
 import { pack } from './pack';
 import { PathPlot } from './path';
 import { FIELD_FS, IMAGE_FS, IMAGE_VS, LINE_FS, LINE_VS, PATH_FS, PATH_VS } from './shaders';
@@ -36,16 +36,30 @@ interface Pane {
 	/** The pane in device pixels, each side within the atlas limit. */
 	w: number;
 	h: number;
-	dirty: boolean;
+	/** The whole pane is due: its view moved, or the context came back. */
+	all: boolean;
+	/** The plots that changed since the last frame. */
+	touched: Set<Plot>;
+	/** Device rects whose picture is out of date: where a touched or removed plot was drawn. */
+	stale: Rect[];
+	/** Where each plot was last drawn, inside the pane. */
+	painted: Map<Plot, Rect>;
+}
+
+/** One rect of one pane that a frame draws again. */
+interface Job {
+	pane: Pane;
+	r: Rect;
 }
 
 /** The atlas grows in these steps, so a pane that grows by a pixel does not reallocate it. */
 const STEP = 256;
+/** The atlas shrinks after this many frames in a row that a quarter of it would have held. */
+const LOOSE = 120;
 
 /** One WebGL2 context for every surface it makes, on the main thread or in a worker: a browser
- * allows a thread few contexts, and a worker fewer. Every frame draws the surfaces that changed
- * side by side on one atlas, and one bitmap handover brings each its own picture. Throws when
- * WebGL2 is not available. */
+ * allows a thread few contexts, and a worker fewer. A frame draws the rects that changed side by
+ * side on one atlas, and one bitmap handover brings each to its canvas. Throws without WebGL2. */
 export function createRenderer(): Renderer {
 	const atlas = new OffscreenCanvas(STEP, STEP);
 	const ctx = atlas.getContext('webgl2', { antialias: true, depth: false, stencil: false });
@@ -58,6 +72,7 @@ export function createRenderer(): Renderer {
 	let programs = build(gl);
 	const panes = new Set<Pane>();
 	let scheduled = false;
+	let loose = 0;
 	let lost = false;
 	let disposed = false;
 
@@ -66,30 +81,50 @@ export function createRenderer(): Renderer {
 		typeof requestAnimationFrame === 'function'
 			? requestAnimationFrame
 			: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
-	const invalidate = (pane: Pane): void => {
-		pane.dirty = true;
+	const invalidate = (): void => {
 		if (scheduled || lost || disposed) return;
 		scheduled = true;
 		schedule(draw);
 	};
 
-	/** The atlas at least the sheet's size, in steps; shrunk once it is four times too large. */
+	/** The atlas at least the sheet's size, in steps; shrunk once it stays four times too large. */
 	function fit(width: number, height: number): void {
 		const w = Math.min(limit, Math.ceil(width / STEP) * STEP);
 		const h = Math.min(limit, Math.ceil(height / STEP) * STEP);
-		const loose = atlas.width * atlas.height > 4 * w * h;
-		if (atlas.width < w || loose) atlas.width = w;
-		if (atlas.height < h || loose) atlas.height = h;
+		loose = atlas.width * atlas.height > 4 * w * h ? loose + 1 : 0;
+		const shrink = loose >= LOOSE;
+		if (shrink) loose = 0;
+		if (atlas.width < w || shrink) atlas.width = w;
+		if (atlas.height < h || shrink) atlas.height = h;
+	}
+
+	/** What `pane` owes this frame, and its state reset: the whole pane, or the rects that changed. */
+	function due(pane: Pane): Rect[] {
+		const { w, h, view } = pane;
+		let rects: Rect[];
+		if (pane.all) {
+			pane.painted.clear();
+			rects = [{ x: 0, y: 0, w, h }];
+		} else {
+			for (const p of pane.touched) {
+				pane.painted.delete(p);
+				const now = clipped(deviceRect(p.rect, view), w, h);
+				if (now) pane.stale.push(now);
+			}
+			rects = damage(pane.stale);
+		}
+		pane.all = false;
+		pane.touched.clear();
+		pane.stale = [];
+		return rects;
 	}
 
 	function draw(): void {
 		scheduled = false;
 		if (lost || disposed) return;
-		// Every pane keeps its slot while the set stands, so a frame of one pane reallocates nothing.
-		const live = [...panes];
-		for (const sheet of pack(live.map((p) => [p.w, p.h]), limit)) {
-			const due = [...sheet.slots].filter(([i]) => live[i].dirty);
-			if (due.length === 0) continue;
+		const jobs: Job[] = [];
+		for (const pane of panes) for (const r of due(pane)) jobs.push({ pane, r });
+		for (const sheet of pack(jobs.map(({ r }) => [r.w, r.h]), limit)) {
 			fit(sheet.width, sheet.height);
 			const W = atlas.width;
 			const H = atlas.height;
@@ -97,42 +132,41 @@ export function createRenderer(): Renderer {
 			gl.enable(gl.BLEND);
 			gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 			gl.enable(gl.SCISSOR_TEST);
-			for (const [i, slot] of due) paint(live[i], slot.x, slot.y, W, H);
+			for (const [i, slot] of sheet.slots) paint(jobs[i], slot.x, slot.y, W, H);
 			const bitmap = atlas.transferToImageBitmap();
-			for (const [i, slot] of due) {
-				const pane = live[i];
-				pane.dirty = false;
-				// A resize resets the 2D state, so the mode is set with every handover.
-				pane.target.globalCompositeOperation = 'copy';
-				pane.target.drawImage(bitmap, slot.x, slot.y, pane.w, pane.h, 0, 0, pane.w, pane.h);
+			for (const [i, slot] of sheet.slots) {
+				const { pane, r } = jobs[i];
+				pane.target.clearRect(r.x, r.y, r.w, r.h);
+				pane.target.drawImage(bitmap, slot.x, slot.y, r.w, r.h, r.x, r.y, r.w, r.h);
 			}
 			bitmap.close();
 		}
 	}
 
-	/** Draw `pane` with its top-left at atlas pixel (sx, sy), y down; the atlas is W × H. */
-	function paint(pane: Pane, sx: number, sy: number, W: number, H: number): void {
+	/** Draw rect `r` of its pane with its top-left at atlas pixel (sx, sy), y down; the atlas is W × H. */
+	function paint({ pane, r }: Job, sx: number, sy: number, W: number, H: number): void {
 		const { w, h, view } = pane;
-		gl.scissor(sx, H - sy - h, w, h);
+		gl.scissor(sx, H - sy - r.h, r.w, r.h);
 		gl.clearColor(0, 0, 0, 0);
 		gl.clear(gl.COLOR_BUFFER_BIT);
 		const size: [number, number] = [W, H];
+		// Where the pane's own top-left falls on the atlas, so the geometry keeps the whole rect.
+		const ox = sx - r.x;
+		const oy = sy - r.y;
 		for (const p of [...pane.plots].sort((a, b) => a.order - b.order)) {
 			const d = deviceRect(p.rect, view);
-			if (!visible(d, view)) continue;
-			// The scissor is the rect inside the pane; the geometry keeps the whole rect.
-			const cx = Math.max(d.x, 0);
-			const cy = Math.max(d.y, 0);
-			const cw = Math.min(d.x + d.w, w) - cx;
-			const ch = Math.min(d.y + d.h, h) - cy;
-			if (cw <= 0 || ch <= 0) continue;
-			gl.scissor(sx + cx, H - sy - cy - ch, cw, ch);
+			const inside = clipped(d, w, h);
+			if (!inside || !meets(inside, r)) continue;
+			pane.painted.set(p, inside);
+			// A plot under the rect draws the part of itself the rect holds.
+			const c = clipped({ x: inside.x - r.x, y: inside.y - r.y, w: inside.w, h: inside.h }, r.w, r.h)!;
+			gl.scissor(sx + c.x, H - sy - c.y - c.h, c.w, c.h);
 			// A transparent background leaves what an earlier plot drew under the rect.
 			if (p.background[3] > 0) {
 				gl.clearColor(...p.background);
 				gl.clear(gl.COLOR_BUFFER_BIT);
 			}
-			const t = { x: sx + d.x, y: sy + d.y, w: d.w, h: d.h };
+			const t = { x: ox + d.x, y: oy + d.y, w: d.w, h: d.h };
 			if (p instanceof LinePlot) {
 				gl.bindVertexArray(programs.line.vao);
 				p.draw(gl, programs.line, t, size, view.dpr);
@@ -160,7 +194,8 @@ export function createRenderer(): Renderer {
 			return;
 		}
 		lost = false;
-		for (const pane of panes) invalidate(pane);
+		for (const pane of panes) pane.all = true;
+		invalidate();
 	});
 
 	function surface(canvas: HTMLCanvasElement | OffscreenCanvas): Surface {
@@ -173,15 +208,27 @@ export function createRenderer(): Renderer {
 			view: { x: 0, y: 0, zoom: 1, width: 0, height: 0, dpr: 1 },
 			w: 0,
 			h: 0,
-			dirty: false
+			all: true,
+			touched: new Set(),
+			stale: [],
+			painted: new Map()
 		};
 		panes.add(pane);
-		const touch = (): void => invalidate(pane);
-		const detach = (p: Plot): void => {
-			pane.plots.delete(p);
-			touch();
+		/** `p` changed: where it was drawn is out of date, and so is where it is now. */
+		const touch = (p: Plot): void => {
+			const was = pane.painted.get(p);
+			if (was) pane.stale.push(was);
+			pane.touched.add(p);
+			invalidate();
 		};
-		const add = <P extends Plot>(p: P): P => {
+		const detach = (p: Plot): void => {
+			touch(p);
+			pane.plots.delete(p);
+			pane.touched.delete(p);
+			pane.painted.delete(p);
+		};
+		const add = <P extends Plot>(make: (touch: () => void) => P): P => {
+			const p: P = make(() => touch(p));
 			pane.plots.add(p);
 			return p;
 		};
@@ -192,12 +239,13 @@ export function createRenderer(): Renderer {
 				pane.h = Math.min(limit, Math.round(v.height * v.dpr));
 				if (canvas.width !== pane.w) canvas.width = pane.w;
 				if (canvas.height !== pane.h) canvas.height = pane.h;
-				touch();
+				pane.all = true;
+				invalidate();
 			},
-			addLine: () => add(new LinePlot(touch, detach)),
-			addImage: () => add(new ImagePlot(touch, detach)),
-			addPath: () => add(new PathPlot(touch, detach)),
-			addField: () => add(new FieldPlot(touch, detach)),
+			addLine: () => add((t) => new LinePlot(t, detach)),
+			addImage: () => add((t) => new ImagePlot(t, detach)),
+			addPath: () => add((t) => new PathPlot(t, detach)),
+			addField: () => add((t) => new FieldPlot(t, detach)),
 			dispose() {
 				for (const p of pane.plots) p.release();
 				pane.plots.clear();
