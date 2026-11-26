@@ -4,7 +4,7 @@
 pub mod boot;
 mod event;
 mod txn;
-pub use event::{Broadcaster, Event};
+pub use event::{Broadcaster, Event, EventText};
 pub use txn::Txn;
 pub use boot::{boot, Config, Manager};
 pub mod autosave;
@@ -719,7 +719,8 @@ pub fn spawn_workers(state: &AppState) {
         let mut last: HashMap<String, NodeState> = HashMap::new();
         let mut broadcast = goofi_supervisor::timing::Pace::new(period);
         let mut live = goofi_supervisor::timing::Pace::new(LIVE_PERIOD);
-        let mut last_roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
+        let mut held = ops::host::Held::new(&state.agents);
+        let mut last_roster = held.roster(&state.agents);
         loop {
             // Parked until a report lands or a pace comes due — pacing, not polling.
             waker.wait_until(broadcast.next().min(live.next()));
@@ -800,7 +801,7 @@ pub fn spawn_workers(state: &AppState) {
             broadcast.reset();
             // The harness plane is the session's, not this process's: an instance another process
             // spawned, or one of its own that exited, shows up here.
-            let roster = ops::host::roster(&state.agents, goofi_agent::Agents::offered());
+            let roster = held.roster(&state.agents);
             if roster != last_roster {
                 events.send(Event::HarnessChanged(roster.clone()));
                 last_roster = roster;
@@ -1381,7 +1382,7 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
             },
             broadcasted = events.recv() => match broadcasted {
                 Ok(e) => {
-                    if tx.send(Message::Text(e.into())).await.is_err() {
+                    if tx.send(Message::Text(e)).await.is_err() {
                         break;
                     }
                 }

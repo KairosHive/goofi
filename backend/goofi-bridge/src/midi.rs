@@ -23,6 +23,8 @@ struct Grab {
 }
 
 struct Inner {
+    /// The one client every probe asks the host through, opened at the first probe and kept.
+    host: Option<midir::MidiInput>,
     /// The host's ports as of the last probe, each with the group it is read as.
     listed: Vec<(String, String)>,
     /// The open ports, by group.
@@ -121,25 +123,37 @@ impl State {
 
 impl Midi {
     pub fn new(store: Arc<Mutex<VariableStore>>) -> Midi {
-        Midi { store, inner: Mutex::new(Inner { listed: Vec::new(), open: HashMap::new(), learn: None }) }
+        Midi { store, inner: Mutex::new(Inner { host: None, listed: Vec::new(), open: HashMap::new(), learn: None }) }
     }
 
-    /// The host's input ports by name, or why it has none.
-    fn host() -> Result<(midir::MidiInput, Vec<(String, midir::MidiInputPort)>), String> {
+    /// A client of the host, or why it has none.
+    fn client() -> Result<midir::MidiInput, String> {
         let mut input = midir::MidiInput::new("goofi").map_err(|e| format!("midi: {e}"))?;
         input.ignore(midir::Ignore::All);
-        let ports = input.ports().into_iter().filter_map(|p| Some((input.port_name(&p).ok()?, p))).collect();
-        Ok((input, ports))
+        Ok(input)
+    }
+
+    /// The input ports `input` lists, by name.
+    fn ports(input: &midir::MidiInput) -> Vec<(String, midir::MidiInputPort)> {
+        input.ports().into_iter().filter_map(|p| Some((input.port_name(&p).ok()?, p))).collect()
     }
 
     /// Ask the host which ports it lists now, so a device plugged in or pulled is seen by the
     /// next resync; answers why the host lists nothing.
     pub fn probe(&self) -> Option<String> {
-        let (ports, reason) = match Midi::host() {
-            Ok((_, ports)) => (ports.into_iter().map(|(name, _)| name).collect::<Vec<_>>(), None),
+        let mut inner = self.inner.lock();
+        let opened = match inner.host.take() {
+            Some(held) => Ok(held),
+            None => Midi::client(),
+        };
+        let (ports, reason) = match opened {
+            Ok(host) => {
+                let ports = Midi::ports(&host).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+                inner.host = Some(host);
+                (ports, None)
+            }
             Err(e) => (Vec::new(), Some(e)),
         };
-        let mut inner = self.inner.lock();
         let named = std::mem::take(&mut inner.listed);
         inner.listed = ports.into_iter().map(|p| {
             let group = named.iter().find(|(n, _)| *n == p).map(|(_, g)| g.clone()).unwrap_or_default();
@@ -210,7 +224,8 @@ impl Midi {
     }
 
     fn connect(&self, port: &str, group: &str) -> Result<Grab, String> {
-        let (input, ports) = Midi::host()?;
+        let input = Midi::client()?;
+        let ports = Midi::ports(&input);
         let (_, port_id) = ports.iter().find(|(name, _)| name == port).ok_or("the host no longer lists it")?;
         let (store, mut state) = (self.store.clone(), State::new(group));
         let link = input.connect(port_id, "goofi-in", move |_, bytes, _| state.feed(bytes, &store), ()).map_err(|e| e.to_string())?;

@@ -556,7 +556,7 @@ impl Goofi {
 
 /// The `/control` event broadcast, as a test consumes it.
 pub struct Events {
-    rx: tokio::sync::broadcast::Receiver<String>,
+    rx: tokio::sync::broadcast::Receiver<goofi_bridge::EventText>,
 }
 
 impl Events {

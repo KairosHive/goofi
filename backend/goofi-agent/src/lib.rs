@@ -218,7 +218,8 @@ impl Agents {
         mounts.pop().map(|(_, p)| p)
     }
 
-    fn records_dir(&self) -> PathBuf {
+    /// Where each instance's record lives, one file each.
+    pub fn records_dir(&self) -> PathBuf {
         session::system_dir(&self.session).join("agents")
     }
 

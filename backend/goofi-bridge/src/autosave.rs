@@ -55,15 +55,30 @@ pub(crate) fn spawn(state: AppState) {
     });
 }
 
-/// Every live mount, as given and symlink-free, and the waker its event pulses. ONE watcher serves
+/// What an event under a watched path calls.
+type Hit = Arc<dyn Fn() + Send + Sync>;
+
+/// Every watched path, as given and symlink-free, and what its event calls. ONE watcher serves
 /// them all. FSEvents names the real path: a macOS temp mount is `/var/…`, its events `/private/var/…`.
-static MOUNTS: Mutex<Vec<(PathBuf, PathBuf, Arc<goofi_node::DrainWaker>)>> = Mutex::new(Vec::new());
+static MOUNTS: Mutex<Vec<(PathBuf, PathBuf, Hit)>> = Mutex::new(Vec::new());
 
 /// The process's one watcher, made on first use and again after a refusal: the instances a
 /// machine grants run out while other programs hold them.
 static WATCHER: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
 
-fn watch(mount: &Path) -> bool {
+/// Call `hit` on every event at `path`, a file or what a directory holds, for the process's
+/// life; whether a watcher took it. A file is watched through its directory, which must exist.
+pub(crate) fn watch_path(path: &Path, hit: Hit) -> bool {
+    let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+    if !watch(dir, notify::RecursiveMode::NonRecursive) {
+        return false;
+    }
+    let real = goofi_core::path::canonical(dir).map_or_else(|_| path.to_path_buf(), |real| if dir == path { real } else { real.join(path.file_name().unwrap_or_default()) });
+    MOUNTS.lock().push((path.to_path_buf(), real, hit));
+    true
+}
+
+fn watch(mount: &Path, mode: notify::RecursiveMode) -> bool {
     let mut watcher = WATCHER.lock();
     if watcher.is_none() {
         match notify::recommended_watcher(|event: notify::Result<notify::Event>| {
@@ -71,7 +86,7 @@ fn watch(mount: &Path) -> bool {
                 event.as_ref().map_or(true, |e| e.paths.is_empty() || e.paths.iter().any(|p| at.iter().any(|m| p.starts_with(m))))
             };
             for (_, _, changed) in MOUNTS.lock().iter().filter(|(m, real, _)| hit(&[m, real])) {
-                changed.notify();
+                changed();
             }
         }) {
             Ok(made) => *watcher = Some(made),
@@ -84,7 +99,7 @@ fn watch(mount: &Path) -> bool {
             }
         }
     }
-    watcher.as_mut().is_some_and(|w| w.watch(mount, notify::RecursiveMode::Recursive).is_ok())
+    watcher.as_mut().is_some_and(|w| w.watch(mount, mode).is_ok())
 }
 
 /// This manager's mount on the shared watcher, re-aimed when a load replaces it. The tick then
@@ -107,9 +122,10 @@ impl Watch {
             return;
         }
         self.release();
-        if watch(&mount) {
+        if watch(&mount, notify::RecursiveMode::Recursive) {
             let real = goofi_core::path::canonical(&mount).unwrap_or_else(|_| mount.clone());
-            MOUNTS.lock().push((mount.clone(), real, self.changed.clone()));
+            let changed = self.changed.clone();
+            MOUNTS.lock().push((mount.clone(), real, Arc::new(move || changed.notify())));
             self.at = Some(mount);
         }
     }

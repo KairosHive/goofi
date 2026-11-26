@@ -113,11 +113,8 @@ The 10 ms half wake, the status beat's walk, the live fill, the follower pass an
 are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 wakeups/s and
 0.5 to 0.7% of a core per idle graphics node. Not covered there:
 
-- The status beat reads `config.toml` and every agent record from disk every 500 ms
-  (`Agents::offered`, `Agents::roster`). Keep both in memory; re-read on a watch event or an
-  agent op.
-- The MIDI probe opens a new ALSA sequencer client every 2 s, and "Midi Through" is always
-  listed, so the no-device back-off never applies. Keep one client and follow `System:Announce`.
+- The MIDI probe asks its one sequencer client for the ports every 2 s, and "Midi Through" is
+  always listed, so the no-device back-off never applies. Follow `System:Announce` on ALSA.
 - Every variable value move wakes `goofi-machines`, a machine or not (`machines.rs` watch).
   Send only names a machine reads.
 - A variable entry preview bumps the store `version`, so each drag frame redelivers every
@@ -129,8 +126,6 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
   track and machine as its own record; cache the functionals by source text.
 - Undo history has no bound, and each entry clones the variable store with every value it held.
   Cap the past; share the store as a persistent map.
-- `/control` clones each event `String` per subscriber and formats it with none: a shared
-  `Bytes`, and no text without a receiver.
 - Verify whether autosave loops on its own `variables/*.npy` writes when a wide driven variable
   moves on a dirty patch.
 

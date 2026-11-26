@@ -34,23 +34,26 @@ impl Event {
     }
 }
 
+/// An event's text as every socket sends it: one buffer, shared by each subscriber.
+pub type EventText = axum::extract::ws::Utf8Bytes;
+
 /// The one sender every event rides, serialized once however many sockets listen.
 #[derive(Clone)]
-pub struct Broadcaster(broadcast::Sender<String>);
+pub struct Broadcaster(broadcast::Sender<EventText>);
 
 impl Broadcaster {
     pub fn new(capacity: usize) -> Broadcaster {
         Broadcaster(broadcast::channel(capacity).0)
     }
 
-    /// Send one event, or nothing for `None`. A send with no listener is not a fault.
+    /// Send one event, or nothing for `None`. With no listener no text is made.
     pub fn send(&self, event: impl Into<Option<Event>>) {
-        if let Some(event) = event.into() {
-            let _ = self.0.send(event.text());
+        if let Some(event) = event.into().filter(|_| self.0.receiver_count() > 0) {
+            let _ = self.0.send(event.text().into());
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+    pub fn subscribe(&self) -> broadcast::Receiver<EventText> {
         self.0.subscribe()
     }
 }

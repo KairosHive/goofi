@@ -141,9 +141,45 @@ impl EffectOp for LogWrite {
 
 /// The roster the snapshot seeds and `harness_changed` broadcasts: the session's instances and
 /// the config's launchable list. `offered` is read off the graph lock by the caller.
-pub fn roster(agents: &goofi_agent::Agents, offered: (Vec<goofi_supervisor::layout::Agent>, Option<String>)) -> Value {
-    let (listed, config_error) = offered;
-    json!({ "instances": agents.roster(), "agents": listed, "config_error": config_error })
+pub fn roster(agents: &goofi_agent::Agents, offered: Offered) -> Value {
+    roster_of(&agents.roster(), offered)
+}
+
+type Offered = (Vec<goofi_supervisor::layout::Agent>, Option<String>);
+
+fn roster_of(instances: &[goofi_agent::Record], (listed, config_error): Offered) -> Value {
+    json!({ "instances": instances, "agents": listed, "config_error": config_error })
+}
+
+/// The roster as the status beat holds it: read from disk when the config or a record moved or
+/// an owner died, and on every beat where no watcher took the paths.
+pub struct Held {
+    moved: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    offered: Offered,
+    instances: Vec<goofi_agent::Record>,
+}
+
+impl Held {
+    pub fn new(agents: &goofi_agent::Agents) -> Held {
+        let moved = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let records = agents.records_dir();
+        let _ = std::fs::create_dir_all(&records);
+        let watched = [records, goofi_supervisor::layout::config_file()].iter().all(|path| {
+            let moved = moved.clone();
+            crate::autosave::watch_path(path, std::sync::Arc::new(move || moved.store(true, std::sync::atomic::Ordering::Release)))
+        });
+        Held { moved: watched.then_some(moved), offered: goofi_agent::Agents::offered(), instances: agents.roster() }
+    }
+
+    /// The roster now.
+    pub fn roster(&mut self, agents: &goofi_agent::Agents) -> Value {
+        let moved = self.moved.as_ref().is_none_or(|moved| moved.swap(false, std::sync::atomic::Ordering::AcqRel));
+        if moved || self.instances.iter().any(|r| !goofi_supervisor::child::alive(r.owner)) {
+            self.offered = goofi_agent::Agents::offered();
+            self.instances = agents.roster();
+        }
+        roster_of(&self.instances, self.offered.clone())
+    }
 }
 
 impl ReadOp for AgentList {
