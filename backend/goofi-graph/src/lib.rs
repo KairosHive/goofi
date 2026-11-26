@@ -3365,7 +3365,7 @@ impl Graph {
     /// one the last settle delivered, pointer by pointer. One decision per changed node, from
     /// settled state, however often the batch touched it. Free when nothing moved.
     pub fn settle(&mut self) {
-        let vars_version = self.variables().version();
+        let vars_version = self.variables().config();
         let vars_moved = vars_version != self.runtime.settled_vars;
         let redeliver = std::mem::take(&mut self.runtime.redeliver) || vars_moved;
         let restarts = std::mem::take(&mut self.runtime.restarts);

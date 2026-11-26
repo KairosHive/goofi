@@ -335,6 +335,23 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(held, j!({ "config": true, "value": true }), "the list answers what holds it, both locks together");
     g.call("variable entry lock", j!({ "name": "desk.handle", "value": false }));
     g.call("variable group lock", j!({ "group": "desk", "config": false }));
+    // A value of the form it had reaches its readers over the plane: the settle delivers nothing
+    // again. A new form, and a value of goofi's own, is configuration, and every node hears it.
+    let settled = g.graph().revision();
+    g.call("variable entry edit", j!({ "name": "desk.handle", "value": "P04" }));
+    assert_eq!(g.graph().revision(), settled, "a value edit of a user's variable settles nothing");
+    let handle = |g: &Goofi| g.call("variable list", j!({}))["variables"].as_array().unwrap().iter()
+        .find(|e| e["name"] == "desk.handle").cloned().unwrap()["value"].clone();
+    assert_eq!(handle(&g), "P04", "and the store holds it");
+    g.call("variable entry edit", j!({ "name": "clock.bpm", "value": 90.0 }));
+    let own = g.graph().revision();
+    assert!(own > settled, "a value of the clock's is delivered");
+    g.call("variable entry edit", j!({ "name": "desk.handle", "value": 4.0 }));
+    assert!(g.graph().revision() > own, "a new form is delivered");
+    for _ in 0..3 {
+        g.call("undo", j!({}));
+    }
+    assert_eq!(handle(&g), "P02", "each of the three is one step back");
     let why = g.refuse("variable group lock", j!({ "group": "system", "config": false }));
     assert!(why.contains("goofi's own"), "the system group's lock is nobody's to set: {why}");
     // A group can be EMPTY, minted at the first free `groupN`, and an entry born with no value
