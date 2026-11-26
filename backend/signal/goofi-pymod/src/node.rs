@@ -11,13 +11,15 @@ pub struct Node {
     /// The engine's clock, in seconds, as of the call in progress: `self.now` in `setup` and `process`.
     #[pyo3(get)]
     pub(crate) now: f64,
+    /// The params `self.params` was last built from: an equal set is not built again.
+    pub(crate) applied: Option<crate::exec::Groups>,
 }
 
 #[pymethods]
 impl Node {
     #[new]
     fn new() -> Node {
-        Node { clear_inputs: None, now: 0.0 }
+        Node { clear_inputs: None, now: 0.0, applied: None }
     }
 
     /// Clear a held input after this process call succeeds.

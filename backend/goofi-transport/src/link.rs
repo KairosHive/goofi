@@ -35,10 +35,10 @@ impl Line {
         }
     }
 
-    /// Every id that rang by `deadline`, in order; empty on the deadline. `Err` is the peer gone,
+    /// Every id that rang by `deadline`, or whenever with none; empty on the deadline. `Err` is the peer gone,
     /// reported only once every ring before it has been answered: a peer that rang and left in
     /// one breath is heard first and found gone on the wait after.
-    pub(crate) fn wait_until(&mut self, deadline: Instant) -> std::io::Result<Vec<u8>> {
+    pub(crate) fn wait_until(&mut self, deadline: Option<Instant>) -> std::io::Result<Vec<u8>> {
         let mut ids = self.drain()?;
         if ids.is_empty() && wait_readable(&self.stream, deadline)? {
             ids = self.drain()?;
@@ -88,7 +88,7 @@ impl Host {
     /// cannot connect, or presents another token, is dropped and waited past.
     pub(crate) fn accept_until(&self, deadline: Instant) -> Result<Option<Line>, String> {
         loop {
-            if !wait_readable(&self.listener, deadline).map_err(|e| format!("the doorbell's port: {e}"))? {
+            if !wait_readable(&self.listener, Some(deadline)).map_err(|e| format!("the doorbell's port: {e}"))? {
                 return Ok(None);
             }
             let (stream, _) = match self.listener.accept() {
@@ -108,7 +108,7 @@ impl Host {
     fn presented(&self, line: &mut Line, deadline: Instant) -> Result<bool, String> {
         let mut got = Vec::new();
         while got.len() < TOKEN {
-            match line.wait_until(deadline) {
+            match line.wait_until(Some(deadline)) {
                 Ok(bytes) if bytes.is_empty() => return Ok(false),
                 Ok(bytes) => got.extend(bytes),
                 Err(_) => return Ok(false),

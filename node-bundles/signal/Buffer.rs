@@ -7,7 +7,7 @@ use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, Output
 #[derive(Default)]
 struct Buffer {
     /// One window per position along the axes OUTSIDE the buffered one, as raw f32-LE bytes.
-    windows: Vec<Vec<u8>>,
+    windows: Vec<std::collections::VecDeque<u8>>,
     /// The shape the windows were filled from, with the buffered axis set to 0.
     layout: Vec<usize>,
 }
@@ -43,7 +43,7 @@ impl Node for Buffer {
         let mut layout = shape.to_vec();
         layout[axis] = 0;
         if layout != self.layout {
-            self.windows = vec![Vec::new(); outer];
+            self.windows = vec![Default::default(); outer];
             self.layout = layout;
         }
 
@@ -52,7 +52,7 @@ impl Node for Buffer {
             .ok_or("buffer size exceeds the supported allocation")?;
         let src = a.as_bytes();
         for (o, window) in self.windows.iter_mut().enumerate() {
-            window.extend_from_slice(&src[o * block..(o + 1) * block]);
+            window.extend(&src[o * block..(o + 1) * block]);
             if window.len() > cap {
                 window.drain(..window.len() - cap);
             }
@@ -61,7 +61,9 @@ impl Node for Buffer {
         let kept = self.windows.first().map_or(0, |w| w.len() / stride);
         let mut buf = Vec::with_capacity(outer * kept * stride);
         for window in &self.windows {
-            buf.extend_from_slice(window);
+            let (old, new) = window.as_slices();
+            buf.extend_from_slice(old);
+            buf.extend_from_slice(new);
         }
 
         let mut shape_out = shape.clone();

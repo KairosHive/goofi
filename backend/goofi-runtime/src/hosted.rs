@@ -46,8 +46,6 @@ pub fn load(
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the stop waits for the child to release what it holds before it is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long the child's wait for a request lasts before it looks at the parent again.
-const SLICE: Duration = Duration::from_millis(100);
 
 /// What a built library says it is, read by a child so the library never enters this process.
 fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
@@ -172,7 +170,7 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
     let mut raw = loaded.raw();
     let mut served = Served::open_from_env()?;
     loop {
-        let Some((seq, body)) = served.wait(SLICE)? else { continue };
+        let Some((seq, body)) = served.wait(None)? else { continue };
         let call = rpc::split_call(&body);
         let reply = match &call {
             Ok((entry, now, request)) => raw.call(*entry, *now, &[request]).unwrap_or_else(|e| rpc::encode_error_response(&e)),

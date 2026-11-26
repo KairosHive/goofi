@@ -31,22 +31,6 @@ not measured.
   cap delivering 60.
 - The table above on a release build, and an audio patch on a null sink.
 
-## Viewers
-
-The largest measured cost: a patch with the editor open costs ten times the same patch unwatched.
-
-- **A viewer on a graphics output that feeds another graphics node reads back the full frame in
-  f32.** `offer_view_wants` (`goofi-graph`) offers `None` for any slot with a wire, and
-  `Stage::wants` (`goofi-graphics/src/plan.rs`) turns `None` into a full-size `Want::Tap`. A
-  TEXTURE edge is a plan edge, not a transport reader, so nothing reads that frame. Count as wired
-  only a consumer that subscribes (another engine, a non-TEXTURE input). Measured: one 1024²
-  `Noise` with its inline viewer, 7.9 to 8.2% unwired, 39.2 to 40.8% wired (three rounds each
-  way); `cycles.gfi` is nine such previews. The fixture: a wired graphics stage's viewer receives
-  a frame of its declared box.
-- **The reducer re-sends every ready U8 graphics frame.** A `Payload::Wire` sets `held = None`,
-  so no content hash runs and an unchanged image goes out at the viewer pace. Hash the body; send
-  stamps alone when it matches.
-
 ## Signal
 
 - **An in-process native node pays the codec on every run.** `CodecNode` encodes the request,
@@ -57,27 +41,16 @@ The largest measured cost: a patch with the editor open costs ten times the same
   1 780 Hz, the same for 1 value and 320; in 65 busy stack samples `abi::call` is 43%, mostly
   meta encode and decode and malloc/free. Pack the meta once, make the stamps typed fields with
   `source` an `Arc` shared across outputs, and pass frames in-process by handle, not by codec.
-- The exchange copies a payload twice more than it needs to in each direction
-  (`exchange.rs`: `read().to_vec()`, then `frame.to_vec()` after `split_seq`). Copy only the
-  frame past the sequence number.
 - An autotrigger node whose `max_frequency` evaluates to 0 has `next_wake` in the past and runs
   back to back (`goofi-runtime/src/host.rs`). Found by reading; prove it with a fixture, then put
   a floor on the period or refuse the configuration.
-- The hosted Rust child and the Python child wake every 100 ms (`hosted.rs`, `serve.rs`
-  `SLICE`); `watch_parent` already ends them when the parent dies. Wait with no deadline.
-
 - The settle still walks every node for its view, every link for its edges and compiles both
   plans whole; the status beat, the live fill and the halves recompute on their clocks:
   `roadmap/reactivity.md` holds the measurements and the remaining work.
-- `Buffer` memmoves its whole window on every frame: a ring, so a frame costs one copy.
-- A Python node copies an array three times out and once in, rebuilds its `params` namespaces
-  every call and reads `_is_gil_enabled` twice a call: cache the namespaces, rebuild on
-  `on_param_changed` alone, one GIL read per tick.
+- A Python node copies an array three times out (`tobytes`, the extract, the cast) and once in.
+  Read the array through the buffer protocol; an empty array has no byte view to cast.
 - `HostExecutor::source` rebuilds and remaps the whole upstream lineage on every emission; a
   32-node chain stays slow uncapped. Measure the lineage's share of a deep hop before changing it.
-- The shipped example patches spell `variables.system.default_ufreq` and
-  `variables.system.goofi_home`: both fail with `NameError` and `EegPlayback` never emits.
-  Rename to `vars.signal.default_ufreq` and `vars.system.goofi_home`.
 
 ## Audio
 

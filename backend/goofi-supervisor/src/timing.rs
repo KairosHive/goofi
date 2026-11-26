@@ -507,15 +507,17 @@ pub fn sleep_until(deadline: Instant) {
     }
 }
 
-/// Park until `socket` has bytes to read, or `deadline` passes; whether it is readable. The
-/// socket's own timeout is never set: on Linux that is a tick-granular wait.
+/// Park until `socket` has bytes to read, or `deadline` passes; whether it is readable. With no
+/// deadline the wait ends on bytes alone. The socket's own timeout is never set.
 #[cfg(unix)]
-pub fn wait_readable(socket: &impl std::os::fd::AsRawFd, deadline: Instant) -> std::io::Result<bool> {
+pub fn wait_readable(socket: &impl std::os::fd::AsRawFd, deadline: Option<Instant>) -> std::io::Result<bool> {
     let mut fds = libc::pollfd { fd: socket.as_raw_fd(), events: libc::POLLIN, revents: 0 };
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
         // `poll` takes whole milliseconds; rounded up, so a wait never ends early.
-        let ms = left.as_millis().min(i32::MAX as u128) as i32 + i32::from(!left.subsec_nanos().is_multiple_of(1_000_000));
+        let ms = deadline.map_or(-1, |deadline| {
+            let left = deadline.saturating_duration_since(Instant::now());
+            left.as_millis().min(i32::MAX as u128 - 1) as i32 + i32::from(!left.subsec_nanos().is_multiple_of(1_000_000))
+        });
         // SAFETY: one pollfd, for the call's duration.
         let n = unsafe { libc::poll(&mut fds, 1, ms) };
         if n < 0 {
@@ -531,18 +533,19 @@ pub fn wait_readable(socket: &impl std::os::fd::AsRawFd, deadline: Instant) -> s
 
 /// As on Unix, through WinSock's `select`.
 #[cfg(windows)]
-pub fn wait_readable(socket: &impl std::os::windows::io::AsRawSocket, deadline: Instant) -> std::io::Result<bool> {
+pub fn wait_readable(socket: &impl std::os::windows::io::AsRawSocket, deadline: Option<Instant>) -> std::io::Result<bool> {
     use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET_ERROR, TIMEVAL};
     let raw = socket.as_raw_socket() as usize;
-    let left = deadline.saturating_duration_since(Instant::now());
-    let micros = left.as_micros().min(i64::MAX as u128) as i64;
-    let tv = TIMEVAL { tv_sec: (micros / 1_000_000) as i32, tv_usec: (micros % 1_000_000) as i32 };
+    let tv = deadline.map(|deadline| {
+        let micros = deadline.saturating_duration_since(Instant::now()).as_micros().min(i64::MAX as u128) as i64;
+        TIMEVAL { tv_sec: (micros / 1_000_000) as i32, tv_usec: (micros % 1_000_000) as i32 }
+    });
     // SAFETY: an FD_SET holding one socket, and a timeval, for the call's duration.
     unsafe {
         let mut set: FD_SET = std::mem::zeroed();
         set.fd_count = 1;
         set.fd_array[0] = raw;
-        let n = select(0, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), &tv);
+        let n = select(0, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), tv.as_ref().map_or(std::ptr::null(), |tv| tv));
         if n == SOCKET_ERROR {
             return Err(std::io::Error::last_os_error());
         }

@@ -3,7 +3,6 @@
 //! [`crate::exec`] seam the in-process tier uses, and answer `[entry][now]` calls over it.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use goofi_codec::rpc::{decode_request, encode_error_response, encode_options_response, encode_response, split_call, Emitted, Entry, Request};
 use goofi_core::SrcDtype;
@@ -45,9 +44,6 @@ fn slot_names(instance: &Bound<'_, PyAny>, constant: &str) -> PyResult<Vec<Strin
     instance.getattr(constant)?.cast::<PyDict>()?.iter().map(|(k, _)| k.extract()).collect()
 }
 
-/// How long one wait for a call lasts; the parent's liveness is watched by its own thread.
-const SLICE: Duration = Duration::from_millis(100);
-
 /// Open the child's end of the exchange and answer calls until the parent says stop.
 fn run_loop(
     py: Python<'_>,
@@ -62,7 +58,7 @@ fn run_loop(
     loop {
         // DETACHED: holding the GIL over the wait would starve a node's own Python threads, and
         // a receiver thread started in `setup()` is this tier's canonical shape.
-        let Some((seq, body)) = py.detach(|| served.wait(SLICE))? else { continue };
+        let Some((seq, body)) = py.detach(|| served.wait(None))? else { continue };
         let (entry, now, request) = split_call(&body)?;
         let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut params, entry, now, request)
             .map_err(|e| format!("node process: {e}"))?;

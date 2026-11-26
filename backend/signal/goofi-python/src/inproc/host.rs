@@ -93,15 +93,19 @@ fn watched<R>(f: impl FnOnce(Python<'_>) -> R) -> (R, bool) {
             RUNNING.fetch_sub(1, Ordering::SeqCst);
         }
     }
+    // The GIL never turns off again, so one seen on is read no more, and one read a call.
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     attach(|py| {
-        let before = gil_on(py).unwrap_or(false);
+        let before = ON.load(Ordering::SeqCst);
         let begun = BEGUN.fetch_add(1, Ordering::SeqCst) + 1;
         let running = (RUNNING.fetch_add(1, Ordering::SeqCst) == 0, Running);
         let out = f(py);
         let alone = running.0 && BEGUN.load(Ordering::SeqCst) == begun;
         drop(running);
         let here = super::log::gil_warned_here();
-        (out, !before && gil_on(py).unwrap_or(false) && (here || alone))
+        let turned = !before && gil_on(py).unwrap_or(false);
+        ON.fetch_or(turned, Ordering::SeqCst);
+        (out, turned && (here || alone))
     })
 }
 

@@ -123,8 +123,9 @@ impl Mailbox {
         Ok(())
     }
 
-    /// The newest message not yet taken, copied out whole; `None` when nothing new is there.
-    fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
+    /// The newest `[u32 seq][frame]` message not yet taken, its frame copied out once; `None`
+    /// when nothing new is there.
+    fn read(&mut self) -> Result<Option<(u32, Vec<u8>)>, String> {
         loop {
             let head = Head::of(&self.current);
             // SAFETY: header words of a live mapping.
@@ -152,7 +153,8 @@ impl Mailbox {
                 if len > head.capacity() {
                     return Err("a mailbox message longer than its segment".into());
                 }
-                std::slice::from_raw_parts(self.current.as_ptr().add(HEADER), len).to_vec()
+                let message = std::slice::from_raw_parts(self.current.as_ptr().add(HEADER), len);
+                message.split_first_chunk::<4>().map(|(seq, frame)| (u32::from_le_bytes(*seq), frame.to_vec()))
             };
             // The copy must be complete before the sequence is checked again; an acquire load
             // alone orders only what follows it.
@@ -163,15 +165,9 @@ impl Mailbox {
                 continue;
             }
             self.taken = seq;
-            return Ok(Some(copied));
+            return Ok(copied);
         }
     }
-}
-
-/// A `[u32 seq][frame]` message, split.
-fn split_seq(payload: &[u8]) -> Option<(u32, &[u8])> {
-    let (seq, frame) = payload.split_first_chunk::<4>()?;
-    Some((u32::from_le_bytes(*seq), frame))
 }
 
 /// The parent's end: `[u32 seq][frame]` each way, the reply carrying the request's sequence. It
@@ -212,15 +208,13 @@ impl Exchange {
     /// without it, at the thread's halt.
     pub fn answer(&mut self, child: &mut goofi_supervisor::child::Child, seq: u32, by: Option<Instant>) -> Result<Vec<u8>, String> {
         loop {
-            if let Some(message) = self.reply.read()? {
-                if let Some((_, frame)) = split_seq(&message).filter(|(s, _)| *s == seq) {
-                    return Ok(frame.to_vec());
-                }
+            if let Some((_, frame)) = self.reply.read()?.filter(|(s, _)| *s == seq) {
+                return Ok(frame);
             }
             // Checked AFTER reading, so a child that answered and then exited still gets its answer through.
             check(child, by)?;
             let line = self.line.as_mut().ok_or("the child's doorbell is not connected")?;
-            if let Err(e) = line.wait_until(Instant::now() + SLICE) {
+            if let Err(e) = line.wait_until(Some(Instant::now() + SLICE)) {
                 // A peer that closed its doorbell is a child that died or is dying: its exit is
                 // the cause to report, the closed socket only how it was noticed.
                 if let Some(status) = child.ended_within(SLICE) {
@@ -237,7 +231,7 @@ impl Exchange {
             match self.host.accept_until(Instant::now() + SLICE)? {
                 Some(mut line) => {
                     // Its READY may already be in flight; what matters is that the end stands.
-                    let _ = line.wait_until(Instant::now());
+                    let _ = line.wait_until(Some(Instant::now()));
                     self.line = Some(line);
                 }
                 None => check(child, None)?,
@@ -291,15 +285,13 @@ impl Served {
         Ok(Served { request, reply, line, answered: None })
     }
 
-    /// Wait up to `within` for a request, then the newest one: latest wins, and the one already
-    /// answered is not a request.
-    pub fn wait(&mut self, within: Duration) -> Result<Option<(u32, Vec<u8>)>, String> {
-        let deadline = Instant::now() + within;
+    /// Wait for a request, up to `within` when given, then the newest one: latest wins, and the
+    /// one already answered is not a request.
+    pub fn wait(&mut self, within: Option<Duration>) -> Result<Option<(u32, Vec<u8>)>, String> {
+        let deadline = within.map(|within| Instant::now() + within);
         loop {
-            if let Some(message) = self.request.read()? {
-                if let Some((seq, frame)) = split_seq(&message).filter(|(seq, _)| self.answered != Some(*seq)) {
-                    return Ok(Some((seq, frame.to_vec())));
-                }
+            if let Some(request) = self.request.read()?.filter(|(seq, _)| self.answered != Some(*seq)) {
+                return Ok(Some(request));
             }
             let rang = self.line.wait_until(deadline).map_err(|e| format!("the doorbell: {e}"))?;
             if rang.is_empty() {

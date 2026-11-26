@@ -403,7 +403,7 @@ fn echo_helper() {
     }
     let mut served = goofi_transport::Served::open_from_env().expect("the exchange the parent opened");
     loop {
-        let Some((seq, request)) = served.wait(std::time::Duration::from_secs(30)).expect("a request") else {
+        let Some((seq, request)) = served.wait(Some(std::time::Duration::from_secs(30))).expect("a request") else {
             panic!("no request within the wait");
         };
         served.answer(seq, &request).expect("an answer");

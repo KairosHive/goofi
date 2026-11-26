@@ -172,7 +172,12 @@ fn process_outputs(
 }
 
 /// Set `instance.params` to nested `SimpleNamespace`, so a node reads `self.params.<group>.<name>`.
+/// Built again only when a value moved since the last call.
 fn apply_params(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) -> PyResult<()> {
+    let node = instance.cast::<crate::node::Node>()?;
+    if node.borrow().applied.as_ref() == Some(params) {
+        return Ok(());
+    }
     let types = py.import("types")?;
     let simple_ns = types.getattr("SimpleNamespace")?;
     let outer = PyDict::new(py);
@@ -184,6 +189,7 @@ fn apply_params(py: Python<'_>, instance: &Bound<'_, PyAny>, params: &Groups) ->
         outer.set_item(group, simple_ns.call((), Some(&inner))?)?;
     }
     instance.setattr("params", simple_ns.call((), Some(&outer))?)?;
+    node.borrow_mut().applied = Some(params.clone());
     Ok(())
 }
 
