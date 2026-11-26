@@ -162,6 +162,11 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, level, "the doubled frame", |d| close(px(d, 5, 5), [0.5, 1.0, 2.0, 1.0]));
     g.set_param(level, "level", "gain", 1.0);
 
+    // Step: opacity scales the alpha and leaves the colour.
+    g.set_param(level, "level", "opacity", 0.5);
+    drawn(&g, level, "the half-clear frame", |d| close(px(d, 5, 5), [0.25, 0.5, 1.0, 0.5]));
+    g.set_param(level, "level", "opacity", 1.0);
+
     // Step: an unwired texture input is transparent black — present, never an error.
     g.call("link remove", j!({ "from": ep(hex(c), "out"), "to": ep(hex(level), "input") }));
     let frame = drawn(&g, level, "the unwired level", |d| close(px(d, 0, 0), [0.0, 0.0, 0.0, 0.0]));
