@@ -1,6 +1,6 @@
 /** What one viewer kind IS to the client: its ask of a frame, its settings, what it draws and
  * how. The vocabulary (kind ids, dtype, drawn dims) is the manager's, in `$lib/api/vocab`. */
-import type { Surface } from 'plotluck';
+import type { Surface } from '$lib/plotluck';
 import { VIEWER_KINDS, type ViewerKind } from '$lib/api/vocab';
 import type { Drawing } from './drawing';
 

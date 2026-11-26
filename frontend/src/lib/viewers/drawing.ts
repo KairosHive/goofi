@@ -1,7 +1,7 @@
 /** One drawing per viewer of an array kind, in the data worker: its plots on the host's surface, and
  * what the feed shows in the DOM for it (corner labels, placed text, a message, the hover). */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
-import type { ImagePlot, LinePlot, Plot, Surface } from 'plotluck';
+import type { ImagePlot, LinePlot, Plot, Surface } from '$lib/plotluck';
 import { axisNames, imageProbe, lineProbe, trajectoryProbe, type Drag, type Probe } from './hover';
 import { formatTick } from './format';
 import { makeLUTCache } from './colormaps';

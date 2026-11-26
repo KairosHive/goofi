@@ -1,7 +1,7 @@
 /** One value per channel on the scalp, or the connectivity between channels: a topomap, a ring of
  * chords, or the electrodes in 3-D, turned by a drag. A field plot under paths; names are DOM text. */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
-import { extent, paths, seriesColor, type FieldPlot, type PathBuilder, type PathPlot, type Rgba, type Surface } from 'plotluck';
+import { extent, paths, seriesColor, type FieldPlot, type PathBuilder, type PathPlot, type Rgba, type Surface } from '$lib/plotluck';
 import { project, type Camera } from './brain3d';
 import { makeLUTCache } from './colormaps';
 import { Base, type DrawBox, type PlacedText } from './drawing';

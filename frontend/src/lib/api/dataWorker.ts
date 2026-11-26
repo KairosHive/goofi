@@ -1,7 +1,7 @@
 /** Data-plane Web Worker: one WebSocket per (node, slot), each frame decoded on arrival and drawn
  * here; a frame goes to the main thread only where a reader there asked for it. */
 import { decodeData, decodeStamps, isArrayFrame, type DataFrame } from '$lib/codec/decode';
-import { createRenderer, type Renderer, type Surface } from 'plotluck';
+import { createRenderer, type Renderer, type Surface } from '$lib/plotluck';
 import type { DrawBox, Drawing, DrawnState } from '$lib/viewers/drawing';
 import type { ProbeBox } from '$lib/viewers/hover';
 import { isRenderable, makeDrawing, type ViewerKind } from '$lib/viewers/registry';

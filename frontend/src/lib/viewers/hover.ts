@@ -1,7 +1,7 @@
 /** What a viewer says about the point under the pointer: each kind defines its own probe, and
  * the feed draws the answer. Positions are in the body's layout px. */
 import type { ArrayData } from '$lib/codec/decode';
-import type { LineData, Range } from 'plotluck';
+import type { LineData, Range } from '$lib/plotluck';
 import { sampleRange, toUnit } from './depth';
 import { formatTick } from './format';
 

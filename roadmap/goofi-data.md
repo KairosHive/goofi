@@ -18,8 +18,10 @@ is not chosen yet.
 
 - **Shared components, no dependency on goofi.** goofi and goofi-data build on the same
   components, and neither program depends on the other. A shared component is a standalone unit
-  with a standardized interface. `panelty` and `plotluck` are independent repositories in this
-  spirit already. The recorder and the data transport are the next two; more will be identified.
+  with a standardized interface. `panelty` is an independent repository in this spirit already;
+  `plotluck` lives in goofi's frontend library (`frontend/src/lib/plotluck`) and imports nothing
+  from the rest of it. The recorder and the data transport are the next two; more will be
+  identified.
 - **The recorder is shared.** goofi-data incorporates the recorder crate to record data inside
   goofi-data directly.
 - **The data transport is shared.** goofi-data incorporates the data transport crate as its direct

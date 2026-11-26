@@ -136,7 +136,7 @@ The owner's-display trace is `roadmap/frontend-performance.md`. From reading `fr
 - Each viewer posts its own `drawn` message outside the flush batch, and autoscaled tick labels
   change every frame. Fold them into the batch; round the range with hysteresis.
 - plotluck redraws every plot of a pane and blits the whole atlas with `'copy'` when one plot
-  changes: dirty plots and dirty rects, upstream.
+  changes: dirty plots and dirty rects, in `frontend/src/lib/plotluck`.
 - The worker's paint loop lets go after 30 flushes with nothing to do and re-arms two animation
   frames late, because the first one after an idle gap fires at once. Verify on a display that
   several streams slower than 2 Hz paint once a tick: the unit tests cannot see a vsync.

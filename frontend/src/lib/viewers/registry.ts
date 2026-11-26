@@ -1,7 +1,7 @@
 /** The viewer kinds, one module each, and everything the app reads across them: which kind a
  * slot resolves to, its settings with their defaults, its asks, and whether a frame draws. */
 import type { ArrayData } from '$lib/codec/decode';
-import type { Surface } from 'plotluck';
+import type { Surface } from '$lib/plotluck';
 import { DEFAULT_KIND, VIEWER_KINDS, type SlotDtype, type ViewerKind } from '$lib/api/vocab';
 import type { Drawing } from './drawing';
 import { boxAsk, type SettingsMap, type ViewSpec, type ViewerModule } from './module';

@@ -5,7 +5,7 @@ import type { DrawBox, DrawnState } from '$lib/viewers/drawing';
 import type { Hover, ProbeBox } from '$lib/viewers/hover';
 import type { ViewerKind } from '$lib/viewers/registry';
 import type { SettingsMap } from '$lib/viewers/module';
-import type { View } from 'plotluck';
+import type { View } from '$lib/plotluck';
 
 let nextId = 1;
 

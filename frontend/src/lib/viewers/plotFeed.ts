@@ -1,6 +1,6 @@
 /** What an array frame becomes on its way to a plot: the reductions the viewers did on their own canvases. */
 import type { ArrayData, DataFrame } from '$lib/codec/decode';
-import { extent, type ImagePlot, type LineData } from 'plotluck';
+import { extent, type ImagePlot, type LineData } from '$lib/plotluck';
 import { decimateMinMax } from './decimate';
 import { sampleRange, toUnit } from './depth';
 import type { SettingsMap } from './module';

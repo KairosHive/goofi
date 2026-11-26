@@ -1,7 +1,7 @@
 /** How a viewer finds the surface it draws on and the card it sits in: two Svelte contexts. */
 import { createContext } from 'svelte';
 import { createSurface, type SurfaceHandle } from '$lib/api/drawings';
-import type { Rect, View } from 'plotluck';
+import type { Rect, View } from '$lib/plotluck';
 
 export interface PlotHost {
 	/** Null until the worker holds the canvas, and again when it could not draw on it. */
