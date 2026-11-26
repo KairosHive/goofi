@@ -64,9 +64,12 @@ export interface StreamNews {
 	stamps?: Record<string, unknown>;
 }
 
+/** What a drawing shows in the DOM, by the drawing's id. */
+export type Drawn = { id: number } & DrawnState;
+
 export type ToMain =
-	| { batch: StreamNews[] }
-	| { drawn: { id: number } & DrawnState }
+	/** One flush: each stream's news, and the state of every drawing the flush changed. */
+	| { batch: StreamNews[]; drawn?: Drawn[] }
 	| { hover: { id: number; hover: Hover | null } }
 	| { surface: { id: number; ok: boolean } }
 	| { stats: { paints: number; streams: [string, string, number, number][] } };

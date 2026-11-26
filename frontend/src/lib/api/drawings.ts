@@ -37,8 +37,8 @@ const hoverCbs = new Map<number, (h: Hover | null) => void>();
 listen((m) => {
 	if ('surface' in m) {
 		if (!m.surface.ok) lostCbs.get(m.surface.id)?.();
-	} else if ('drawn' in m) {
-		stateCbs.get(m.drawn.id)?.(m.drawn);
+	} else if ('batch' in m) {
+		for (const d of m.drawn ?? []) stateCbs.get(d.id)?.(d);
 	} else if ('hover' in m) {
 		hoverCbs.get(m.hover.id)?.(m.hover.hover);
 	}

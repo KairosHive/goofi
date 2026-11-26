@@ -45,9 +45,6 @@ status drain 25, MIDI 5, machines 2). The other rows were not measured again.
   1 780 Hz, the same for 1 value and 320; in 65 busy stack samples `abi::call` is 43%, mostly
   meta encode and decode and malloc/free. Pack the meta once, make the stamps typed fields with
   `source` an `Arc` shared across outputs, and pass frames in-process by handle, not by codec.
-- An autotrigger node whose `max_frequency` evaluates to 0 has `next_wake` in the past and runs
-  back to back (`goofi-runtime/src/host.rs`). Found by reading; prove it with a fixture, then put
-  a floor on the period or refuse the configuration.
 - The settle still walks every node for its view, every link for its edges and compiles both
   plans whole; the status beat, the live fill and the halves recompute on their clocks:
   `roadmap/reactivity.md` holds the measurements and the remaining work.
@@ -114,10 +111,8 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
 
 - The MIDI probe asks its one sequencer client for the ports every 2 s, and "Midi Through" is
   always listed, so the no-device back-off never applies. Follow `System:Announce` on ALSA.
-- A variable entry preview bumps the store `version`, so each drag frame redelivers every
-  binding to every engine; `set`, `apply_change` and `set_expression` bump it before they
-  validate. Bump on a configuration change only, after validation, with a separate counter for
-  history.
+- The store's other writers (`add`, `remove`, `rename`, the locks, the groups) still move its
+  configuration version before they validate, so a refused one redelivers every binding once.
 - A timeline edit re-serializes the whole `machines` and `timeline` roots, a drag preview sends a
   track's whole note or key array, and `Timeline::new` recompiles every curve track. Project each
   track and machine as its own record; cache the functionals by source text.
@@ -133,8 +128,6 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
 
 The owner's-display trace is `roadmap/frontend-performance.md`. From reading `frontend/src`:
 
-- Each viewer posts its own `drawn` message outside the flush batch, and autoscaled tick labels
-  change every frame. Fold them into the batch; round the range with hysteresis.
 - plotluck draws only the rects that changed (2026-11-26). Measured on Chrome's software
   renderer alone, where one changed plot of thirty on a 2560 by 1440 pane went from 3 to 5 frames
   a second to 60: headless Chrome had no hardware GPU. Measure on a display.

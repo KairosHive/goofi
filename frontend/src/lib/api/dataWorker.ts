@@ -7,7 +7,7 @@ import type { ProbeBox } from '$lib/viewers/hover';
 import { isRenderable, makeDrawing, type ViewerKind } from '$lib/viewers/registry';
 import type { SettingsMap } from '$lib/viewers/module';
 import { summaryOf } from '$lib/viewers/viewMeta';
-import { headOf, streamKey, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
+import { headOf, streamKey, type Drawn, type StreamNews, type ToMain, type ToWorker } from './dataProtocol';
 import { wsUrl } from './wsUrl';
 
 interface SlotState {
@@ -111,6 +111,8 @@ const schedule =
 		? requestAnimationFrame
 		: (fn: () => void): number => setTimeout(fn, 16) as unknown as number;
 const stale = new Set<DrawingState>();
+/** The states a flush's drawings reached, sent with its batch; null outside a flush. */
+let shows: Drawn[] | null = null;
 let painting = false;
 let paints = 0;
 /** How many flushes in a row may find nothing before the loop lets go. */
@@ -144,6 +146,7 @@ function invalidate(d: DrawingState): void {
 function flush(): boolean {
 	let painted = false;
 	let worked = stale.size > 0;
+	const drawn: Drawn[] = (shows = []);
 	for (const st of slots.values()) {
 		if (!st.pending) continue;
 		worked = true;
@@ -168,8 +171,10 @@ function flush(): boolean {
 		batch.push({ node: st.node, slot: st.slot, ...st.news });
 		st.news = null;
 	}
+	shows = null;
 	// Copied, never transferred: the slot keeps the frame to replay to a drawing that attaches.
-	if (batch.length > 0) send({ batch });
+	if (drawn.length > 0) send({ batch, drawn });
+	else if (batch.length > 0) send({ batch });
 	if (painted) paints++;
 	return worked || batch.length > 0;
 }
@@ -219,7 +224,9 @@ function show(d: DrawingState, state: DrawnState): void {
 	const sig = JSON.stringify(state);
 	if (sig === d.shown) return;
 	d.shown = sig;
-	send({ drawn: { id: d.id, ...state } });
+	const drawn = { id: d.id, ...state };
+	if (shows) shows.push(drawn);
+	else send({ batch: [], drawn: [drawn] });
 }
 
 /** Ask the drawing's probe about the pointer; the readout follows the pointer and the frame alike. */
