@@ -67,6 +67,8 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await learn.click();
 		await expect(learn).toHaveAttribute('aria-pressed', 'true');
 		await expect(learn.locator('.spinner')).toBeVisible();
+		// Listening adds no fill of its own; the pointer leaves first, since a hover has one.
+		await page.mouse.move(0, 0);
 		await expect(learn).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
 		await expect.poll(() => openGroups(page), { timeout: WAIT }).toContain('midikeys_test_keys');
 		await baseline(page, 'midikeys_test_keys.notes');
