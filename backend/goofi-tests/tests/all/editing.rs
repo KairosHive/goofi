@@ -639,6 +639,22 @@ fn a_text_on_a_number_param_is_refused_and_nothing_moves() {
     assert_eq!(entry(&g)["mode"], "constant", "a literal switches a driven param to constant");
 }
 
+/// The history holds a bounded past: one step more than it holds costs the oldest.
+#[test]
+fn the_history_keeps_its_newest_steps_and_lets_the_oldest_go() {
+    let g = Goofi::new();
+    let osc = g.add("LFO");
+    let buf = g.add("Buffer");
+    let link = j!({ "from": ep(hex(osc), "out"), "to": ep(hex(buf), "input") });
+    let past = goofi_graph::history::PAST;
+    for step in 0..past {
+        g.call(if step % 2 == 0 { "link add" } else { "link remove" }, link.clone());
+    }
+    let undone = (0..past + 2).take_while(|_| g.call("undo", j!({}))["changed"] == true).count();
+    assert_eq!(undone, past, "every held step is taken back, and the two births before them are gone");
+    assert!(g.nodes().contains(&hex(osc)) && g.nodes().contains(&hex(buf)), "the steps let go stand");
+}
+
 /// One history for every client: an undo takes back the last write whoever made it, the stack
 /// walks to empty and forward again from either side, and a refused write leaves the document and
 /// the history exactly as they were.

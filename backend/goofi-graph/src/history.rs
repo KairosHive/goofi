@@ -121,6 +121,9 @@ struct Preview {
     cut: Cut,
 }
 
+/// How many steps back the history holds; the oldest goes when one more lands.
+pub const PAST: usize = 200;
+
 #[derive(Default)]
 pub struct History {
     past: Vec<Entry>,
@@ -165,6 +168,9 @@ impl History {
             }
         }
         self.past.push(Entry { step, before });
+        if self.past.len() > PAST {
+            self.past.remove(0);
+        }
     }
 
     /// A drag's step landed, `before` to `after`: the first step keeps the way back, which is the

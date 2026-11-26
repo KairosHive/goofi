@@ -113,8 +113,6 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
 
 - The MIDI probe asks its one sequencer client for the ports every 2 s, and "Midi Through" is
   always listed, so the no-device back-off never applies. Follow `System:Announce` on ALSA.
-- Every variable value move wakes `goofi-machines`, a machine or not (`machines.rs` watch).
-  Send only names a machine reads.
 - A variable entry preview bumps the store `version`, so each drag frame redelivers every
   binding to every engine; `set`, `apply_change` and `set_expression` bump it before they
   validate. Bump on a configuration change only, after validation, with a separate counter for
@@ -122,8 +120,8 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
 - A timeline edit re-serializes the whole `machines` and `timeline` roots, a drag preview sends a
   track's whole note or key array, and `Timeline::new` recompiles every curve track. Project each
   track and machine as its own record; cache the functionals by source text.
-- Undo history has no bound, and each entry clones the variable store with every value it held.
-  Cap the past; share the store as a persistent map.
+- Each undo entry clones the variable store with every value it held (the past is capped at
+  200 steps). Share the store as a persistent map.
 - Verify whether autosave loops on its own `variables/*.npy` writes when a wide driven variable
   moves on a dirty patch.
 

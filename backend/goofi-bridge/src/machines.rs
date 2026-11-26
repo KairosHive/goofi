@@ -53,13 +53,16 @@ pub struct Driver {
     door: Arc<Door>,
     /// The note tracks as the audio engine's MIDI ports.
     ports: goofi_audio::TrackPorts,
+    /// The variables the configured model reads, as the thread last took it: a write to any
+    /// other is no message.
+    watched: Arc<goofi_supervisor::sync::Mutex<HashSet<String>>>,
 }
 
 impl Driver {
     pub fn new(hub: &Hub, g: &mut Graph) -> (Driver, Receiver<Msg>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let ports = crate::audio_engine(g).track_ports();
-        (Driver { tx, door: hub.door(&machines_door(g.instance())), ports }, rx)
+        (Driver { tx, door: hub.door(&machines_door(g.instance())), ports, watched: Arc::default() }, rx)
     }
 
     /// Hand the thread the settled model: the machines, with every node read resolved against
@@ -79,9 +82,12 @@ impl Driver {
     pub fn watch(&self) -> Arc<dyn Fn(&str) + Send + Sync> {
         let tx = self.tx.clone();
         let door = self.door.clone();
+        let watched = self.watched.clone();
         Arc::new(move |name: &str| {
-            let _ = tx.send(Msg::Changed(name.to_string()));
-            door.ring(MACHINES_INBOX_ID);
+            if watched.lock().contains(name) {
+                let _ = tx.send(Msg::Changed(name.to_string()));
+                door.ring(MACHINES_INBOX_ID);
+            }
         })
     }
 }
@@ -162,7 +168,7 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
             let mut woken = door.wait_until(Instant::now() + wait).has(MACHINES_FRAME_ID);
             loop {
                 match rx.try_recv() {
-                    Ok(msg) => woken |= take(&mut machines, &mut reads, &mut streams, &mut ended, &state.hub, msg),
+                    Ok(msg) => woken |= take(&mut machines, &mut reads, &mut streams, &mut ended, &state, msg),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
                 }
@@ -235,10 +241,14 @@ pub fn spawn(state: AppState, rx: Receiver<Msg>) {
 }
 
 /// One message into the machines; whether it is a reason to settle now.
-fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, ended: &mut Vec<(String, Sender<Take>)>, hub: &Hub, msg: Msg) -> bool {
+fn take(machines: &mut Machines, reads: &mut NodeReads, streams: &mut Streams, ended: &mut Vec<(String, Sender<Take>)>, state: &AppState, msg: Msg) -> bool {
+    let hub = &state.hub;
     match msg {
         Msg::Configure(config, timed, evaluator, node_reads) => {
             machines.configure(config, timed, evaluator);
+            // Before the settle this message asks for: a write that came too early for the new
+            // set is read there.
+            *state.machines.watched.lock() = machines.keys().iter().cloned().collect();
             streams.follow(hub, &node_reads);
             *reads = node_reads;
         }
