@@ -436,6 +436,7 @@
 					>
 						<div
 							class="widget"
+							data-kind={c.kind}
 							class:held={held.value || gv.expression !== undefined}
 							class:broken={gv.error !== undefined}
 							title={gv.expression !== undefined ? gv.error ?? `Computed by ${gv.expression}` : held.value ? 'Value-locked' : undefined}
@@ -751,6 +752,12 @@
 	[data-edit='true'] .widget,
 	.born .widget {
 		pointer-events: none;
+	}
+	/* A slider's bounds sit in the two corners the learn and delete buttons take. */
+	@media not ((hover: none) and (pointer: coarse)) {
+		[data-edit='true'] .widget[data-kind='slider'] {
+			padding-top: calc(var(--hit) - var(--space-2));
+		}
 	}
 	.widget.held {
 		pointer-events: none;
