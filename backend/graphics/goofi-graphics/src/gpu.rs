@@ -36,15 +36,10 @@ impl Want {
         }
     }
 
-    /// How many frames this reader keeps in flight. A screen must never miss one, so a copy is
-    /// started while the last is still on the device; a viewer is PULLED and can never use more
-    /// than the one it asked for.
+    /// How many frames this reader keeps in flight: two, so a copy is started while the last is
+    /// still on the device or in its reader's hands, and no due frame waits for a slot.
     pub const fn depth(self) -> usize {
-        match self {
-            Want::Screen => 2,
-            Want::Tap | Want::TapU8 => 1,
-            Want::Record => 2,
-        }
+        2
     }
 
     /// What one texel takes in that format.

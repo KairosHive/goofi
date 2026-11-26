@@ -82,8 +82,7 @@ status drain 25, MIDI 5, machines 2). The other rows were not measured again.
 
 ## Graphics
 
-- The `Tap` ring holds one slot where `Screen` and `Record` hold two: give it two. Every tap
-  lands in its own mapped buffer; one staging buffer per tick would be one map for all.
+- Every tap lands in its own mapped buffer; one staging buffer per tick would be one map for all.
 - A tap is read back at `system.viewer_fps`, not at the display rate a page declares below it:
   a 24 Hz display under the 30 fps cap downloads six frames a second it never paints.
 - Only audio asks for a real-time grant and a seat on the performance cores: the render clock

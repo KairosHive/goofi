@@ -33,7 +33,7 @@ pub struct Cells {
     /// Whether anyone drinks from this output right now: the half writes it each tick.
     pub readers: AtomicBool,
     /// The frame the render thread read back for the viewers, until the half takes it. Latest
-    /// wins: the ring's one slot in flight paces the readback.
+    /// wins: a frame the half did not take in time gives its slot back.
     pub tap: Mailbox<Readback>,
     /// The box the readers want the readback fitted into, LIVE: a viewer never re-plans.
     pub tap_box: AtomicU64,
