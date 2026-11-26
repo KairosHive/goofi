@@ -87,7 +87,8 @@ status drain 25, MIDI 5, machines 2). The other rows were not measured again.
   to the supervisor and give the render clock one below audio's.
 - `library refresh` validates every shader with naga on the op thread: 170 to 370 ms per refresh
   with one 1 600-line shader (`compile_stall` probe). Validate through `ready::prepare` and
-  report the refusal at the settle after.
+  report the refusal at the settle after. Open: the graphics situation asserts that the refresh
+  itself answers the greyed type with naga's line, which a later refusal cannot do.
 - Submission is not completion: `tick_max_us` excludes `drain_inbox`, nothing budgets GPU
   completion, and `Chain::configure` can fall back to `Fifo` presentation. Verify the mode and
   adapter on the user's display; time completion apart from submission.
@@ -99,8 +100,8 @@ status drain 25, MIDI 5, machines 2). The other rows were not measured again.
 - Every ARRAY arrival (`Upload::of`) and every host `Pixels` frame (`Upload::pixels`) is
   converted to f16 on the CPU whether or not its stage is drawn. Keep the `Arc`, convert at draw,
   or upload f32 and RGBA8 and convert in the existing blit.
-- Every library shader's pipeline is built at boot, one thread each, with no `PipelineCache`:
-  validate with naga at the scan, build at the first `insert` of the type.
+- A shader's pipeline is built at the first node of its type, with no `PipelineCache`: a patch
+  that loads many types at once still compiles each from source.
 - An occluded window's stage is still drawn and submitted every tick; count it as no reader.
 
 ## Manager and bridge

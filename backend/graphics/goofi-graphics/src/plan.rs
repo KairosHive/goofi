@@ -190,6 +190,12 @@ pub fn compile(
         if let Some(why) = inst.class.refusal() {
             faults.push((*uid, why));
         }
+        let pass = match &inst.class.kind {
+            // An insert asks for the pipeline, so a live node's class has one; a stage keeps its
+            // place in the order either way.
+            Kind::Shader(shader) => Pass::Shader(shader.built().cloned().unwrap_or_else(|| Built::done(Err("no pipeline was asked for".into())))),
+            Kind::Node { .. } => Pass::Node,
+        };
         let manifest = inst.class.manifest;
         let arrays = crate::shader::array_inputs(manifest).count();
         let inputs = manifest
@@ -205,10 +211,7 @@ pub fn compile(
             .collect();
         stages.push(Stage {
             uid: *uid,
-            pass: match &inst.class.kind {
-                Kind::Shader(built) => Pass::Shader(built.clone()),
-                Kind::Node { .. } => Pass::Node,
-            },
+            pass,
             inputs,
             state: inst.class.state.len(),
             arrays,

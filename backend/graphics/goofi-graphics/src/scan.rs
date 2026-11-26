@@ -16,9 +16,34 @@ pub type Built = goofi_supervisor::ready::Ready<Arc<wgpu::RenderPipeline>>;
 
 /// What a class draws its stage with.
 pub enum Kind {
-    Shader(Built),
+    Shader(Shader),
     /// A Python node the tick calls: its source, and the interpreter of the child that runs it.
     Node { python: String, source: String },
+}
+
+/// A shader naga passed: its pipeline is asked of the device at the first node of the type.
+pub struct Shader {
+    job: Job,
+    built: std::sync::OnceLock<Built>,
+}
+
+impl Shader {
+    /// The pipeline's cell, once a node asked for it.
+    pub fn built(&self) -> Option<&Built> {
+        self.built.get()
+    }
+
+    /// Ask the device for the pipeline, once: a thread of its own compiles, and the settle it
+    /// asks for is for a refusal, which only a plan can turn into the node's error.
+    pub(crate) fn start(&self, gpu: &Arc<Gpu>, shared: &Arc<goofi_runtime::Shared>) -> Option<Built> {
+        if self.built.get().is_some() {
+            return None;
+        }
+        let (gpu, job, shared) = (gpu.clone(), self.job.clone(), shared.clone());
+        let built = goofi_supervisor::ready::prepare("goofi-graphics-compile", move || compile(&gpu, &job));
+        built.on_ready(move || shared.ask_settle());
+        self.built.set(built.clone()).ok().map(|()| built)
+    }
 }
 
 /// One graphics source as the engine holds it.
@@ -41,7 +66,7 @@ impl Class {
     /// Why a stage of this class cannot draw: a shader the device refused.
     pub fn refusal(&self) -> Option<String> {
         match &self.kind {
-            Kind::Shader(built) => built.error().map(|why| format!("shader: {why}")),
+            Kind::Shader(shader) => shader.built()?.error().map(|why| format!("shader: {why}")),
             Kind::Node { .. } => None,
         }
     }
@@ -92,10 +117,8 @@ impl GraphicsEngine {
         let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let intro = shader::header(&source)?;
         let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Texture))?;
-        let pipeline = shader(&self.gpu, &self.shared, manifest, &source, &intro.state)?;
-        self.compiles.retain(|build| !build.is_ready());
-        self.compiles.push(pipeline.clone());
-        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(pipeline), isolation: &goofi_node::SHADER }))
+        let shader = shader(manifest, &source, &intro.state)?;
+        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(shader), isolation: &goofi_node::SHADER }))
     }
 
     /// A Python file marked `# goofi: graphics`: a node the tick calls, run in a child of the
@@ -122,6 +145,7 @@ impl GraphicsEngine {
 }
 
 /// What one pipeline is built from: the whole text naga passed, and the shape of its layout.
+#[derive(Clone)]
 struct Job {
     source: String,
     params: bool,
@@ -129,20 +153,13 @@ struct Job {
     state: usize,
 }
 
-/// `source` plus the prelude, once naga passes it, built into a pipeline on a thread of its own,
-/// as every compile is: the tick picks the cell up by itself once it is filled, and the settle it
-/// asks for is for a refusal, which only a plan can turn into the node's error.
-pub(crate) fn shader(gpu: &Arc<Gpu>, shared: &Arc<goofi_runtime::Shared>, manifest: &'static NodeManifest, source: &str, state: &[String]) -> Result<Built, String> {
+/// `source` plus the prelude, once naga passes it: what a pipeline is built from when a node asks.
+pub(crate) fn shader(manifest: &'static NodeManifest, source: &str, state: &[String]) -> Result<Shader, String> {
     let full = format!("{source}{}", shader::prelude(manifest, state));
     shader::validate(&full)?;
     let params = !manifest.params.is_empty() || shader::array_inputs(manifest).next().is_some();
     let inputs = manifest.inputs.len() + shader::array_inputs(manifest).count();
-    let job = Job { source: full, params, inputs, state: state.len() };
-    let gpu = gpu.clone();
-    let built = goofi_supervisor::ready::prepare("goofi-graphics-compile", move || compile(&gpu, &job));
-    let shared = shared.clone();
-    built.on_ready(move || shared.ask_settle());
-    Ok(built)
+    Ok(Shader { job: Job { source: full, params, inputs, state: state.len() }, built: std::sync::OnceLock::new() })
 }
 
 /// The device's compile, on the preparing thread. wgpu keeps an error scope per thread, so the

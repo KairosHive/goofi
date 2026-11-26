@@ -1011,7 +1011,14 @@ fn shaders_render_on_the_gpu() {
 fn the_engine_draws_on_its_own_clock() {
     let g = Goofi::timed();
     let mut ev = g.events();
+    // Step: a shader type costs the device a pipeline at its first node, and none before it.
+    let pipelines = |g: &Goofi| g.call("session status", j!({}))["graphics"]["pipelines"].clone();
+    assert_eq!(pipelines(&g), j!(0), "a library nobody draws with asks the device for nothing");
     let c = g.add("graphics:Constant");
+    assert_eq!(pipelines(&g), j!(1), "the first node of a type asks for its pipeline");
+    let twin = g.add("graphics:Constant");
+    assert_eq!(pipelines(&g), j!(1), "and a second node shares it");
+    g.call("node remove", j!({ "node": hex(twin) }));
     g.ready(c);
     g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
 

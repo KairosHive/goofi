@@ -56,6 +56,8 @@ pub struct GraphicsStatus {
     /// those the GPU presents into directly.
     pub windows: u64,
     pub surfaces: u64,
+    /// How many shader types have a pipeline asked of the device: those a node was made of.
+    pub pipelines: u64,
     pub frames: u64,
     pub stages: u64,
     pub tick_max_us: u64,
@@ -332,6 +334,7 @@ impl GraphicsEngine {
             fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
             surfaces: self.windows.values().filter(|o| o.surface.is_some()).count() as u64,
+            pipelines: self.classes.values().filter(|c| matches!(&c.kind, scan::Kind::Shader(s) if s.built().is_some())).count() as u64,
             frames: self.stats.frames.load(Ordering::Relaxed),
             stages: self.stats.stages.load(Ordering::Relaxed),
             tick_max_us: self.stats.tick_max_us.load(Ordering::Relaxed),
@@ -477,6 +480,13 @@ impl Engine for GraphicsEngine {
         let Some(class) = self.classes.get(type_name).cloned() else {
             return Some(format!("no graphics node type `{type_name}`"));
         };
+        // The first node of a type asks the device for its pipeline; a type nobody uses costs none.
+        if let scan::Kind::Shader(shader) = &class.kind {
+            if let Some(build) = shader.start(&self.gpu, &self.shared) {
+                self.compiles.retain(|build| !build.is_ready());
+                self.compiles.push(build);
+            }
+        }
         let manifest = class.manifest;
         let base = goofi_transport::service_base(&self.instance, uid, generation);
         let decls = decls_of(&class);
