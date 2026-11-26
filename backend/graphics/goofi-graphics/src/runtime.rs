@@ -38,6 +38,8 @@ pub struct Stats {
     pub frames: AtomicU64,
     pub stages: AtomicU64,
     pub tick_max_us: AtomicU64,
+    /// Whether the clock waits at its door, with nothing to draw.
+    pub parked: AtomicBool,
 }
 
 /// What each stage the render thread refused wears, for the engine that settles it: the WHOLE
@@ -407,8 +409,8 @@ impl Runtime {
     }
 
     /// One tick: upload what arrived, write the uniforms, draw every demanded stage, and read
-    /// back the ones with a reader.
-    pub fn tick(&mut self) {
+    /// back the ones with a reader. Answers whether a stage was demanded.
+    pub fn tick(&mut self) -> bool {
         self.drain_inbox();
         let began = Instant::now();
         let t = self.time.now();
@@ -423,7 +425,7 @@ impl Runtime {
         }
         if !want.contains(&true) {
             self.stats.frames.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
         // BEFORE the take, because a map callback runs on a poll and nowhere else: polling only
         // after the submit below left every copy one whole tick older than it had to be.
@@ -610,6 +612,7 @@ impl Runtime {
         }
         self.stats.frames.fetch_add(1, Ordering::Relaxed);
         self.stats.tick_max_us.fetch_max(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+        true
     }
 
     /// Raise or clear what an armed stage wears, and ask for the settle that publishes it.

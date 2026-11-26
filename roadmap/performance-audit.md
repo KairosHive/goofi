@@ -100,8 +100,6 @@ not measured.
 - The device opens at boot on the `HighPerformance` adapter (`gpu.rs`), with no graphics node,
   `--headless` included: on a hybrid laptop the discrete GPU stays powered. Open it at the first
   graphics node or shader compile; measure the idle power before and after.
-- The render clock wakes at `graphics.fps` with nothing demanded (60 wakeups/s on an empty
-  patch). Block on the inbox while `demanded` is empty; the half and the recorder's arm ring it.
 - Every ARRAY arrival (`Upload::of`) and every host `Pixels` frame (`Upload::pixels`) is
   converted to f16 on the CPU whether or not its stage is drawn. Keep the `Arc`, convert at draw,
   or upload f32 and RGBA8 and convert in the existing blit.

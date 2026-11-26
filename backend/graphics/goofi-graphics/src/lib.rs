@@ -48,6 +48,8 @@ pub struct GraphicsStatus {
     /// How many nodes the tick calls hold their pictures in device memory their child maps.
     pub shared: u64,
     pub clock: &'static str,
+    /// Whether the clock waits for a reader, a window or a recording: it turns while one draws.
+    pub parked: bool,
     /// The rate the clock paces, as `graphics.fps` last settled.
     pub fps: u32,
     /// How many `Window` nodes have a window open on the machine's screen, and how many of
@@ -113,6 +115,9 @@ pub struct GraphicsEngine {
     /// that thread's alone; nothing else holds it.
     ticker: Option<Ticker>,
     inbox: std::sync::mpsc::Sender<runtime::Cmd>,
+    /// The clock's door: a command, a reader and a recording ring it, and so does the stop.
+    wake: Arc<goofi_supervisor::timing::Event>,
+    recording: Arc<AtomicBool>,
     stats: Arc<Stats>,
     faults: goofi_runtime::Faults,
     ui: Option<goofi_window::Ui>,
@@ -215,21 +220,30 @@ impl GraphicsEngine {
         let fps = Arc::new(AtomicU32::new(fps_of(None)));
         let viewer_fps = Arc::new(AtomicU32::new(viewer_fps_of(None)));
         let (inbox, asked) = std::sync::mpsc::channel();
-        let links = runtime::Links { stats: stats.clone(), troubles: troubles.clone(), shared: shared.clone(), recording, fps: fps.clone(), viewer_fps: viewer_fps.clone() };
+        let wake = Arc::new(goofi_supervisor::timing::Event::new());
+        let links = runtime::Links { stats: stats.clone(), troubles: troubles.clone(), shared: shared.clone(), recording: recording.clone(), fps: fps.clone(), viewer_fps: viewer_fps.clone() };
         let mut runtime = Runtime::new(gpu.clone(), time.clone(), links, asked);
         let ticker = match clock {
             Clock::External => Ticker::Hand(Box::new(runtime)),
             Clock::Internal => {
                 let stop = Arc::new(AtomicBool::new(false));
-                let (halt, pace) = (stop.clone(), fps.clone());
+                let (halt, pace, door, stats) = (stop.clone(), fps.clone(), wake.clone(), stats.clone());
                 let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
                     .spawn(move || {
                         let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
                         while !halt.load(Ordering::Relaxed) {
                             // A tick that panics ends no clock: the cause is logged and the next
                             // tick runs on what the runtime still holds.
-                            if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())) {
+                            let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())).unwrap_or_else(|p| {
                                 goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                                true
+                            });
+                            // Nothing asked for a stage: the clock parks until its door rings.
+                            if !drew && !halt.load(Ordering::Relaxed) {
+                                stats.parked.store(true, Ordering::Relaxed);
+                                door.wait();
+                                stats.parked.store(false, Ordering::Relaxed);
+                                continue;
                             }
                             grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
                             // A tick that overran does not try to catch up: the grid restarts from now.
@@ -257,6 +271,8 @@ impl GraphicsEngine {
             compiles: Vec::new(),
             live: HashMap::new(),
             inbox,
+            wake,
+            recording,
             stats,
             ticker: Some(ticker),
             faults: goofi_runtime::Faults::default(),
@@ -287,6 +303,7 @@ impl GraphicsEngine {
     /// on one would be an op that waits on a render.
     fn ask(&self, cmd: runtime::Cmd) {
         let _ = self.inbox.send(cmd);
+        self.wake.ring(0);
     }
 
     /// The external clock: run `frames` ticks on the caller's thread. The harness's door; a no-op
@@ -311,6 +328,7 @@ impl GraphicsEngine {
             timed: self.gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
             shared: self.live.values().filter(|inst| inst.cells.node.as_ref().is_some_and(|meeting| meeting.linked.load(Ordering::Relaxed))).count() as u64,
             clock: self.clock.name(),
+            parked: self.stats.parked.load(Ordering::Relaxed),
             fps: self.fps.load(Ordering::Relaxed),
             windows: self.windows.len() as u64,
             surfaces: self.windows.values().filter(|o| o.surface.is_some()).count() as u64,
@@ -476,6 +494,8 @@ impl Engine for GraphicsEngine {
             produced: AtomicU64::new(0),
             // The half's own door: the render thread rings it once a readback is in a cell.
             bell: goofi_transport::Doorbell::on(self.hub.door(&goofi_transport::door_service(&base))),
+            wake: self.wake.clone(),
+            recording: self.recording.clone(),
         });
         let spawn = goofi_runtime::Spawn {
             engine: "graphics",
@@ -601,6 +621,7 @@ impl Engine for GraphicsEngine {
         match self.ticker.take() {
             Some(Ticker::Clock { stop, thread }) => {
                 stop.store(true, Ordering::Relaxed);
+                self.wake.ring(0);
                 let _ = thread.join();
             }
             Some(Ticker::Hand(mut runtime)) => runtime.clear(),

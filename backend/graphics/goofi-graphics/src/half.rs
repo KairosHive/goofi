@@ -49,6 +49,10 @@ pub struct Cells {
     pub produced: AtomicU64,
     /// This half's door, rung by the render thread once a readback or a call is in a cell above.
     pub bell: goofi_transport::Doorbell,
+    /// The render clock's door and the recorder's flag: the half rings when a reader or a
+    /// recording arrives, because a clock with nothing to draw is parked.
+    pub wake: Arc<goofi_supervisor::timing::Event>,
+    pub recording: Arc<AtomicBool>,
 }
 
 /// One run's inputs: per input another stage feeds, its frame, or none where it is unwired.
@@ -122,6 +126,8 @@ pub struct GraphicsHalf {
     spare: Vec<Vec<u8>>,
     /// The node the tick calls, built on this thread, and the declared input behind each inbox.
     node: Option<(HostExecutor, Vec<usize>)>,
+    /// Whether a reader or a recording asked for this stage at the last run.
+    asked: bool,
 }
 
 /// The upload size as one atomic word, and back; 0 is no upload yet.
@@ -138,7 +144,7 @@ impl GraphicsHalf {
         if let Some(meeting) = &cells.node {
             meeting.ready.store(true, Ordering::Release);
         }
-        GraphicsHalf { cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new(), node }
+        GraphicsHalf { cells, size, last: ((u32::MAX, u32::MAX), Vec::new()), refused: None, spare: Vec::new(), node, asked: false }
     }
 
     /// Whether the render thread left something for this thread to take.
@@ -310,6 +316,11 @@ impl Executor for GraphicsHalf {
         // What the render thread reads to decide whether this node runs at all.
         let readers = cx.readers.first().copied().unwrap_or(false);
         self.cells.readers.store(readers, Ordering::Relaxed);
+        let asked = readers || self.cells.recording.load(Ordering::Relaxed);
+        if asked && !std::mem::replace(&mut self.asked, asked) {
+            self.cells.wake.ring(0);
+        }
+        self.asked = asked;
         self.meet(cx, &mut ticked);
         self.record(publish);
         self.tap(publish);

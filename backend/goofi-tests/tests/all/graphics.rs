@@ -1015,13 +1015,12 @@ fn the_engine_draws_on_its_own_clock() {
     g.ready(c);
     g.set_param(c, "constant", "colour", j!([0.75, 1.0, 1.0, 1.0]));
 
-    // Step: with no reader the clock turns and nothing is drawn — the demand rule holds here too.
+    // Step: with no reader nothing is drawn and the clock parks at its door: it does not turn.
     let idle = |g: &Goofi| g.call("session status", j!({}))["graphics"].clone();
-    let start = g.until("the clock turns", |g| {
-        idle(g)["frames"].as_u64().filter(|f| *f > 3)
-    });
+    g.until("the clock parks", |g| (idle(g)["parked"] == j!(true)).then_some(()));
+    let start = idle(&g)["frames"].as_u64().expect("the tick count");
     assert_eq!(idle(&g)["clock"], "internal");
-    assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage, whatever the clock does");
+    assert_eq!(idle(&g)["stages"], j!(0), "no reader, no stage");
     // Where a signal node says its rate, this one says how much of the frame period its pass
     // takes. An adapter that keeps no timestamps times nothing, and the node says nothing.
     let timed = idle(&g)["timed"] == j!(true);
@@ -1040,8 +1039,10 @@ fn the_engine_draws_on_its_own_clock() {
     assert!(ran["frames"].as_u64().is_some_and(|f| f > start), "{ran}");
     assert!(ran["stages"].as_u64().is_some_and(|s| s > 0), "{ran}");
     share("a drawn node's pass takes some of the frame", &|s| s > 0.0);
+    assert_eq!(ran["parked"], j!(false), "a clock with a reader turns");
     drop(probe);
     share("and none again once the viewer left", &|s| s == 0.0);
+    g.until("and the clock parks again", |g| (idle(g)["parked"] == j!(true)).then_some(()));
 }
 
 /// A viewer asks for the box it can draw, and the ENGINE renders that — a 4K frame is never read
