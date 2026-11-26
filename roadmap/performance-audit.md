@@ -124,8 +124,11 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
   track and machine as its own record; cache the functionals by source text.
 - Each undo entry clones the variable store with every value it held (the past is capped at
   200 steps). Share the store as a persistent map.
-- Verify whether autosave loops on its own `variables/*.npy` writes when a wide driven variable
-  moves on a dirty patch.
+- On a dirty patch, autosave archives and writes the manifest every 500 ms while any computed
+  variable moves: 39 writes in 20 s with one narrow `np.sin(t)` variable, and the same count of
+  `.npy` writes with a wide one (measured 2026-11-26, private headless instance). Its own file
+  writes are not the cause: the narrow case writes no `.npy`. Decide what a moving computed value
+  owes the autosave, then pace or skip it.
 
 ## Frontend
 
