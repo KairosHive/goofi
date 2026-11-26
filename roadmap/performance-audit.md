@@ -67,8 +67,6 @@ not measured.
   half drains it before it checks `readers` (`control.rs`). A gate the half sets loses the blocks
   rendered between a reader's arrival and the half's next run; the audio thread must read the
   slot's reader count itself. A MidiIn at 4 voices holds about 4.8 MB of rings (estimate).
-- A bound functional runs at 17 points every tick even when no block moved; skip when the first
-  block, the epoch and the code are unchanged.
 - Every control-rate param gets a 64-sample region and a glide check each block (a VST3 plugin
   declares up to 4 096): a source that writes the scalar strip alone, and a per-slot "moved"
   generation.

@@ -173,6 +173,8 @@ pub struct AudioHalf {
     params: Arc<[AtomicU64]>,
     /// Per param, the functional a bare binding holds, and the ramp it is rendered by.
     functionals: Vec<Option<Arc<[u8]>>>,
+    /// Per param, what its ramp's points were read from.
+    ramped: Vec<Option<Ramped>>,
     ramps: Arc<[crate::runtime::Ramps]>,
     evaluator: goofi_runtime::SharedEvaluator,
     playback: crate::runtime::Playback,
@@ -229,6 +231,7 @@ impl AudioHalf {
             uid: birth.uid,
             manifest: birth.manifest,
             functionals: vec![None; birth.manifest.params.len()],
+            ramped: vec![None; birth.manifest.params.len()],
             ramps: birth.ramps,
             evaluator: birth.evaluator,
             params: birth.params,
@@ -434,6 +437,10 @@ impl AudioHalf {
     }
 }
 
+/// What a ramp's points depend on: the first block, the epoch, the code, and as bits the range
+/// and the first and last instant.
+type Ramped = (u64, u64, usize, [u64; 4]);
+
 impl AudioHalf {
     /// Every functional read at the start of each of the `POINTS` blocks from the one the audio
     /// thread renders next, which the clock tie places in patch time; the ramps take the points.
@@ -449,10 +456,17 @@ impl AudioHalf {
                 goofi_core::Param::Num { vmin, vmax, .. } => (*vmin, *vmax),
                 _ => (0.0, 1.0),
             };
+            // A functional is of `t` alone: the same code over the same instants gives the points
+            // the ramp holds. No block moved and no clock was steered, so nothing is read again.
+            let at = |i: usize| cx.time.position_at(anchor.seconds(first + i as u64, epoch));
+            let key = (first, epoch, Arc::as_ptr(code) as *const u8 as usize, [range.0, range.1, at(0), at(crate::runtime::POINTS - 1)].map(f64::to_bits));
+            if self.ramped[param] == Some(key) {
+                continue;
+            }
             let mut values = [0f32; crate::runtime::POINTS];
             let mut whole = true;
             for (i, v) in values.iter_mut().enumerate() {
-                let t = cx.time.position_at(anchor.seconds(first + i as u64, epoch));
+                let t = at(i);
                 match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range, state: None }) {
                     Ok(frame) => *v = goofi_core::control::number_of(&frame) as f32,
                     Err(_) => {
@@ -465,6 +479,7 @@ impl AudioHalf {
             // is the runtime's to report.
             if whole {
                 self.ramps[param].set(first, &values);
+                self.ramped[param] = Some(key);
             }
         }
     }
@@ -532,6 +547,7 @@ impl Executor for AudioHalf {
         if code.is_none() && self.functionals[param].is_some() {
             self.ramps[param].clear();
         }
+        self.ramped[param] = None;
         self.functionals[param] = code.cloned();
     }
 
