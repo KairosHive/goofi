@@ -78,9 +78,10 @@ export function movedBy(origin: Cell, dx: number, dy: number, units: Units, colu
 	return inside(snap({ ...origin, x: origin.x + dx / units.x, y: origin.y + dy / units.y }), columns);
 }
 
-/** The fewest rows a widget of `kind` resizes to: a slider's track needs two under its label. */
+/** The fewest rows a widget of `kind` resizes to: one row holds the name alone, and an envelope
+ * stands its shape on four knobs and their numbers. */
 export function minRows(kind: Kind): number {
-	return kind === 'slider' ? 2 : 1;
+	return kind === 'envelope' ? 5 : 2;
 }
 
 /** The cell a resize drag lands on, never under `rows` tall. The origin's x and y stay: a resize

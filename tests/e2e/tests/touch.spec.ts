@@ -307,7 +307,7 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 
 			// …and the same drag MOVES it once edit mode is on, which is the whole mode switch.
 			await page.getByTestId('control-edit-toggle').tap();
-			// The strip opening above the board is the sign the mode landed, and it moves the board.
+			// The palette opening under the board is the sign the mode landed.
 			await expect(page.getByTestId('control-palette'), 'edit mode opened the palette').toBeVisible();
 			// The bar's tabs are the groups — `desk`, and `control0` the panel was born over: ＋ makes
 			// a fresh `controlN` and shows it, its ✕ takes the group away, and a tap on a tab shows it.

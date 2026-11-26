@@ -220,7 +220,7 @@
 
 	/** Which presses on a cell count: in edit mode all but its tools, else the label alone. */
 	function allowed(t: Element): boolean {
-		return edit ? !t.closest('.zap, .learn, .rename, .handle') : t.closest('.label') !== null;
+		return edit ? !t.closest('.tools, .rename, .handle') : t.closest('.label') !== null;
 	}
 
 	function press(e: PointerEvent, gv: VariableView): void {
@@ -331,10 +331,10 @@
 		}
 	}
 
-	async function startRename(gv: VariableView, cell: HTMLElement): Promise<void> {
+	async function startRename(gv: VariableView, cell: Element | null): Promise<void> {
 		renaming = gv.name;
 		await tick();
-		const input = cell.querySelector<HTMLInputElement>('[data-testid="control-rename"]');
+		const input = cell?.querySelector<HTMLInputElement>('[data-testid="control-rename"]');
 		input?.focus();
 		input?.select();
 	}
@@ -352,7 +352,6 @@
 		computingFor = null;
 		void g.computeControl(group, pv.element, expression).catch(() => {});
 	}
-
 </script>
 
 {#if menu}
@@ -372,26 +371,6 @@
 			>
 		{/snippet}
 	</InstanceBar>
-
-	{#if edit}
-		<div class="strip">
-			<div class="palette" data-testid="control-palette">
-				{#each CONTROL_KINDS as { id: kind } (kind)}
-					<!-- The grip around the chip carries the press: an action needs an element of its own. -->
-					<span class="grip" use:draggable={{ source: () => liftChip(kind), onTap: () => void bear(kind, null), onEnd: () => (chip = null) }}>
-						<Chip
-							tone={chip?.kind === kind ? 'accent' : 'neutral'}
-							data-testid={`control-palette-${kind}`}
-							title="Drag onto the board, or tap to add"
-							onclick={(e) => {
-								if (e.detail === 0) void bear(kind, null);
-							}}>{kind}</Chip
-						>
-					</span>
-				{/each}
-			</div>
-		</div>
-	{/if}
 
 	<ScrollArea>
 		<!-- The sheet fills the scroll area, so a chip let go under the widgets still lands on the board. -->
@@ -436,7 +415,6 @@
 					>
 						<div
 							class="widget"
-							data-kind={c.kind}
 							class:held={held.value || gv.expression !== undefined}
 							class:broken={gv.error !== undefined}
 							title={gv.expression !== undefined ? gv.error ?? `Computed by ${gv.expression}` : held.value ? 'Value-locked' : undefined}
@@ -451,13 +429,25 @@
 								onStroke={(ops) => g.paintControl(group, gv.element, ops)}
 							/>
 						</div>
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<span
-							class="label"
-							title="Drag onto a parameter to set its expression. Double-click to rename"
-							ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).parentElement as HTMLElement)}
-							>{gv.element}</span
-						>
+						<!-- The name's row is the widget's tool row: learn and delete before the name, the corner after. -->
+						<div class="foot">
+							{#if edit}
+								<div class="tools">
+									{#if variableForm(gv.name) === 'number'}
+										<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
+									{/if}
+									<IconButton variant="ghost" size="sm" data-testid="control-delete" label={`Delete ${gv.element}`} onclick={() => void g.removeControl(group, gv.element)}
+										><Icon name="x" /></IconButton
+									>
+								</div>
+							{/if}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<span
+								class="label"
+								title="Drag onto a parameter to set its expression. Double-click to rename"
+								ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).closest('.cell'))}>{gv.element}</span
+							>
+						</div>
 						{#if renaming === gv.name}
 							<div class="rename">
 								<TextInput
@@ -475,19 +465,6 @@
 							</div>
 						{/if}
 						{#if edit}
-							{#if variableForm(gv.name) === 'number'}
-								<div class="learn">
-									<MidiLearn label={gv.element} target={`control:${gv.name}`} testid="control-learn" onLearn={learn(gv)} />
-								</div>
-							{/if}
-							<button
-								type="button"
-								class="zap"
-								data-testid="control-delete"
-								title="Delete {gv.element}"
-								aria-label="Delete {gv.element}"
-								onclick={() => void g.removeControl(group, gv.element)}><Icon name="x" /></button
-							>
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<span class="handle" data-testid="control-resize" title="Resize" use:corner={(e) => resize(e, gv)}></span>
 							<DropHint id={`${props.panelId}#${gv.name}`} />
@@ -497,6 +474,24 @@
 			</div>
 		</div>
 	</ScrollArea>
+
+	{#if edit}
+		<div class="palette" data-testid="control-palette">
+			{#each CONTROL_KINDS as { id: kind } (kind)}
+				<!-- The grip around the chip carries the press: an action needs an element of its own. -->
+				<span class="grip" use:draggable={{ source: () => liftChip(kind), onTap: () => void bear(kind, null), onEnd: () => (chip = null) }}>
+					<Chip
+						tone={chip?.kind === kind ? 'accent' : 'neutral'}
+						data-testid={`control-palette-${kind}`}
+						title="Drag onto the board, or tap to add"
+						onclick={(e) => {
+							if (e.detail === 0) void bear(kind, null);
+						}}>{kind}</Chip
+					>
+				</span>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- The settings stand down while a widget is moved or resized: they sit outside the panel, so
 	     a pointer over them would read as carried beyond it, and they hide the board it lands on. -->
@@ -615,32 +610,25 @@
 						onChange={() => {}}
 					/>
 				</div>
-				<span class="label">{chip.kind}</span>
+				<div class="foot"><span class="label">{chip.kind}</span></div>
 			</div>
 		</div>
 	{/if}
 </div>
 
 <style>
-
 	.wrap {
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
 	}
-	.strip {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-2) var(--space-4);
-		padding: var(--space-2) var(--space-3);
-		border-bottom: 1px dashed var(--border);
-	}
 	.palette {
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		border-top: 1px dashed var(--border);
 		touch-action: none;
 	}
 	.grip {
@@ -653,42 +641,12 @@
 		/* Three numbers share one field's row, so each takes its share rather than a fixed width. */
 		--number-width: 100%;
 	}
-	/* A bare red cross over the widget's corner, no box of its own. */
-	.zap {
-		position: absolute;
-		top: 0;
-		right: 0;
-		z-index: 1;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-width: var(--hit);
-		min-height: var(--hit);
-		padding: 0;
-		background: transparent;
-		border: none;
-		color: var(--danger);
-		cursor: pointer;
-	}
-	.zap:focus-visible {
-		outline: var(--focus-width) solid var(--focus-ink);
-		outline-offset: -2px;
-	}
-	/* Its blue twin over the other corner; lit while it listens. */
-	.learn {
-		position: absolute;
-		top: 0;
-		left: 0;
-		z-index: 1;
-	}
-
 	.touch-actions {
 		display: none;
 		gap: var(--space-2);
 	}
 	@media (hover: none) and (pointer: coarse) {
-		.learn,
-		.zap {
+		.tools {
 			display: none;
 		}
 		.touch-actions {
@@ -747,17 +705,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		/* What a widget cannot fit is cut at its own edge, never drawn over the name. */
+		overflow: hidden;
 		--number-width: 100%;
 	}
 	[data-edit='true'] .widget,
 	.born .widget {
 		pointer-events: none;
-	}
-	/* A slider's bounds sit in the two corners the learn and delete buttons take. */
-	@media not ((hover: none) and (pointer: coarse)) {
-		[data-edit='true'] .widget[data-kind='slider'] {
-			padding-top: calc(var(--hit) - var(--space-2));
-		}
 	}
 	.widget.held {
 		pointer-events: none;
@@ -766,10 +720,31 @@
 	.widget.broken {
 		outline: 1px dashed var(--danger);
 	}
+	.foot {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+		height: var(--label-h);
+		min-width: 0;
+	}
+	/* The corner's tab takes the row's end. */
+	[data-edit='true'] .foot {
+		padding-right: var(--space-6);
+	}
+	/* The tools are the row's height, the delete in its own red. */
+	.tools {
+		display: flex;
+		flex-shrink: 0;
+		--panelty-hit: var(--label-h);
+	}
+	.tools > :global(.ui-icon-btn) {
+		--panelty-text: var(--danger);
+	}
 	.label {
+		flex: 1;
+		min-width: 0;
 		touch-action: none;
 		cursor: grab;
-		height: var(--label-h);
 		line-height: var(--label-h);
 		text-align: center;
 		font-family: var(--font-mono);

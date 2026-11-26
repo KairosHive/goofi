@@ -54,9 +54,9 @@ describe('a drag in edit mode', () => {
 		expect(resizedBy(origin, 4000, 0, square, 8, 1)).toEqual({ x: 1, y: 1, w: 7, h: 2 });
 	});
 
-	it('stops a slider at two rows and any other widget at one', () => {
+	it('stops a widget at two rows and an envelope at five', () => {
 		expect(resizedBy(origin, 0, -4000, square, 8, minRows('slider'))).toEqual({ x: 1, y: 1, w: 2, h: 2 });
-		expect(resizedBy(origin, 0, -4000, square, 8, minRows('knob'))).toEqual({ x: 1, y: 1, w: 2, h: 1 });
+		expect(resizedBy(origin, 0, -4000, square, 8, minRows('envelope'))).toEqual({ x: 1, y: 1, w: 2, h: 5 });
 	});
 });
 

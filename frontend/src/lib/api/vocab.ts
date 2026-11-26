@@ -111,7 +111,7 @@ export const CONTROL_KINDS: readonly ControlKindInfo[] = [
 	{ id: 'paint', draws: 'image', w: 8, h: 8 },
 	{ id: 'vector', draws: 'vector', w: 8, h: 2 },
 	{ id: 'color', draws: 'color', w: 2, h: 2 },
-	{ id: 'envelope', draws: 'envelope', w: 8, h: 4 },
+	{ id: 'envelope', draws: 'envelope', w: 8, h: 5 },
 ];
 
 /** How many columns a control panel's grid is, whatever its pixel width. */

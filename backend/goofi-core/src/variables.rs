@@ -87,7 +87,7 @@ impl ControlKind {
             ControlKind::Paint => (8.0, 8.0),
             ControlKind::Vector => (8.0, 2.0),
             ControlKind::Color => (2.0, 2.0),
-            ControlKind::Envelope => (8.0, 4.0),
+            ControlKind::Envelope => (8.0, 5.0),
         }
     }
 }
