@@ -927,6 +927,16 @@ impl Graph {
         }
     }
 
+    /// The first group a control panel may draw: a plain group, not goofi's own and not an
+    /// owner's, else one a control panel names. What a new control panel opens on.
+    pub fn first_control_group(&self) -> Option<String> {
+        let store = self.variables();
+        let plain = |g: &&str| !goofi_core::variables::is_own_group(g) && store.owner(g).is_none();
+        let held = store.groups().map(|(g, _)| g).chain(store.entries().filter_map(|(n, _)| n.split_once('.').map(|(g, _)| g)));
+        let first = held.filter(plain).map(str::to_string).next();
+        first.or_else(|| self.patch.arrangement.control_panels().into_iter().next().map(|(_, g)| g))
+    }
+
     /// Whether a group name is held: by the variables, or by a control panel that names it.
     pub fn group_taken(&self, group: &str) -> bool {
         self.variables().has_group(group) || self.patch.arrangement.control_panels().iter().any(|(_, held)| held == group)

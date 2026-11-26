@@ -76,6 +76,20 @@ const GHOST: &str = "ffffffffffff";
 #[test]
 fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let g = Goofi::new();
+    // A panel made a control panel in a patch with no group for one is born naming a fresh one.
+    let group_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["group"].clone();
+    let born_as = entries(&g)[&first_panel(&g)]["panel_type"].clone();
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
+    assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
+    assert!(g.doc()["variable_groups"]["control0"].is_object(), "and recorded, so it outlives a switch away");
+    // The birth is ONE step: undone, neither the panel's type nor the group remains; redone, both do.
+    g.call("undo", j!({}));
+    assert!(g.doc()["variable_groups"].get("control0").is_none(), "the birth's group went with the birth");
+    assert_eq!(entries(&g)[&first_panel(&g)]["panel_type"], born_as);
+    g.call("redo", j!({}));
+    assert_eq!(group_of(&g), j!("control0"));
+    assert!(g.doc()["variable_groups"]["control0"].is_object());
+    g.call("undo", j!({}));
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
     g.link(osc, "out", buf, "input");
@@ -109,7 +123,6 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     // A control panel names its group the way an expression does, so the ONE rename moves both.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control",
                                      "state": { "group": "desk" } }));
-    let group_of = |g: &Goofi| entries(g)[&first_panel(g)]["state"]["group"].clone();
     g.call("variable group rename", j!({ "from": "desk", "to": "board" }));
     assert_eq!(group_of(&g), j!("board"), "the panel followed its group");
     g.call("variable group rename", j!({ "from": "board", "to": "desk" }));
@@ -163,18 +176,15 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     g.until("the carrier to emit after the clear", |_| after.latest());
     assert!(g.stays(|g| g.variable("desk.level") == j!(0.5)), "the cleared source writes no more");
 
-    // A panel made a control panel with no group of its own is born naming a fresh one.
+    // A panel made a control panel where the patch has a group for one opens on the first, and
+    // mints none.
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "viewer" }));
     g.call("layout panel edit", j!({ "panel": first_panel(&g), "type": "control" }));
-    assert_eq!(group_of(&g), j!("control0"), "the first free `controlN` was minted for it");
-    assert!(g.doc()["variable_groups"]["control0"].is_object(), "and recorded, so it outlives a switch away");
-    // The birth is ONE step: undone, neither the panel's type nor the group remains; redone, both do.
-    g.call("undo", j!({}));
-    assert!(g.doc()["variable_groups"].get("control0").is_none(), "the birth's group went with the birth");
-    assert_eq!(entries(&g)[&first_panel(&g)]["panel_type"], j!("viewer"));
-    g.call("redo", j!({}));
-    assert_eq!(group_of(&g), j!("control0"));
-    assert!(g.doc()["variable_groups"]["control0"].is_object());
+    assert_eq!(group_of(&g), j!("desk"), "the panel opened on the group the patch has");
+    assert!(g.doc()["variable_groups"].get("control0").is_none(), "and no group was minted beside it");
+    // The steps that follow are over a group of the panel's own.
+    g.call("variable group add", j!({ "group": "control0" }));
+    g.call("layout panel edit", j!({ "panel": first_panel(&g), "state": { "group": "control0" } }));
     // A machine panel is born over a machine the same way: the first the patch has, else a fresh
     // one born in the step. A removal re-aims the panels that showed the machine at the first left,
     // in its own step, so a client never has to react — a reaction that edits would fight undo.
@@ -433,7 +443,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     let built = g.doc();
 
     // A compound is ONE step though it is an add plus a remove composed.
-    let expected_steps = 65 + 2 * goofi_core::variables::ControlKind::ALL.len();
+    let expected_steps = 67 + 2 * goofi_core::variables::ControlKind::ALL.len();
     let mut steps = 0;
     while g.call("undo", j!({}))["changed"] == true {
         steps += 1;

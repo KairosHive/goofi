@@ -179,12 +179,16 @@ impl WriteOp for PanelEdit {
         // What the panel is born over, made in this same step.
         let mut born: Option<Born> = None;
         let instance: Option<(&str, String)> = match ty.as_deref() {
-            // A control panel: a group of its own, `control0`, `control1`, … recorded with it.
-            Some("control") if !named("group") => {
-                let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
-                born = Some(Born::Group(fresh.clone()));
-                Some(("group", fresh))
-            }
+            // A control panel: the first group the patch has for one, or a fresh `control0`
+            // recorded with it.
+            Some("control") if !named("group") => Some(("group", match tx.g.first_control_group() {
+                Some(first) => first,
+                None => {
+                    let fresh = goofi_core::fresh_name("control", 0, |c| tx.g.group_taken(c));
+                    born = Some(Born::Group(fresh.clone()));
+                    fresh
+                }
+            })),
             // A machine panel: the first machine the patch has, or a fresh empty one.
             Some("machine") if !named("machine") => Some(("machine", match tx.g.machines().keys().next() {
                 Some(first) => first.clone(),
