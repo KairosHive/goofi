@@ -34,6 +34,8 @@ export function headOf(f: DataFrame): FrameHead {
 
 export type ToWorker =
 	| { op: 'rate'; fps: number }
+	/** The page went out of sight or came back: a hidden page keeps no stream served. */
+	| { op: 'hidden'; hidden: boolean }
 	| { op: 'sub'; node: string; slot: string; frames: boolean }
 	| { op: 'spec'; node: string; slot: string; specs: ViewSpec[]; frames: boolean }
 	| { op: 'unsub'; node: string; slot: string }

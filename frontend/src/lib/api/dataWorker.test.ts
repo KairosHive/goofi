@@ -22,7 +22,10 @@ class MockSocket {
 	fire(type: string, e: unknown = {}): void {
 		for (const cb of this.listeners[type] ?? []) cb(e);
 	}
-	close(): void {}
+	closed = false;
+	close(): void {
+		this.closed = true;
+	}
 }
 
 const posted: { batch?: { node: string; slot: string; frame?: unknown; stamps?: unknown; head?: unknown }[] }[] = [];
@@ -92,6 +95,22 @@ describe('the data worker', () => {
 		expect(last.frame).toBeUndefined();
 		expect(last.head?.dtype).toBe('ARRAY');
 		expect(last.head?.array?.shape.length).toBe(1);
+		vi.useRealTimers();
+	});
+
+	it('holds no socket while the page is hidden, and opens each again when it shows', () => {
+		vi.useFakeTimers();
+		inbound({ data: { op: 'sub', node: 'h', slot: 'out', frames: true } });
+		const ws = MockSocket.last;
+		ws.fire('open');
+		inbound({ data: { op: 'hidden', hidden: true } });
+		expect(ws.closed, 'a hidden page closes its streams').toBe(true);
+		ws.fire('close', { code: 1000 });
+		vi.advanceTimersByTime(6000);
+		expect(MockSocket.last, 'and does not reconnect while hidden').toBe(ws);
+		inbound({ data: { op: 'hidden', hidden: false } });
+		expect(MockSocket.last).not.toBe(ws);
+		expect(MockSocket.last.url).toContain('/h/');
 		vi.useRealTimers();
 	});
 });

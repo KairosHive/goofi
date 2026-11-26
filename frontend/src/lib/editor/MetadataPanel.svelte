@@ -1,9 +1,7 @@
 <script lang="ts">
 	import type { NodeInstanceInfo } from '$lib/api/control';
-	import { bindViewer, dropRate, latestFrame } from '$lib/api/frames';
-	import { isArrayFrame, type DataFrame } from '$lib/codec/decode';
-	import { reportedDtype } from '$lib/viewers/depth';
-	import { originShape } from '$lib/viewers/viewMeta';
+	import { bindViewer, dropRate, latestHead } from '$lib/api/frames';
+	import type { FrameHead } from '$lib/api/dataProtocol';
 	import { metaEntries, formatMetaValue, formatMetaInline } from './metaFormat';
 	import MetadataField from './MetadataField.svelte';
 	import { nodeStatsRows } from './nodeStats';
@@ -16,7 +14,7 @@
 
 	const slots = $derived(Object.keys(node.output_slots ?? {}));
 	let internalSlot = $state<string | null>(null);
-	let lastFrame = $state.raw<DataFrame | null>(null);
+	let lastFrame = $state.raw<FrameHead | null>(null);
 	/** This panel's identity in the slot's viewer registry; it binds with a null spec, so it
 	 *  constrains nothing a real viewer asked for. */
 	const token = $props.id();
@@ -25,23 +23,18 @@
 		if (internalSlot === null || !slots.includes(internalSlot)) internalSlot = fst;
 	});
 
-	// The binding keeps the stream served; the callback writes nothing, the interval below reads.
+	// The binding keeps the stream served and asks for no frame here: the interval reads its head.
 	$effect(() => {
 		const slot = internalSlot;
 		if (!slot) return;
-		return bindViewer(node.uid, slot, token, null, () => {});
+		return bindViewer(node.uid, slot, token, null, null);
 	});
 
 	// Format once per polled frame, not per render. An array says its shape and dtype in its
 	// body, not its meta: shown first, in the node's own terms rather than the viewer hop's.
 	const fields = $derived.by(() => {
-		const own: [string, unknown][] =
-			lastFrame && isArrayFrame(lastFrame)
-				? [
-						['shape', originShape(lastFrame.data.shape, lastFrame.meta)],
-						['dtype', reportedDtype(lastFrame.data.dtype)]
-					]
-				: [];
+		const array = lastFrame?.array;
+		const own: [string, unknown][] = array ? [['shape', array.shape], ['dtype', array.dtype]] : [];
 		return [...own, ...metaEntries(lastFrame?.meta)].map(([key, value]) => ({
 			key,
 			body: formatMetaValue(value),
@@ -60,7 +53,7 @@
 		if (!slot) return;
 		const id = setInterval(() => {
 			drops = dropRate(uid, slot);
-			lastFrame = latestFrame(uid, slot);
+			lastFrame = latestHead(uid, slot);
 		}, 250);
 		return () => clearInterval(id);
 	});

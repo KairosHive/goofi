@@ -29,6 +29,9 @@ interface SlotState {
 	drawings: Set<DrawingState>;
 	/** The last decoded frame, replayed to a drawing that attaches. */
 	latest: DataFrame | null;
+	/** The newest frame off the wire, decoded at the next flush, and the stamps that came after it. */
+	pending: ArrayBuffer | null;
+	pendingStamps: Record<string, unknown> | null;
 	/** What the main thread is owed at the next flush, latest-wins. */
 	news: Omit<StreamNews, 'node' | 'slot'> | null;
 	/** Since the last stats report: what the wire delivered, and what arrived over an unflushed frame. */
@@ -59,6 +62,8 @@ let renderer: Renderer | null = null;
 const drawings = new Map<number, DrawingState>();
 /** The page's display rate, declared with every stream's specs; unset until it is measured. */
 let fps: number | undefined;
+/** Whether the page is hidden: a hidden page holds no socket, so the manager serves it nothing. */
+let hidden = false;
 
 const send = (m: ToMain): void => (self as unknown as Worker).postMessage(m);
 
@@ -72,7 +77,7 @@ function sendSpecs(st: SlotState): void {
 }
 
 function openWs(st: SlotState): void {
-	if (st.closed) return;
+	if (st.closed || hidden || st.ws) return;
 	const ws = new WebSocket(st.url);
 	ws.binaryType = 'arraybuffer';
 	st.ws = ws;
@@ -84,8 +89,8 @@ function openWs(st: SlotState): void {
 		if (e.data instanceof ArrayBuffer) arrive(st, e.data);
 	});
 	ws.addEventListener('close', (e) => {
-		st.ws = null;
-		if (st.closed) return;
+		if (st.ws === ws) st.ws = null;
+		if (st.closed || hidden) return;
 		// Terminal app close codes (4000+) can never resolve — don't reconnect.
 		if (e.code >= 4000) {
 			st.closed = true;
@@ -108,17 +113,25 @@ const schedule =
 const stale = new Set<DrawingState>();
 let painting = false;
 let paints = 0;
-/** Keep the loop armed while a stream is open: a frame asked for after an idle gap is answered at
- * once, which split one tick's streams into two paints, so the loop never lets go between ticks. */
+/** How many flushes in a row may find nothing before the loop lets go. */
+const QUIET = 30;
+let quiet = 0;
+/** An animation frame asked for after an idle gap is answered at once, which splits one tick's
+ * streams into two paints: the loop stays armed between ticks, and a re-arm paints a frame late. */
+const arm =
+	typeof requestAnimationFrame === 'function'
+		? (fn: () => void): number => requestAnimationFrame(() => requestAnimationFrame(fn))
+		: schedule;
 function requestFlush(): void {
 	if (painting) return;
 	painting = true;
-	schedule(paint);
+	arm(paint);
 }
 function paint(): void {
-	flush();
-	if (slots.size === 0 && stale.size === 0) {
+	quiet = flush() ? 0 : quiet + 1;
+	if ((slots.size === 0 && stale.size === 0) || quiet > QUIET) {
 		painting = false;
+		quiet = 0;
 		return;
 	}
 	schedule(paint);
@@ -127,8 +140,15 @@ function invalidate(d: DrawingState): void {
 	stale.add(d);
 	requestFlush();
 }
-function flush(): void {
+/** One flush; whether it found a frame, a drawing or news to act on. */
+function flush(): boolean {
 	let painted = false;
+	let worked = stale.size > 0;
+	for (const st of slots.values()) {
+		if (!st.pending) continue;
+		worked = true;
+		take(st);
+	}
 	for (const d of stale) {
 		if (!d.slot?.latest) continue;
 		// One drawing that cannot draw this frame must not withhold the batch from everyone.
@@ -151,6 +171,7 @@ function flush(): void {
 	// Copied, never transferred: the slot keeps the frame to replay to a drawing that attaches.
 	if (batch.length > 0) send({ batch });
 	if (painted) paints++;
+	return worked || batch.length > 0;
 }
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 function report(): void {
@@ -244,6 +265,8 @@ function ensureSlot(node: string, slot: string): SlotState {
 			heads: false,
 			drawings: new Set(),
 			latest: null,
+			pending: null,
+			pendingStamps: null,
 			news: null,
 			arrivals: 0,
 			drops: 0,
@@ -260,6 +283,13 @@ self.addEventListener('message', (e: MessageEvent) => {
 		case 'rate':
 			fps = m.fps;
 			for (const st of slots.values()) sendSpecs(st);
+			break;
+		case 'hidden':
+			hidden = m.hidden;
+			for (const st of slots.values()) {
+				if (hidden) st.ws?.close();
+				else if (st.opened) openWs(st);
+			}
 			break;
 		case 'sub': {
 			const st = ensureSlot(m.node, m.slot);
@@ -387,32 +417,56 @@ self.addEventListener('message', (e: MessageEvent) => {
 	}
 });
 
-/** Decode one frame and mark what it changes for the next flush: the drawings it feeds, and the
- * news the main thread is owed (the frame where a reader asked, else its head). */
+/** Keep the newest frame off the wire for the next flush, which decodes it: a frame another
+ * overwrites first is never decoded. Stamps land on the frame they follow. */
 function arrive(st: SlotState, raw: ArrayBuffer): void {
+	let stamps: Record<string, unknown> | null;
+	try {
+		stamps = decodeStamps(raw);
+	} catch {
+		return; // a corrupt frame shouldn't kill the slot
+	}
+	if (stamps) {
+		if (st.pending) st.pendingStamps = { ...st.pendingStamps, ...stamps };
+		else restamp(st, stamps);
+		requestFlush();
+		return;
+	}
+	st.arrivals++;
+	// A frame over one no flush has shown yet is a drop, whoever would have drawn it.
+	if (st.unflushed) st.drops++;
+	st.unflushed = true;
+	st.pending = raw;
+	st.pendingStamps = null;
+	requestFlush();
+}
+
+/** Decode the pending frame and mark what it changes: the drawings it feeds, and the news the
+ * main thread is owed (the frame where a reader asked, else its head). */
+function take(st: SlotState): void {
+	const raw = st.pending;
+	const stamps = st.pendingStamps;
+	st.pending = null;
+	st.pendingStamps = null;
+	if (!raw) return;
 	let frame: DataFrame;
 	try {
-		const stamps = decodeStamps(raw);
-		if (stamps) {
-			if (st.latest) st.latest = { ...st.latest, meta: { ...st.latest.meta, ...stamps } };
-			const n = st.news;
-			if (n?.frame) n.frame = { ...n.frame, meta: { ...n.frame.meta, ...stamps } };
-			else if (n?.head) n.head = { ...n.head, meta: { ...n.head.meta, ...stamps } };
-			else if (st.frames || st.heads) st.news = { stamps: { ...n?.stamps, ...stamps } };
-			requestFlush();
-			return;
-		}
 		frame = decodeData(raw);
 	} catch {
 		return; // a corrupt frame shouldn't kill the slot
 	}
-	st.arrivals++;
 	st.latest = frame;
-	// A frame over one no flush has shown yet is a drop, whoever would have drawn it.
-	if (st.unflushed) st.drops++;
-	st.unflushed = true;
 	for (const d of st.drawings) stale.add(d);
 	if (st.frames) st.news = { frame };
 	else if (st.heads) st.news = { head: headOf(frame) };
-	requestFlush();
+	if (stamps) restamp(st, stamps);
+}
+
+/** A held frame's fresh stamps, on the frame and on whatever news the main thread is owed. */
+function restamp(st: SlotState, stamps: Record<string, unknown>): void {
+	if (st.latest) st.latest = { ...st.latest, meta: { ...st.latest.meta, ...stamps } };
+	const n = st.news;
+	if (n?.frame) n.frame = { ...n.frame, meta: { ...n.frame.meta, ...stamps } };
+	else if (n?.head) n.head = { ...n.head, meta: { ...n.head.meta, ...stamps } };
+	else if (st.frames || st.heads) st.news = { stamps: { ...n?.stamps, ...stamps } };
 }

@@ -138,20 +138,15 @@ are in `roadmap/reactivity.md` (B, D). The 2026-11-23 measure of the first: 99 w
 
 The owner's-display trace is `roadmap/frontend-performance.md`. From reading `frontend/src`:
 
-- The page keeps every stream served while hidden: no `visibilitychange` handler. Treat hidden
-  as not visible in `frames.ts`.
-- The worker's paint loop re-arms every vsync while any stream is open, frames or not
-  (`dataWorker.ts`). Release it after a quiet interval; an arrival re-arms it.
-- `MetadataPanel` binds `() => {}`, and `frames.ts` counts any callback as a frame reader, so
-  every frame of the selected node is cloned to the main thread. Read `latestHead`, with a
-  minimal spec.
 - Each viewer posts its own `drawn` message outside the flush batch, and autoscaled tick labels
   change every frame. Fold them into the batch; round the range with hysteresis.
 - `MachineInspector` runs a rAF loop while a machine has a playhead; the sweep can be a CSS
   animation paused by `clock.playing`.
 - plotluck redraws every plot of a pane and blits the whole atlas with `'copy'` when one plot
   changes: dirty plots and dirty rects, upstream.
-- A frame overwritten before the flush is decoded anyway; decode at the flush.
+- The worker's paint loop lets go after 30 flushes with nothing to do and re-arms two animation
+  frames late, because the first one after an idle gap fires at once. Verify on a display that
+  several streams slower than 2 Hz paint once a tick: the unit tests cannot see a vsync.
 
 ## Recording
 

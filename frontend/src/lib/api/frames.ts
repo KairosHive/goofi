@@ -58,6 +58,15 @@ function measureDisplayRate(): void {
 	requestAnimationFrame(step);
 }
 
+let watching = false;
+/** Tell the worker when the page goes out of sight and comes back. */
+function watchVisibility(): void {
+	if (watching || typeof document === 'undefined') return;
+	watching = true;
+	document.addEventListener('visibilitychange', () => post({ op: 'hidden', hidden: document.hidden }));
+	if (document.hidden) post({ op: 'hidden', hidden: true });
+}
+
 /** Bring the backend in line with the registry for one stream, read once the tick has SETTLED. */
 function reconcile(node: string, slot: string, k: string, s: Slot): void {
 	if (s.viewers.size === 0) {
@@ -146,6 +155,7 @@ export function bindViewer(
 	cb: FrameCallback | null
 ): () => void {
 	measureDisplayRate();
+	watchVisibility();
 	const k = streamKey(node, slot);
 	const s = ensureSlot(k);
 	const bound = { cb, specs };
