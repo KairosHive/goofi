@@ -241,6 +241,11 @@ pub trait Engine: Send {
     /// Whether this engine's drain marked work only a settle can finish — a Ready it collected,
     /// an ack that completed a phase. What makes the memo rule honest.
     fn dirty(&self) -> bool;
+    /// The input kind whose wires between two of this engine's nodes its own plan carries: no
+    /// reader of the producer's frames. `None` where every wire is a subscription.
+    fn carried(&self) -> Option<goofi_core::SlotType> {
+        None
+    }
     /// Every node class this engine can build, advertised on request.
     fn library(&self) -> Vec<LibraryEntry>;
     /// What a scan of `dir` would wait on that needs no engine — a probe, a build — as work the

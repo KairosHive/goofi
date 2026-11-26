@@ -324,7 +324,7 @@ impl GraphicsEngine {
     /// edge, carried by the stage rather than subscribed; an armed output's queue is the half's,
     /// fed with what the render thread read back.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let plane = Plane { kind: Some(SlotType::Texture), planned: &|_| false, records: true };
+        let plane = Plane { kind: self.carried(), planned: &|_| false, records: true };
         let manifest = self.live[&uid].class.manifest;
         let mut desired = goofi_runtime::desired_of(view, uid, nv, &decls_of(&self.live[&uid].class), &plane);
         // A texture input another engine feeds is a frame off the wire, as an ARRAY input's is.
@@ -419,6 +419,10 @@ impl Engine for GraphicsEngine {
 
     fn dirty(&self) -> bool {
         self.dirty || self.shared.replan.load(Ordering::Acquire)
+    }
+
+    fn carried(&self) -> Option<SlotType> {
+        Some(SlotType::Texture)
     }
 
     fn library(&self) -> Vec<LibraryEntry> {

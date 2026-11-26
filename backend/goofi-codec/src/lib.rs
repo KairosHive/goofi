@@ -340,6 +340,22 @@ pub fn stamp_hash(d: &Data) -> Result<u64, EncodeError> {
     Ok(h.finish())
 }
 
+/// [`content_hash`] and [`stamp_hash`] of an encoded frame, read off its bytes, with its meta.
+pub fn wire_hashes(frame: &[u8]) -> std::result::Result<(u64, u64, goofi_core::Meta), String> {
+    let (tag, meta, body) = split_frame(frame)?;
+    let meta = parse_meta(meta)?;
+    let mut said: Vec<(Mp, Mp)> =
+        carried(&meta).into_iter().filter(|(k, _)| !k.as_str().is_some_and(|k| STAMP_KEYS.contains(&k))).collect();
+    said.sort_by(|(a, _), (b, _)| a.as_str().cmp(&b.as_str()));
+    let mut h = Xxh3::new();
+    h.write_u8(tag);
+    h.write(&pack(said).map_err(|e| e.to_string())?);
+    h.write(body);
+    let mut s = Xxh3::new();
+    s.write(&pack(stamps(&meta)).map_err(|e| e.to_string())?);
+    Ok((h.finish(), s.finish(), meta))
+}
+
 /// The stamps of `meta` as a frame of their own, under [`STAMPS_TAG`].
 pub fn encode_stamps(meta: &goofi_core::Meta) -> Result<Vec<u8>, EncodeError> {
     frame(STAMPS_TAG, pack(stamps(meta))?, Vec::new())

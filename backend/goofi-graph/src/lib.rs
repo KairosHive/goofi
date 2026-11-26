@@ -1369,11 +1369,24 @@ impl Graph {
 
     /// Offer every engine its viewers' demand, or the full frame where a wire reads the slot.
     fn offer_view_wants(&mut self, edges: &[Edge]) {
-        let Runtime { view_wants, engines, .. } = &mut self.runtime;
-        for ((uid, slot), want) in view_wants.iter() {
-            let wired = edges.iter().any(|e| e.producer.0 == *uid && e.producer.1 == slot);
-            for e in engines.iter_mut() {
-                e.view_demand(*uid, slot, if wired { None } else { *want });
+        // A wire the producer's engine carries in its plan reads no frame off the slot.
+        let planned = |e: &Edge| {
+            let (Some(p), Some(c)) = (self.leaf(e.producer.0), self.leaf(e.consumer.0)) else { return false };
+            let kind = c.manifest.inputs.iter().find(|i| i.name == e.consumer.1).map(|i| i.kind);
+            p.engine == c.engine && kind.is_some() && self.engine(p.engine).and_then(|e| e.carried()) == kind
+        };
+        let offers: Vec<_> = self
+            .runtime
+            .view_wants
+            .iter()
+            .map(|((uid, slot), want)| {
+                let wired = edges.iter().any(|e| e.producer.0 == *uid && e.producer.1 == slot && !planned(e));
+                (*uid, slot.clone(), if wired { None } else { *want })
+            })
+            .collect();
+        for (uid, slot, want) in offers {
+            for e in self.runtime.engines.iter_mut() {
+                e.view_demand(uid, &slot, want);
             }
         }
     }

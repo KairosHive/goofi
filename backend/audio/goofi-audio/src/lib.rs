@@ -858,7 +858,7 @@ impl AudioEngine {
     /// Everything one node's runtime holds, read off the settled view: an audio-typed wire and a
     /// bare audio reference are plan edges, carried by the block rather than subscribed.
     fn desired_of(&self, view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>) -> Desired {
-        let plane = Plane { kind: Some(SlotType::Audio), planned: &|b| plan::is_edge(b, &self.live), records: true };
+        let plane = Plane { kind: self.carried(), planned: &|b| plan::is_edge(b, &self.live), records: true };
         goofi_runtime::desired_of(view, uid, nv, nv.manifest.params, &plane)
     }
 
@@ -1077,6 +1077,10 @@ impl Engine for AudioEngine {
 
     fn dirty(&self) -> bool {
         self.dirty || self.shared.replan.load(Ordering::Acquire)
+    }
+
+    fn carried(&self) -> Option<SlotType> {
+        Some(SlotType::Audio)
     }
 
     fn library(&self) -> Vec<LibraryEntry> {

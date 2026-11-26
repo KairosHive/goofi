@@ -567,7 +567,11 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             };
             // What a frame says and its stamps go each when its own hash moved, so a repeat goes as
             // stamps or not at all — unless a joiner, a leaver, a spec or a re-offer asked for it.
-            let (hash, stamps) = (held.as_ref().and_then(|d| goofi_codec::content_hash(d).ok()), held.as_ref().and_then(|d| goofi_codec::stamp_hash(d).ok()));
+            let wire = made.as_ref().and_then(|ready| goofi_codec::wire_hashes(ready).ok());
+            let (hash, stamps) = match &wire {
+                Some((hash, stamps, _)) => (Some(*hash), Some(*stamps)),
+                None => (held.as_ref().and_then(|d| goofi_codec::content_hash(d).ok()), held.as_ref().and_then(|d| goofi_codec::stamp_hash(d).ok())),
+            };
             let same = hash.is_some() && served == Some(g_now) && hash == sent;
             if same && stamps == stamped {
                 pending = live;
@@ -576,7 +580,10 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             let bytes = match &made {
                 // Already exactly what the viewers asked for: one buffer, shared by every
                 // subscriber, and no pass over a texel anywhere in this process.
-                Some(ready) => ready.clone(),
+                Some(ready) => match wire.as_ref().filter(|_| same).and_then(|(_, _, meta)| goofi_codec::encode_stamps(meta).ok()) {
+                    Some(stamps) => Bytes::from(stamps),
+                    None => ready.clone(),
+                },
                 None => {
                     let Some(d) = held else { continue };
                     let encoded = if same {

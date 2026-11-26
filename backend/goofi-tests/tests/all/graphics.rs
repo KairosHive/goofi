@@ -1147,6 +1147,31 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
         .await;
     holds_at(vec![64, 128, 4], "a viewer that cannot draw the frame shrank one that can");
 
+    // Step: a shader behind the output is an edge of the engine's plan and reads no frame off the
+    // slot, so the viewer's box stands; a consumer on another engine does read it, whole.
+    let level = g.add("graphics:Level");
+    g.ready(level);
+    g.link(big, "out", level, "input");
+    holds_at(vec![64, 128, 4], "a shader wired behind the output widened its viewer's readback");
+
+    // Step: a picture in the viewers' own 8 bits is forwarded as the engine made it, and one
+    // that says what the last one said goes once: after it, the stamps of each tick alone.
+    let mut still = Viewer::open(&base, &hex(level), "out").await;
+    still
+        .view(j!([{ "dtype": "array", "ndim": [["ge", 2], ["le", 3]], "dims": [],
+                    "reduce": [{ "dim": 0, "max": 128 }, { "dim": 1, "max": 128 }], "aspect": true, "depth": "u8" }]))
+        .await;
+    loop {
+        let frame = still.frame().await;
+        let (_, _, body) = goofi_codec::split_frame(&frame).expect("a GOOF frame");
+        if goofi_codec::array_head(body).is_some_and(|(dtype, shape, _)| dtype == b"|u1" && shape == [64, 128, 4]) {
+            break;
+        }
+    }
+    assert!(still.silent_for(std::time::Duration::from_millis(700)).await, "an unchanged picture was sent again");
+    let (first, next) = (still.stamps().await, still.stamps().await);
+    assert!(next.procstart() > first.procstart(), "its stamps keep moving: {first:?} then {next:?}");
+
     // Step: a frame cut TWICE — by `GraphicsIn` on the way over and by the reducer for a viewer —
     // still names what `GraphicsIn` read as its origin — the engine's box, never its own 16 —
     // on the dim the reducer cut and on the one it left alone.
