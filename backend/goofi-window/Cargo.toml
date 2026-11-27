@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
-# The loop's entry in the process's resource index.
-goofi-core = { path = "../goofi-core" }
 # The handles a GPU surface is made from, in the vocabulary wgpu reads.
 raw-window-handle = "0.6"
 

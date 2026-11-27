@@ -15,10 +15,8 @@ path = "src/main.rs"
 # The startup screen: the banner, a spinner per step, a bar per folder being scanned.
 goofi-screen = { path = "../goofi-screen" }
 goofi-supervisor = { path = "../goofi-supervisor" }
-goofi-graphics = { path = "../graphics/goofi-graphics" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
-goofi-core = { path = "../goofi-core" }
 goofi-record = { path = "../goofi-record" }
 # Client argv re-quoted into the ONE line /exec parses — the same word rules bash used.
 shell-words = "1"

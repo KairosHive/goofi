@@ -14,7 +14,6 @@ embed = ["dep:pyo3", "dep:goofi_pymod"]
 
 [dependencies]
 goofi-supervisor = { path = "../../goofi-supervisor" }
-goofi-build = { path = "../../goofi-build" }
 goofi-core = { path = "../../goofi-core" }
 goofi-transport = { path = "../../goofi-transport" }
 goofi-node = { path = "../../goofi-node" }
@@ -27,6 +26,3 @@ sha2 = "0.10"
 # The dual-built goofi pyclass crate, linked (rlib, `host`) into the embedded FT interpreter.
 goofi_pymod = { path = "../goofi-pymod", package = "goofi-pymod", features = ["host"], optional = true }
 pyo3 = { version = "0.29", features = ["auto-initialize"], optional = true }
-
-[dev-dependencies]
-indexmap = "2"
