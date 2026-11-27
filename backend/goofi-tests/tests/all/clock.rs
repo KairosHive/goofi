@@ -132,4 +132,15 @@ fn a_machine_steps_by_the_position() {
     g.call("clock set", j!({ "time": 1e9 }));
     g.until("the playhead to step to a after the jump", |g| (state(g) == "a").then_some(()));
     g.until("the playhead to step on to b", |g| (state(g) == "b").then_some(()));
+    // A section too long for a wait to count down to its end is a section the position never
+    // leaves: a machine at rest under it owes nothing, and steps again once it has a beat.
+    for name in ["a", "b"] {
+        g.call("machine state edit", j!({ "machine": "pulse", "name": name, "interval": -1.0 }));
+    }
+    assert_eq!(g.call("clock set", j!({ "section": [0.0, 1e20] }))["section"], j!([0.0, 1e20]));
+    for name in ["a", "b"] {
+        g.call("machine state edit", j!({ "machine": "pulse", "name": name, "interval": 0.1 }));
+    }
+    g.until("the playhead to step to a under the long section", |g| (state(g) == "a").then_some(()));
+    g.until("the playhead to step on to b under it", |g| (state(g) == "b").then_some(()));
 }

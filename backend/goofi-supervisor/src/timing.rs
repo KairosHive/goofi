@@ -142,11 +142,14 @@ impl Time {
 
     /// How long until the position next stands at `at`, or restarts, where that is sooner: what a
     /// wait toward a deadline of the position parks for. None while it is paused, and for a
-    /// position it never reaches.
+    /// position it never reaches, or one further off than a wait can count.
     pub fn until(&self, at: f64) -> Option<Duration> {
         let now = self.position();
         let at = self.looped().map_or(at, |(start, length)| at.min(start + length));
-        (self.playing() && at.is_finite()).then(|| Duration::from_secs_f64((at - now).max(0.0)))
+        if !(self.playing() && at.is_finite()) {
+            return None;
+        }
+        Duration::try_from_secs_f64((at - now).max(0.0)).ok()
     }
 
     /// The wall time the patch began at — the one UTC a recording's manifest states, so nothing
