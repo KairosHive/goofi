@@ -34,7 +34,8 @@ fn a_shipped_node_runs_with_no_cargo_and_an_authored_one_says_what_it_needs() {
 
     let dir = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("Twice.rs"), "fn never_built() {}\n").unwrap();
+    // The `export!` line is what makes the file a node of an engine; the body is never built.
+    std::fs::write(dir.join("Twice.rs"), "fn never_built() {}\ngoofi_sdk::signal::export!(Twice, MANIFEST);\n").unwrap();
     g.call("library refresh", j!({}));
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|v| v["type"] == "signal:Twice").cloned().expect("the file is listed, greyed");
