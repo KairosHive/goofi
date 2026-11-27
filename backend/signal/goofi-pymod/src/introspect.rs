@@ -4,7 +4,7 @@
 use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Show, Slot};
 use goofi_core::Face;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyModule};
 
 use crate::loader::{find_node_class, module_from_path};
 use crate::params::{BoolParam, ColorParam, DataType, EnvelopeParam, InputSlot, NumParam, PulseParam, StringParam};
@@ -14,9 +14,10 @@ pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
     // The import must precede the GIL sample: a node's declaration-time imports can re-enable
     // the GIL process-wide, and the routing gate has to see that.
     let module = module_from_path(py, path)?;
-    let cls = find_node_class(py, &module)?;
+    let (cls, engine) = find_node_class(py, &module)?;
 
     let intro = Introspection {
+        engine: engine.to_string(),
         gil_safe: !py
             .import("sys")?
             .getattr("_is_gil_enabled")
@@ -31,7 +32,7 @@ pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
             .and_then(|d| d.extract::<String>())
             .unwrap_or_default(),
         producer: cls.getattr("PRODUCER")?.extract()?,
-        // A Python node is the signal plane's, and no signal node closes a loop.
+        // No node a tick or a frame calls closes a loop.
         feedback: false,
         window: false,
         state: Vec::new(),
@@ -42,6 +43,31 @@ pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
     };
     serde_json::to_string(&intro)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// The engine a node file declares, read from its text alone: the engine base its class names.
+/// For a file whose import failed, so the palette still files the type under its engine.
+#[pyfunction]
+pub fn declared_engine(py: Python<'_>, path: &str) -> PyResult<Option<String>> {
+    const READ: &std::ffi::CStr = cr#"
+import ast
+def declared(path, bases):
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+                if name in bases:
+                    return bases[name]
+    return None
+"#;
+    let module = PyModule::from_code(py, READ, c"goofi_declared.py", c"goofi_declared")?;
+    let bases = PyDict::new(py);
+    for (engine, base) in crate::node::engines(py) {
+        bases.set_item(base.name()?, engine)?;
+    }
+    module.getattr("declared")?.call1((path, bases))?.extract()
 }
 
 /// An input slot is declared as a bare `goofi.DataType` or as a `goofi.InputSlot`.

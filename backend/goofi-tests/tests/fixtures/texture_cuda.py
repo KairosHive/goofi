@@ -1,4 +1,3 @@
-# goofi: graphics
 import goofi
 
 try:
@@ -7,7 +6,7 @@ except ImportError:
     torch = None
 
 
-class TextureCuda(goofi.Node):
+class TextureCuda(goofi.GraphicsNode):
     """Half the picture on its input, through torch where there is one.
 
     Green says that the input came in device memory, blue that the last picture left in it.

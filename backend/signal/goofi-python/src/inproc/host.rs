@@ -10,7 +10,7 @@ use pyo3::types::PyModule;
 
 use crate::attach;
 
-/// A live `goofi.Node` subclass instance running in-process on the free-threaded interpreter.
+/// A live Python node instance running in-process on the free-threaded interpreter.
 pub struct PyNode {
     instance: Py<PyAny>,
     in_slots: Vec<(&'static str, bool)>,
@@ -26,7 +26,7 @@ pub struct PyNode {
 }
 
 impl PyNode {
-    /// Compile a node module from `source` and instantiate its `goofi.Node` subclass.
+    /// Compile a node module from `source` and instantiate its node class.
     pub fn from_source(
         source: &str,
         in_slots: Vec<(&'static str, bool)>,

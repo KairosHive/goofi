@@ -31,7 +31,7 @@ KINDS = {
 }
 
 
-class VitalPreset(goofi.Node):
+class VitalPreset(goofi.SignalNode):
     """Export a tuning or explicit partials as a Vital oscillator preset.
 
     Inputs:

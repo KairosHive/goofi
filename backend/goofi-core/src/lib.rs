@@ -860,11 +860,11 @@ impl SlotType {
         self == into
     }
 
-    /// How a node that makes this kind is written, where ONE engine alone makes it and it never
-    /// crosses the wire. `None` for a kind any engine makes.
+    /// The engine that alone makes this kind, which never crosses the wire. `None` for a kind
+    /// any engine makes.
     pub fn engine_local(self) -> Option<&'static str> {
         match self {
-            SlotType::Audio => Some("audio — an audio node is written against goofi_audio_sdk"),
+            SlotType::Audio => Some("audio"),
             SlotType::Array | SlotType::String | SlotType::Table | SlotType::Texture => None,
         }
     }

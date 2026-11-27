@@ -23,7 +23,8 @@ goofi-codec = { path = "../goofi-codec" }
 goofi-graph = { path = "../goofi-graph" }
 goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../signal/goofi-signal" }
-goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }
+goofi-host-sdk = { path = "../goofi-host-sdk" }
+goofi-build = { path = "../goofi-build" }
 goofi-audio-sdk = { path = "../audio/goofi-audio-sdk" }
 goofi-audio = { path = "../audio/goofi-audio" }
 goofi-window = { path = "../goofi-window" }

@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class PermutationEntropy(goofi.Node):
+class PermutationEntropy(goofi.SignalNode):
     """Permutation entropy: disorder in the ORDER of neighbouring samples."""
 
     TAGS = ["analysis"]

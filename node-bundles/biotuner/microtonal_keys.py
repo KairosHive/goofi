@@ -29,7 +29,7 @@ import goofi
 C4_HZ = 261.63
 
 
-class MicrotonalKeys(goofi.Node):
+class MicrotonalKeys(goofi.SignalNode):
     """Play a tuning from a MIDI keyboard: one voice per key, one step per key.
 
     Inputs:

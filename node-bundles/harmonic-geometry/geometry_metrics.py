@@ -9,7 +9,7 @@ import goofi
 from goofi.geometry import decode
 
 
-class GeometryMetrics(goofi.Node):
+class GeometryMetrics(goofi.SignalNode):
     """Measure geometry size, field structure, connectivity, and method-specific features."""
 
     TAGS = ["analysis"]

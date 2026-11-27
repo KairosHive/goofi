@@ -327,7 +327,7 @@ test('parameter groups keep readable widths and scroll to the last group', async
 		const source = path.join(status.workspace, 'nodes_signal', 'many_groups.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });
 		const params = groups.map((g) => `"${g}": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}`).join(', ');
-		fs.writeFileSync(source, `import goofi\nclass ManyGroups(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {${params}}\n`);
+		fs.writeFileSync(source, `import goofi\nclass ManyGroups(goofi.SignalNode):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {${params}}\n`);
 		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
 		const uid = await addNode(page, 'ManyGroups');
 		await waitForNode(page, uid);
@@ -382,7 +382,7 @@ test('a dropdown shows and hides the params, sections and group that depend on i
 		fs.mkdirSync(path.dirname(source), { recursive: true });
 		fs.writeFileSync(source, [
 			'import goofi',
-			'class ShownByMode(goofi.Node):',
+			'class ShownByMode(goofi.SignalNode):',
 			'    OUTPUTS = {"out": goofi.DataType.ARRAY}',
 			'    PARAMS = {',
 			'        "filter": [',

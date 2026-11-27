@@ -1,9 +1,8 @@
-# goofi: graphics
 import goofi
 import numpy as np
 
 
-class TextureTick(goofi.Node):
+class TextureTick(goofi.GraphicsNode):
     """The picture on its input, times a gain; the graphics tick calls it."""
 
     INPUTS = {'image': goofi.InputSlot(goofi.DataType.TEXTURE)}

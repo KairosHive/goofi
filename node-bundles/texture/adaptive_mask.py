@@ -487,7 +487,7 @@ def pair(v):
     return clamp(v[0], 0.0, 1.0), clamp(v[1], 0.0, 1.0)
 
 
-class AdaptiveMask(goofi.Node):
+class AdaptiveMask(goofi.SignalNode):
     """Keep the share of the frame a source picks, snapped to the picture's contours: one mask layer."""
 
     TAGS = ["image", "analysis"]

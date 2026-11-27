@@ -8,7 +8,7 @@ import numpy as np
 import goofi
 
 
-class Weights(goofi.Node):
+class Weights(goofi.SignalNode):
     """Hold a `.npy` or `.npz` array on the wire, reloading it when the path changes."""
 
     TAGS = ["input", "ml"]

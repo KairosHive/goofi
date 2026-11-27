@@ -13,7 +13,7 @@ def activation_rgb(values, ceiling):
     return (stops[k]*(1-(u-k)[..., None])+stops[k+1]*(u-k)[..., None]).astype(np.uint8)
 
 
-class HarmonicObservatory(goofi.Node):
+class HarmonicObservatory(goofi.SignalNode):
     """An evolving atlas of power-weighted harmonic activation and history.
 
     Activation is supplied by HarmonicSpectrum: kernel times normalized power

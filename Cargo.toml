@@ -17,7 +17,6 @@ members = [
     "backend/goofi-build",
     "backend/goofi-graph",
     "backend/goofi-record",
-    "backend/signal/goofi-signal-sdk",
     "backend/audio/goofi-audio-sdk",
     "backend/audio/goofi-audio",
     "backend/graphics/goofi-graphics",

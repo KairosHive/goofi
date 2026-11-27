@@ -1,7 +1,7 @@
 import goofi
 
 
-class Documented(goofi.Node):
+class Documented(goofi.SignalNode):
     """Every param kind, each with help text, in sections shown by the params above them."""
 
     INPUTS = {"data": goofi.DataType.ARRAY}

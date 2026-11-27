@@ -65,7 +65,7 @@ def mutual_info(x, bins):
     return out
 
 
-class Connectivity(goofi.Node):
+class Connectivity(goofi.SignalNode):
     """A connectivity matrix over channels.
 
     Phase, amplitude and plain statistical couplings, all as `[C, C]`.

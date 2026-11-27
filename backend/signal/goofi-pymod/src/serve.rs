@@ -30,7 +30,7 @@ pub fn serve(py: Python<'_>) -> PyResult<()> {
     py.import("goofi")?.getattr("gpu")?.call_method0("connect")?;
 
     let module = module_from_source(py, "goofi_node_main", &source)?;
-    let instance = find_node_class(py, &module)?.call0()?;
+    let instance = find_node_class(py, &module)?.0.call0()?;
     let out_slots = slot_names(&instance, "OUTPUTS")?;
     let in_slots: Vec<(String, bool)> =
         crate::introspect::slots(&instance.getattr("INPUTS")?)?.into_iter().map(|s| (s.name, s.multi)).collect();

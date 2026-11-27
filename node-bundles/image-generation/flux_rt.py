@@ -523,7 +523,7 @@ class Runtime:
         # goofi owns the subprocess. Its exit also releases a model still in a CUDA call.
 
 
-class FluxRT(goofi.Node):
+class FluxRT(goofi.SignalNode):
     """Edit a video or graphics stream. The 16 GB preset trades frame rate for memory."""
     TAGS = ['image', 'ml', 'transform']
     INPUTS = {'source': goofi.InputSlot(goofi.DataType.ARRAY, trigger=False, required=False),

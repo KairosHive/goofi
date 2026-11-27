@@ -6,7 +6,7 @@ from PIL import Image, ImageOps
 import goofi
 
 
-class ImageFile(goofi.Node):
+class ImageFile(goofi.SignalNode):
     """Load PNG, JPEG, WebP and other Pillow image formats from an absolute file path."""
     TAGS = ['image', 'input']
     PRODUCER = True

@@ -22,7 +22,7 @@ AXES = ["drawn", "direct"]
 PROVIDERS = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
 
 
-class Decoder(goofi.Node):
+class Decoder(goofi.SignalNode):
     """Run a trained generator, steering its latent from the patch."""
 
     TAGS = ["image", "generator", "ml"]

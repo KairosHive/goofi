@@ -14,7 +14,7 @@ test('each node opens on the param group last fronted on it, else on its first',
 		fs.mkdirSync(path.dirname(source), { recursive: true });
 		fs.writeFileSync(source, [
 			'import goofi',
-			'class TwoGroups(goofi.Node):',
+			'class TwoGroups(goofi.SignalNode):',
 			'    PARAMS = {"shape": {"amount": goofi.NumParam(0.5, 0.0, 1.0)}, "timing": {"rate": goofi.NumParam(1.0, 0.0, 10.0)}}',
 			''
 		].join('\n'));
@@ -47,7 +47,7 @@ test('a plain vector opens as one list or as its entries', async ({ page }) => {
 		const status = (await rawCall(page, 'session status')).result;
 		const source = path.join(status.workspace, 'nodes_signal', 'shifted.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });
-		fs.writeFileSync(source, 'import goofi\nclass Shifted(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {"look": {"shift": goofi.NumParam([0.1, 0.2, 0.3, 0.4], 0.0, 1.0)}}\n');
+		fs.writeFileSync(source, 'import goofi\nclass Shifted(goofi.SignalNode):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n    PARAMS = {"look": {"shift": goofi.NumParam([0.1, 0.2, 0.3, 0.4], 0.0, 1.0)}}\n');
 		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
 		const uid = await addNode(page, 'Shifted', [300, 60]);
 		await waitForNode(page, uid);

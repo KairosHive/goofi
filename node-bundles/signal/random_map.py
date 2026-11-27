@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class RandomMap(goofi.Node):
+class RandomMap(goofi.SignalNode):
     """Seeded random linear map from flattened inputs to m values."""
 
     TAGS = ['transform']

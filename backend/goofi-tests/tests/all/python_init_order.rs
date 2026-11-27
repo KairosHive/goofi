@@ -8,7 +8,7 @@ use pyo3::types::PyModule;
 const NODE: &str = concat!(
     "import goofi\n",
     "import numpy as np\n",
-    "class Double(goofi.Node):\n",
+    "class Double(goofi.SignalNode):\n",
     "    INPUTS = {'data': goofi.DataType.ARRAY}\n",
     "    OUTPUTS = {'out': goofi.DataType.ARRAY}\n",
     "    def process(self, data):\n",

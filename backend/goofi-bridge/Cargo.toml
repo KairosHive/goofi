@@ -10,7 +10,6 @@ license.workspace = true
 goofi-init = { path = "../goofi-init" }
 # The node pipeline, run here over the shipped folders so the artifacts ship inside the binary.
 goofi-build = { path = "../goofi-build" }
-goofi-node = { path = "../goofi-node" }
 # Where the pipeline's output goes: the same runtime a goofi from this build reads.
 goofi-supervisor = { path = "../goofi-supervisor" }
 
@@ -25,7 +24,7 @@ goofi-node = { path = "../goofi-node" }
 goofi-graph = { path = "../goofi-graph" }
 goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../signal/goofi-signal" }
-goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }
+goofi-host-sdk = { path = "../goofi-host-sdk" }
 goofi-transport = { path = "../goofi-transport" }
 # The harness plane the agent ops and `/term` are doors onto.
 goofi-agent = { path = "../goofi-agent" }

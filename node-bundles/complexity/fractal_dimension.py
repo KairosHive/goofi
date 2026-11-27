@@ -11,7 +11,7 @@ import numpy as np
 import goofi
 
 
-class FractalDimension(goofi.Node):
+class FractalDimension(goofi.SignalNode):
     """Fractal dimension: how much the trace fills the plane.
 
     1 is a smooth line, 2 a trace that fills it.

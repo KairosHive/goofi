@@ -61,7 +61,7 @@ def clamp(v, lo, hi):
     return min(max(float(v), lo), hi)
 
 
-class SpaceDraw(goofi.Node):
+class SpaceDraw(goofi.SignalNode):
     """Draw a hybrid texture from a place in the material space, by SD 1.5 and the IP-Adapter."""
 
     TAGS = ["image", "ml", "generator"]

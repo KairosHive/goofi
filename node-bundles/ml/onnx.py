@@ -35,7 +35,7 @@ KINDS = {
 }
 
 
-class Onnx(goofi.Node):
+class Onnx(goofi.SignalNode):
     """Run any ONNX model on the arrays wired into it."""
 
     TAGS = ["ml", "transform"]

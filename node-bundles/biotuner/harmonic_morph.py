@@ -45,7 +45,7 @@ def merge_components(r, a, ph):
     return unique, weights, phase
 
 
-class HarmonicMorph(goofi.Node):
+class HarmonicMorph(goofi.SignalNode):
     """Morph tunings, phases, and component counts; share the result across media."""
 
     TAGS = ["generator", "transform"]

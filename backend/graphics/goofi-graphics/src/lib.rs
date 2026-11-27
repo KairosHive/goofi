@@ -4,7 +4,6 @@
 //! its own, parked on the node's door — the same one the audio engine uses.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::{Mailbox, Stack};
@@ -13,7 +12,7 @@ use std::time::Duration;
 use goofi_runtime::{Desired, Handle, Plane, Shared};
 use goofi_core::SlotType;
 use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
-    ParamDecl, ParamGroups, ParamSpec, ScannedType, Status, Uid,
+    ParamDecl, ParamGroups, ParamSpec, Status, Uid,
 };
 
 mod gpu;
@@ -30,7 +29,6 @@ use gpu::Gpu;
 use half::GraphicsHalf;
 use runtime::{Runtime, Stats};
 use scan::Class;
-pub use goofi_python::catalog::Python;
 
 /// What `graphics.fps`, the clock's pace, is held to. A tick the clock did not pace — the
 /// harness's `render` — is why every frame's instant is written beside the video.
@@ -104,7 +102,6 @@ pub struct GraphicsEngine {
     viewer_fps: Arc<AtomicU32>,
     shared: Arc<Shared>,
     /// The interpreters a Python node is probed with, and the one its child runs in.
-    pub(crate) python: Option<Python>,
     pub(crate) classes: HashMap<String, Arc<Class>>,
     /// The file and stamp each class was registered from, so a rescan skips one that did not
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
@@ -181,31 +178,34 @@ fn decls_of(class: &Class) -> Vec<ParamDecl> {
 }
 
 impl GraphicsEngine {
-    pub fn set_python(&mut self, python: Python) {
-        self.python = Some(python);
-    }
-
     /// What builds the executor of a node the tick calls, on the node's own thread: the child
     /// that runs its source, and its `setup`. None for a shader.
     fn node_build(&self, class: &Class, params: &ParamGroups, cells: &half::Cells) -> Option<impl FnOnce() -> (goofi_runtime::HostExecutor, Vec<usize>) + Send + 'static> {
-        let scan::Kind::Node { python, source } = &class.kind else { return None };
+        let scan::Kind::Node(runs) = &class.kind else { return None };
         // Where the device shares memory, the child learns the door to join and the device to match.
         let door = cells.node.as_ref().and_then(|meeting| meeting.door.as_ref()).zip(self.gpu.shares);
         let env: Vec<(&'static str, String)> = door
             .map(|(door, uuid)| vec![(share::DOOR, door.name().to_string()), (share::DEVICE, uuid.iter().map(|byte| format!("{byte:02x}")).collect())])
             .unwrap_or_default();
-        let (hub, python, source, params) = (self.hub.clone(), python.clone(), source.clone(), params.clone());
+        let (hub, params) = (self.hub.clone(), params.clone());
         let (manifest, decls) = (class.manifest, decls_of(class));
+        let make: goofi_runtime::NodeBuild = match runs {
+            scan::Runs::Python { interpreter, source } => {
+                let (interpreter, source) = (interpreter.clone(), source.clone());
+                Box::new(move |_| {
+                    let child = goofi_python::subproc::subproc_in(hub, interpreter, source, env);
+                    Box::new(goofi_python::subproc::RemoteNode::new(child, goofi_host_sdk::host::in_slots(manifest)))
+                })
+            }
+            scan::Runs::Rust(factory) => {
+                let factory = factory.clone();
+                Box::new(move |params| factory(params))
+            }
+        };
         // The half's inboxes are the ARRAY inputs, then the TEXTURE ones; a node reads by slot.
         let declared = |name: &str| manifest.inputs.iter().position(|slot| slot.name == name).expect("an input of this manifest");
         let slots: Vec<usize> = shader::array_inputs(manifest).chain(shader::texture_inputs(manifest)).map(declared).collect();
-        Some(move || {
-            let build: goofi_runtime::NodeBuild = Box::new(move |_| {
-                let child = goofi_python::subproc::subproc_in(hub, python, source, env);
-                Box::new(goofi_python::subproc::RemoteNode::new(child, goofi_host_sdk::host::in_slots(manifest)))
-            });
-            (goofi_runtime::HostExecutor::new(manifest, decls, build, &params), slots)
-        })
+        Some(move || (goofi_runtime::HostExecutor::new(manifest, decls, make, &params), slots))
     }
 
     /// Open the device and start the engine, or say why this machine has none.
@@ -269,7 +269,6 @@ impl GraphicsEngine {
             viewer_fps,
             gpu,
             shared,
-            python: None,
             classes: HashMap::new(),
             stamps: HashMap::new(),
             compiles: Vec::new(),
@@ -462,19 +461,8 @@ impl Engine for GraphicsEngine {
             .collect()
     }
 
-    /// The probes a scan of `dir` would spawn, as work for off the lock.
-    fn prepare(&self, dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
-        let python = self.python.clone()?;
-        let files: Vec<(std::path::PathBuf, String)> = goofi_node::node_files(dir, "graphics")
-            .into_iter()
-            .filter(|(path, _, _)| path.extension().is_some_and(|ext| ext == "py"))
-            .map(|(path, name, _)| (path, name))
-            .collect();
-        (!files.is_empty()).then(|| Box::new(move || goofi_python::catalog::warm(&files, &python)) as Box<dyn FnOnce() + Send>)
-    }
-
-    fn scan(&mut self, dir: &Path) -> Vec<ScannedType> {
-        scan::scan(self, dir)
+    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+        self.register_file(file, read)
     }
 
     fn remove_type(&mut self, type_name: &str) -> bool {

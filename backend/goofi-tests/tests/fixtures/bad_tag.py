@@ -1,7 +1,7 @@
 import goofi
 
 
-class BadTag(goofi.Node):
+class BadTag(goofi.SignalNode):
     """Declares a tag the vocabulary does not hold."""
 
     TAGS = ["sparkly"]

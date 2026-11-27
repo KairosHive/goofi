@@ -10,7 +10,7 @@ use goofi_tests::{drive, j, require_python, Goofi, OutputProbe};
 fn write_node(dir: &Path, file: &str, value: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let source = format!(
-        "import goofi\nimport numpy as np\n\nclass Emit(goofi.Node):\n    \
+        "import goofi\nimport numpy as np\n\nclass Emit(goofi.SignalNode):\n    \
          OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n    PRODUCER = True\n\n    \
          def process(self):\n        return {{\"out\": np.array([{value}], dtype=\"float32\")}}\n"
     );
@@ -225,7 +225,7 @@ fn write_audio_node(dir: &Path, file: &str, value: &str) {
     std::fs::write(dir.join(file), source).unwrap();
 }
 
-const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.Node):\n    OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n    def process(self):\n        return {\"out\": np.zeros(1, dtype=np.float32)}\n";
+const PY_LEVEL: &str = "import goofi\nimport numpy as np\nclass Level(goofi.SignalNode):\n    OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n    def process(self):\n        return {\"out\": np.zeros(1, dtype=np.float32)}\n";
 
 /// Drive the audio clock and watch one node's `out` tap until it holds `want`.
 fn holds(g: &Goofi, uid: goofi_tests::Uid, want: f32) {
@@ -360,8 +360,9 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
 
     // A file that does not compile greys the type out with rustc's own words, and the instance
     // built from the last good file runs on.
-    std::fs::write(mount.join("nodes_signal").join("Twice.rs"), "fn broken( {\n").unwrap();
-    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\n").unwrap();
+    // The `export!` line is what names the SDK the file is built against.
+    std::fs::write(mount.join("nodes_signal").join("Twice.rs"), "fn broken( {\ngoofi_signal_sdk::export!(Twice, MANIFEST);\n").unwrap();
+    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\ngoofi_audio_sdk::export!(Level, MANIFEST);\n").unwrap();
     rescan(&g);
     let listed = g.call("library list", j!({ "full": true }));
     let greyed = |ty: &str| {

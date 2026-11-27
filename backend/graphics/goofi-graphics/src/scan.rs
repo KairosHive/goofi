@@ -1,12 +1,11 @@
-//! The engine's scan of one `nodes_graphics/` folder, and the pipeline built for what it
-//! registered. A driver takes its time over a compile, so no op and no tick waits on one: the
-//! class holds a cell a thread of its own fills, and the plan picks it up at the tick after.
-//! A Python file is a node the tick calls: its class holds the source its child runs.
+//! What the graphics engine registers from a node file, and the pipeline built for a shader.
+//! A driver takes its time over a compile, so no op and no tick waits on one: the class holds a
+//! cell a thread of its own fills, and the plan picks it up at the tick after.
+//! A Python or a Rust file is a node the tick calls: its class holds what builds one.
 
-use std::path::Path;
 use std::sync::Arc;
 
-use goofi_node::{NodeManifest, Scanned, ScannedType};
+use goofi_node::{Body, NodeFile, NodeManifest, Read, Scanned};
 
 use crate::gpu::Gpu;
 use crate::{shader, GraphicsEngine};
@@ -17,8 +16,16 @@ pub type Built = goofi_supervisor::ready::Ready<Arc<wgpu::RenderPipeline>>;
 /// What a class draws its stage with.
 pub enum Kind {
     Shader(Shader),
-    /// A Python node the tick calls: its source, and the interpreter of the child that runs it.
-    Node { python: String, source: String },
+    /// A node the tick calls.
+    Node(Runs),
+}
+
+/// What runs a node the tick calls.
+pub enum Runs {
+    /// A Python file's source, and the interpreter of the child that runs it.
+    Python { interpreter: String, source: String },
+    /// A Rust library, in this process or in a child.
+    Rust(Arc<goofi_host_sdk::NodeFactory>),
 }
 
 /// A shader naga passed: its pipeline is asked of the device at the first node of the type.
@@ -60,87 +67,74 @@ pub struct Class {
 impl Class {
     /// Whether the tick calls this class's node, where a shader's stage is a pass.
     pub fn node(&self) -> bool {
-        matches!(self.kind, Kind::Node { .. })
+        matches!(self.kind, Kind::Node(_))
     }
 
     /// Why a stage of this class cannot draw: a shader the device refused.
     pub fn refusal(&self) -> Option<String> {
         match &self.kind {
             Kind::Shader(shader) => shader.built()?.error().map(|why| format!("shader: {why}")),
-            Kind::Node { .. } => None,
+            Kind::Node(_) => None,
         }
     }
-}
-
-pub(crate) fn scan(engine: &mut GraphicsEngine, dir: &Path) -> Vec<ScannedType> {
-    let mut out = Vec::new();
-    for (path, type_name, stamp) in goofi_node::node_files(dir, "graphics") {
-        // A file with no stamp to compare is read again: unreadable metadata proves nothing.
-        let seen = stamp.map(|s| (path.clone(), s));
-        let unchanged = seen.is_some() && engine.stamps.get(&type_name) == seen.as_ref() && engine.classes.contains_key(&type_name);
-        let registered = match unchanged {
-            true => Ok(false),
-            false => engine.register(&path, &type_name).map(|class| engine.classes.insert(type_name.clone(), class).is_some()),
-        };
-        let outcome = match registered {
-            Ok(replaced) => {
-                match seen {
-                    Some(s) => engine.stamps.insert(type_name.clone(), s),
-                    None => engine.stamps.remove(&type_name),
-                };
-                Scanned::Registered { isolation: engine.classes[&type_name].isolation.get(), replaced }
-            }
-            Err(reason) => {
-                // A file that no longer loads displaces its registration, so the palette greys the
-                // type rather than offering one nothing can build.
-                engine.classes.remove(type_name.as_str());
-                engine.stamps.remove(&type_name);
-                Scanned::Unavailable(reason)
-            }
-        };
-        goofi_supervisor::progress::scanned(dir, &path);
-        out.push(ScannedType { type_name, stamp, outcome });
-    }
-    out
 }
 
 impl GraphicsEngine {
-    /// One file: its header is the manifest, its text plus the prelude is what naga judges, and
-    /// only then does a pipeline get asked for.
-    pub(crate) fn register(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("wgsl") => {}
-            Some("py") => return self.register_node(path, type_name),
-            // `goofi_graphics_sdk` is kept for a Rust node the tick calls.
-            _ => return Err("the graphics engine runs shaders and Python nodes; a Rust node that makes a texture is a signal node".into()),
+    /// A file that did not change keeps its class, and the pipeline built for it. One that no
+    /// longer loads displaces its registration, so the palette greys the type.
+    pub(crate) fn register_file(&mut self, file: &NodeFile, read: &Read) -> Scanned {
+        let name = &file.type_name;
+        // A file with no stamp to compare is read again: unreadable metadata proves nothing.
+        let seen = file.stamp.map(|s| (file.path.clone(), s));
+        let unchanged = seen.is_some() && self.stamps.get(name) == seen.as_ref() && self.classes.contains_key(name);
+        let registered = match unchanged {
+            true => Ok(false),
+            false => self.class(name, read).map(|class| self.classes.insert(name.clone(), class).is_some()),
+        };
+        match registered {
+            Ok(replaced) => {
+                match seen {
+                    Some(s) => self.stamps.insert(name.clone(), s),
+                    None => self.stamps.remove(name),
+                };
+                Scanned::Registered { isolation: self.classes[name].isolation.get(), replaced }
+            }
+            Err(reason) => {
+                self.classes.remove(name.as_str());
+                self.stamps.remove(name);
+                Scanned::Unavailable(reason)
+            }
         }
-        let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let intro = shader::header(&source)?;
-        let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Texture))?;
-        let shader = shader(manifest, &source, &intro.state)?;
-        Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(shader), isolation: &goofi_node::SHADER }))
     }
 
-    /// A Python file marked `# goofi: graphics`: a node the tick calls, run in a child of the
-    /// subprocess interpreter. It makes one picture, and each of its inputs takes one wire.
-    fn register_node(&mut self, path: &Path, type_name: &str) -> Result<Arc<Class>, String> {
-        use goofi_python::catalog::Probed;
-        let found = match goofi_python::catalog::probed(path, type_name, self.python.as_ref()) {
-            Some(Probed::InProcess(found) | Probed::Subprocess(found)) => found,
-            Some(Probed::Unavailable(reason)) => return Err(reason),
-            None => return Err("no Python interpreter provisioned — run `cargo run -p goofi-init`".into()),
-        };
-        let manifest = found.manifest;
+    /// A shader's header completed is its manifest, and its text plus the prelude is what naga
+    /// judges. A Python or a Rust node makes one picture, and each of its inputs takes one wire.
+    fn class(&self, type_name: &str, read: &Read) -> Result<Arc<Class>, String> {
+        if let Body::Shader { source } = &read.body {
+            let intro = shader::complete(&read.intro)?;
+            let manifest = goofi_node::manifest_of(type_name, &intro)?;
+            let shader = shader(manifest, source, &intro.state)?;
+            return Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(shader), isolation: &goofi_node::SHADER }));
+        }
+        let manifest = goofi_node::manifest_of(type_name, &read.intro)?;
         if manifest.outputs.len() != 1 || manifest.outputs[0].kind != goofi_core::SlotType::Texture {
             return Err("a graphics node has one output, a TEXTURE".into());
         }
         if manifest.inputs.iter().any(|slot| slot.multi) {
             return Err("an input of a graphics node takes one wire".into());
         }
-        let python = self.python.as_ref().map(|python| python.subproc.clone()).unwrap_or_default();
-        let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let isolation = goofi_node::IsolationCell::leak(goofi_node::Isolation::Subprocess);
-        Ok(Arc::new(Class { manifest, feedback: false, window: false, state: Vec::new(), kind: Kind::Node { python, source }, isolation }))
+        let (runs, isolation) = match &read.body {
+            Body::Rust { artifact, host } => {
+                let (factory, tier) = goofi_runtime::hosted::factory(self.hub.clone(), artifact.clone(), host.clone(), manifest)?;
+                (Runs::Rust(Arc::new(factory)), tier)
+            }
+            Body::Python { source, interpreter } => {
+                let runs = Runs::Python { interpreter: interpreter.clone(), source: source.clone() };
+                (runs, goofi_node::IsolationCell::leak(goofi_node::Isolation::Subprocess))
+            }
+            Body::Shader { .. } => unreachable!("a shader returned above"),
+        };
+        Ok(Arc::new(Class { manifest, feedback: false, window: false, state: Vec::new(), kind: Kind::Node(runs), isolation }))
     }
 }
 

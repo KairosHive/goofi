@@ -221,7 +221,7 @@ def clamp(v, lo, hi):
     return min(max(float(v), lo), hi)
 
 
-class PromptMask(goofi.Node):
+class PromptMask(goofi.SignalNode):
     """Cut out what a few words name: SAM 2 for things with sharp edges, CLIPSeg for soft surfaces."""
 
     TAGS = ["image", "analysis", "ml"]

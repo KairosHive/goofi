@@ -19,7 +19,7 @@ from biotuner.harmonic_geometry.media.eigenmode.rigid_plate import ratios_to_mod
 import goofi
 
 
-class HarmonicModes(goofi.Node):
+class HarmonicModes(goofi.SignalNode):
     """Map harmonic ratios to Chladni modes and interpolate two mode structures.
 
     Use separate input/target harmonic frames and mix, or a single transition

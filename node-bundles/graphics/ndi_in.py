@@ -1,4 +1,3 @@
-# goofi: graphics
 """NdiIn — a picture another program sends over the network with NDI, as a texture on the
 graphics tick.
 
@@ -20,7 +19,7 @@ import goofi
 DISCOVERY = 3.0
 
 
-class NdiIn(goofi.Node):
+class NdiIn(goofi.GraphicsNode):
     """Receive an NDI video source as a texture."""
 
     TAGS = ["input", "image"]

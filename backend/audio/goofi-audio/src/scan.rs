@@ -1,56 +1,35 @@
-//! The audio engine's scan of one `nodes_audio/` folder: an `.rs` file is found built through
-//! goofi-build — never built here — and loaded behind its version symbol; a `.vst3` bundle is
-//! `vst3`'s; anything else in the folder is named as not an audio node. A file whose stem is a
-//! built-in node's name is not a node file, as a stem outside the name rule is not.
+//! What the audio engine registers from a node file: a Rust node built against
+//! `goofi_audio_sdk`, loaded behind its version symbol. A `.vst3` bundle in a folder is `vst3`'s.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use goofi_audio_sdk::host::Loaded;
-use goofi_node::{Isolation, Scanned, ScannedType};
+use goofi_node::{Body, Isolation, NodeFile, Read, Scanned};
 
 use crate::nodes::Class;
 use crate::AudioEngine;
 
-pub(crate) fn scan(engine: &mut AudioEngine, dir: &Path) -> Vec<ScannedType> {
-    let mut out = Vec::new();
-    for (path, type_name, stamp) in goofi_node::node_files(dir, goofi_node::Engine::id(engine)) {
-        if crate::nodes::built_in(&type_name) {
-            continue;
-        }
-        let outcome = if path.extension().is_some_and(|e| e == "rs") {
-            engine.register_rust(&path, &type_name)
-        } else {
-            Scanned::Unavailable("an audio node is an `.rs` file".into())
-        };
-        goofi_supervisor::progress::scanned(dir, &path);
-        out.push(ScannedType { type_name, stamp, outcome });
-    }
-    out.extend(crate::vst3::scan_dir(engine, dir));
-    out
-}
-
 impl AudioEngine {
-    /// An `.rs` file: the artifact the prebuild left for these bytes, loaded — a library that will
-    /// not load displaces a stale registration and greys the type out with the reason.
-    fn register_rust(&mut self, path: &Path, type_name: &str) -> Scanned {
-        let base = goofi_supervisor::layout::runtime().build();
-        let loaded = goofi_build::built(&goofi_build::AUDIO, path, &base)
-            .and_then(|artifact| self.load_rust(&artifact, type_name));
+    /// A library that will not load displaces a stale registration and greys the type out.
+    pub(crate) fn register_file(&mut self, file: &NodeFile, read: &Read) -> Scanned {
+        let loaded = match &read.body {
+            Body::Rust { artifact, .. } => self.load_rust(artifact, file, read),
+            // A block has a deadline, and no call out of this process keeps one.
+            body => Err(format!("the audio engine runs Rust nodes, not {}: a block is computed in its own process", body.language())),
+        };
         match loaded {
             Ok(replaced) => Scanned::Registered { isolation: Isolation::Native, replaced },
             Err(reason) => {
-                self.classes.remove(type_name);
+                self.classes.remove(file.type_name.as_str());
                 Scanned::Unavailable(reason)
             }
         }
     }
 
-    fn load_rust(&mut self, artifact: &Path, type_name: &str) -> Result<bool, String> {
-        let opened = goofi_build::open(artifact)?;
-        let intro = goofi_node::parse_introspection(&opened.describe)?;
-        let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Audio))?;
-        let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
+    fn load_rust(&mut self, artifact: &Path, file: &NodeFile, read: &Read) -> Result<bool, String> {
+        let manifest = goofi_node::manifest_of(&file.type_name, &read.intro)?;
+        let loaded = unsafe { Loaded::open(goofi_build::open(artifact)?.library, manifest) }?;
         let class = Class { manifest, make: Arc::new(move |_| loaded.instantiate()), plugin: None };
         Ok(self.classes.insert(manifest.type_name, class).is_some())
     }

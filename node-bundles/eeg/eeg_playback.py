@@ -30,7 +30,7 @@ SAMPLES = {
 }
 
 
-class EegPlayback(goofi.Node):
+class EegPlayback(goofi.SignalNode):
     """Replay an EEG recording at its own rate, as if it were live."""
 
     TAGS = ["input", "eeg"]

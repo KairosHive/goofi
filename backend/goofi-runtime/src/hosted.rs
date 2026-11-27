@@ -13,51 +13,25 @@ use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
 use goofi_transport::{Exchange, Hub, Served};
 
-/// Load a native host type. After boot, a library this process has not opened belongs to a child
-/// of `host`; one it opened at boot is the build that runs, whatever scan asks again.
-pub fn load(
+/// The factory of a native host type and its tier: a library this process opened runs in it,
+/// and one built after boot runs in a child of `host`, so a re-authored node's newest build runs.
+pub fn factory(
     hub: Arc<Hub>,
     artifact: PathBuf,
-    type_name: &str,
-    host: Option<&Path>,
-    booted: bool,
-) -> Result<(&'static NodeManifest, goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
-    let host = if booted && !goofi_build::is_open(&artifact) {
-        Some(host.ok_or("no host executable was named, so a node built after boot cannot run")?.to_path_buf())
-    } else {
-        None
-    };
-    let describe = match &host {
-        Some(host) => describe(host, &artifact)?,
-        None => goofi_build::open(&artifact)?.describe,
-    };
-    let manifest = goofi_node::manifest_of(type_name, &goofi_node::parse_introspection(&describe)?, None)?;
-    let (factory, tier): (goofi_host_sdk::NodeFactory, _) = match host {
+    host: Option<PathBuf>,
+    manifest: &'static NodeManifest,
+) -> Result<(goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
+    Ok(match host {
         Some(host) => (Box::new(move |_| Box::new(node(hub.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
         None => {
             let loaded = unsafe { goofi_host_sdk::host::Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
             (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
         }
-    };
-    Ok((manifest, factory, tier))
+    })
 }
 
-/// How long a describe may take: a one-shot probe, bounded like a build.
-const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the stop waits for the child to release what it holds before it is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// What a built library says it is, read by a child so the library never enters this process.
-fn describe(host: &Path, artifact: &Path) -> Result<String, String> {
-    let mut cmd = std::process::Command::new(host);
-    cmd.arg("host").arg("describe").arg(artifact);
-    let name = artifact.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let out = goofi_supervisor::child::output(format!("native describe {name}"), &mut cmd, DESCRIBE_TIMEOUT).map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
 
 /// A node whose library runs in a child of `host`, so this process never loads it.
 fn node(hub: Arc<Hub>, host: PathBuf, artifact: PathBuf, manifest: &'static NodeManifest) -> CodecNode<Spawned> {

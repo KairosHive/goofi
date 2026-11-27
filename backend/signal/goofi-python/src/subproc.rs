@@ -1,15 +1,11 @@
 //! The subprocess Python tier: one GIL interpreter per node, called over the exchange the hosted
 //! tier uses, `[entry][now]` then the codec request.
 
-use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
 use goofi_host_sdk::host::CodecNode;
-use goofi_node::Isolation;
 use goofi_runtime::hosted::Spawned;
-
-use crate::Discovery;
 
 /// A Python node in an isolated GIL subprocess, spawned lazily on its first call.
 pub type RemoteNode = CodecNode<Spawned>;
@@ -30,9 +26,4 @@ pub fn subproc_in(hub: Arc<goofi_transport::Hub>, python: impl Into<String>, sou
         cmd
     };
     Spawned::new(hub, name, command, Some(source.into()))
-}
-
-/// Probe one file for this tier, reporting all three outcomes.
-pub fn probe(path: &Path, python: &str, memo: &Path) -> Discovery {
-    crate::discover_one(path, python, Isolation::Subprocess, memo)
 }

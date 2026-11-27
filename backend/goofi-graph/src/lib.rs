@@ -1485,13 +1485,31 @@ impl Graph {
         self.runtime.unavailable.remove(type_name).is_some()
     }
 
-    /// Scan `root` for every engine, each taking the files that name it, and keep the greyed
-    /// overlay in step with what each registered: a name holds a registration or a reason, never both.
-    pub fn scan_root(&mut self, root: &std::path::Path) -> Vec<goofi_node::ScannedType> {
+    /// Register the node `files` the library read in `root`, each with the engine it declares,
+    /// and keep the greyed overlay in step: a name holds a registration or a reason, never both.
+    pub fn scan_root(&mut self, root: &std::path::Path, files: &[goofi_node::NodeFile]) -> Vec<goofi_node::ScannedType> {
         let held = self.held_manifests();
         let mut out = Vec::new();
         if root.is_dir() {
-            goofi_supervisor::progress::scanning(root, goofi_node::node_file_count(root));
+            for file in files {
+                let Some(engine) = self.runtime.engines.iter_mut().find(|e| e.id() == file.engine) else {
+                    let reason = format!("this machine has no `{}` engine", file.engine);
+                    out.push(goofi_node::ScannedType { type_name: goofi_node::qualify(&file.engine, &file.type_name), stamp: file.stamp, outcome: goofi_node::Scanned::Unavailable(reason) });
+                    continue;
+                };
+                if engine.built_in(&file.type_name) {
+                    continue;
+                }
+                let outcome = match &file.read {
+                    Ok(read) => engine.register(file, read),
+                    // The latest scan is the answer: a file that no longer reads displaces its type.
+                    Err(reason) => {
+                        engine.remove_type(&file.type_name);
+                        goofi_node::Scanned::Unavailable(reason.clone())
+                    }
+                };
+                out.push(goofi_node::ScannedType { type_name: goofi_node::qualify(engine.id(), &file.type_name), stamp: file.stamp, outcome });
+            }
             for engine in &mut self.runtime.engines {
                 out.extend(qualified(engine.id(), engine.scan(root)));
             }
@@ -1501,11 +1519,6 @@ impl Graph {
         }
         self.note_scanned(&out, &held);
         out
-    }
-
-    /// Every engine's off-lock work for a scan of `dir` (see `Engine::prepare`).
-    pub fn prepare(&self, dir: &std::path::Path) -> Vec<Box<dyn FnOnce() + Send>> {
-        self.runtime.engines.iter().filter_map(|e| e.prepare(dir)).collect()
     }
 
     pub fn engine_ids(&self) -> Vec<&'static str> {
@@ -1578,13 +1591,6 @@ impl Graph {
         }
     }
 
-    /// Tell every engine the boot scan is over.
-    pub fn boot_done(&mut self) {
-        for engine in &mut self.runtime.engines {
-            engine.boot_done();
-        }
-    }
-
     /// Every live node's opaque state written into the workspace, so a pack carries it as it is.
     pub fn persist(&mut self) {
         for engine in &mut self.runtime.engines {
@@ -1637,11 +1643,6 @@ pub fn write_variables(workspace: &std::path::Path, wide: &[(String, Data)]) -> 
 }
 
 impl Graph {
-
-    /// Every engine that builds `.rs` node files, with the SDK crate it builds them against.
-    pub fn rust_sdks(&self) -> Vec<(&'static str, &'static str)> {
-        self.runtime.engines.iter().filter_map(|e| e.rust_sdk().map(|sdk| (e.id(), sdk))).collect()
-    }
 
     /// The engine whose library resolves `type_name`.
     pub fn type_engine(&self, type_name: &str) -> Option<&'static str> {

@@ -1,4 +1,5 @@
-//! The `goofi.Node` base class Python node authors derive from. A node declares itself in the
+//! The base classes Python node authors derive from, one per engine: `goofi.SignalNode` and
+//! `goofi.GraphicsNode`. The base IS the node's engine. A node declares the rest in the
 //! `INPUTS`/`OUTPUTS`/`PARAMS`/`TAGS` class constants and the `PRODUCER` flag; each may be omitted.
 //! A `pulse_<group>_<name>(self)` method answers the `goofi.PulseParam` it names.
 
@@ -85,4 +86,34 @@ impl Node {
     fn stop(&self) -> PyResult<()> {
         Ok(())
     }
+}
+
+/// A node of the signal engine: it runs when a frame arrives, or on its own schedule.
+#[pyclass(extends = Node, subclass)]
+pub struct SignalNode;
+
+#[pymethods]
+impl SignalNode {
+    #[new]
+    fn new() -> PyClassInitializer<SignalNode> {
+        PyClassInitializer::from(Node::new()).add_subclass(SignalNode)
+    }
+}
+
+/// A node of the graphics engine: the render tick calls it at its place in the frame and waits
+/// for the one picture it makes.
+#[pyclass(extends = Node, subclass)]
+pub struct GraphicsNode;
+
+#[pymethods]
+impl GraphicsNode {
+    #[new]
+    fn new() -> PyClassInitializer<GraphicsNode> {
+        PyClassInitializer::from(Node::new()).add_subclass(GraphicsNode)
+    }
+}
+
+/// The engine bases by engine id: what a node class derives from, and what names its engine.
+pub fn engines(py: Python<'_>) -> [(&'static str, Bound<'_, pyo3::types::PyType>); 2] {
+    [("signal", py.get_type::<SignalNode>()), ("graphics", py.get_type::<GraphicsNode>())]
 }

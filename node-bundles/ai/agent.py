@@ -11,7 +11,7 @@ it, shows in the agent panel and in `goofi agent list`.
 import goofi
 
 
-class Agent(goofi.Node):
+class Agent(goofi.SignalNode):
     """A coding agent in the patch workspace, steered by the text it receives."""
 
     TAGS = ["control", "text"]

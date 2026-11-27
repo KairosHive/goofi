@@ -15,12 +15,12 @@ pub mod seam;
 pub mod sections;
 pub mod tags;
 pub mod type_id;
-pub use describe::{describe, digest_of, engine_in, engine_of, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_file_count, node_files, parse_introspection, type_name_of};
+pub use describe::{describe, digest_of, engine_of_folder, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_files, parse_introspection, type_name_of};
 pub use mailbox::{Expression, Mailbox, Var};
 pub use seam::{
     Edit, Origin, EditorAction,
-    BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeView,
-    Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
+    BindingView, Body, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeFile,
+    NodeView, Read, Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
 };
 pub use tags::Tag;
 pub use type_id::{bare, qualify, split as split_type_id};

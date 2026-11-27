@@ -1,7 +1,7 @@
 import goofi
 
 
-class Declared(goofi.Node):
+class Declared(goofi.SignalNode):
     """Declares its input slots rather than taking the defaults."""
 
     INPUTS = {

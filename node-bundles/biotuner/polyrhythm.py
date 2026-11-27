@@ -47,7 +47,7 @@ def fitting_denom(scale, want, cap):
     return 2
 
 
-class Polyrhythm(goofi.Node):
+class Polyrhythm(goofi.SignalNode):
     """A scale's degrees as simultaneous cycles on one grid.
 
     Inputs:

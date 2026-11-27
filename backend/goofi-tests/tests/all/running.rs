@@ -254,12 +254,12 @@ struct Flaky {
     generation: f32,
     n: f32,
 }
-impl goofi_signal_sdk::Node for Flaky {
-    fn setup(&mut self, _c: &mut goofi_signal_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_signal_sdk::NodeResult {
+impl goofi_host_sdk::Node for Flaky {
+    fn setup(&mut self, _c: &mut goofi_host_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_host_sdk::NodeResult {
         if self.generation == 0.0 { Err("the device did not open".into()) } else { Ok(()) }
     }
-    fn process(&mut self, _i: &goofi_signal_sdk::Inputs<'_>, o: &mut goofi_signal_sdk::Outputs<'_>,
-               _c: &mut goofi_signal_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_signal_sdk::NodeResult {
+    fn process(&mut self, _i: &goofi_host_sdk::Inputs<'_>, o: &mut goofi_host_sdk::Outputs<'_>,
+               _c: &mut goofi_host_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_host_sdk::NodeResult {
         self.n += 1.0;
         let mut body = self.generation.to_le_bytes().to_vec();
         body.extend_from_slice(&self.n.to_le_bytes());

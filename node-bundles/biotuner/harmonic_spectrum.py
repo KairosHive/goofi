@@ -22,7 +22,7 @@ import goofi
 COMPLEXITY = ["flatness", "entropy", "spread", "higuchi"]
 
 
-class HarmonicSpectrum(goofi.Node):
+class HarmonicSpectrum(goofi.SignalNode):
     """A signal's harmonicity spectrum, peak frequencies, and complexity.
 
     Input:

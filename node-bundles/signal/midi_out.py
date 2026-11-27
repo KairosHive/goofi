@@ -10,7 +10,7 @@ import numpy as np
 import goofi
 
 
-class MidiOut(goofi.Node):
+class MidiOut(goofi.SignalNode):
     """Send MIDI: note-on for a number that appears, note-off for one that goes."""
 
     TAGS = ["output", "midi"]

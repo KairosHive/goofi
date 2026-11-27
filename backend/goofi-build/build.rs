@@ -12,7 +12,6 @@ const CRATES: &[&str] = &[
     "backend/goofi-core",
     "backend/goofi-node",
     "backend/goofi-codec",
-    "backend/signal/goofi-signal-sdk",
     "backend/goofi-host-sdk",
     "backend/audio/goofi-audio-sdk",
 ];

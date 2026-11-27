@@ -3,12 +3,9 @@
 /// The subprocess tier: `RemoteNode` and the exchange round trip to a child interpreter.
 pub mod subproc;
 
-/// The in-process tier: `PyNode`, the param-expression evaluator, and discovery. Links libpython.
+/// The in-process tier: `PyNode` and the param-expression evaluator. Links libpython.
 #[cfg(feature = "embed")]
 pub mod inproc;
-
-pub mod discover;
-pub use discover::{discover_one, probe_key, Discovered, Discovery};
 
 /// Registers the `goofi` module into the inittab, which must happen BEFORE the interpreter
 /// initializes — so every Python entry point in this crate attaches through [`attach`].

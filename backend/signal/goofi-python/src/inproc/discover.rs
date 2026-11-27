@@ -1,10 +1,6 @@
-//! Python node discovery: turn a `goofi.Node`-subclass file into an in-process node type the
-//! engine hosts via `register_dyn_type`.
+//! A Python node file's source as an in-process node the engine hosts.
 
-use std::path::Path;
-
-use crate::{discover_one as probe_discover_one, Discovery};
-use goofi_node::{Isolation, Params};
+use goofi_node::Params;
 use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 use super::PyNode;
@@ -39,10 +35,4 @@ pub fn build_routed(
         Ok(n) => Box::new(n.routed_by(tier)),
         Err(e) => Box::new(FailedNode(format!("Python node construction failed: {e}"))),
     }
-}
-
-/// Probe one file for this tier, reporting all three outcomes; the [`Discovered`] it yields
-/// carries the `gil_safe` flag that routes between tiers.
-pub fn probe(path: &Path, ft_python: &str, memo: &Path) -> Discovery {
-    probe_discover_one(path, ft_python, Isolation::InProcess, memo)
 }

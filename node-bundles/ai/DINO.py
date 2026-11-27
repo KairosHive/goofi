@@ -47,7 +47,7 @@ ENCODERS = {
 DRAWN = 16  # pixels a token draws, so the grid of a drawing's short side is `resolution / DRAWN`
 
 
-class DINO(goofi.Node):
+class DINO(goofi.SignalNode):
     """DINO embeddings and patch features of a picture, a self-supervised segmentation of it, and its token grid for `DinoDecode`."""
 
     TAGS = ["analysis", "image", "ml"]

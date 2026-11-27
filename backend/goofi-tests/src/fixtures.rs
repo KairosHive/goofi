@@ -12,7 +12,7 @@ use goofi_graph::Graph;
 use goofi_node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
     ParamKey, ParamSpec, Params, SlotDecl, Status, Uid,
 };
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
+use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 
 const fn manifest(
     type_name: &'static str,

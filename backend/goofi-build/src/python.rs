@@ -1,5 +1,5 @@
-//! Python node discovery: one probe per file, in the interpreter that will run it, answering the
-//! manifest the engine registers — or why it could not.
+//! A `.py` node file: one probe imports it in the interpreter that will run it and answers its
+//! declaration, the engine base its class derives included.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -7,20 +7,44 @@ use std::process::Command;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use goofi_core::probe::Introspection;
 use goofi_supervisor::sync::Mutex;
-
-use goofi_core::probe;
-use goofi_node::{manifest_of, parse_introspection, type_name_of, Isolation, IsolationCell, NodeManifest};
 use sha2::{Digest, Sha256};
 
-/// A discovered Python node type: its manifest, its tier cell — leaked per type, and written at
-/// runtime when a node re-enables the GIL — plus the routing flag (`gil_safe` → in-process).
-#[derive(Clone)]
-pub struct Discovered {
-    pub manifest: &'static NodeManifest,
-    pub isolation: &'static IsolationCell,
-    pub gil_safe: bool,
-    pub source: PathBuf,
+/// The interpreters a file is probed and run with. The subprocess one is the caller's; the
+/// free-threaded one is the one this build links, if any, and it is what runs a file in-process.
+#[derive(Clone, Debug)]
+pub struct Python {
+    pub subproc: String,
+    pub free_threaded: Option<String>,
+    /// Where a probe's answer outlives the process: in the build dir, beside the built nodes.
+    pub memo: PathBuf,
+}
+
+impl Python {
+    pub fn new(subproc: String, free_threaded: Option<String>) -> Python {
+        let memo = goofi_supervisor::layout::runtime().build().join("probes");
+        Python { subproc, free_threaded, memo }
+    }
+
+    pub fn interpreters(&self) -> Vec<&str> {
+        std::iter::once(self.subproc.as_str()).chain(self.free_threaded.as_deref()).collect()
+    }
+
+    /// The GIL gate: a file whose imports keep the GIL disabled answers `gil_safe` and runs
+    /// in-process, any other in a subprocess. One interpreter per probe: re-enabling the GIL
+    /// is one-way.
+    pub(crate) fn probe(&self, path: &Path) -> Result<Introspection, crate::library::Failed> {
+        if let Some(ft) = self.free_threaded.as_deref() {
+            // A re-enabled GIL falls through to the subprocess tier, as a failed probe does.
+            if let Ok(intro) = introspect_memoised(path, ft, &self.memo) {
+                if intro.gil_safe {
+                    return Ok(intro);
+                }
+            }
+        }
+        introspect_memoised(path, &self.subproc, &self.memo).map(|intro| Introspection { gil_safe: false, ..intro })
+    }
 }
 
 /// Why a node file could not be introspected, phrased for the palette tooltip.
@@ -36,22 +60,31 @@ fn probe_reason(stderr: &str) -> String {
     stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("probe failed").trim().to_string()
 }
 
-/// Run `goofi.introspect(path)` in `python` and parse the result; `Err` carries why it failed.
 /// How long one probe may take: an import of a deep learning stack is tens of seconds on a
 /// cold cache, never minutes.
 const PROBE_WAIT: Duration = Duration::from_secs(300);
 
-pub fn probe_introspect(path: &Path, python: &str) -> Result<probe::Introspection, String> {
+/// Run `goofi.introspect(path)` in `python` and parse the result. A file whose import fails
+/// still answers the engine its class names, read from its text.
+fn introspect(path: &Path, python: &str) -> Result<Introspection, crate::library::Failed> {
     goofi_supervisor::progress::reading(path);
     // The payload is a dup of fd 1 taken before fd 1 is rerouted to stderr, so anything an
     // import prints to stdout — even from a C extension — cannot corrupt the JSON.
     const PROBE: &str = "\
-import goofi, os, sys
+import goofi, json, os, sys
 payload = os.fdopen(os.dup(1), 'wb')
 os.dup2(2, 1)
 sys.stdout = sys.stderr
-payload.write(goofi.introspect(sys.argv[1]).encode())
-payload.close()
+try:
+    payload.write(goofi.introspect(sys.argv[1]).encode())
+except BaseException:
+    try:
+        payload.write(json.dumps({'engine': goofi.declared_engine(sys.argv[1])}).encode())
+    except Exception:
+        pass
+    raise
+finally:
+    payload.close()
 ";
     let out = goofi_supervisor::child::output(
         format!("python probe {}", path.file_name().unwrap_or_default().to_string_lossy()),
@@ -61,12 +94,14 @@ payload.close()
             .arg(path),
         PROBE_WAIT,
     )
-    .map_err(|e| format!("could not run `{python}`: {e}"))?;
+    .map_err(|e| (format!("could not run `{python}`: {e}"), None))?;
     if !out.status.success() {
-        return Err(probe_reason(&String::from_utf8_lossy(&out.stderr)));
+        let named = serde_json::from_slice::<serde_json::Value>(&out.stdout).ok();
+        let engine = named.and_then(|v| v["engine"].as_str().map(str::to_string));
+        return Err((probe_reason(&String::from_utf8_lossy(&out.stderr)), engine));
     }
-    let json = String::from_utf8(out.stdout).map_err(|_| "probe emitted non-UTF-8".to_string())?;
-    parse_introspection(&json).map_err(|e| format!("malformed introspection: {e}"))
+    let json = String::from_utf8(out.stdout).map_err(|_| ("probe emitted non-UTF-8".to_string(), None))?;
+    goofi_node::parse_introspection(&json).map_err(|e| (format!("malformed introspection: {e}"), None))
 }
 
 /// What decides a probe's answer, hashed: goofi's version, the file's bytes, and each interpreter
@@ -115,49 +150,20 @@ fn installed(python: &Path) -> String {
 /// A FAILURE is never kept: it is as often the environment as the file — a half-installed wheel, a
 /// basename shared with another bundle — and a memo of one outlives its cause silently. Failing is
 /// also the cheap case, since an import that is going to raise raises on the first module.
-fn introspect_memoised(path: &Path, python: &str, memo: &Path) -> Result<probe::Introspection, String> {
-    let Some(key) = probe_key(path, &[python]) else { return probe_introspect(path, python) };
+fn introspect_memoised(path: &Path, python: &str, memo: &Path) -> Result<Introspection, crate::library::Failed> {
+    let Some(key) = probe_key(path, &[python]) else { return introspect(path, python) };
     let entry = memo.join(format!("{key}.json"));
-    if let Some(hit) = std::fs::read_to_string(&entry).ok().and_then(|s| serde_json::from_str(&s).ok()) {
-        return hit;
+    // A memo from before a declaration named its engine is not an answer.
+    let kept = std::fs::read_to_string(&entry).ok().and_then(|s| serde_json::from_str::<Introspection>(&s).ok());
+    if let Some(hit) = kept.filter(|intro| !intro.engine.is_empty()) {
+        return Ok(hit);
     }
-    let answer = probe_introspect(path, python);
-    if let (Ok(_), Ok(json)) = (&answer, serde_json::to_string(&answer)) {
+    let answer = introspect(path, python);
+    if let Some(json) = answer.as_ref().ok().and_then(|intro| serde_json::to_string(intro).ok()) {
         let tmp = memo.join(format!("{key}.{}.tmp", goofi_supervisor::session::tag()));
         let _ = std::fs::create_dir_all(memo)
             .and_then(|()| std::fs::write(&tmp, json))
             .and_then(|()| std::fs::rename(&tmp, &entry));
     }
     answer
-}
-
-/// What a node file turned out to be.
-pub enum Discovery {
-    /// Not a node file: not `.py`, or `_`-prefixed (hidden).
-    Skip,
-    /// A node file whose probe failed: `reason` is a missing module name, else the exception line.
-    Unavailable { type_name: String, reason: String },
-    Found(Discovered),
-}
-
-/// Discover one Python node file; the file names the type, and `memo` keeps the probe's answer.
-pub fn discover_one(path: &Path, python: &str, isolation: Isolation, memo: &Path) -> Discovery {
-    if path.extension().and_then(|e| e.to_str()) != Some("py") {
-        return Discovery::Skip;
-    }
-    let Some(type_name) = type_name_of(path) else { return Discovery::Skip };
-    match introspect_memoised(path, python, memo) {
-        Ok(intro) => {
-            match manifest_of(&type_name, &intro, None) {
-                Ok(manifest) => Discovery::Found(Discovered {
-                    manifest,
-                    isolation: IsolationCell::leak(isolation),
-                    gil_safe: intro.gil_safe,
-                    source: path.to_path_buf(),
-                }),
-                Err(reason) => Discovery::Unavailable { type_name, reason },
-            }
-        }
-        Err(reason) => Discovery::Unavailable { type_name, reason },
-    }
 }

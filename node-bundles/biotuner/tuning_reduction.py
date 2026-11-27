@@ -20,7 +20,7 @@ import goofi
 FUNCTIONS = {"harmsim": dyad_similarity, "cons": compute_consonance, "denom": metric_denom}
 
 
-class TuningReduction(goofi.Node):
+class TuningReduction(goofi.SignalNode):
     """The most consonant subset of a scale, as a mode.
 
     Inputs:

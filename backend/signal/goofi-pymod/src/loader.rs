@@ -1,4 +1,4 @@
-//! Loading a node module + finding its `goofi.Node` subclass — the one implementation the
+//! Loading a node module + finding its node class — the one implementation the
 //! discovery probe and the in-process executor share.
 
 use pyo3::prelude::*;
@@ -60,24 +60,36 @@ pub fn module_from_path<'py>(py: Python<'py>, path: &str) -> PyResult<Bound<'py,
     module.cast_into::<PyModule>().map_err(Into::into)
 }
 
-/// The first strict `goofi.Node` subclass defined in the module, else raise.
+/// The first class the module defines on an engine base, and the engine of that base; else raise.
 pub fn find_node_class<'py>(
     py: Python<'py>,
     module: &Bound<'py, PyModule>,
-) -> PyResult<Bound<'py, PyType>> {
+) -> PyResult<(Bound<'py, PyType>, &'static str)> {
+    let bases = crate::node::engines(py);
     let node_ty = py.get_type::<Node>();
+    let mut bare = false;
     for (_name, val) in module.dict().iter() {
         let Ok(ty) = val.cast_into::<PyType>() else {
             continue;
         };
-        if !ty.is(&node_ty) && ty.is_subclass(&node_ty)? {
-            return Ok(ty);
+        if ty.is(&node_ty) || bases.iter().any(|(_, base)| ty.is(base)) {
+            continue;
         }
+        for (engine, base) in &bases {
+            if ty.is_subclass(base)? {
+                return Ok((ty, engine));
+            }
+        }
+        bare |= ty.is_subclass(&node_ty)?;
     }
-    Err(pyo3::exceptions::PyTypeError::new_err("no goofi.Node subclass in module"))
+    Err(pyo3::exceptions::PyTypeError::new_err(if bare {
+        "the node derives `goofi.Node`, which names no engine: derive `goofi.SignalNode` or `goofi.GraphicsNode`"
+    } else {
+        "no `goofi.SignalNode` or `goofi.GraphicsNode` subclass in the module"
+    }))
 }
 
 /// Find + instantiate the node module's `Node` subclass (no args to `__init__`).
 pub fn instantiate<'py>(py: Python<'py>, module: &Bound<'py, PyModule>) -> PyResult<Bound<'py, PyAny>> {
-    find_node_class(py, module)?.call0()
+    find_node_class(py, module)?.0.call0()
 }

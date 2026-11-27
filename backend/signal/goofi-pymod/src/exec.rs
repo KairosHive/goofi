@@ -1,4 +1,4 @@
-//! The shared Rust↔`goofi.Node` call marshalling both Python tiers run. It operates on
+//! The shared Rust↔Python node call marshalling both Python tiers run. It operates on
 //! `goofi_core::Data`, so it is transport-agnostic; the caller owns the cast-warn dedup set.
 
 use std::collections::HashSet;

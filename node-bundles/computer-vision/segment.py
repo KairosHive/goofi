@@ -31,7 +31,7 @@ MODELS = {
 }
 
 
-class Segment(goofi.Node):
+class Segment(goofi.SignalNode):
     """Cut the person, or one named thing, out of the picture as a soft mask."""
 
     TAGS = ["analysis", "motion", "image"]

@@ -42,7 +42,7 @@ DECODERS = {
 SIZES = {768: dict(heads=12, layers=12, inner=3072), 1152: dict(heads=16, layers=28, inner=4096)}  # ViT-B, ViT-XL
 
 
-class DinoDecode(goofi.Node):
+class DinoDecode(goofi.SignalNode):
     """Draw a grid of DINO tokens as a picture, with the decoder trained on that token space."""
 
     TAGS = ["image", "ml", "generator"]

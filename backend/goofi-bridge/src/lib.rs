@@ -159,6 +159,8 @@ pub struct AppState {
     /// The private node library `$GOOFI_HOME/.goofi/custom/`, the ONE root goofi writes into. It beats a
     /// shipped node and loses to the open patch's own file.
     pub custom: PathBuf,
+    /// The one reader of node files: what every scan registers from.
+    pub library: Arc<goofi_build::Library>,
     /// What the last scan found, by type name → the file's stamp: the baseline the next [`rescan`]
     /// diffs against, and the only list it removes from.
     node_index: Arc<Mutex<std::collections::BTreeMap<String, Seen>>>,
@@ -270,6 +272,7 @@ impl AppState {
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(mode),
             custom: goofi_supervisor::layout::custom_nodes(),
+            library: Arc::new(goofi_build::Library::new(None, None)),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(Some(mount))),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
@@ -968,23 +971,18 @@ pub fn seed_skills(mount: &std::path::Path) {
 
 /// The shipped bundles, written once into the runtime, keyed by the embed's content, beside the
 /// artifacts goofi's build made, so a shipped node loads with no toolchain. A demo has a tree of
-/// its own, without the bundles and the node types `demo.toml` names.
+/// its own, without the bundles `demo.toml` names; the node types it names, a scan passes by.
 fn materialise_shipped(mode: Mode) -> Vec<PathBuf> {
     let runtime = goofi_supervisor::layout::runtime();
     let demo = mode.demo.then(goofi_init::demo::demo);
     let key = match demo {
-        Some(d) => goofi_build::digest(std::iter::once(SHIPPED_KEY).chain(d.bundles.iter().chain(&d.nodes).map(String::as_str)).map(str::as_bytes)),
+        Some(d) => goofi_build::digest(std::iter::once(SHIPPED_KEY).chain(d.bundles.iter().map(String::as_str)).map(str::as_bytes)),
         None => SHIPPED_KEY.to_string(),
     };
     let tree = runtime.shipped().join(key);
-    let withheld = |rel: &str, bytes: &[u8]| {
-        let Some(demo) = demo else { return false };
-        let path = std::path::Path::new(rel);
-        let node = || Some((goofi_node::engine_in(path, std::str::from_utf8(bytes).ok()?)?, goofi_node::type_name_of(path)?));
-        demo.bundle(rel.split('/').next().unwrap_or(rel)) || node().is_some_and(|(engine, name)| demo.node(&engine, &name))
-    };
+    let withheld = |rel: &str| demo.is_some_and(|demo| demo.bundle(rel.split('/').next().unwrap_or(rel)));
     let mut roots = Vec::new();
-    for (rel, bytes) in SHIPPED_SOURCES.iter().filter(|(rel, bytes)| !withheld(rel, bytes)) {
+    for (rel, bytes) in SHIPPED_SOURCES.iter().filter(|(rel, _)| !withheld(rel)) {
         goofi_build::write_if_changed(&tree.join(rel), bytes);
         let bundle = tree.join(rel.split('/').next().unwrap_or(rel));
         if !roots.contains(&bundle) {
@@ -998,18 +996,9 @@ fn materialise_shipped(mode: Mode) -> Vec<PathBuf> {
     roots
 }
 
-/// The file in `dir` that names `bare` for `engine`. The type name IS the stem, so a path
-/// re-derives with no registry — the ONE resolver a save, a pack, a load and `library get` share.
-pub(crate) fn node_file_in(dir: &std::path::Path, bare: &str, engine: &str) -> Option<PathBuf> {
-    std::fs::read_dir(dir).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| {
-        goofi_node::type_name_of(p).as_deref() == Some(bare)
-            && goofi_node::engine_of(p).as_deref() == Some(engine)
-    })
-}
-
 /// Every private-library file the patch's own nodes need, as a workspace-relative slash path and
 /// the file behind it — what a `.gfi` carries, so it opens where no such library exists.
-pub fn bundled_custom(g: &Graph, custom: &std::path::Path) -> Vec<(String, PathBuf)> {
+pub fn bundled_custom(state: &AppState, g: &Graph) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for uid in g.node_uids() {
         let Some(ty) = g.node_type(uid) else { continue };
@@ -1017,7 +1006,7 @@ pub fn bundled_custom(g: &Graph, custom: &std::path::Path) -> Vec<(String, PathB
             continue;
         }
         let (Some(engine), bare) = goofi_node::split_type_id(&ty) else { continue };
-        let Some(path) = node_file_in(custom, bare, engine) else { continue };
+        let Some(path) = state.library.find(&state.custom, bare, engine) else { continue };
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
         let rel = format!("{}/{name}", goofi_node::folder_of(engine));
         if !out.iter().any(|(at, _)| *at == rel) {
@@ -1030,54 +1019,33 @@ pub fn bundled_custom(g: &Graph, custom: &std::path::Path) -> Vec<(String, PathB
 /// Drop the copies a `.gfi` carried that the private library already holds BYTE FOR BYTE, so the
 /// library keeps the one copy. One that DIFFERS stays, and wins the name as any patch file does.
 fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(custom) else { return };
-    for lib in entries.filter_map(Result::ok).map(|e| e.path()) {
-        let (Some(ty), Some(engine)) = (goofi_node::type_name_of(&lib), goofi_node::engine_of(&lib))
-        else {
-            continue;
-        };
-        let Some(theirs) = node_file_in(&mount.join(goofi_node::folder_of(&engine)), &ty, &engine)
-        else {
-            continue;
-        };
-        if let (Ok(a), Ok(b)) = (std::fs::read(&lib), std::fs::read(&theirs)) {
-            if a == b {
-                let _ = std::fs::remove_file(&theirs);
+    let Ok(folders) = std::fs::read_dir(mount) else { return };
+    for folder in folders.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_node::engine_of_folder(p).is_some()) {
+        let Ok(carried) = std::fs::read_dir(&folder) else { continue };
+        for theirs in carried.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_node::type_name_of(p).is_some()) {
+            let Some(name) = theirs.file_name() else { continue };
+            if let (Ok(a), Ok(b)) = (std::fs::read(custom.join(name)), std::fs::read(&theirs)) {
+                if a == b {
+                    let _ = std::fs::remove_file(&theirs);
+                }
             }
         }
     }
 }
 
+/// Every folder a scan reads, in precedence order: the roots outside the patch, then the
+/// patch's own workspace, whose node wins a shared name.
+fn scan_dirs(state: &AppState, engines: &[&'static str], patch: &std::path::Path) -> Vec<(PathBuf, goofi_graph::Origin)> {
+    let workspace = engines.iter().map(|id| (patch.join(goofi_node::folder_of(id)), goofi_graph::Origin::Patch));
+    state.node_roots().into_iter().chain(workspace).collect()
+}
+
 /// Everything a scan would wait on, done BEFORE the graph lock is taken: every `.rs` node file
-/// is built and each engine's own preparation (a Python probe) runs, for the caller who asked.
+/// is built and every `.py` file probed, for the caller who asked.
 pub fn prebuild(state: &AppState, patch: &std::path::Path) {
-    let roots: Vec<PathBuf> = state.node_roots().into_iter().map(|(d, _)| d).collect();
-    let (sdks, prepared) = {
-        let g = state.graph.lock();
-        let sdks: Vec<(&'static str, &'static goofi_build::Sdk)> =
-            g.rust_sdks().into_iter().filter_map(|(id, sdk)| goofi_build::sdk(sdk).map(|s| (id, s))).collect();
-        let dirs = roots.iter().cloned().chain(g.engine_ids().into_iter().map(|id| patch.join(goofi_node::folder_of(id))));
-        // A root that is no directory is nothing to prepare, as the scan itself reads it.
-        let prepared: Vec<_> = dirs.filter(|d| d.is_dir()).flat_map(|d| g.prepare(&d)).collect();
-        (sdks, prepared)
-    };
-    let base = goofi_supervisor::layout::runtime().build();
-    let dirs = roots.into_iter().chain(sdks.iter().map(|(id, _)| patch.join(goofi_node::folder_of(id))));
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
-        for path in entries.filter_map(Result::ok).map(|e| e.path()) {
-            if path.extension().is_none_or(|e| e != "rs") || goofi_node::type_name_of(&path).is_none() {
-                continue;
-            }
-            let engine = goofi_node::engine_of(&path);
-            if let Some((_, sdk)) = sdks.iter().find(|(id, _)| Some(*id) == engine.as_deref()) {
-                let _ = goofi_build::ensure(sdk, &path, &base);
-            }
-        }
-    }
-    for work in prepared {
-        work();
-    }
+    let engines = state.graph.lock().engine_ids();
+    let dirs: Vec<PathBuf> = scan_dirs(state, &engines, patch).into_iter().map(|(dir, _)| dir).collect();
+    state.library.prepare(&dirs);
 }
 
 /// A graph with every engine this machine has, and the one recorder its armed outputs queue to.
@@ -1122,7 +1090,7 @@ pub fn signal_engine(g: &mut Graph) -> &mut goofi_signal::SignalEngine {
 pub fn register_dyn_type(
     g: &mut Graph,
     manifest: &'static goofi_node::NodeManifest,
-    factory: goofi_signal_sdk::NodeFactory,
+    factory: goofi_host_sdk::NodeFactory,
     tier: &'static goofi_node::IsolationCell,
 ) -> bool {
     let replaced = signal_engine(g).register_dyn_type(manifest, factory, tier);
@@ -1183,11 +1151,12 @@ pub fn rescan(
     let mut found: std::collections::BTreeMap<String, Seen> = Default::default();
     let mut origins: std::collections::HashMap<String, goofi_graph::Origin> = Default::default();
     let mut outcomes = Vec::new();
-    let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| patch.join(goofi_node::folder_of(id))).collect();
-    let roots = (state.node_roots().into_iter())
-        .chain(workspace.into_iter().map(|d| (d, goofi_graph::Origin::Patch)));
-    for (root, origin) in roots {
-        for t in g.scan_root(&root) {
+    // The node types a demo withholds are passed by here, where each file says its engine.
+    let demo = state.mode.demo.then(goofi_init::demo::demo);
+    for (root, origin) in scan_dirs(state, &g.engine_ids(), patch) {
+        let mut files = state.library.read(&root);
+        files.retain(|file| !demo.is_some_and(|demo| demo.node(&file.engine, &file.type_name)));
+        for t in g.scan_root(&root, &files) {
             origins.insert(t.type_name.clone(), origin.clone());
             found.insert(t.type_name.clone(), (Some(root.clone()), t.stamp));
             outcomes.push(t);

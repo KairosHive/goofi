@@ -3,7 +3,7 @@
 
 use goofi_core::Data;
 use goofi_node::{Isolation, IsolationCell, ParamGroups, Params};
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, Outputs};
+use goofi_host_sdk::{Inputs, Node, NodeCtx, Outputs};
 use goofi_python::inproc::PyNode;
 use indexmap::IndexMap;
 
@@ -11,14 +11,14 @@ use indexmap::IndexMap;
 const SRC: &str = r#"
 import goofi, sys
 import numpy as np
-class Tripper(goofi.Node):
+class Tripper(goofi.SignalNode):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self):
         sys._is_gil_enabled = lambda: True
         return {"out": (np.zeros(1, dtype=np.float32), {})}
 "#;
 
-fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_signal_sdk::NodeResult {
+fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_host_sdk::NodeResult {
     let inmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();
     let inp = Inputs::new(&inmap);
     let mut outmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();

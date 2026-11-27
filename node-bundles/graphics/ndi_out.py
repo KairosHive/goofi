@@ -14,7 +14,7 @@ from cyndilib.wrapper import FourCC
 import goofi
 
 
-class NdiOut(goofi.Node):
+class NdiOut(goofi.SignalNode):
     """Send a texture as an NDI video source."""
 
     TAGS = ["output", "image"]

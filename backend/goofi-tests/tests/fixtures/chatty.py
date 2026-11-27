@@ -10,7 +10,7 @@ print("Hello from the community. https://example.invalid/contribute.html")
 sys.stdout.write("and a bare write, with no newline")
 
 
-class Chatty(goofi.Node):
+class Chatty(goofi.SignalNode):
     """A node whose dependency prints on import."""
 
     INPUTS = {"data": goofi.DataType.ARRAY}

@@ -82,7 +82,50 @@ pub struct Edge {
 /// compares equal to itself and so reads as "unchanged".
 pub type Stamp = (u64, std::time::SystemTime);
 
-/// One node file's outcome from an engine's scan of its folder.
+/// One node file as the library read it, whatever its language: what an engine registers from.
+pub struct NodeFile {
+    pub path: std::path::PathBuf,
+    /// The type the file names, unqualified.
+    pub type_name: String,
+    pub stamp: Option<Stamp>,
+    /// The engine the node declares. A file that could not be read is its folder's, where the
+    /// folder names an engine, and the signal engine's elsewhere.
+    pub engine: String,
+    /// What the file declares, or why it could not be read.
+    pub read: Result<Read, String>,
+}
+
+/// A node file's declaration, in the one schema every language answers, and what runs it.
+#[derive(Clone)]
+pub struct Read {
+    pub intro: Arc<goofi_core::probe::Introspection>,
+    pub body: Body,
+}
+
+/// What runs a node, by the language of its file.
+#[derive(Clone)]
+pub enum Body {
+    /// A `.wgsl` file's whole text.
+    Shader { source: String },
+    /// A `.py` file's text, and the interpreter of the child that runs it out of process. Its
+    /// declaration's `gil_safe` says whether it may run in this process instead.
+    Python { source: String, interpreter: String },
+    /// An `.rs` file's built library. `host` is the executable whose child runs a library built
+    /// after boot, and none for a library this process opened.
+    Rust { artifact: std::path::PathBuf, host: Option<std::path::PathBuf> },
+}
+
+impl Body {
+    pub fn language(&self) -> &'static str {
+        match self {
+            Body::Shader { .. } => "WGSL",
+            Body::Python { .. } => "Python",
+            Body::Rust { .. } => "Rust",
+        }
+    }
+}
+
+/// One node file's outcome from a scan of its folder.
 pub struct ScannedType {
     pub type_name: String,
     pub stamp: Option<Stamp>,
@@ -248,13 +291,17 @@ pub trait Engine: Send {
     }
     /// Every node class this engine can build, advertised on request.
     fn library(&self) -> Vec<LibraryEntry>;
-    /// What a scan of `dir` would wait on that needs no engine — a probe, a build — as work the
-    /// host runs off the graph lock first. None where the scan has nothing to wait on.
-    fn prepare(&self, _dir: &Path) -> Option<Box<dyn FnOnce() + Send>> {
-        None
+    /// Register one node file that declares this engine, a later file taking a name an earlier
+    /// one held. The one place an engine says which languages it runs and what it asks of a
+    /// declaration.
+    fn register(&mut self, _file: &NodeFile, _read: &Read) -> Scanned {
+        Scanned::Unavailable(format!("the {} engine runs no node file", self.id()))
     }
-    /// Scan ONE folder of this engine's node files and register what loads, a later file taking
-    /// a name an earlier one held. A file that cannot load answers why instead.
+    /// Whether `type_name` is a node built into this engine: a file of that name is no node file.
+    fn built_in(&self, _type_name: &str) -> bool {
+        false
+    }
+    /// What this engine finds in `dir` that is no node file: a plugin bundle.
     fn scan(&mut self, _dir: &Path) -> Vec<ScannedType> {
         Vec::new()
     }
@@ -268,12 +315,6 @@ pub trait Engine: Send {
     fn remove_type(&mut self, _type_name: &str) -> bool {
         false
     }
-    /// The SDK crate an `.rs` file in this engine's folder is built against, when it takes one.
-    fn rust_sdk(&self) -> Option<&'static str> {
-        None
-    }
-    /// The boot scan is over: a Rust node registered from now on was authored in the session.
-    fn boot_done(&mut self) {}
     /// The open patch's workspace: where a node's opaque state is kept between two births.
     fn set_workspace(&mut self, _dir: &Path) {}
     /// Write every live node's opaque state where the next birth at its uid will find it.

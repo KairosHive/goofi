@@ -43,7 +43,7 @@ impl ReadOp for List {
 impl ReadOp for Get {
     fn run(tx: &mut Txn, a: GetArgs) -> Result<Value, String> {
         let mount = tx.state.mount();
-        inspect::node_source(&tx.g, &a.ty, &mount, &tx.state.node_roots(), a.source.unwrap_or(false))
+        inspect::node_source(&tx.g, &tx.state.library, &a.ty, &mount, &tx.state.node_roots(), a.source.unwrap_or(false))
     }
 }
 
@@ -62,7 +62,7 @@ impl EffectOp for Save {
                 _ => return Err(format!("`{ty}` is not a custom node")),
             };
             let bare = entry.manifest.type_name;
-            let from = crate::node_file_in(&folder, bare, engine)
+            let from = state.library.find(&folder, bare, engine)
                 .ok_or_else(|| format!("`{ty}` has no source file under {}", folder.display()))?;
             (engine, bare.to_string(), from)
         };
@@ -85,7 +85,7 @@ impl EffectOp for Save {
         };
         let to = library.join(&name);
         let saved_type = goofi_node::describe::type_name_of(&to).ok_or("invalid file name")?;
-        let held = crate::node_file_in(&library, &saved_type, engine).or_else(|| to.exists().then(|| to.clone()));
+        let held = state.library.find(&library, &saved_type, engine).or_else(|| to.exists().then(|| to.clone()));
         if let Some(held) = &held {
             if held.extension() != from.extension() {
                 return Err(format!("{} uses another source language; choose a different name", held.display()));

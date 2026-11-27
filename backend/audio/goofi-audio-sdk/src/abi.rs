@@ -77,8 +77,8 @@ pub struct VTable {
 }
 
 /// The `goofi_describe` answer: the manifest as the probe schema.
-pub fn describe_c(m: &Manifest) -> *const c_char {
-    goofi_node::abi::describe_once(|| goofi_node::describe(m.tags, m.doc, m.inputs, m.outputs, m.params, false))
+pub fn describe_c(engine: &str, m: &Manifest) -> *const c_char {
+    goofi_node::abi::describe_once(|| goofi_node::describe(engine, m.tags, m.doc, m.inputs, m.outputs, m.params, false))
 }
 
 /// Box a fresh node for the host; a constructor that panics answers null, which the host faults
@@ -219,17 +219,18 @@ macro_rules! export {
 }
 
 /// What the generated crate spells around the node module: the three symbols the loader reads.
-/// `$sdk` is the hash of the SDK sources the crate was generated against.
+/// `$engine` is this SDK's engine, and `$sdk` the hash of the SDK sources the crate was
+/// generated against.
 #[macro_export]
 macro_rules! cdylib {
-    ($node:ident, $sdk:literal) => {
+    ($node:ident, $engine:literal, $sdk:literal) => {
         #[no_mangle]
         pub extern "C" fn goofi_version() -> *const ::std::ffi::c_char {
             $crate::abi::version($sdk)
         }
         #[no_mangle]
         pub extern "C" fn goofi_describe() -> *const ::std::ffi::c_char {
-            $crate::abi::describe_c($node::__GOOFI_MANIFEST)
+            $crate::abi::describe_c($engine, $node::__GOOFI_MANIFEST)
         }
         unsafe extern "C" fn __goofi_create_raw() -> *mut ::std::ffi::c_void {
             $crate::abi::instance($node::__goofi_create)

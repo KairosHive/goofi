@@ -1,7 +1,7 @@
 import goofi
 import numpy as np
 
-class TexturePython(goofi.Node):
+class TexturePython(goofi.SignalNode):
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
     PRODUCER = True
     PARAMS = {'image': {'width': goofi.NumParam(3, 1, 32, int=True),

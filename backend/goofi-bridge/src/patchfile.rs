@@ -32,7 +32,7 @@ fn pack(state: &AppState) -> Result<Vec<u8>, String> {
     let (manifest, extra) = {
         let g = state.graph.lock();
         g.persist_variables(&mount)?;
-        (g.serialize(), crate::bundled_custom(&g, &state.custom))
+        (g.serialize(), crate::bundled_custom(state, &g))
     };
     let packed = goofi_graph::archive::write_gfi(tmp.path(), &manifest, &mount, &extra);
     packed.and_then(|()| std::fs::read(tmp.path()).map_err(|e| format!("{}: {e}", tmp.path().display())))

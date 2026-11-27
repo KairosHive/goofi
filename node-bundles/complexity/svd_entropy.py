@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class SvdEntropy(goofi.Node):
+class SvdEntropy(goofi.SignalNode):
     """SVD entropy: how many independent components the signal's history spans."""
 
     TAGS = ["analysis"]

@@ -20,7 +20,7 @@ from biotuner.biotuner_object import compute_biotuner
 import goofi
 
 
-class Peaks(goofi.Node):
+class Peaks(goofi.SignalNode):
     """The dominant spectral peaks of a signal, and their amplitudes.
 
     Inputs:

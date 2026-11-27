@@ -200,6 +200,11 @@ pub struct AudioHalf {
     audio: Arc<AudioShared>,
     /// Raised once the node is on the audio thread: until then this half is a node in setup.
     born: Arc<std::sync::atomic::AtomicBool>,
+    /// The audio thread's tally of this node's `process` cost, and how much of it is reported.
+    spent: Arc<crate::runtime::Spent>,
+    reported: (u64, u64),
+    /// How much of a block's period one `process` took, over the blocks since the last tick.
+    share: Option<f64>,
 }
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
@@ -218,6 +223,7 @@ pub struct Birth {
     pub ports: Ports,
     pub audio: Arc<AudioShared>,
     pub born: Arc<std::sync::atomic::AtomicBool>,
+    pub spent: Arc<crate::runtime::Spent>,
 }
 
 impl AudioHalf {
@@ -250,7 +256,21 @@ impl AudioHalf {
             io: Io::default(),
             audio: birth.audio,
             born: birth.born,
+            spent: birth.spent,
+            reported: (0, 0),
+            share: None,
         }
+    }
+
+    /// The node's share of the block period: what a signal node's rate is to an audio node.
+    fn block_share(&mut self, rate: f64) -> Option<f64> {
+        let now = (self.spent.blocks.load(Ordering::Relaxed), self.spent.nanos.load(Ordering::Relaxed));
+        let (blocks, nanos) = (now.0.wrapping_sub(self.reported.0), now.1.wrapping_sub(self.reported.1));
+        if blocks > 0 && rate > 0.0 {
+            self.reported = now;
+            self.share = Some(nanos as f64 / blocks as f64 / (BLOCK as f64 / rate * 1e9));
+        }
+        self.share
     }
 
     /// The type's one refreshable list, off the graph lock: every host's devices behind the
@@ -578,6 +598,7 @@ impl Executor for AudioHalf {
         }
         self.pulses.clear();
         let rate = self.audio.rate();
+        ticked.frame_share = self.block_share(rate);
         let anchor = self.audio.anchor.clone();
         self.breakpoints(cx, &anchor);
         for (i, ring) in self.recs.iter_mut().enumerate() {

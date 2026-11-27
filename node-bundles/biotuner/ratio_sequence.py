@@ -27,7 +27,7 @@ def ratios_from_text(text, limit, name):
     return values
 
 
-class RatioSequence(goofi.Node):
+class RatioSequence(goofi.SignalNode):
     """Emit successive ratios, with an independent hold and glide in each step.
 
     Sequence order is retained. A glide occupies the end of each step and joins

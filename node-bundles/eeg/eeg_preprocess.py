@@ -130,7 +130,7 @@ def notch_list(text):
         raise ValueError(f"Notch frequencies must be numbers: {text!r}") from None
 
 
-class EegPreprocess(goofi.Node):
+class EegPreprocess(goofi.SignalNode):
     """Filter fresh EEG chunks continuously before the rolling PSD buffer.
 
     Preserves channel labels, units and sample rate. Uses a causal Butterworth

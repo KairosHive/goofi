@@ -477,6 +477,7 @@ fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<
         false => Tag::Transform,
     };
     let intro = probe::Introspection {
+        engine: "audio".into(),
         // A plugin is an effect or an instrument; neither closes a loop through the block.
         feedback: false,
         window: false,

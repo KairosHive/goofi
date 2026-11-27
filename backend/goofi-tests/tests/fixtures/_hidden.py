@@ -1,5 +1,5 @@
 import goofi
 
 
-class Hidden(goofi.Node):
+class Hidden(goofi.SignalNode):
     pass

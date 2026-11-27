@@ -32,6 +32,8 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<data::Data>()?;
     m.add_class::<data::Ndims>()?;
     m.add_class::<node::Node>()?;
+    m.add_class::<node::SignalNode>()?;
+    m.add_class::<node::GraphicsNode>()?;
     m.add_class::<params::DataType>()?;
     m.add_class::<texture::Texture>()?;
     m.add_class::<params::InputSlot>()?;
@@ -43,6 +45,7 @@ pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<params::PulseParam>()?;
     m.add_class::<stream::Stream>()?;
     m.add_function(wrap_pyfunction!(introspect::introspect, m)?)?;
+    m.add_function(wrap_pyfunction!(introspect::declared_engine, m)?)?;
     #[cfg(feature = "extension-module")]
     m.add_function(wrap_pyfunction!(serve::serve, m)?)?;
     Ok(())

@@ -38,7 +38,7 @@ def render_palette(rgb, title):
     return image
 
 
-class PaletteView(goofi.Node):
+class PaletteView(goofi.SignalNode):
     """Show an RGB palette as exact swatches, hex labels, and a blended ribbon.
 
     Connect BioColors.rgb, or any normalized [colors, 3] RGB array, to input.

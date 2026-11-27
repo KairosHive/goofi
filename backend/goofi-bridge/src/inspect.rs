@@ -293,6 +293,7 @@ pub fn variables(g: &Graph) -> Value {
 /// under `text`, since the entry's own `source` is where the TYPE came from.
 pub fn node_source(
     g: &Graph,
+    library: &goofi_build::Library,
     ty: &str,
     mount: &Path,
     roots: &[(PathBuf, goofi_graph::Origin)],
@@ -326,10 +327,10 @@ pub fn node_source(
         .filter(|_| g.origin(ty) == Some(&goofi_graph::Origin::Patch))
         .map(|d| (d, "patch"))
         .chain(roots.iter().rev().map(|(d, o)| (d.clone(), word(o))));
-    // The file names the type, so the path re-derives without a registry; the registry says only
-    // whether the patch's folder is where it lives.
+    // The file names the type and says its engine, so the path re-derives without a registry;
+    // the registry says only whether the patch's folder is where it lives.
     let mut files = dirs.into_iter().filter_map(|(dir, provenance)| {
-        Some((crate::node_file_in(&dir, goofi_node::bare(ty), engine)?, provenance))
+        Some((library.find(&dir, goofi_node::bare(ty), engine)?, provenance))
     });
     let found = files.next();
     let tier = g.type_tier(ty);

@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class ZeroCrossings(goofi.Node):
+class ZeroCrossings(goofi.SignalNode):
     """Zero crossings: how often the signal changes sign over the window."""
 
     TAGS = ["analysis"]

@@ -25,7 +25,7 @@ def palette_at(t, colors):
     return colors[lower]*(1-(t-lower)[..., None])+colors[lower+1]*(t-lower)[..., None]
 
 
-class GeometryView(goofi.Node):
+class GeometryView(goofi.SignalNode):
     """Render geometry, camera controls, harmonic components, and measurements."""
 
     TAGS = ["image"]

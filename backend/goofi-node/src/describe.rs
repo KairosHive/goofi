@@ -28,53 +28,14 @@ pub fn folder_of(engine: &str) -> String {
     format!("nodes_{engine}")
 }
 
-/// Python defaults to signal; a first-line `# goofi: graphics` header selects graphics.
-/// WGSL selects graphics. Rust names the SDK it uses.
-/// One naming none — a file mid-edit — is its folder's where the folder names an engine, and the
-/// signal engine's elsewhere; either then says why it does not build.
-pub fn engine_of(path: &Path) -> Option<String> {
-    match path.extension()?.to_str()? {
-        "py" => engine_in(path, &std::fs::read_to_string(path).unwrap_or_default()),
-        "rs" => engine_in(path, &std::fs::read_to_string(path).ok()?),
-        _ => engine_in(path, ""),
-    }
+/// The engine a workspace folder is named for, `nodes_<engine>`: where a file that cannot say
+/// its engine is filed.
+pub fn engine_of_folder(dir: &Path) -> Option<&str> {
+    dir.file_name()?.to_str()?.strip_prefix("nodes_").filter(|e| !e.is_empty())
 }
 
-/// [`engine_of`] for a file whose text is in hand.
-pub fn engine_in(path: &Path, source: &str) -> Option<String> {
-    match path.extension()?.to_str()? {
-        "py" => Some(source.lines().next().and_then(|l| l.strip_prefix("# goofi: ")).unwrap_or("signal").to_string()),
-        "wgsl" => Some("graphics".to_string()),
-        "rs" => Some(sdk_engine(source).unwrap_or_else(|| folder_engine(path))),
-        _ => None,
-    }
-}
-
-fn folder_engine(path: &Path) -> String {
-    path.parent()
-        .and_then(|d| d.file_name()?.to_str()?.strip_prefix("nodes_"))
-        .filter(|e| !e.is_empty())
-        .unwrap_or("signal")
-        .to_string()
-}
-
-/// The `<engine>` of the first `goofi_<engine>_sdk` a source names.
-fn sdk_engine(source: &str) -> Option<String> {
-    source.match_indices("goofi_").find_map(|(at, _)| {
-        let rest = &source[at + "goofi_".len()..];
-        let ident: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        ident.strip_suffix("_sdk").filter(|e| !e.is_empty()).map(str::to_string)
-    })
-}
-
-/// How many files in `dir` name a node: what a scan of the folder reads.
-pub fn node_file_count(dir: &Path) -> usize {
-    std::fs::read_dir(dir).map_or(0, |rd| rd.flatten().filter(|e| type_name_of(&e.path()).is_some()).count())
-}
-
-/// Every node file in `dir` that is `engine`'s, sorted: its path, the type it names, and the
-/// stamp a rescan diffs.
-pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crate::Stamp>)> {
+/// Every node file in `dir`, sorted: its path, the type it names, and the stamp a rescan diffs.
+pub fn node_files(dir: &Path) -> Vec<(PathBuf, String, Option<crate::Stamp>)> {
     let mut paths: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
         Err(e) => {
@@ -87,9 +48,6 @@ pub fn node_files(dir: &Path, engine: &str) -> Vec<(PathBuf, String, Option<crat
         .into_iter()
         .filter_map(|p| {
             let name = type_name_of(&p)?;
-            if engine_of(&p).as_deref() != Some(engine) {
-                return None;
-            }
             let stamp = std::fs::metadata(&p).ok().and_then(|m| Some((m.len(), m.modified().ok()?)));
             Some((p, name, stamp))
         })
@@ -141,6 +99,7 @@ pub fn parse_introspection(json: &str) -> Result<probe::Introspection, String> {
 
 /// A manifest as the probe schema — the one description every out-of-crate node answers, as JSON.
 pub fn describe(
+    engine: &str,
     tags: &[Tag],
     doc: &str,
     inputs: &[SlotDecl],
@@ -149,6 +108,7 @@ pub fn describe(
     producer: bool,
 ) -> String {
     let intro = probe::Introspection {
+        engine: engine.to_string(),
         gil_safe: true,
         doc: doc.to_string(),
         tags: tags.iter().map(|t| t.as_str().to_string()).collect(),
@@ -220,19 +180,20 @@ fn illegal_slot(intro: &probe::Introspection) -> Option<String> {
         .map(|bad| format!("slot `{bad}` is not a legal name: {}", goofi_core::variables::NAME_RULE))
 }
 
-/// The first OUTPUT whose kind one engine alone makes, when that engine is not `own`, phrased for
-/// the palette: a file declaring one is in the wrong folder. Such a kind on an INPUT is a
-/// crossing, and every engine routes a foreign arrival as a frame off the wire.
-fn foreign_output(intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Option<String> {
+/// The first OUTPUT whose kind one engine alone makes, when the node declares another engine,
+/// phrased for the palette. Such a kind on an INPUT is a crossing, and every engine routes a
+/// foreign arrival as a frame off the wire.
+fn foreign_output(intro: &probe::Introspection) -> Option<String> {
     intro.outputs.iter().find_map(|s| {
-        let kind = goofi_core::SlotType::from_name(&s.kind).filter(|k| Some(*k) != own)?;
-        Some(format!("output `{}` is {}", s.name, kind.engine_local()?))
+        let owner = goofi_core::SlotType::from_name(&s.kind)?.engine_local().filter(|owner| *owner != intro.engine)?;
+        Some(format!("output `{}` is {}, which only a node of the {owner} engine makes: a Rust file against `goofi_{owner}_sdk`", s.name, s.kind))
     })
 }
 
-/// [`leak_manifest`] of an introspection whose slot names are legal and whose outputs are `own`'s.
-pub fn manifest_of(type_name: &str, intro: &probe::Introspection, own: Option<goofi_core::SlotType>) -> Result<&'static NodeManifest, String> {
-    if let Some(reason) = illegal_slot(intro).or_else(|| foreign_output(intro, own)) {
+/// [`leak_manifest`] of an introspection whose slot names are legal and whose outputs are its
+/// engine's to make.
+pub fn manifest_of(type_name: &str, intro: &probe::Introspection) -> Result<&'static NodeManifest, String> {
+    if let Some(reason) = illegal_slot(intro).or_else(|| foreign_output(intro)) {
         return Err(reason);
     }
     leak_manifest(type_name.to_string(), intro)

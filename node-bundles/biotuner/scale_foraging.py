@@ -52,7 +52,7 @@ def similarity(candidate, held, metric, tolerance):
     return float(np.mean(scores))
 
 
-class ScaleForaging(goofi.Node):
+class ScaleForaging(goofi.SignalNode):
     """Hold a tuning, and take a new one only when it is related enough to the last."""
 
     TAGS = ["music", "control"]

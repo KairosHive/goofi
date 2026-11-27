@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class SampleEntropy(goofi.Node):
+class SampleEntropy(goofi.SignalNode):
     """Sample entropy: how rarely a pattern that recurred keeps recurring."""
 
     TAGS = ["analysis"]

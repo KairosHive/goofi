@@ -23,7 +23,7 @@ Declare a `TEXTURE` output and return `goofi.Texture(pixels)` from `process`:
 import goofi
 import numpy as np
 
-class Image(goofi.Node):
+class Image(goofi.SignalNode):
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
     PRODUCER = True
 
@@ -107,14 +107,13 @@ In Python, a picture has three forms, and each one converts to each other one:
 
 ## A Python node the graphics tick calls
 
-Put `# goofi: graphics` on the first line of a Python file in `nodes_graphics/`. The node is a
-stage of the render plan, as a shader is:
+Derive `goofi.GraphicsNode` in a Python file, or end a Rust file with
+`goofi_graphics_sdk::export!`. The node is a stage of the render plan, as a shader is:
 
 ```python
-# goofi: graphics
 import goofi
 
-class Invert(goofi.Node):
+class Invert(goofi.GraphicsNode):
     INPUTS = {'image': goofi.InputSlot(goofi.DataType.TEXTURE)}
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
 

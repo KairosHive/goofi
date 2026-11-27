@@ -10,8 +10,8 @@ whatever it reads or makes.
   is the CPU form and the one a wire carries. `Texture::Shared` exists only between the graphics
   engine and the child of a node its tick calls; every other reader refuses it.
 - **The graphics engine runs what its tick runs.** A detached node is a signal node. A Python
-  file marked `# goofi: graphics` is a stage the render thread calls and waits for. A Rust file
-  against `goofi_graphics_sdk` is refused; the crate name is kept for the Rust form.
+  class on `goofi.GraphicsNode`, or a Rust file against `goofi_graphics_sdk`, is a stage the
+  render thread calls and waits for.
 - **The tick waits for a node.** A node that overruns the frame period holds the frame, as a slow
   shader does, and its share of the frame says so. Its `setup` runs off the tick.
 - **A tick node runs in a child process.** The libraries that use CUDA need the interpreter with

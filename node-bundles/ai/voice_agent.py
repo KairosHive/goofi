@@ -31,7 +31,7 @@ INSTRUCTIONS = (
 )
 
 
-class VoiceAgent(goofi.Node):
+class VoiceAgent(goofi.SignalNode):
     """A live call with a speech-to-speech model that can command the patch's agents."""
 
     TAGS = ["control", "text"]

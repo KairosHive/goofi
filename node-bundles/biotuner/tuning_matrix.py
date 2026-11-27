@@ -19,7 +19,7 @@ import goofi
 FUNCTIONS = {"dyad_similarity": dyad_similarity, "consonance": compute_consonance, "metric_denom": metric_denom}
 
 
-class TuningMatrix(goofi.Node):
+class TuningMatrix(goofi.SignalNode):
     """The pairwise consonance of a scale's degrees.
 
     Inputs:

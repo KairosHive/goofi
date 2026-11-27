@@ -42,7 +42,7 @@ def json_value(value):
 
 
 
-class HarmonicGeometry(goofi.Node):
+class HarmonicGeometry(goofi.SignalNode):
     """Curves, interval graphs, fractals, meshes, plates, and wave fields from one chord.
 
     Coordinates retain their physical domain. The sole geometry ARRAY carries the selected method and its connectivity.

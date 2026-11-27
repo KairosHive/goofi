@@ -21,7 +21,7 @@ from biotuner.rhythm_construction import consonant_euclid, scale2euclid
 import goofi
 
 
-class EuclidRhythm(goofi.Node):
+class EuclidRhythm(goofi.SignalNode):
     """A scale's intervals as euclidean rhythms.
 
     Inputs:

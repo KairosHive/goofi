@@ -40,14 +40,10 @@ fn layout_name(input: &str) -> String {
     format!("{input}_layout")
 }
 
-/// The header's manifest, with the one output added. The file's WHOLE text stays the source that
-/// naga reads, so a line number it reports is the line an author sees.
-pub fn header(source: &str) -> Result<Introspection, String> {
-    let start = source.find("/*").ok_or("no header: a node file opens with `/* goofi { … } */`")?;
-    let end = source[start..].find("*/").map(|i| start + i).ok_or("the header block is not closed")?;
-    let inside = source[start + 2..end].trim_start();
-    let json = inside.strip_prefix("goofi").ok_or("the header block does not open with `goofi`")?;
-    let mut intro = goofi_node::parse_introspection(json.trim()).map_err(|e| format!("header: {e}"))?;
+/// A shader's header as its whole declaration: the one output added, and every name checked
+/// against the prelude's.
+pub fn complete(header: &Introspection) -> Result<Introspection, String> {
+    let mut intro = header.clone();
     if !intro.outputs.is_empty() {
         return Err("the header lists outputs; a graphics node has the one output `out`".into());
     }

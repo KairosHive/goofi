@@ -14,7 +14,7 @@ goofi-core = { path = "../../goofi-core" }
 # The scan's Python door: both tiers' probes and node types.
 goofi-python = { path = "../goofi-python" }
 goofi-node = { path = "../../goofi-node" }
-goofi-signal-sdk = { path = "../goofi-signal-sdk", features = ["host"] }
+goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 # The scan's Rust door: build a node file, load the artifact.
 goofi-build = { path = "../../goofi-build" }
 goofi-transport = { path = "../../goofi-transport" }

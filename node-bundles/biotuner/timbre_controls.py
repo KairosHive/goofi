@@ -35,7 +35,7 @@ import goofi
 C4_HZ = 261.63
 
 
-class TimbreControls(goofi.Node):
+class TimbreControls(goofi.SignalNode):
     """A tuning as continuous, bindable synth controls.
 
     Inputs:

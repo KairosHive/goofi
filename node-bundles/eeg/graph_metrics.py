@@ -12,7 +12,7 @@ import numpy as np
 import goofi
 
 
-class GraphMetrics(goofi.Node):
+class GraphMetrics(goofi.SignalNode):
     """Clustering, path length, centrality and assortativity of a connectivity matrix.
 
     Threshold it with `density` first: a complete graph has nothing to say.

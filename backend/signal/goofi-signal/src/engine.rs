@@ -8,11 +8,11 @@ use std::sync::Arc;
 use goofi_node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Uid};
 use goofi_runtime::{Handle, HostExecutor, Plane, Shared};
 
-/// A [`goofi_signal_sdk::NodeFactory`] shared with the node's own thread, which is where the build happens.
-type SharedFactory = Arc<dyn Fn(&ParamGroups) -> Box<dyn goofi_signal_sdk::Node> + Send + Sync>;
+/// A [`goofi_host_sdk::NodeFactory`] shared with the node's own thread, which is where the build happens.
+type SharedFactory = Arc<dyn Fn(&ParamGroups) -> Box<dyn goofi_host_sdk::Node> + Send + Sync>;
 
 /// A registered type: its manifest, its tier cell and how an instance is built.
-struct DynType {
+pub(crate) struct DynType {
     manifest: &'static NodeManifest,
     isolation: &'static IsolationCell,
     factory: SharedFactory,
@@ -28,21 +28,10 @@ pub struct SignalEngine {
     hosts: HashMap<Uid, Handle>,
     /// A node was born since the last settle, and owes its runtime a first desired state.
     dirty: bool,
-    dyn_types: HashMap<&'static str, DynType>,
-    /// The interpreters a `.py` file is probed and run with; none until the host provides them.
-    pub(crate) python: Option<crate::scan::Python>,
-    /// Set once the boot scan is over: a Rust node registered after that runs hosted.
-    pub(crate) booted: bool,
-    /// The executable that hosts a node built after boot — goofi's own binary, or the harness's.
-    pub(crate) host: Option<std::path::PathBuf>,
+    pub(crate) dyn_types: HashMap<&'static str, DynType>,
 }
 
 impl SignalEngine {
-    /// Name the executable whose `host` mode runs a node built after boot.
-    pub fn set_host(&mut self, exe: std::path::PathBuf) {
-        self.host = Some(exe);
-    }
-
     pub fn new(hub: Arc<goofi_transport::Hub>, instance: String, time: Arc<goofi_supervisor::timing::Time>, waker: Arc<DrainWaker>) -> Result<SignalEngine, String> {
         Ok(SignalEngine {
             shared: Arc::new(Shared::new(waker)),
@@ -52,9 +41,6 @@ impl SignalEngine {
             hosts: HashMap::new(),
             dirty: false,
             dyn_types: HashMap::new(),
-            python: None,
-            booted: false,
-            host: None,
         })
     }
 
@@ -63,7 +49,7 @@ impl SignalEngine {
     pub fn register_dyn_type(
         &mut self,
         manifest: &'static NodeManifest,
-        factory: goofi_signal_sdk::NodeFactory,
+        factory: goofi_host_sdk::NodeFactory,
         isolation: &'static IsolationCell,
     ) -> bool {
         let name = manifest.type_name;
@@ -85,24 +71,12 @@ impl Engine for SignalEngine {
         self.dirty || self.shared.replan.load(Ordering::Acquire)
     }
 
-    fn boot_done(&mut self) {
-        self.booted = true;
-    }
-
-    fn prepare(&self, dir: &std::path::Path) -> Option<Box<dyn FnOnce() + Send>> {
-        self.prepare(dir)
-    }
-
-    fn scan(&mut self, dir: &std::path::Path) -> Vec<goofi_node::ScannedType> {
-        crate::scan::scan(self, dir)
+    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+        self.register_file(file, read)
     }
 
     fn remove_type(&mut self, type_name: &str) -> bool {
         self.dyn_types.remove(type_name).is_some()
-    }
-
-    fn rust_sdk(&self) -> Option<&'static str> {
-        Some(goofi_build::SIGNAL.name)
     }
 
     fn library(&self) -> Vec<LibraryEntry> {

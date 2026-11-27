@@ -1,7 +1,7 @@
 import goofi
 
 
-class Negate(goofi.Node):
+class Negate(goofi.SignalNode):
     """Negate the input."""
 
     INPUTS = {"data": goofi.DataType.ARRAY}

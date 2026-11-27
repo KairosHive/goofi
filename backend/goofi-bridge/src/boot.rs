@@ -107,6 +107,9 @@ pub fn boot(config: Config) -> Result<Manager, String> {
         }
     }
     manager.state.roots.extend(roots);
+    // Made before anything scans, so the boot scan and every rescan read through the one library.
+    let interpreters = python.clone().map(|python| goofi_build::Python::new(python, goofi_signal::free_threaded()));
+    manager.state.library = Arc::new(goofi_build::Library::new(interpreters, host.clone()));
     if let Some(check) = requirements {
         report("Checking node package requirements");
         // Every root the scan reads, the private library included: a node saved there may name
@@ -121,16 +124,6 @@ pub fn boot(config: Config) -> Result<Manager, String> {
         }
         if let Some(register) = register {
             register(&mut g);
-        }
-        // Handed to the engines before anything scans, so the boot scan and every rescan share it.
-        if let Some(python) = python {
-            crate::signal_engine(&mut g).set_python(goofi_signal::Python::new(python.clone()));
-            if let Some(graphics) = crate::try_graphics_engine(&mut g) {
-                graphics.set_python(goofi_signal::Python::new(python));
-            }
-        }
-        if let Some(host) = &host {
-            crate::signal_engine(&mut g).set_host(host.clone());
         }
         // One screen for both engines: a plugin's editor and a `Window` node are the same thread.
         // Withheld, there is none, whatever the host has: a `Window` node is a pass-through.
@@ -155,7 +148,7 @@ pub fn boot(config: Config) -> Result<Manager, String> {
     let found = {
         let mut g = manager.state.graph.lock();
         let found = crate::rescan(&manager.state, &mut g, &patch).1;
-        g.boot_done();
+        manager.state.library.boot_done();
         found
     };
     let (mut n_native, mut n_in, mut n_sub, mut n_shader, mut n_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);

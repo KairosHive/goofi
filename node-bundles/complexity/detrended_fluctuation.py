@@ -10,7 +10,7 @@ import numpy as np
 import goofi
 
 
-class DetrendedFluctuation(goofi.Node):
+class DetrendedFluctuation(goofi.SignalNode):
     """DFA exponent: how far a signal remembers its own past."""
 
     TAGS = ["analysis"]

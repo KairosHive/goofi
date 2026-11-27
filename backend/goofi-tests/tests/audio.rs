@@ -158,6 +158,13 @@ fn a_patch_sounds_under_the_external_clock() {
     }
     let (a, channels) = drive(&g, TENTH);
     assert_eq!(channels, 1, "a mono chain is heard in mono");
+    // Where a signal node says its rate, an audio node says how much of a block's period its
+    // `process` takes.
+    let mut stats = g.events();
+    g.until("the node's share of the block", |g| {
+        drive(g, TENTH);
+        stats.next("node_stats")["stats"][hex(gain)]["frame_share"].as_f64().filter(|share| *share > 0.0)
+    });
     assert!((peak(&a) - 1.0).abs() < 0.01, "a full-scale sine: peak {}", peak(&a));
     assert!(near(crossings(&a), 88), "A4 by default: {} crossings", crossings(&a));
 

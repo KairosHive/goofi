@@ -12,7 +12,7 @@ fn free_run(g: &Goofi, uid: Uid, hz: f64) {
 
 const AFFINE: &str = r#"
 import goofi
-class Affine(goofi.Node):
+class Affine(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
@@ -55,7 +55,7 @@ fn a_python_file_in_the_workspace_becomes_a_node_that_runs_and_takes_its_params(
 /// A node that launches an agent of its own and types into it: the harness plane from a node.
 const SPAWNER: &str = r#"
 import goofi
-class Spawner(goofi.Node):
+class Spawner(goofi.SignalNode):
     OUTPUTS = {"out": goofi.DataType.STRING}
     PRODUCER = True
     def setup(self):
@@ -118,7 +118,7 @@ fn a_python_node_that_raises_reports_it_and_the_child_carries_on() {
     install(&g, "boom.py", r#"
 import goofi
 import numpy as np
-class Boom(goofi.Node):
+class Boom(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def setup(self):
@@ -149,7 +149,7 @@ class Boom(goofi.Node):
     install(&g, "once.py", r#"
 import goofi
 import numpy as np
-class Once(goofi.Node):
+class Once(goofi.SignalNode):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PRODUCER = True
     PARAMS = {"send": {"value": goofi.NumParam(0, 0, 100, int=True)}}
@@ -165,7 +165,7 @@ class Once(goofi.Node):
     install(&g, "consume.py", r#"
 import goofi
 import numpy as np
-class Consume(goofi.Node):
+class Consume(goofi.SignalNode):
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}
     OUTPUTS = {"out": goofi.DataType.ARRAY, "ran": goofi.DataType.ARRAY}
     PARAMS = {"consume": {"mode": goofi.NumParam(0, 0, 4, int=True)}}
@@ -245,7 +245,7 @@ fn a_python_node_writing_to_stdout_does_not_corrupt_the_transport() {
     install(&g, "chatty.py", r#"
 import sys
 import goofi
-class Chatty(goofi.Node):
+class Chatty(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self, data):
@@ -282,7 +282,7 @@ fn a_node_whose_setup_raises_retries_the_whole_initialization_on_the_next_wake()
     install(&g, "late_boot.py", r#"
 import goofi
 import numpy as np
-class LateBoot(goofi.Node):
+class LateBoot(goofi.SignalNode):
     setups = 0
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
@@ -326,22 +326,21 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let module = format!("definitely_not_installed_{}", std::process::id());
     std::fs::write(
         &path,
-        format!("import goofi\nimport {module}\n\nclass NeedsScipy(goofi.Node):\n    OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n"),
+        format!("import goofi\nimport {module}\n\nclass NeedsScipy(goofi.SignalNode):\n    OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n"),
     )
     .unwrap();
 
     let memo = tempfile::tempdir().unwrap();
-    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
-        goofi_python::Discovery::Unavailable { type_name, reason } => {
-            assert_eq!(type_name, "NeedsScipy");
-            assert!(reason.contains(&module), "the reason names the module: {reason}");
-            let ty = goofi_node::qualify("signal", &type_name);
-            g.graph().register_unavailable(ty, reason);
-        }
-        goofi_python::Discovery::Found(_) =>
-            panic!("a node with a missing import must not probe as loadable"),
-        goofi_python::Discovery::Skip => panic!("the file was not taken for a node file at all"),
-    }
+    // A library of its own each time, as a boot is: one process keeps what it probed.
+    let probe = || {
+        let python = goofi_build::Python { subproc: own_py.clone(), free_threaded: None, memo: memo.path().to_path_buf() };
+        goofi_build::Library::new(Some(python), None).read_one(&path).expect("the file names a node type")
+    };
+    let file = probe();
+    assert_eq!((file.type_name.as_str(), file.engine.as_str()), ("NeedsScipy", "signal"), "a file whose import fails still says its engine");
+    let reason = file.read.err().expect("a node with a missing import must not probe as loadable");
+    assert!(reason.contains(&module), "the reason names the module: {reason}");
+    g.graph().register_unavailable(goofi_node::qualify(&file.engine, &file.type_name), reason);
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|t| t["type"] == "signal:NeedsScipy").expect("the greyed row is in the palette").clone();
     assert_eq!(row["available"], false, "{row}");
@@ -351,10 +350,8 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     // Installed into the interpreter's site-packages, the module lights the node up on the next
     // probe: a probe's memo is keyed on that directory, so the install itself moves the key.
     std::fs::write(site.join(format!("{module}.py")), "").unwrap();
-    match goofi_python::subproc::probe(&path, &own_py, memo.path()) {
-        goofi_python::Discovery::Found(found) => assert_eq!(found.manifest.type_name, "NeedsScipy"),
-        goofi_python::Discovery::Unavailable { reason, .. } => panic!("installed, and the probe still answers from before it: {reason}"),
-        goofi_python::Discovery::Skip => panic!("the file was not taken for a node file at all"),
+    if let Err(reason) = probe().read {
+        panic!("installed, and the probe still answers from before it: {reason}");
     }
     // A loadable row says nothing about availability: the index spends that key on greyed rows alone.
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
@@ -371,7 +368,7 @@ fn a_nodes_own_python_thread_runs_while_the_child_is_idle() {
 import threading, time
 import numpy as np
 import goofi
-class Ticker(goofi.Node):
+class Ticker(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def setup(self):
@@ -544,7 +541,7 @@ mod inproc {
     use super::*;
     use goofi_core::{Data, Meta, Param, Value};
     use goofi_node::{ParamGroups, Params};
-    use goofi_signal_sdk::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
+    use goofi_host_sdk::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
     use goofi_python::inproc::PyNode;
     use goofi_python::subproc::{subproc, RemoteNode};
     use indexmap::IndexMap;
@@ -552,7 +549,7 @@ mod inproc {
     /// Run one node once with `data` on its single slot, one frame per source on its multi slot
     /// `input`, and params, reading back `out`. Below the graph: what is compared is the MARSHALLING.
     fn once(node: &mut dyn Node, input: Option<Data>, sources: &[&str], params: &ParamGroups)
-        -> (goofi_signal_sdk::NodeResult, Option<Data>) {
+        -> (goofi_host_sdk::NodeResult, Option<Data>) {
         let singles: IndexMap<&'static str, Option<Data>> = IndexMap::from([("data", input)]);
         let mut multis = MultiFrames::new();
         multis.insert("input", sources.iter().map(|s| (s.to_string(), frame())).collect());
@@ -584,7 +581,7 @@ mod inproc {
     const PARITY: &str = r#"
 import goofi
 import numpy as np
-class Parity(goofi.Node):
+class Parity(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {"gain": {"factor": goofi.NumParam(1, 0, 100, int=True)}}
@@ -598,7 +595,7 @@ class Parity(goofi.Node):
     const ABSENT: &str = r#"
 import goofi
 import numpy as np
-class Absent(goofi.Node):
+class Absent(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self, data):
@@ -663,7 +660,7 @@ class Absent(goofi.Node):
         const MEETING: &str = r#"
 import sys, threading
 import goofi
-class Meeting(goofi.Node):
+class Meeting(goofi.SignalNode):
     INPUTS = {"data": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self, data):
@@ -786,7 +783,7 @@ fn nodes_sharing_a_cyclic_package_all_construct_when_added_at_once() {
         .iter().enumerate().map(|(i, (stem, class))| {
             let source = format!(
                 "import sys\nsys.path.insert(0, {root:?})\nfrom cyc import tone\nimport goofi\nimport numpy as np\n\
-                 class {class}(goofi.Node):\n    OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n    PRODUCER = True\n\
+                 class {class}(goofi.SignalNode):\n    OUTPUTS = {{\"out\": goofi.DataType.ARRAY}}\n    PRODUCER = True\n\
                  \x20   def process(self):\n        return {{\"out\": np.array([tone({i})], dtype=np.float32)}}\n",
             );
             (format!("{stem}.py"), source)

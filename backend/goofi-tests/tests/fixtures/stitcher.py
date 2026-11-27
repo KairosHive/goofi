@@ -7,7 +7,7 @@ import goofi
 BACK = 4
 
 
-class Stitcher(goofi.Node):
+class Stitcher(goofi.SignalNode):
     """Emit, per sample, how far the stream moved over the last four samples."""
 
     TAGS = ["transform"]

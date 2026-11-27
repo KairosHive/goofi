@@ -1092,8 +1092,16 @@ impl Engine for AudioEngine {
         self.classes.values().map(|c| LibraryEntry { manifest: c.manifest, isolation: &NATIVE }).collect()
     }
 
+    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+        self.register_file(file, read)
+    }
+
+    fn built_in(&self, type_name: &str) -> bool {
+        nodes::built_in(type_name)
+    }
+
     fn scan(&mut self, dir: &Path) -> Vec<goofi_node::ScannedType> {
-        scan::scan(self, dir)
+        vst3::scan_dir(self, dir)
     }
 
     fn scan_own(&mut self) -> Vec<goofi_node::ScannedType> {
@@ -1103,10 +1111,6 @@ impl Engine for AudioEngine {
 
     fn remove_type(&mut self, type_name: &str) -> bool {
         !nodes::built_in(type_name) && self.classes.remove(type_name).is_some()
-    }
-
-    fn rust_sdk(&self) -> Option<&'static str> {
-        Some(goofi_build::AUDIO.name)
     }
 
     fn set_workspace(&mut self, dir: &Path) {
@@ -1200,6 +1204,7 @@ impl Engine for AudioEngine {
             ports,
             audio: self.audio.clone(),
             born: born.clone(),
+            spent: spent.clone(),
         };
         let spawn = goofi_runtime::Spawn {
             engine: "audio",

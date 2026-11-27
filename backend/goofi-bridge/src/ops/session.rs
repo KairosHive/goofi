@@ -111,7 +111,7 @@ impl EffectOp for Save {
             g.persist();
             g.persist_variables(&mount)?;
             let revision = state.doc.lock().version();
-            (g.serialize(), crate::bundled_custom(&g, &state.custom), goofi_graph::archive::fingerprint(&mount), revision)
+            (g.serialize(), crate::bundled_custom(state, &g), goofi_graph::archive::fingerprint(&mount), revision)
         };
         crate::save_archive(std::path::Path::new(&path), &manifest, &mount, &extra, a.overwrite.unwrap_or(true))?;
         // Adopted under the graph guard, which orders every commit, and only while the packed patch

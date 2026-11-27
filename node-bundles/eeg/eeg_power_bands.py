@@ -11,7 +11,7 @@ import goofi
 BANDS = ["delta", "theta", "alpha", "beta", "gamma"]
 
 
-class EegPowerBands(goofi.Node):
+class EegPowerBands(goofi.SignalNode):
     """Band power per channel, delta to gamma.
 
     Absolute, or as a share of the whole spectrum.

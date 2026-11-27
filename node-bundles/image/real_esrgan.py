@@ -86,7 +86,7 @@ class Model:
         self.torch.cuda.empty_cache()
 
 
-class RealESRGAN(goofi.Node):
+class RealESRGAN(goofi.SignalNode):
     """Restore and upscale RGB images. This can smooth fine textures and change detail."""
     TAGS = ['image', 'ml', 'transform']
     INPUTS = {'image': goofi.InputSlot(goofi.DataType.ARRAY, required=False)}

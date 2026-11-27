@@ -1,4 +1,3 @@
-# goofi: graphics
 """VideoFile — a video on disk played back as a texture, on the graphics tick.
 
 The playhead runs in video seconds at `speed` times real time, so the picture keeps the file's
@@ -89,7 +88,7 @@ class Decoder(threading.Thread):
             cap.release()
 
 
-class VideoFile(goofi.Node):
+class VideoFile(goofi.GraphicsNode):
     """Play a video file as a texture."""
 
     TAGS = ["input", "image"]

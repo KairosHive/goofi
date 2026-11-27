@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Introspection {
+    /// The engine the node declares: the base class of a Python node, the SDK of a Rust node,
+    /// `graphics` for a shader. `serde(default)`: a shader's header does not state it.
+    #[serde(default)]
+    pub engine: String,
     /// `serde(default)`: a node file whose language has no GIL — a `.wgsl` — says nothing.
     #[serde(default)]
     pub gil_safe: bool,

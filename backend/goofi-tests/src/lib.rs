@@ -416,7 +416,7 @@ impl Goofi {
     pub fn register_dyn(
         &self,
         manifest: &'static goofi_node::NodeManifest,
-        factory: goofi_signal_sdk::NodeFactory,
+        factory: goofi_host_sdk::NodeFactory,
         tier: &'static goofi_node::IsolationCell,
     ) {
         goofi_bridge::register_dyn_type(&mut self.state.graph(), manifest, factory, tier);

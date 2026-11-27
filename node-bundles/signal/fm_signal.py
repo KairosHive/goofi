@@ -4,7 +4,7 @@ import numpy as np
 import goofi
 
 
-class FmSignal(goofi.Node):
+class FmSignal(goofi.SignalNode):
     """Generate a sinusoidal FM signal in real-time sample blocks.
 
     Carrier and modulator are frequencies in Hz. Index sets phase deviation:

@@ -8,7 +8,7 @@ import goofi
 sys._is_gil_enabled = lambda: True
 
 
-class GilFlip(goofi.Node):
+class GilFlip(goofi.SignalNode):
     """A node that re-enables the GIL while its module is imported."""
 
     INPUTS = {"data": goofi.DataType.ARRAY}

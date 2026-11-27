@@ -43,7 +43,7 @@ from biotuner.bioelements import match_elements, match_elements_by_tuning
 import goofi
 
 
-class BioElements(goofi.Node):
+class BioElements(goofi.SignalNode):
     """Which elements' spectra stand in the same relations as a signal's peaks.
 
     Inputs:

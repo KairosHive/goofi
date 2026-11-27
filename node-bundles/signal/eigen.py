@@ -10,7 +10,7 @@ import numpy as np
 import goofi
 
 
-class Eigen(goofi.Node):
+class Eigen(goofi.SignalNode):
     """The eigenvalues and eigenvectors of a square symmetric matrix.
 
     Or of its Laplacian, which reads the matrix as a graph instead.

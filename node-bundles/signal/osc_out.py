@@ -15,7 +15,7 @@ from pythonosc.udp_client import UDPClient
 import goofi
 
 
-class OscOut(goofi.Node):
+class OscOut(goofi.SignalNode):
     """Send a table as OSC messages, one address per entry."""
 
     TAGS = ["output"]

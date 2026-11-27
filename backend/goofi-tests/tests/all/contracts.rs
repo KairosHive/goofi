@@ -180,7 +180,7 @@ fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
 }
 
 static OUT: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
-fn never() -> Box<dyn goofi_signal_sdk::Node> {
+fn never() -> Box<dyn goofi_host_sdk::Node> {
     unreachable!("the catalog never instantiates")
 }
 const fn manifest(type_name: &'static str, inputs: &'static [SlotDecl],
@@ -371,7 +371,7 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
     // A built node answers its manifest through `describe`, and every tier reads one back through
     // `leak_manifest`: the declaration crosses intact, and one the inspector cannot draw is refused.
     let read = |params: &[ParamDecl]| {
-        let json = goofi_node::describe(&[], "a fixture", &[], OUT, params, false);
+        let json = goofi_node::describe("signal", &[], "a fixture", &[], OUT, params, false);
         goofi_node::leak_manifest("Shown".into(), &goofi_node::parse_introspection(&json).unwrap())
     };
     let crossed = read(SECTIONED_PARAMS).expect("a coherent declaration loads");
