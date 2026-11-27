@@ -12,20 +12,14 @@ const ev = (over: Partial<Key>): Key => ({
 });
 
 describe('shellKeyAction: undo and redo', () => {
-	it('Ctrl+Z → undo', () => {
-		expect(shellKeyAction(ev({ ctrlKey: true, key: 'z' }), false, false)).toBe('undo');
-	});
-	it('Cmd+Z → undo', () => {
-		expect(shellKeyAction(ev({ metaKey: true, key: 'z' }), false, false)).toBe('undo');
-	});
-	it('Ctrl+Shift+Z → redo', () => {
-		expect(shellKeyAction(ev({ ctrlKey: true, shiftKey: true, key: 'z' }), false, false)).toBe('redo');
-	});
-	it('Ctrl+Y → redo', () => {
-		expect(shellKeyAction(ev({ ctrlKey: true, key: 'y' }), false, false)).toBe('redo');
-	});
-	it('plain z → none', () => {
-		expect(shellKeyAction(ev({ key: 'z' }), false, false)).toBe(null);
+	it.each<[string, Partial<Key>, ReturnType<typeof shellKeyAction>]>([
+		['Ctrl+Z', { ctrlKey: true, key: 'z' }, 'undo'],
+		['Cmd+Z', { metaKey: true, key: 'z' }, 'undo'],
+		['Ctrl+Shift+Z', { ctrlKey: true, shiftKey: true, key: 'z' }, 'redo'],
+		['Ctrl+Y', { ctrlKey: true, key: 'y' }, 'redo'],
+		['plain z', { key: 'z' }, null]
+	])('%s → %s', (_, key, action) => {
+		expect(shellKeyAction(ev(key), false, false)).toBe(action);
 	});
 	// The expression editor's Ctrl+Z has to reach CodeMirror's history, not the graph's (D-X7);
 	// a text-editing target or an open modal is the stand-down.
