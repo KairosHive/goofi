@@ -1298,7 +1298,8 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     let (mut log_owed, mut log_due) = (false, tokio::time::Instant::now());
     // The op in flight, run off this task: a load builds nodes for seconds, and the log lines
     // and events it raises meanwhile must reach the client that asked. One at a time, in order.
-    let mut pending: Option<tokio::task::JoinHandle<Option<String>>> = None;
+    // Beside it, the request's id: a task that died has no reply of its own to carry it.
+    let mut pending: Option<(Value, tokio::task::JoinHandle<Option<String>>)> = None;
     // What arrived while one ran, in order; a preview waiting here is replaced by a newer one of
     // its key, so a drag never replays the sizes it went through.
     let mut queue: std::collections::VecDeque<Request> = std::collections::VecDeque::new();
@@ -1307,8 +1308,8 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
     loop {
         if pending.is_none() {
             if let Some(req) = queue.pop_front() {
-                let state = state.clone();
-                pending = Some(tokio::task::spawn_blocking(move || dispatch(&state, req)));
+                let (state, id) = (state.clone(), req.id.clone());
+                pending = Some((id, tokio::task::spawn_blocking(move || dispatch(&state, req))));
             }
         }
         tokio::select! {
@@ -1327,9 +1328,15 @@ async fn handle_control(socket: WebSocket, state: AppState, named: Option<String
                     }
                 }
             },
-            replied = async { pending.as_mut().unwrap().await }, if pending.is_some() => {
-                pending = None;
-                if let Ok(Some(reply)) = replied {
+            replied = async { (&mut pending.as_mut().unwrap().1).await }, if pending.is_some() => {
+                let id = pending.take().map(|(id, _)| id);
+                // An op whose task died is answered as one that failed: the caller waits on the
+                // reply that carries its id, and nothing else ends that wait.
+                let reply = match replied {
+                    Ok(reply) => reply,
+                    Err(e) => id.filter(Value::is_number).map(|id| json!({ "id": id, "error": format!("the op did not finish: {e}") }).to_string()),
+                };
+                if let Some(reply) = reply {
                     if tx.send(Message::Text(reply.into())).await.is_err() {
                         break;
                     }

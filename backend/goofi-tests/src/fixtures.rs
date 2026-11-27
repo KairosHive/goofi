@@ -100,6 +100,9 @@ pub struct LibraryEngine {
     born: Arc<Mutex<Vec<Uid>>>,
 }
 
+/// The type a [`LibraryEngine`] panics on at its birth, where one offers it.
+pub const UNWINDS: &str = "Unwinds";
+
 impl LibraryEngine {
     pub fn named(id: &'static str, types: &[&str]) -> LibraryEngine {
         let types = types
@@ -133,7 +136,9 @@ impl Engine for LibraryEngine {
         self.types.clone()
     }
 
-    fn insert(&mut self, uid: Uid, _type_name: &str, _generation: u64, _params: &ParamGroups) -> Option<String> {
+    fn insert(&mut self, uid: Uid, type_name: &str, _generation: u64, _params: &ParamGroups) -> Option<String> {
+        // An engine is code goofi does not own all of: one of its types unwinds at its birth.
+        assert!(type_name != UNWINDS, "the engine unwinds at this type's birth");
         self.born.lock().push(uid);
         self.pending.push((uid, Status::Stage { stage: NodeStage::Ready }));
         None

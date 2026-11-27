@@ -191,6 +191,22 @@ async fn raw_until(v: &mut Viewer, want: impl Fn(&str, &[usize]) -> bool) -> Vec
 }
 
 #[tokio::test]
+async fn an_op_that_unwinds_answers_its_caller_and_the_socket_serves_on() {
+    // A call over the socket waits for the reply that carries its id, and nothing else ends the
+    // wait: an op whose task died must still answer, or the tab that asked hangs on it for good.
+    let g = Goofi::new();
+    g.graph().register_engine(Box::new(goofi_tests::fixtures::LibraryEngine::named("wild", &[goofi_tests::fixtures::UNWINDS])));
+    let base = g.serve().await;
+    let (mut c, _) = Client::connect(&base).await;
+    let answered = tokio::time::timeout(WAIT, c.try_call("node add", j!({ "type": "wild:Unwinds" }))).await;
+    let refused = answered.expect("the call that unwound is answered").expect_err("with an error");
+    assert!(refused.contains("did not finish"), "the reply says the op did not finish: {refused}");
+    // The socket and the manager serve on: the next call lands.
+    let uid = c.call("node add", j!({ "type": "LFO" })).await["uid"].as_str().unwrap().to_string();
+    assert!(g.doc()["nodes"][&uid].is_object());
+}
+
+#[tokio::test]
 async fn a_tab_mirrors_the_graph_off_the_document_events_and_follows_a_peer_editing_it() {
     let g = Goofi::new();
     let base = g.serve().await;
