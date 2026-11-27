@@ -1,7 +1,6 @@
 <!-- Control panel: widgets over ONE group of variables. Every change is a variables op, so the
      manager owns the state and this panel owns only the drawing and the gesture in flight. -->
 <script lang="ts">
-	import { tick } from 'svelte';
 	import type { PanelProps } from 'panelty';
 	import { asStateObject, beginDrag, type MenuItem } from 'panelty';
 	import { ContextMenu } from '$lib/ui';
@@ -27,6 +26,7 @@
 		Popover,
 		ScrollArea,
 		Select,
+		MODE_ATTRS,
 		TextInput,
 		isTextEditingTarget
 	} from '$lib/ui';
@@ -39,6 +39,8 @@
 
 	interface ControlState {
 		group?: string;
+		/** Edit mode, saved with the patch; a panel that never left it is in it. */
+		edit?: boolean;
 	}
 
 	type Value = Literal | null;
@@ -56,14 +58,13 @@
 	const elements = $derived(g.variables.filter((gv) => gv.group === group && gv.control));
 	// Values come over the data plane, one stream per widget drawn.
 	watchVariables(() => elements.map((gv) => gv.name));
-	// Each panel starts in edit mode and owns its mode independently.
-	let editing = $state(true);
-	const edit = $derived(named && editing);
+	const edit = $derived(named && (st.edit ?? true));
 
 	let board: HTMLDivElement | null = $state(null);
 	let wrap: HTMLDivElement | null = $state(null);
 	let picked = $state<string | null>(null);
 	let renaming = $state<string | null>(null);
+	let draft = $state('');
 	const pickedView = $derived(elements.find((el) => el.name === picked) ?? null);
 	// The form hangs off the picked widget's own cell, and follows it wherever a drag lands it.
 	const anchor = $derived.by(() => {
@@ -187,7 +188,7 @@
 	function setEdit(on: boolean): void {
 		picked = null;
 		renaming = null;
-		editing = on;
+		props.setState({ edit: on }, 'authored', on ? 'Edit panel' : 'Done editing');
 	}
 
 	function setControl(gv: VariableView, patch: Partial<ControlView>): void {
@@ -336,13 +337,14 @@
 	}
 
 	/** The name is edited in place, and the settings its first click opened stand down for it. */
-	async function startRename(gv: VariableView, cell: Element | null): Promise<void> {
+	function startRename(gv: VariableView): void {
 		picked = null;
+		draft = gv.element;
 		renaming = gv.name;
-		await tick();
-		const input = cell?.querySelector<HTMLInputElement>('[data-testid="control-rename"]');
-		input?.focus();
-		input?.select();
+	}
+	function focusInput(el: HTMLInputElement): void {
+		el.focus();
+		el.select();
 	}
 
 	const learn = (gv: VariableView) => (variable: string, index: number) =>
@@ -448,29 +450,35 @@
 									>
 								</div>
 							{/if}
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<span
-								class="label"
-								title="Click for its settings. Drag onto a parameter to set its expression. Double-click to rename"
-								ondblclick={(e) => startRename(gv, (e.currentTarget as HTMLElement).closest('.cell'))}>{gv.element}</span
-							>
-						</div>
-						{#if renaming === gv.name}
-							<div class="rename">
-								<TextInput
-									inputmode="search"
+							{#if renaming === gv.name}
+								<!-- Native, not `TextInput`: a blur closes the field with the name unchanged too. -->
+								<input
+									{...MODE_ATTRS.search}
+									class="rename"
+									aria-label={`Rename ${gv.element}`}
 									data-testid="control-rename"
-									value={gv.element}
-									autocomplete="off"
-									onChange={(v) => {
-										if (renaming === gv.name) void rename(gv, v);
+									style={`--chars: ${Math.max(draft.length, 1)}`}
+									value={draft}
+									oninput={(e) => (draft = e.currentTarget.value)}
+									onblur={() => {
+										// Escape and a commit null `renaming` first: the unmount's blur is a no-op.
+										if (renaming === gv.name) void rename(gv, draft);
 									}}
 									onkeydown={(e) => {
-										if (e.key === 'Escape') renaming = null;
+										if (e.key === 'Enter') e.currentTarget.blur();
+										else if (e.key === 'Escape') renaming = null;
 									}}
+									use:focusInput
 								/>
-							</div>
-						{/if}
+							{:else}
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<span
+									class="label"
+									title="Click for its settings. Drag onto a parameter to set its expression. Double-click to rename"
+									ondblclick={() => startRename(gv)}>{gv.element}</span
+								>
+							{/if}
+						</div>
 						{#if edit}
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<span class="handle" data-testid="control-resize" title="Resize" use:corner={(e) => resize(e, gv)}></span>
@@ -744,15 +752,21 @@
 		display: inline-flex;
 		--panelty-text: var(--danger);
 	}
-	.label {
-		flex: 1;
+	/* The name and its field are as wide as the name, centred in what the tools leave. */
+	.label,
+	.rename {
+		flex: 0 1 auto;
 		min-width: 0;
+		margin-inline: auto;
+		font-family: var(--font-mono);
+		font-size: var(--fs-small);
+		text-align: center;
+	}
+	.label {
+		padding-inline: var(--space-2);
 		touch-action: none;
 		cursor: grab;
 		line-height: var(--label-h);
-		text-align: center;
-		font-family: var(--font-mono);
-		font-size: var(--fs-small);
 		color: var(--text-muted);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -765,11 +779,19 @@
 		background: var(--hover-fill);
 	}
 	.rename {
-		position: absolute;
-		left: var(--space-2);
-		right: var(--space-2);
-		bottom: var(--space-2);
-		z-index: 1;
+		box-sizing: border-box;
+		width: calc(var(--chars) * 1ch + 2 * var(--space-2) + 2px);
+		max-width: 100%;
+		height: var(--label-h);
+		min-height: 0;
+		padding: 0 var(--space-2);
+		border-color: var(--accent);
+	}
+	/* Restates app.css's 16px coarse floor, which the size above outranks: no iOS focus zoom. */
+	@media (hover: none) and (pointer: coarse) {
+		.rename {
+			font-size: 16px;
+		}
 	}
 	/* A --hit corner to grab, painted as a small tab so it does not hide the widget. */
 	.handle {

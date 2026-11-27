@@ -520,7 +520,15 @@ test('a held slot or control element is picked for reference, and a held param t
 			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'true');
 			await page.getByTestId('control-edit-toggle').tap();
 			await expect(page.getByTestId('control-panel')).toHaveAttribute('data-edit', 'false');
+			expect(
+				await page.evaluate(() => (window as any).goofi.query.panels()[0].state.edit),
+				'the mode is panel state, which the patch saves'
+			).toBe(false);
 			const label = page.getByTestId('control-desk-level').locator('.label');
+			await label.dblclick();
+			await page.getByTestId('control-rename').blur();
+			await expect(page.getByTestId('control-rename'), 'a blur closes an unchanged rename field').toHaveCount(0);
+			await expect(label).toHaveText('level');
 			await label.dblclick();
 			const rename = page.getByTestId('control-rename');
 			await rename.fill('other');
