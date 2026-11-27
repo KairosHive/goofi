@@ -611,6 +611,15 @@ fn a_refreshable_param_is_re_enumerated_on_the_nodes_own_thread() {
     let osc = g.add("LFO");
     let why = g.refuse("node param request", j!({ "node": hex(osc), "param": "lfo/waveform", "request": "refresh" }));
     assert!(why.contains("not refreshable"), "{why}");
+
+    // Step: a node is born with its list read once, as a refresh would read it: nobody asks.
+    let born = g.add("_TestPicker");
+    let p = g.until("the newborn picker's own echo", |_| {
+        let p = ev.next("state_update");
+        (p["node"] == hex(born) && p["refreshed_params"] == j!([["io", "device"]])).then_some(p)
+    });
+    let options = p["options"]["io"]["device"].as_array().cloned().unwrap_or_default();
+    assert!(options.iter().any(|o| o.as_str().is_some_and(|s| s.starts_with("dev"))), "a new node shows its list: {options:?}");
 }
 
 #[test]

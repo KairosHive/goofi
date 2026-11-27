@@ -486,7 +486,14 @@ pub fn spawn<E: Executor + 'static>(
         .map(|out| Out_ { publisher: hub.publisher(&output_service(&spawn.base, out.name), false), bells: Vec::new(), record: None })
         .collect();
     let hub = hub.clone();
-    let mail = Arc::new(Mutex::new(Mail::default()));
+    // A node is born with its refreshable lists read once, as a ⟳ would read them.
+    let refresh = spawn
+        .decls
+        .iter()
+        .filter(|d| matches!(d.spec, goofi_node::ParamSpec::Str { refresh: true, .. }))
+        .map(|d| ParamKey::new(d.group, d.name))
+        .collect();
+    let mail = Arc::new(Mutex::new(Mail { refresh, ..Mail::default() }));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
     goofi_supervisor::worker::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))

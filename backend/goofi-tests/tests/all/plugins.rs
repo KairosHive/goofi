@@ -274,6 +274,22 @@ fn a_virtual_cable_is_a_device_the_audio_nodes_can_name() {
     assert_eq!(goofi.call("plugin virtual-cables remove", j!({"name": cable}))["removed"], true);
     assert_eq!(goofi.call("plugin virtual-cables list", j!({}))["cables"], j!([]));
     assert!(goofi.refuse("plugin virtual-cables route", j!({"node": hex(inn), "cable": cable})).contains("no cable"));
+
+    // Step: a loaded patch's node looks for its cable before the plugin has made it. The order
+    // is fixed here: the node names a cable that is not there, then the patch's state brings it.
+    let late = format!("goofi late {}", std::process::id());
+    let mic = goofi.add("audio:AudioIn");
+    goofi.set_param(mic, "audio", "device", format!("PulseAudio: Monitor of {late}"));
+    let why = goofi.until("the absent cable to be named", |g| g.error(mic).filter(|e| e.contains("no input device")));
+    assert!(why.contains(&late), "{why}");
+    goofi.call("plugin state edit", j!({"plugin": "virtual-cables", "value": {"cables": [{"name": late, "channels": 2}]}}));
+    held(j!([late]));
+    // The plugin has every audio device list read again, and a refresh tries a missing name once
+    // more: the cable is found, and only the test's clock, which owns no device, keeps it closed.
+    let found = goofi.until("the AudioIn to find the cable made after it", |g| g.error(mic).filter(|e| !e.contains("no input device")));
+    assert!(found.contains("the external clock owns no device"), "{found}");
+    goofi.call("plugin state edit", j!({"plugin": "virtual-cables"}));
+    held(j!([]));
 }
 
 #[test]

@@ -619,6 +619,7 @@ impl AudioEngine {
                 buffer: AtomicU32::new(goofi_core::variables::DEFAULT_BUFFER),
                 clock,
                 cards: AtomicBool::new(true),
+                retry: AtomicBool::new(false),
                 edits: Mutex::new(Vec::new()),
                 waker,
                 anchor: anchor.clone(),
@@ -1403,6 +1404,10 @@ impl Engine for AudioEngine {
         // A stream that died is closed here, and its name tried once more at the settle this asks for.
         if self.stats.dead.swap(false, Ordering::Acquire) {
             self.close();
+            self.tried = None;
+            self.dirty = true;
+        }
+        if self.audio.retry.swap(false, Ordering::Acquire) && self.tried.as_ref().is_some_and(|(_, _, error)| error.is_some()) {
             self.tried = None;
             self.dirty = true;
         }

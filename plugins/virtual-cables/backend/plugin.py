@@ -175,6 +175,7 @@ def kept() -> dict | None:
 async def restore(ctx, state):
     """Hold the cables the patch keeps and no other: after a load, a new patch, an undo."""
     wanted = {c["name"]: c["channels"] for c in (state or {}).get("cables", [])}
+    made = False
     async with lock:
         prune()
         for name in [n for n, c in cables.items() if wanted.get(n) != c.channels]:
@@ -188,8 +189,20 @@ async def restore(ctx, state):
                 continue
             try:
                 cables[name] = await spawn(name, channels)
+                made = True
             except RuntimeError as error:
                 ctx.log(str(error), "warning")
+    if made:
+        await reread(ctx)
+
+
+async def reread(ctx) -> None:
+    """Have every audio device node read its list again: a loaded node looked for its cable
+    before the cable was made, and a refresh is what tries a missing device once more."""
+    nodes = (await ctx.call("session state"))["nodes"]
+    for uid, node in nodes.items():
+        if node.get("type") in ("audio:AudioIn", "audio:AudioOut"):
+            await ctx.call("node param request", {"node": uid, "param": "audio/device", "request": "refresh"})
 
 
 @plugin.on_stop

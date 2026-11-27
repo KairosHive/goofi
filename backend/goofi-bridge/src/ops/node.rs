@@ -61,7 +61,7 @@ op!(ParamRequest, "node param request", 2, ParamRequestArgs {
     pub param: ParamAddr,
     pub request: String,
 },
-    "One request to a node's own thread, addressed `group/param`: `refresh` asks a refreshable string param (a device or stream picker) to re-enumerate its options — read them back with `node state`; `pulse` fires a pulse param once: a reset, a trigger, a clear. A request holds no value, so it is never an edit of the document, and this reply only says it was dispatched.",
+    "One request to a node's own thread, addressed `group/param`: `refresh` asks a refreshable string param (a device or stream picker) to re-enumerate its options — read them back with `node state`; a node is born with each such list read once, and a refresh of an audio device picker tries a device that failed its open once more; `pulse` fires a pulse param once: a reset, a trigger, a clear. A request holds no value, so it is never an edit of the document, and this reply only says it was dispatched.",
     "{ok: true} — the request was dispatched to the node's own thread");
 
 op!(Remove, "node remove", 1, RemoveArgs {

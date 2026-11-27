@@ -83,6 +83,8 @@ pub struct AudioShared {
     pub clock: Clock,
     /// Whether this engine opens the machine's sound cards; a public goofi opens none.
     pub cards: AtomicBool,
+    /// An `AudioOut` read the device list again: a clock device that failed its open is tried again.
+    pub retry: AtomicBool,
     /// What a plugin reported of its own values — node, plugin param id, normalized value, and
     /// what moved it — for the worker to put into the document.
     pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64, goofi_node::Origin)>>,
@@ -613,7 +615,15 @@ impl Executor for AudioHalf {
         ticked
     }
 
+    /// The list is read again, so a device that was not there may be: a name that failed its
+    /// open, this node's input or the clock's output, is tried once more.
     fn refresh(&mut self, _: usize) -> Option<Vec<String>> {
+        if self.io.stream.is_none() {
+            self.io.device = None;
+        }
+        if self.manifest.type_name == audio_out::TYPE {
+            self.audio.retry.store(true, Ordering::Release);
+        }
         self.enumerate()
     }
 }

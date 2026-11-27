@@ -61,6 +61,8 @@ fn state(g: &Goofi, uid: Uid) -> String {
 /// Ask for a param's list and read it off the `state_update` every client gets — the echo that
 /// clears the spinner — rather than through any door of the test's own.
 fn refreshed(g: &Goofi, ev: &mut goofi_tests::Events, uid: Uid, group: &str, name: &str) -> Vec<String> {
+    // Read from here on: the echo of the node's own refresh at its birth is not this answer.
+    *ev = g.events();
     g.call("node param request", j!({ "node": hex(uid), "param": format!("{group}/{name}"), "request": "refresh" }));
     let p = g.until("the refresh echo", |_| {
         let p = ev.next("state_update");
