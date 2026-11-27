@@ -3,9 +3,6 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
-import { workspace } from 'panelty';
-import { ROOT_ID } from '$lib/editor/subpatchScene';
-import { nodesMap } from '$lib/crdt/graphDoc';
 import { SCOPE_TYPE } from '$lib/api/vocab';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
@@ -51,7 +48,6 @@ function withInstance(): { fc: FakeControl; g: GraphStore; d: DocSeed } {
 
 describe('a wholesale load resets the client history (lockstep with the manager)', () => {
 	beforeEach(() => history().reset());
-	const ctx = { activeWorkspaceId: 'w', activePanelId: null, enteredPath: {}, selection: {} };
 
 	it('graph_replaced (in-session load) drops pre-load undo steps', async () => {
 		const fc = new FakeControl();
@@ -66,17 +62,13 @@ describe('a wholesale load resets the client history (lockstep with the manager)
 		// mismatched. graph_replaced must reset the client history too.
 		fc.emit({ event: 'graph_replaced', payload: snapshot() });
 		expect(history().canUndo).toBe(false);
-		void g;
 	});
 });
-
-// (The panels a delete empties, and their re-binding on undo, moved to the MANAGER: `RemoveNode`
-// clears every panel bound to a uid it takes, so one inverse restores both.)
 
 describe('deleting a collapsed sub-patch instance is undoable (manager owns the subtree capture)', () => {
 	beforeEach(() => history().reset());
 
-	it('undo DELEGATES to the manager (no client-side checkpoint / add_node replay)', async () => {
+	it('undo is one `undo` op: the manager restores the subtree', async () => {
 		const { fc, g } = withInstance();
 		history().configure(() => fc, () => g);
 
@@ -84,13 +76,8 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 		const before = fc.recordedCalls().length;
 		await history().undo();
 
-		const undoCalls = fc.recordedCalls().slice(before);
-		// Undo just asks the manager to undo its session command (which restores the whole subtree
-		// from the inverse it captured) — never a client-side whole-patch checkpoint or a fragile
-		// add_node{Sub-patch} replay.
-		expect(undoCalls.some((c) => c.op === 'undo')).toBe(true);
-		expect(undoCalls.some((c) => c.op === 'session load')).toBe(false);
-		expect(undoCalls.some((c) => c.op === 'node add')).toBe(false);
+		// The manager holds the inverse of the whole subtree, so the client sends this op alone.
+		expect(fc.recordedCalls().slice(before).map((c) => c.op)).toEqual(['undo']);
 		expect(history().canRedo).toBe(true);
 	});
 
@@ -113,17 +100,15 @@ describe('deleting a collapsed sub-patch instance is undoable (manager owns the 
 		expect(fc.undoStack).toHaveLength(1);
 		expect(history().undoLabel).toBe('Delete 2 nodes');
 
-		// Undo is ONE manager `undo`, no client-side reload.
+		// Undo is one manager `undo` and nothing else; redo is its mirror.
 		const before = fc.recordedCalls().length;
 		await history().undo();
-		const undoCalls = fc.recordedCalls().slice(before);
-		expect(undoCalls.filter((c) => c.op === 'undo')).toHaveLength(1);
-		expect(undoCalls.some((c) => c.op === 'session load')).toBe(false);
+		expect(fc.recordedCalls().slice(before).map((c) => c.op)).toEqual(['undo']);
 		expect(history().canRedo).toBe(true);
 
 		const beforeRedo = fc.recordedCalls().length;
 		await history().redo();
-		expect(fc.recordedCalls().slice(beforeRedo).filter((c) => c.op === 'redo')).toHaveLength(1);
+		expect(fc.recordedCalls().slice(beforeRedo).map((c) => c.op)).toEqual(['redo']);
 		expect(history().canRedo).toBe(false);
 		expect(history().canUndo).toBe(true);
 	});
