@@ -266,7 +266,7 @@ impl AppState {
             settled: Arc::new(tokio::sync::watch::channel(0).0),
             live: Arc::new(LiveHub::default()),
             beat: Arc::new(Mutex::new(Readings::default())),
-            history: Arc::new(Mutex::new(goofi_graph::History::new())),
+            history: Arc::default(),
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(mode),
             custom: goofi_supervisor::layout::custom_nodes(),

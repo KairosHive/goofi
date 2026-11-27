@@ -140,10 +140,6 @@ pub struct Flip {
 }
 
 impl History {
-    pub fn new() -> History {
-        History::default()
-    }
-
     pub fn clear(&mut self) {
         self.past.clear();
         self.future.clear();
@@ -247,23 +243,19 @@ impl History {
 
     /// Put back the snapshot from before the last step; `changed` is false with nothing to undo.
     pub fn undo(&mut self, g: &mut Graph, actor: &str) -> Flip {
-        let reverted = self.end_previews(g, actor);
-        let Some(entry) = self.past.pop() else { return Flip { changed: reverted, context: Value::Null } };
-        let now = self.committed(g.snapshot());
-        g.restore(&entry.before);
-        let after = g.snapshot();
-        let mut moved = Cut::default();
-        moved.widen(&now, &after);
-        self.rebase(&after, &moved);
-        let context = entry.step.context.clone();
-        self.future.push(Entry { before: now, ..entry });
-        Flip { changed: true, context }
+        self.flip(g, actor, true)
     }
 
     /// Put back the snapshot the last undo took away; `changed` is false with nothing to redo.
     pub fn redo(&mut self, g: &mut Graph, actor: &str) -> Flip {
+        self.flip(g, actor, false)
+    }
+
+    /// Swap in the newest entry of one stack, and push what it replaced onto the other.
+    fn flip(&mut self, g: &mut Graph, actor: &str, back: bool) -> Flip {
         let reverted = self.end_previews(g, actor);
-        let Some(entry) = self.future.pop() else { return Flip { changed: reverted, context: Value::Null } };
+        let popped = if back { self.past.pop() } else { self.future.pop() };
+        let Some(entry) = popped else { return Flip { changed: reverted, context: Value::Null } };
         let now = self.committed(g.snapshot());
         g.restore(&entry.before);
         let after = g.snapshot();
@@ -271,7 +263,8 @@ impl History {
         moved.widen(&now, &after);
         self.rebase(&after, &moved);
         let context = entry.step.context.clone();
-        self.past.push(Entry { before: now, ..entry });
+        let other = if back { &mut self.future } else { &mut self.past };
+        other.push(Entry { before: now, ..entry });
         Flip { changed: true, context }
     }
 
