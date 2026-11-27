@@ -6,23 +6,20 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use goofi_node::NodeManifest;
-
 use crate::abi::{collect, BlockDesc, OutDesc, PortDesc, VTable, Write};
 use crate::{AudioNode, Block, MAX_PORTS};
 
-/// One loaded node type: its vtable and the manifest the host leaked from `goofi_describe`.
+/// One loaded node type: its vtable.
 pub struct Loaded {
     vtable: &'static VTable,
-    pub manifest: &'static NodeManifest,
 }
 
 impl Loaded {
     /// # Safety
     /// `library` was built by [`crate::cdylib!`] at this SDK's version — its `goofi_version`
     /// was read and matched before this is called.
-    pub unsafe fn open(library: &'static libloading::Library, manifest: &'static NodeManifest) -> Result<Loaded, String> {
-        Ok(Loaded { vtable: goofi_build::vtable::<VTable>(library, c"goofi_audio_node")?, manifest })
+    pub unsafe fn open(library: &'static libloading::Library) -> Result<Loaded, String> {
+        Ok(Loaded { vtable: goofi_build::vtable::<VTable>(library, c"goofi_audio_node")? })
     }
 
     pub fn instantiate(&self) -> Box<dyn AudioNode> {

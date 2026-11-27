@@ -117,7 +117,6 @@ impl Fleet {
         let spawn = Spawn {
             engine: "signal",
             uid,
-            instance: instance(),
             base: base_of(uid),
             manifest: &MANIFEST,
             decls: MANIFEST.params.to_vec(),

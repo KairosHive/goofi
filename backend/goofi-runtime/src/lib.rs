@@ -260,8 +260,6 @@ fn reaches_itself(start: Uid, inbound: &HashMap<Uid, Vec<Uid>>, within: &[Uid]) 
 
 /// This run's settled state, as [`Executor::run`] reads it.
 pub struct Cx<'a> {
-    /// The live typed value per declared param — a constant, or what its binding last evaluated to.
-    pub values: &'a [Param],
     /// The record value per declared param.
     pub consts: &'a [Param],
     /// The live scalar per declared param, as a DSP thread reads it.
@@ -452,8 +450,6 @@ pub struct Spawn {
     /// segment.
     pub engine: &'static str,
     pub uid: Uid,
-    /// The instance, which names the recorder's one door.
-    pub instance: String,
     pub base: String,
     pub manifest: &'static NodeManifest,
     /// The params as the engine counts them: the consts, the atomics and every binding index.
@@ -1003,7 +999,6 @@ impl<E: Executor> Runtime<E> {
         let readers: Vec<bool> = self.outs.iter().map(|o| o.publisher.readers() > 0).collect();
         let recorded: Vec<bool> = self.outs.iter().map(|o| o.record.as_ref().is_some_and(|(_, r)| !r.retired())).collect();
         let cx = Cx {
-            values: &self.values,
             consts: &self.consts,
             params: &self.params,
             readers: &readers,

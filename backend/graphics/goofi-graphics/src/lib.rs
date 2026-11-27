@@ -518,7 +518,6 @@ impl Engine for GraphicsEngine {
         let spawn = goofi_runtime::Spawn {
             engine: "graphics",
             uid,
-            instance: self.instance.clone(),
             base,
             manifest,
             decls,

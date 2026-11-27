@@ -50,7 +50,7 @@ impl AudioEngine {
         let opened = goofi_build::open(artifact)?;
         let intro = goofi_node::parse_introspection(&opened.describe)?;
         let manifest = goofi_node::manifest_of(type_name, &intro, Some(goofi_core::SlotType::Audio))?;
-        let loaded = unsafe { Loaded::open(opened.library, manifest) }?;
+        let loaded = unsafe { Loaded::open(opened.library) }?;
         let class = Class { manifest, make: Arc::new(move |_| loaded.instantiate()), plugin: None };
         Ok(self.classes.insert(manifest.type_name, class).is_some())
     }

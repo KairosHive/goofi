@@ -122,7 +122,6 @@ impl Engine for SignalEngine {
         let spawn = goofi_runtime::Spawn {
             engine: "signal",
             uid,
-            instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             decls: decls.clone(),

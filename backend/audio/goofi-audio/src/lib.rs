@@ -21,7 +21,6 @@ mod chanmap;
 mod control;
 mod host;
 pub use host::{hosts, NO_ASIO_NOTE};
-pub use rt::performance_cores;
 pub(crate) use rt::Realtime;
 
 /// Open a stream through `$stream` in the sample format the DEVICE speaks, for input and output
@@ -1202,7 +1201,6 @@ impl Engine for AudioEngine {
         let spawn = goofi_runtime::Spawn {
             engine: "audio",
             uid,
-            instance: self.instance.clone(),
             base: goofi_transport::service_base(&self.instance, uid, generation),
             manifest,
             decls: manifest.params.to_vec(),

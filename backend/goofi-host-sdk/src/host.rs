@@ -24,10 +24,6 @@ impl Loaded {
         Ok(Loaded { vtable: goofi_build::vtable::<VTable>(library, c"goofi_host_node")?, manifest })
     }
 
-    pub fn manifest(&self) -> &'static NodeManifest {
-        self.manifest
-    }
-
     pub fn instantiate(&self) -> Box<dyn Node> {
         Box::new(CodecNode::new(self.raw(), in_slots(self.manifest)))
     }

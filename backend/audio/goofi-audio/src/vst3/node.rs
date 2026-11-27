@@ -37,8 +37,6 @@ const BEND_SEMITONES: f32 = 2.0;
 
 /// One voice's gate, pitch or velocity for one sample, whichever source is carrying it.
 type Reader<'a> = dyn Fn(usize, usize, usize) -> f32 + 'a;
-/// Whether a gate reading means the note is down — a level for a param, a velocity for the cable.
-type Gate = dyn Fn(f32) -> bool;
 
 /// What the scan derived for one class: enough to stage a block and to instantiate.
 pub struct Derived {
@@ -365,21 +363,19 @@ impl Live {
             // The `voice` cable is the last input: pitches then velocities, no gate, as a
             // velocity of zero is the note off.
             let cable = b.ins.last().filter(|p| p.wired() && p.channels() >= 2);
-            // A param gate crosses at GATE_HIGH; the cable's gate is MIDI's, any velocity above
-            // zero.
-            let (voices, read, held): (usize, &Reader<'_>, &Gate) = match cable {
+            let (voices, read): (usize, &Reader<'_>) = match cable {
                     Some(p) => {
                         let n = p.channels() as usize / 2;
-                        (n, &move |which, c, s| if which == 1 { p.chan(c)[s] } else { p.chan(n + c)[s] }, &|v| v > 0.0)
+                        (n, &move |which, c, s| if which == 1 { p.chan(c)[s] } else { p.chan(n + c)[s] })
                     }
                     None => {
                         let n = (b.params[0].channels() as usize).min(MIDI_CHANNELS);
-                        (n, &|which, c, s| b.params[which].chan(c)[s], &high)
+                        (n, &|which, c, s| b.params[which].chan(c)[s])
                     }
                 };
             for c in 0..voices.min(MIDI_CHANNELS) {
                 for s in 0..BLOCK {
-                    match (held(read(0, c, s)), self.held[c]) {
+                    match (high(read(0, c, s)), self.held[c]) {
                         (true, None) => {
                             // A plugin's note is an integer; what the round threw away rides as
                             // `tuning`.
