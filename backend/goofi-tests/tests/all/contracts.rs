@@ -147,36 +147,6 @@ fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
     regenerated("frontend/src/lib/api/vocab.ts", vocab::typescript());
     regenerated("frontend/src/lib/api/generated.ts", goofi_bridge::schemas::typescript());
     regenerated("frontend/src/lib/codec/frame.ts", goofi_codec::typescript());
-
-    // `PROTOCOL_VERSION` is the one number both halves declare by hand, and each comments that the
-    // other must be bumped with it — which is the definition of a pair that drifts. A client one
-    // version behind still connects and then half-works, so neither side's suite can catch it.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../frontend/src/lib/api/control.ts");
-    let src = std::fs::read_to_string(&path).expect("the control client");
-    let declared: i64 = src
-        .split("export const PROTOCOL_VERSION")
-        .nth(1)
-        .and_then(|rest| rest.split(';').next())
-        .and_then(|rest| rest.trim_start_matches([' ', '=', ':']).trim().parse().ok())
-        .unwrap_or_else(|| panic!("no PROTOCOL_VERSION in {}", path.display()));
-    assert_eq!(
-        declared,
-        goofi_bridge::schemas::PROTOCOL_VERSION,
-        "the client declares protocol {declared} and this manager speaks {} — bump both together",
-        goofi_bridge::schemas::PROTOCOL_VERSION
-    );
-
-    // The other pair declared by hand on both sides: a tier the client's union does not name
-    // types as `never`, and its health pill silently draws nothing.
-    let union = src
-        .split("export type NodeRuntime =")
-        .nth(1)
-        .and_then(|rest| rest.split(';').next())
-        .unwrap_or_else(|| panic!("no NodeRuntime in {}", path.display()));
-    let named: Vec<&str> = union.split('|').map(|w| w.trim().trim_matches('\'')).collect();
-    let ours: Vec<&str> = goofi_node::Isolation::ALL.iter().map(|i| i.wire()).collect();
-    assert_eq!(named, ours, "the client's tiers and this manager's — declare a new one in both");
 }
 
 static OUT: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

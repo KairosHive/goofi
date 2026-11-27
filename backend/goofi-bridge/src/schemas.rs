@@ -441,10 +441,15 @@ pub fn typescript() -> String {
         ParamKind::decl(&cfg),
     ];
     let body = decls.iter().map(|d| format!("export {d}\n")).collect::<String>();
+    let tiers = goofi_node::Isolation::ALL.iter().map(|i| format!("'{}'", i.wire())).collect::<Vec<_>>().join(" | ");
     format!(
         "// GENERATED from the Rust types in goofi-core, goofi-graph and goofi-bridge — do not edit by\n\
          // hand. The document, its deltas, a variable and a param descriptor are each declared once,\n\
          // in Rust; a field that is not there is a type error here. Regenerate by running\n\
-         // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\n{body}"
+         // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\n{body}\
+         /** The control plane's protocol version: a client on another one is told to reload. */\n\
+         export const PROTOCOL_VERSION = {PROTOCOL_VERSION};\n\
+         /** Where a node's code runs. Absent for a port and a facade, which run nowhere. */\n\
+         export type NodeRuntime = {tiers};\n"
     )
 }

@@ -3,19 +3,14 @@ import type { LogBatch } from '$lib/stores/console.svelte';
 import type { ParamDescriptor } from '$lib/api/types';
 import type { OpName } from '$lib/api/ops';
 import type { TAGS } from '$lib/api/vocab';
-import type { Link } from './generated';
+import { PROTOCOL_VERSION, type Link, type NodeRuntime } from './generated';
 import type { LiveSource } from './paramLive';
 import { wsUrl } from './wsUrl';
 
-/** Control-plane protocol version. Bump it together with PROTOCOL_VERSION in
- * `backend/goofi-bridge/src/schemas.rs`. */
-export const PROTOCOL_VERSION = 5;
+export { PROTOCOL_VERSION, type NodeRuntime };
 
 /** A node's lifecycle stage. 'error' is terminal: the backend does not auto-restart it. */
 export type NodeStage = 'creating' | 'setup' | 'ready' | 'error';
-
-/** Where a node's code runs. Absent for a port and a facade, which run nowhere. */
-export type NodeRuntime = 'native' | 'in-process' | 'subprocess' | 'shader' | 'hosted';
 
 export interface NodeTypeInfo {
 	/** The qualified `engine:Name` id; a structural type is bare. `engineOf` reads the engine. */

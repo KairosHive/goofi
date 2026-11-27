@@ -148,3 +148,7 @@ refreshable: boolean, mode: Mode, expression: string | null,
  */
 error: string | null, };
 export type ParamKind = { "type": "num", value: number | number[], vmin: number, vmax: number, int: boolean, options: Array<number>, face: Face, } | { "type": "bool", value: boolean, } | { "type": "string", value: string, options: Array<string> | null, } | { "type": "pulse", value: null, };
+/** The control plane's protocol version: a client on another one is told to reload. */
+export const PROTOCOL_VERSION = 5;
+/** Where a node's code runs. Absent for a port and a facade, which run nowhere. */
+export type NodeRuntime = 'native' | 'in-process' | 'subprocess' | 'shader' | 'hosted';
