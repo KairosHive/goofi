@@ -43,15 +43,6 @@ describe('GraphStore.newPatch — the reset door', () => {
 		expect(g.savePath).toBe(null);
 		expect(g.unsavedChanges).toBe(false);
 	});
-
-	/**
-	 * …and takes the panels down with it — which is no longer the client's problem to get right.
-	 * The arrangement is the manager's, so `new` reloads it along with the graph and the replica
-	 * simply follows. There is nothing here for a stale client copy to ride into the fresh patch's
-	 * `.gfi`, because the client keeps no copy.
-	 */
-	// (That a New patch opens on the DEFAULT arrangement is the manager's now — `new` reloads an
-	// empty document, which restores the default layout with it.)
 });
 
 function snapshot(savePath: string | null) {
