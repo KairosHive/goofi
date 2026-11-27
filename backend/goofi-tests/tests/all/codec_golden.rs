@@ -360,3 +360,60 @@ fn malformed_and_deep_frames_are_refused_before_reduction() {
     assert!(goofi_codec::decode(&frame).unwrap_err().contains("nesting"));
     assert!(goofi_codec::decode(&encode(&Data::string("next frame", Meta::empty()))).is_ok());
 }
+
+#[test]
+fn a_foreign_dtype_is_cast_to_f32_where_it_enters() {
+    // A Python child hands over whatever dtype numpy made, and the decoder is the one place it
+    // becomes the f32 every `Data` holds: one frame per dtype the ingest names, each sample a
+    // value both widths hold exactly.
+    fn body(dtype: &str, shape: &[u32], samples: &[u8]) -> Vec<u8> {
+        let mut body = vec![shape.len() as u8, dtype.len() as u8];
+        body.extend_from_slice(dtype.as_bytes());
+        body.resize(body.len().div_ceil(ALIGN) * ALIGN, 0);
+        for dim in shape {
+            body.extend_from_slice(&dim.to_le_bytes());
+        }
+        body.extend_from_slice(samples);
+        body
+    }
+    let decoded = |dtype: &str, shape: &[u32], samples: &[u8]| goofi_codec::decode(&framed(0, &[], &body(dtype, shape, samples)));
+    fn bytes<const N: usize, T: Copy>(values: &[T], le: fn(T) -> [u8; N]) -> Vec<u8> {
+        values.iter().flat_map(|v| le(*v)).collect()
+    }
+    let cases: Vec<(&str, Vec<u8>, [f32; 2])> = vec![
+        ("<f8", bytes(&[1.5f64, -2.25], f64::to_le_bytes), [1.5, -2.25]),
+        ("<f2", bytes(&[0x3c00u16, 0xc000], u16::to_le_bytes), [1.0, -2.0]),
+        ("|i1", vec![0xff, 0x7f], [-1.0, 127.0]),
+        ("<i2", bytes(&[-300i16, 300], i16::to_le_bytes), [-300.0, 300.0]),
+        ("<i4", bytes(&[-70_000i32, 70_000], i32::to_le_bytes), [-70_000.0, 70_000.0]),
+        ("<i8", bytes(&[-5_000_000_000i64, 5_000_000_000], i64::to_le_bytes), [-5.0e9, 5.0e9]),
+        ("|u1", vec![0, 255], [0.0, 255.0]),
+        ("<u2", bytes(&[1u16, 65_535], u16::to_le_bytes), [1.0, 65_535.0]),
+        ("<u4", bytes(&[1u32, 4_000_000_000], u32::to_le_bytes), [1.0, 4.0e9]),
+        ("<u8", bytes(&[1u64, 1 << 40], u64::to_le_bytes), [1.0, 1_099_511_627_776.0]),
+        ("|b1", vec![0, 1], [0.0, 1.0]),
+        // numpy spells the machine's own order `=`, and a bare typestring carries none.
+        ("=i4", bytes(&[7i32, -7], i32::to_le_bytes), [7.0, -7.0]),
+        ("i2", bytes(&[7i16, -7], i16::to_le_bytes), [7.0, -7.0]),
+        ("<f4", le_bytes(&[0.25, -0.5]), [0.25, -0.5]),
+    ];
+    for (dtype, samples, want) in &cases {
+        let d = decoded(dtype, &[2], samples).unwrap_or_else(|e| panic!("[{dtype}] {e}"));
+        let store = d.as_array().unwrap_or_else(|e| panic!("[{dtype}] {e}"));
+        assert_eq!((store.shape(), store.values().collect::<Vec<f32>>()), (&[2usize][..], want.to_vec()), "[{dtype}]");
+        assert_eq!(encode(&d), encode(&arr(&[2], le_bytes(want), Meta::empty())), "[{dtype}] what leaves again is `<f4`");
+    }
+    // The shape is the frame's own, whatever the width of a sample.
+    let image = decoded("|u1", &[2, 3], &[0, 1, 2, 3, 4, 255]).expect("a 2x3 of bytes");
+    let store = image.as_array().unwrap();
+    assert_eq!((store.shape(), store.values().collect::<Vec<f32>>()), (&[2usize, 3][..], vec![0.0, 1.0, 2.0, 3.0, 4.0, 255.0]));
+
+    // What the ingest cannot read is refused, never guessed at: another byte order, a dtype that
+    // is no number, a buffer that is no whole number of samples, or not the samples the shape counts.
+    let big_endian = decoded(">f4", &[1], &1.0f32.to_be_bytes()).unwrap_err();
+    assert!(big_endian.contains("unsupported dtype `>f4`"), "{big_endian}");
+    assert!(decoded("<c8", &[1], &[0; 8]).unwrap_err().contains("unsupported dtype `<c8`"));
+    assert!(decoded("<i2", &[2], &[1, 0, 2]).is_err(), "three bytes are not two 16-bit samples");
+    assert!(decoded("<i2", &[3], &[1, 0, 2, 0]).is_err(), "two samples under a shape of three");
+    assert!(decoded("<f4", &[3], &[0; 8]).is_err(), "and the same of f32 itself");
+}
