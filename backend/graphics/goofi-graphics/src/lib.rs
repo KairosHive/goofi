@@ -130,6 +130,8 @@ pub struct GraphicsEngine {
     /// kept here, and settled as a fault like any other.
     troubles: runtime::Troubles,
     troubled: HashMap<Uid, String>,
+    /// Every node's picture size, as the last settle planned it.
+    sizes: HashMap<Uid, (u32, u32)>,
     /// After the classes and the runtime, for the reason [`Gpu`] states.
     gpu: Arc<Gpu>,
 }
@@ -284,6 +286,7 @@ impl GraphicsEngine {
             dirty: false,
             troubles,
             troubled: HashMap::new(),
+            sizes: HashMap::new(),
             hub,
         })
     }
@@ -316,6 +319,12 @@ impl GraphicsEngine {
             runtime.tick();
             runtime.finish();
         }
+    }
+
+    /// The picture `uid` makes, as the last settle sized it, and the rate the clock paces: what a
+    /// recording of it is opened at.
+    pub fn picture(&self, uid: Uid) -> Option<((u32, u32), f64)> {
+        self.sizes.get(&uid).map(|size| (*size, f64::from(self.fps.load(Ordering::Relaxed))))
     }
 
     /// The window `uid` has open on the machine's screen, if it is a window node with one.
@@ -575,7 +584,9 @@ impl Engine for GraphicsEngine {
             inst.control.send_if_changed(desired);
         }
         // Windows first: a screen is a reader, so one opened here must be in THIS plan's demand.
-        let refused = self.follow_windows(view, &plan::sizes(view, &self.live));
+        let sizes = plan::sizes(view, &self.live);
+        let refused = self.follow_windows(view, &sizes);
+        self.sizes = sizes;
         let (plan, mut faults) = plan::compile(view, &self.live, &self.windows, &self.gpu);
         faults.extend(refused);
         // The render thread's word, as it last said it; a node gone since is not in the plan.

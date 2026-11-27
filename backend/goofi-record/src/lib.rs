@@ -197,6 +197,13 @@ impl Recorder {
         encoders.probe()
     }
 
+    /// Choose the encoder for a picture ahead of the take that records it: the choice can take
+    /// a trial of every candidate, which is time a take's first frames do not have.
+    pub fn prepare(&self, size: (u32, u32), fps: f64, quality: VideoQuality) {
+        let encoders = self.encoders.lock().clone();
+        encoders.prepare(size, fps, quality);
+    }
+
     /// Whether a take runs, as a flag an engine's clock reads without a lock.
     pub fn running_flag(&self) -> Arc<AtomicBool> {
         self.running.clone()

@@ -114,6 +114,8 @@ fn run(rec: Weak<Recorder>, mut receiver: Receiver, armed: Arc<Mutex<Armed>>, sh
                 if let Some(o) = open.take() {
                     close(&rec, &shared, &id, o, "stopped");
                 }
+                // A frame that lands while the file closed is not a second file of this take.
+                dead = Some(take.id);
                 rec.finished(&shared, take.id);
             }
         }

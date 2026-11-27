@@ -145,8 +145,21 @@ impl EffectOp for Start {
             .unwrap_or_else(goofi_supervisor::layout::recordings);
         let name = record_arg(&g, a.name.as_deref(), "name").unwrap_or_default();
         let patch = state.save_path().map(std::path::PathBuf::from);
+        // Every armed picture, at the size the settled graph gives it and the quality it is armed at.
+        let mut g = g;
+        let mut pictures = Vec::new();
+        for uid in &armed {
+            let qualities: Vec<_> = g.recorded(*uid).unwrap_or(&[]).iter().map(|output| output.quality).collect();
+            if let Some((size, fps)) = crate::try_graphics_engine(&mut g).and_then(|graphics| graphics.picture(*uid)) {
+                pictures.extend(qualities.into_iter().map(|quality| (size, fps, quality)));
+            }
+        }
         // Capture preparation and the stream drain need the graph to make progress.
         drop(g);
+        // Chosen before the take begins: a trial of the encoders is no part of a take.
+        for (size, fps, quality) in pictures {
+            state.recorder.prepare(size, fps, quality);
+        }
         let folder = state
             .recorder
             .start(&root, &name, patch.as_deref(), a.annotations.as_ref())

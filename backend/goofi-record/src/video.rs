@@ -33,6 +33,9 @@ pub trait Encoders: Send + Sync {
     /// The container this backend writes, which is what names the file.
     fn extension(&self) -> &'static str;
     fn open(&self, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Box<dyn Encoder>, String>;
+    /// A take is about to record a picture of this size: whatever choosing an encoder for it
+    /// costs is spent now, before the take begins, and not in its first frames.
+    fn prepare(&self, _size: (u32, u32), _fps: f64, _quality: VideoQuality) {}
 }
 
 /// Constant-quality H.264 in Matroska, through an `ffmpeg` child on stdin.
@@ -47,6 +50,10 @@ impl Encoders for FfmpegEncoders {
 
     fn extension(&self) -> &'static str {
         "mkv"
+    }
+
+    fn prepare(&self, size: (u32, u32), fps: f64, quality: VideoQuality) {
+        let _ = Preset::chosen(size, fps, quality);
     }
 
     fn open(&self, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Box<dyn Encoder>, String> {
@@ -188,27 +195,34 @@ fn ffmpeg() -> Command {
 /// no trial: a trial is a child per candidate, and an armed slot reopens on every resize.
 static WORKING: LazyLock<Mutex<HashMap<(u32, u32), usize>>> = LazyLock::new(Default::default);
 
-impl Ffmpeg {
-    /// Select and start the encoder on the writer thread, without blocking the graphics clock.
-    fn start(&mut self) -> Result<(), String> {
-        let candidates = Preset::candidates();
-        let known = WORKING.lock().get(&self.size).copied();
+impl Preset {
+    /// The candidate that encodes at `size`: the one a trial found before, or a trial of each now.
+    fn chosen(size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Self, String> {
+        let mut candidates = Self::candidates();
+        let known = WORKING.lock().get(&size).copied().filter(|i| *i < candidates.len());
         let index = match known {
-            Some(i) if i < candidates.len() => i,
-            _ => {
+            Some(i) => i,
+            None => {
                 let mut found = None;
                 for (i, preset) in candidates.iter().enumerate() {
-                    if preset.works(self.size, self.fps, self.quality)? {
+                    if preset.works(size, fps, quality)? {
                         found = Some(i);
                         break;
                     }
                 }
                 let i = found.ok_or("FFmpeg has no working H.264 encoder for this frame size; install an FFmpeg build with libx264 or a supported hardware encoder")?;
-                WORKING.lock().insert(self.size, i);
+                WORKING.lock().insert(size, i);
                 i
             }
         };
-        let preset = &candidates[index];
+        Ok(candidates.swap_remove(index))
+    }
+}
+
+impl Ffmpeg {
+    /// Start the encoder on the writer thread, without blocking the graphics clock.
+    fn start(&mut self) -> Result<(), String> {
+        let preset = &Preset::chosen(self.size, self.fps, self.quality)?;
         let mut command = ffmpeg();
         preset.input(&mut command);
         command.args(["-f", "rawvideo", "-pix_fmt", "rgba"])
@@ -287,22 +301,29 @@ impl Drop for Ffmpeg {
     }
 }
 
-/// One video file, written as a [`Format`]: the frames an armed texture slot read back or sent,
-/// each handed to the encoder as it comes. The worker that writes it is this stream's own thread, so
-/// an encoder that is slow costs this stream its queue's depth and nobody else anything.
+/// One video file, written as a [`Format`]: the frames an armed texture slot read back or sent.
+/// The file plays at `fps`, so each frame goes where its instant puts it. The worker that writes
+/// it is this stream's own thread: a slow encoder costs this stream its queue's depth alone.
 pub struct Video {
     encoder: Box<dyn Encoder>,
+    fps: f64,
     encoded: u64,
+    /// The first frame's instant: the file's zero.
+    began: Option<f64>,
+    /// The last picture encoded, which is what a hole in the source shows.
+    held: Option<Frame>,
 }
+
+/// How far behind its instant the file is before a hole is filled, in frames: under one, so a
+/// missing frame is seen, and over a half, so a late tick is not taken for one.
+const HOLE: f64 = 0.75;
 
 impl Video {
     pub fn open(encoders: &dyn Encoders, file: &Path, size: (u32, u32), fps: f64, quality: VideoQuality) -> Result<Video, String> {
-        Ok(Video { encoder: encoders.open(file, size, fps, quality)?, encoded: 0 })
+        Ok(Video { encoder: encoders.open(file, size, fps, quality)?, fps, encoded: 0, began: None, held: None })
     }
-}
 
-impl Format for Video {
-    fn write(&mut self, frame: &Frame, _at: f64) -> Result<Added, String> {
+    fn encode(&mut self, frame: &Frame) -> Result<(), String> {
         match frame {
             Frame::Texels(t) => self.encoder.write(&t.rgba)?,
             Frame::Data(d) => match d.as_texture().and_then(|texture| texture.pixels()) {
@@ -311,7 +332,27 @@ impl Format for Video {
             },
         }
         self.encoded += 1;
-        Ok(Added::Rows(1))
+        Ok(())
+    }
+}
+
+impl Format for Video {
+    /// A source that skipped or lost frames leaves a hole, which holds the picture before it; a
+    /// frame a whole place early has no place, and is not encoded. The file so keeps real time.
+    fn write(&mut self, frame: &Frame, at: f64) -> Result<Added, String> {
+        let before = self.encoded;
+        let behind = (at - *self.began.get_or_insert(at)) * self.fps - before as f64;
+        if behind <= -1.0 {
+            return Ok(Added::Rows(0));
+        }
+        if let Some(held) = self.held.take().filter(|_| behind >= HOLE) {
+            for _ in 0..behind.round() as u64 {
+                self.encode(&held)?;
+            }
+        }
+        self.encode(frame)?;
+        self.held = Some(frame.clone());
+        Ok(Added::Rows(self.encoded - before))
     }
 
     /// Frames the encoder took, which is what the manifest counts.

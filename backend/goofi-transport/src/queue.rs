@@ -17,11 +17,11 @@ use goofi_supervisor::timing::Event;
 
 /// How many frames an engine's armed slots queue ahead of the recorder. Signal: a second of ticks
 /// at the default cap. Audio: a block is a 64-frame slice, so about a second and a third. Graphics:
-/// a readback is megabytes, so a few, and a drop shows as a gap in the frame numbers.
+/// a readback is megabytes, so only what an encoder's start holds back: half a second at 60 fps.
 pub fn record_depth(engine: &str) -> usize {
     match engine {
         "audio" => 1024,
-        "graphics" => 4,
+        "graphics" => 32,
         _ => 64,
     }
 }

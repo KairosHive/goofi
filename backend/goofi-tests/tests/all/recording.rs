@@ -339,6 +339,129 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     }
 }
 
+/// An encoder that keeps the first byte of each picture it is given, in order, and the sizes it
+/// was told of ahead. Its first write waits for `release`, as an encoder that is starting does.
+#[derive(Default)]
+struct Witness {
+    prepared: std::sync::Mutex<Vec<(u32, u32)>>,
+    shades: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    inside: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct Witnessed {
+    shades: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    inside: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl goofi_record::video::Encoders for Witness {
+    fn probe(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn extension(&self) -> &'static str {
+        "mkv"
+    }
+    fn open(
+        &self,
+        _file: &std::path::Path,
+        _size: (u32, u32),
+        _fps: f64,
+        _quality: goofi_core::record::VideoQuality,
+    ) -> Result<Box<dyn goofi_record::video::Encoder>, String> {
+        Ok(Box::new(Witnessed { shades: self.shades.clone(), inside: self.inside.clone(), release: self.release.clone() }))
+    }
+    fn prepare(&self, size: (u32, u32), _fps: f64, _quality: goofi_core::record::VideoQuality) {
+        let mut prepared = self.prepared.lock().expect("unpoisoned");
+        if !prepared.contains(&size) {
+            prepared.push(size);
+        }
+    }
+}
+
+impl goofi_record::video::Encoder for Witnessed {
+    fn write(&mut self, rows: &[u8]) -> Result<(), String> {
+        self.inside.store(true, std::sync::atomic::Ordering::Relaxed);
+        while !self.release.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.shades.lock().expect("unpoisoned").push(rows[0]);
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_video_loses_no_frame_to_its_encoders_start_and_keeps_real_time() {
+    use goofi_core::record::Frame;
+    use std::sync::atomic::Ordering;
+    const FPS: f64 = 60.0;
+    let dir = tempfile::tempdir().expect("a temp root");
+    let time = std::sync::Arc::new(Time::new());
+    let hub = goofi_tests::hub();
+    let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone(), hub.clone()));
+    let seen = std::sync::Arc::new(Witness::default());
+    rec.set_encoders(seen.clone());
+    // Armed as the settled graph arms a graphics slot: on the queue depth the engine sends at.
+    let depth = goofi_transport::record_depth("graphics");
+    rec.arm(vec![goofi_record::Armed {
+        id: goofi_record::StreamId { uid: goofi_node::Uid(1), node: "stage".into(), slot: "out".into(), engine: "graphics" },
+        service: "test-rec-film".into(),
+        depth,
+        timeline: goofi_record::Timeline::Measured,
+        quality: Default::default(),
+    }]);
+    let film = hub.sender("test-rec-film", depth);
+    // A 2x2 picture of one shade, `place` frames after `t0`.
+    let picture = |t0: f64, place: f64, index: u64, shade: u8| {
+        let mut meta = goofi_core::Meta::new().with_sfreq(Some(FPS)).with_index(Some(index));
+        meta.set_procstart(Some(t0 + place / FPS));
+        Frame::Texels(std::sync::Arc::new(goofi_core::record::Texels { width: 2, height: 2, rgba: vec![shade; 16], meta }))
+    };
+    let shades = || seen.shades.lock().expect("unpoisoned").clone();
+
+    // Step: the encoder holds its first write while it starts. Sixteen pictures queue behind it,
+    // and every one is in the file.
+    let folder = rec.start(dir.path(), "film", None, None).expect("started");
+    let t0 = time.now();
+    assert!(film.send(picture(t0, 0.0, 1, 1)));
+    until("the encoder to hold its first write", || seen.inside.load(Ordering::Relaxed).then_some(()));
+    for i in 1..=16u8 {
+        assert!(film.send(picture(t0, f64::from(i), 1 + u64::from(i), 1 + i)));
+    }
+    seen.release.store(true, Ordering::Relaxed);
+    until("every queued picture to be encoded", || (shades().len() == 17).then_some(()));
+    assert_eq!(shades(), (1..=17).collect::<Vec<u8>>(), "each picture once, in order");
+
+    // Step: the file plays at its rate, so a picture stands where its instant puts it. Two
+    // frames the source skipped hold the picture before them; a frame a whole place early has none.
+    assert!(film.send(picture(t0, 19.0, 18, 50)));
+    assert!(film.send(picture(t0, 19.1, 19, 51)));
+    assert!(film.send(picture(t0, 19.2, 20, 52)));
+    until("the hole to be filled", || (shades().len() == 21).then_some(()));
+    until("the early frame to be read", || (rec.status().streams.iter().all(|s| s.fill == 0.0)).then_some(()));
+    rec.stop().expect("stopped").expect("a folder");
+    let mut filmed: Vec<u8> = (1..=17).collect();
+    filmed.extend([17, 17, 50, 51]);
+    assert_eq!(shades(), filmed, "places 17 and 18 hold picture 17, and shade 52 has no place");
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(folder.join("manifest.json")).expect("a manifest")).expect("json");
+    let entry = &manifest["streams"][0];
+    assert_eq!(entry["frames"], j!(21), "the file is as long as the time it covers: {entry}");
+    assert_eq!(entry["dropped"], j!(0), "no picture was lost to the encoder's start: {entry}");
+    // The sidecar says how many of the file's frames each picture added.
+    let beside = folder.join(entry["file"].as_str().expect("a name")).with_extension("jsonl");
+    let added: Vec<u64> = std::fs::read_to_string(&beside)
+        .expect("a sidecar")
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()?["n"].as_u64())
+        .collect();
+    assert_eq!(added[17..], [3, 1, 0], "{added:?}");
+}
+
 /// A `.npy` split into its header text and its samples, the way `np.load` reads one.
 fn npy(bytes: &[u8]) -> (String, Vec<u8>) {
     assert_eq!(&bytes[..6], b"\x93NUMPY", "the numpy magic");
@@ -594,7 +717,9 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     let counted = video["frames"].as_u64().expect("a count");
     assert!(counted >= 4, "every armed tick reached the encoder: {counted}");
     let instants = beside_instants(&file);
-    assert_eq!(instants.len() as u64, counted, "one line per encoded frame");
+    // A line per picture, and each says how many of the file's frames it added: a hole in the
+    // hand-ticked clock holds the picture before it, and a tick ahead of the rate adds none.
+    assert_eq!(beside_added(&file), counted, "the lines add up to the file's frames");
     for pair in instants.windows(2) {
         assert!(pair[1] > pair[0], "the instants are the patch's own seconds, in order: {instants:?}");
     }
@@ -605,7 +730,7 @@ fn arming_survives_a_rewire_and_rides_the_document() {
     }) {
         let made = std::path::Path::new(&folder).join(entry["file"].as_str().expect("a name"));
         let held = entry["frames"].as_u64().expect("a count");
-        assert_eq!(beside_instants(&made).len() as u64, held, "one line per encoded frame: {entry}");
+        assert_eq!(beside_added(&made), held, "the lines add up to the file's frames: {entry}");
         assert!(held >= 4, "each file holds its own frames: {entry}");
         // Decoded, because only the container itself says whether the frames in it line up: a
         // readback of the wrong size makes a file that still counts but no longer decodes to it.
@@ -1066,6 +1191,14 @@ fn an_armed_signal_slot_loses_no_tick_to_the_viewer_plane() {
     assert!((from..=to).all(|i| seen.contains(&i)), "the recording queue loses no tick: {from}..={to} in {seen:?}");
 }
 
+/// The frames a video's sidecar says its lines added to the file, summed.
+fn beside_added(file: &std::path::Path) -> u64 {
+    let text = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a json line")["n"].as_u64().expect("a count"))
+        .sum()
+}
+
 /// A stream's sidecar, read as the instants it carries — the one sidecar shape every kind has.
 fn beside_instants(file: &std::path::Path) -> Vec<f64> {
     let text = std::fs::read_to_string(file.with_extension("jsonl")).expect("the sidecar");
@@ -1101,6 +1234,15 @@ fn video_quality_is_saved_undone_and_applied_to_each_file() {
     g.call("session load", j!({ "path": path }));
     assert_eq!(quality(), "small", "the patch keeps the output's quality");
     g.ready(uid);
+    // The encoder for an armed picture is chosen by the start, before the take has a frame.
+    let seen = std::sync::Arc::new(Witness::default());
+    seen.release.store(true, std::sync::atomic::Ordering::Relaxed);
+    g.state.recorder.set_encoders(seen.clone());
+    g.call("record start", j!({ "root": root.path() }));
+    assert_eq!(*seen.prepared.lock().expect("unpoisoned"), [(32, 16)], "the start names the armed picture's size");
+    assert_eq!(seen.shades.lock().expect("unpoisoned").len(), 0, "and no frame was encoded before it did");
+    g.call("record stop", j!({}));
+    g.state.recorder.set_encoders(std::sync::Arc::new(goofi_record::video::FfmpegEncoders));
     let folder = g.call("record start", j!({ "root": root.path() }))["folder"].as_str().unwrap().to_string();
     let frames = || g.state.recorder.status().streams.iter().map(|stream| stream.frames).sum::<u64>();
     g.until("the small-quality video to write frames", |_| {
