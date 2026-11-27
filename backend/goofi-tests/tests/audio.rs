@@ -483,8 +483,13 @@ fn a_patch_sounds_under_the_external_clock() {
     assert_eq!(variable("audio.rate")["lock"]["value"], j!(true), "an ephemeral variable is value-locked");
     let why = g.refuse("variable entry edit", j!({ "name": "audio.rate", "value": 22_050.0 }));
     assert!(why.contains("ephemeral"), "the engine's own fact refuses a hand edit: {why}");
-    assert!(!g.call("session manifest", j!({}))["yaml"].as_str().unwrap().contains("audio_rate"),
-            "and a patch never carries it");
+    let manifest: serde_json::Value = serde_yaml_ng::from_str(g.call("session manifest", j!({}))["yaml"].as_str().unwrap()).unwrap();
+    let carried: Vec<&String> = manifest["patch"]["variables"].as_object().into_iter().flatten().map(|(name, _)| name).collect();
+    // Read beside a setting of the same group the patch does carry, so the names are the real ones.
+    assert!(carried.iter().any(|name| *name == "audio.buffer_size"), "a setting rides the patch: {carried:?}");
+    for ephemeral in ["audio.rate", "audio.channels", "audio.device", "audio.driver", "audio.hosts"] {
+        assert!(!carried.iter().any(|name| *name == ephemeral), "and a patch never carries `{ephemeral}`: {carried:?}");
+    }
 
     // A pulse is refused on a param that is not one; no shipped audio node declares a pulse yet.
     let why = g.refuse("node param request", j!({ "node": hex(gain3), "param": "gain/gain", "request": "pulse" }));
