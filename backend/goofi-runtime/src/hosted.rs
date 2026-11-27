@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use goofi_codec::rpc::{self, Entry};
+use goofi_codec::rpc;
 use goofi_node::NodeManifest;
 use goofi_host_sdk::host::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
@@ -111,8 +111,8 @@ impl Call for Spawned {
 
     /// One call to the child, spawning it first if need be; a child that failed is dropped so
     /// the next call starts a fresh one. A stop is the child's last call, then its end.
-    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
-        if entry == Entry::Stop {
+    fn call(&mut self, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
+        if rpc::is_stop(request) {
             if let Some(live) = self.live.take() {
                 end(live, now);
             }
@@ -122,7 +122,7 @@ impl Call for Spawned {
             self.live = Some(self.spawn()?);
         }
         let (child, exchange) = self.live.as_mut().expect("spawned");
-        let head = rpc::call_head(entry, now);
+        let head = now.to_le_bytes();
         let frame: Vec<&[u8]> = std::iter::once(&head[..]).chain(request.iter().copied()).collect();
         let reply = exchange.ask(child, &frame);
         if reply.is_err() {
@@ -136,7 +136,7 @@ impl Call for Spawned {
 /// A child's last call, then its end. One that answered its stop leaves by itself and releases
 /// its ports on the way; a kill would cut that short, so each half has its own grace.
 fn end((mut child, mut exchange): (Child, Exchange), now: f64) {
-    let stop = &[&rpc::call_head(Entry::Stop, now)[..]];
+    let stop = &[&now.to_le_bytes()[..], rpc::STOP];
     let by = std::time::Instant::now() + STOP_TIMEOUT;
     let _ = exchange.send(&mut child, stop).and_then(|seq| exchange.answer(&mut child, seq, Some(by)));
     let _ = child.wait_within(STOP_TIMEOUT);
@@ -173,11 +173,11 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
         let Some((seq, body)) = served.wait(None)? else { continue };
         let call = rpc::split_call(&body);
         let reply = match &call {
-            Ok((entry, now, request)) => raw.call(*entry, *now, &[request]).unwrap_or_else(|e| rpc::encode_error_response(&e)),
+            Ok((now, request)) => raw.call(*now, &[request]).unwrap_or_else(|e| rpc::encode_error_response(&e)),
             Err(e) => rpc::encode_error_response(e),
         };
         served.answer(seq, &reply)?;
-        if matches!(call, Ok((Entry::Stop, ..))) {
+        if matches!(call, Ok((_, request)) if rpc::is_stop(&[request])) {
             return Ok(());
         }
     }

@@ -3,11 +3,11 @@
 
 use std::ffi::c_void;
 
-use goofi_codec::rpc::{self, Entry, Output, ProcessOutput, Response};
+use goofi_codec::rpc::{self, Output, ProcessOutput, Response};
 use goofi_core::Data;
 use goofi_node::{NodeManifest, ParamKey, Params};
 
-use crate::abi::{self, collect, Bytes, Ctx, Segments, VTable};
+use crate::abi::{collect, Bytes, Ctx, Segments, VTable};
 use crate::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
 
 /// One loaded node type: its vtable and the manifest the host leaked from `goofi_describe`.
@@ -32,8 +32,8 @@ impl Loaded {
         Box::new(CodecNode::new(self.raw(), in_slots(self.manifest)))
     }
 
-    /// A fresh instance called by entry, request bytes in and reply bytes out — what a hosted
-    /// child forwards across its exchange.
+    /// A fresh instance, request bytes in and reply bytes out — what a hosted child forwards
+    /// across its exchange.
     pub fn raw(&self) -> Raw {
         Raw { node: unsafe { (self.vtable.create)() }, vtable: self.vtable }
     }
@@ -48,10 +48,10 @@ pub struct Raw {
 // The instance is used from the one thread that runs it, as every node is.
 unsafe impl Send for Raw {}
 
-/// Whoever answers an entry in codec bytes: the vtable itself, or a child that holds it. The
-/// one child RPC: every implementation takes `[entry][now]` and the request's runs.
+/// Whoever answers a request in codec bytes: the vtable itself, or a child that holds it. The
+/// one child RPC: every implementation takes `now` and the request's runs.
 pub trait Call: Send {
-    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String>;
+    fn call(&mut self, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String>;
     /// Whether the answerer holds no params yet — a child not running — so the next call must be
     /// a setup carrying the whole map. False for the vtable, which lives as long as the node.
     fn needs_seed(&mut self) -> bool {
@@ -60,23 +60,14 @@ pub trait Call: Send {
 }
 
 impl Call for Raw {
-    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
+    fn call(&mut self, now: f64, request: &[&[u8]]) -> Result<Vec<u8>, String> {
         if self.node.is_null() {
             return Err("the node's constructor panicked".into());
         }
-        let call: abi::Call = match entry {
-            Entry::Setup => self.vtable.setup,
-            Entry::Process => self.vtable.process,
-            Entry::ParamChanged => self.vtable.on_param_changed,
-            Entry::Refresh => self.vtable.on_param_refreshed,
-            Entry::Pulse => self.vtable.on_pulse,
-            // The drop destroys: an in-process node has no child to tell.
-            Entry::Stop => return Ok(rpc::done()),
-        };
         let runs: Vec<Bytes> = request.iter().map(|r| Bytes::of(r)).collect();
         let mut reply: Vec<u8> = Vec::new();
         // SAFETY: the entry is the node's own, `request` and the sink live for the call.
-        unsafe { call(self.node, Ctx { now }, Segments::of(&runs), &mut reply as *mut Vec<u8> as *mut c_void, collect) };
+        unsafe { (self.vtable.call)(self.node, Ctx { now }, Segments::of(&runs), &mut reply as *mut Vec<u8> as *mut c_void, collect) };
         Ok(reply)
     }
 }
@@ -106,8 +97,8 @@ impl<C: Call> CodecNode<C> {
         CodecNode { call, in_slots, seeded: false }
     }
 
-    fn call(&mut self, entry: Entry, now: f64, request: &[&[u8]]) -> Result<Response, String> {
-        goofi_codec::rpc::decode_response(self.call.call(entry, now, request)?)
+    fn call(&mut self, now: f64, request: &[&[u8]]) -> Result<Response, String> {
+        rpc::decode_response(self.call.call(now, request)?)
     }
 
     /// A child that is not running knows no params: it is seeded with the whole map before it is
@@ -121,7 +112,7 @@ impl<C: Call> CodecNode<C> {
 
     fn setup_with(&mut self, now: f64, p: &Params<'_>) -> NodeResult {
         let request = goofi_codec::rpc::encode_setup_request(p.groups()).map_err(|e| NodeError(e.to_string()))?;
-        let done = Self::done(self.call(Entry::Setup, now, &[&request]));
+        let done = Self::done(self.call(now, &[&request]));
         self.seeded = done.is_ok();
         done
     }
@@ -138,7 +129,7 @@ impl<C: Call> CodecNode<C> {
 
 impl<C: Call> Drop for CodecNode<C> {
     fn drop(&mut self) {
-        let _ = self.call.call(Entry::Stop, 0.0, &[]);
+        let _ = self.call.call(0.0, &[rpc::STOP]);
     }
 }
 
@@ -151,7 +142,7 @@ impl<C: Call> Node for CodecNode<C> {
         self.seed(ctx.now, p)?;
         let present = present(self.in_slots.iter().copied(), inp);
         let request = goofi_codec::rpc::encode_request(&present).map_err(|e| NodeError(e.to_string()))?;
-        match self.call(Entry::Process, ctx.now, &request.iter().map(|r| &**r).collect::<Vec<_>>()) {
+        match self.call(ctx.now, &request.iter().map(|r| &**r).collect::<Vec<_>>()) {
             Ok(Response::Process(result)) => apply(result, inp, out, ctx),
             other => Self::done(other),
         }
@@ -163,13 +154,13 @@ impl<C: Call> Node for CodecNode<C> {
             return Ok(());
         }
         let request = goofi_codec::rpc::encode_param_request(&key.group, &key.name, v).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(Entry::ParamChanged, 0.0, &[&request]))
+        Self::done(self.call(0.0, &[&request]))
     }
 
     fn on_param_refreshed(&mut self, key: &ParamKey, p: &Params<'_>) -> Option<Vec<String>> {
         self.seed(0.0, p).ok()?;
         let request = goofi_codec::rpc::encode_refresh_request(&key.group, &key.name).ok()?;
-        match self.call(Entry::Refresh, 0.0, &[&request]) {
+        match self.call(0.0, &[&request]) {
             Ok(Response::Options(options)) => options,
             _ => None,
         }
@@ -178,7 +169,7 @@ impl<C: Call> Node for CodecNode<C> {
     fn on_pulse(&mut self, key: &ParamKey, p: &Params<'_>) -> NodeResult {
         self.seed(0.0, p)?;
         let request = goofi_codec::rpc::encode_pulse_request(&key.group, &key.name).map_err(|e| NodeError(e.to_string()))?;
-        Self::done(self.call(Entry::Pulse, 0.0, &[&request]))
+        Self::done(self.call(0.0, &[&request]))
     }
 }
 

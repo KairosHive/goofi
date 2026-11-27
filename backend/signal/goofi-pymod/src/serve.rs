@@ -1,10 +1,10 @@
 //! `goofi.serve()` — the subprocess child loop (wheel only; `extension-module`): read the node
 //! source from stdin and the exchange from the environment, run the node over the same
-//! [`crate::exec`] seam the in-process tier uses, and answer `[entry][now]` calls over it.
+//! [`crate::exec`] seam the in-process tier uses, and answer `[now][request]` calls over it.
 
 use std::collections::HashSet;
 
-use goofi_codec::rpc::{decode_request, encode_error_response, encode_options_response, encode_response, split_call, Emitted, Entry, Request};
+use goofi_codec::rpc::{decode_request, encode_error_response, encode_options_response, encode_response, is_stop, split_call, Emitted, Request};
 use goofi_core::SrcDtype;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -59,11 +59,11 @@ fn run_loop(
         // DETACHED: holding the GIL over the wait would starve a node's own Python threads, and
         // a receiver thread started in `setup()` is this tier's canonical shape.
         let Some((seq, body)) = py.detach(|| served.wait(None))? else { continue };
-        let (entry, now, request) = split_call(&body)?;
-        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut params, entry, now, request)
+        let (now, request) = split_call(&body)?;
+        let resp = handle(py, instance, in_slots, out_slots, &mut warned, &mut params, now, request)
             .map_err(|e| format!("node process: {e}"))?;
         served.answer(seq, &resp)?;
-        if entry == Entry::Stop {
+        if is_stop(&[request]) {
             return Ok(());
         }
     }
@@ -79,14 +79,9 @@ fn handle(
     out_slots: &[&str],
     warned: &mut HashSet<SrcDtype>,
     params: &mut crate::exec::Groups,
-    entry: Entry,
     now: f64,
     body: &[u8],
 ) -> PyResult<Vec<u8>> {
-    if entry == Entry::Stop {
-        crate::exec::run_stop(instance);
-        return Ok(response(&[], &[]));
-    }
     let arrived = match decode_request(&[body]).map_err(pyo3::exceptions::PyValueError::new_err)? {
         // Setup is a call of its own, with the params it seeds; a raise is the engine's to retry.
         Request::Setup { params: seeded } => {
@@ -101,6 +96,10 @@ fn handle(
             return Ok(response(&[], &[]));
         }
         Request::Process { slots } => slots,
+        Request::Stop => {
+            crate::exec::run_stop(instance);
+            return Ok(response(&[], &[]));
+        }
         Request::Refresh { group, name } => {
             let options = crate::exec::run_refresh(py, instance, params, &group, &name);
             return Ok(encode_options_response(&options).unwrap_or_else(|e| encode_error_response(&e.to_string())));

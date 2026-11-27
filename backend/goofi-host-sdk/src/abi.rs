@@ -1,4 +1,4 @@
-//! The C boundary a built host node crosses: one vtable of `extern "C"` entries over codec
+//! The C boundary a built host node crosses: one `extern "C"` call over codec
 //! bytes, the shim that puts an author's [`Node`] behind it, and the two macros a node file and
 //! its generated crate spell. Only code and plain data cross; never a Rust type.
 
@@ -22,18 +22,12 @@ pub struct Ctx {
     pub now: f64,
 }
 
-/// Every entry has one shape: a request in, a reply out through the host's sink.
-pub type Call = unsafe extern "C" fn(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write);
-
 #[repr(C)]
 pub struct VTable {
     pub create: unsafe extern "C" fn() -> *mut c_void,
     pub destroy: unsafe extern "C" fn(node: *mut c_void),
-    pub setup: Call,
-    pub process: Call,
-    pub on_param_changed: Call,
-    pub on_param_refreshed: Call,
-    pub on_pulse: Call,
+    /// The one entry: a request in, which says what it asks, and a reply out through the host's sink.
+    pub call: unsafe extern "C" fn(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write),
 }
 
 /// The `goofi_describe` answer: the manifest as the probe schema — the one schema every
@@ -68,7 +62,7 @@ pub unsafe extern "C" fn destroy(node: *mut c_void) {
     }
 }
 
-/// What an entry answers, encoded onto the host's sink only once the whole call succeeded.
+/// What a request answers, encoded onto the host's sink only once the whole call succeeded.
 enum Answer {
     Done,
     Process { outputs: IndexMap<&'static str, Option<Data>>, inputs: Vec<(&'static str, usize, Data)>, clears: Vec<String> },
@@ -88,21 +82,18 @@ impl<'a> Out<'a> for Sink {
     }
 }
 
-/// Every entry the same way: decode, call, encode — a refusal or a panic is an error reply.
-unsafe fn call(
-    node: *mut c_void,
-    ctx: Ctx,
-    request: Segments,
-    sink: *mut c_void,
-    write: Write,
-    f: impl FnOnce(&mut Instance, &[&[u8]]) -> Result<Answer, String>,
-) {
+/// The one entry: decode the request, do what it asks, encode the answer — a refusal or a panic
+/// is an error reply.
+///
+/// # Safety
+/// `node` came from [`instance`]; `request` and `sink` are the host's for the call.
+pub unsafe extern "C" fn call(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
     let inst = &mut *(node as *mut Instance);
     inst.ctx.now = ctx.now;
     let request = request.as_slices();
     let mut out = Sink { sink, write };
     // An encoder decides before its first byte, so a refused answer leaves the sink for the error.
-    let encoded = match catch_unwind(AssertUnwindSafe(|| f(inst, &request))) {
+    let encoded = match catch_unwind(AssertUnwindSafe(|| answer(inst, &request))) {
         Ok(Err(e)) => Err(e),
         Err(p) => Err(goofi_node::panic_message(p)),
         Ok(Ok(Answer::Done)) => goofi_codec::rpc::encode_response(&[], &[], &mut out).map_err(|e| e.to_string()),
@@ -127,86 +118,55 @@ unsafe fn call(
     }
 }
 
-/// # Safety
-/// `node` came from [`instance`]; `request` and `sink` are the host's for the call.
-pub unsafe extern "C" fn setup(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, ctx, request, sink, write, |inst, req| {
-        let Request::Setup { params } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a setup was expected".into());
-        };
-        inst.params = params;
-        inst.node.setup(&mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
-        Ok(Answer::Done)
-    })
-}
-
-/// # Safety
-/// As [`setup`].
-pub unsafe extern "C" fn process(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, ctx, request, sink, write, |inst, req| {
-        let Request::Process { slots } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a run was expected".into());
-        };
-        let mut singles: IndexMap<&'static str, Option<Data>> =
-            inst.manifest.inputs.iter().filter(|s| !s.multi).map(|s| (s.name, None)).collect();
-        let mut multis: crate::MultiFrames =
-            inst.manifest.inputs.iter().filter(|s| s.multi).map(|s| (s.name, Vec::new())).collect();
-        for (name, source, data) in slots {
-            if let Some(frames) = multis.get_mut(name.as_str()) {
-                frames.push((source, data));
-            } else if let Some(slot) = singles.get_mut(name.as_str()) {
-                *slot = Some(data);
-            }
+/// What one request asks of the node. The params cross once, on the setup, and then only as the
+/// one that moved.
+fn answer(inst: &mut Instance, request: &[&[u8]]) -> Result<Answer, String> {
+    match goofi_codec::rpc::decode_request(request)? {
+        Request::Setup { params } => {
+            inst.params = params;
+            inst.node.setup(&mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
+            Ok(Answer::Done)
         }
-        let mut outputs: IndexMap<&'static str, Option<Data>> =
-            inst.manifest.outputs.iter().map(|o| (o.name, None)).collect();
-        let inputs = Inputs::with_multi(&singles, &multis);
-        let mut out = Outputs::new(&mut outputs);
-        inst.ctx.take_cleared_inputs();
-        inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
-        let inputs = singles
-            .iter()
-            .filter_map(|(slot, d)| d.clone().map(|d| (*slot, 0, d)))
-            .chain(multis.iter().flat_map(|(slot, frames)| frames.iter().enumerate().map(|(i, (_, d))| (*slot, i, d.clone()))))
-            .collect();
-        Ok(Answer::Process { outputs, inputs, clears: inst.ctx.take_cleared_inputs() })
-    })
-}
-
-/// # Safety
-/// As [`setup`]; `request` is a codec param request: the one value that moved.
-pub unsafe extern "C" fn on_param_changed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, ctx, request, sink, write, |inst, req| {
-        let Request::Param { group, name, value } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a moved param was expected".into());
-        };
-        inst.params.entry(group.clone()).or_default().insert(name.clone(), value.clone());
-        inst.node.on_param_changed(&ParamKey::new(group, name), &value).map_err(|e| e.0)?;
-        Ok(Answer::Done)
-    })
-}
-
-/// # Safety
-/// As [`setup`]; `request` is a codec refresh request.
-pub unsafe extern "C" fn on_param_refreshed(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, ctx, request, sink, write, |inst, req| {
-        let Request::Refresh { group, name } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a refresh was expected".into());
-        };
-        Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&inst.params))))
-    })
-}
-
-/// # Safety
-/// As [`setup`]; `request` is a codec pulse request.
-pub unsafe extern "C" fn on_pulse(node: *mut c_void, ctx: Ctx, request: Segments, sink: *mut c_void, write: Write) {
-    call(node, ctx, request, sink, write, |inst, req| {
-        let Request::Pulse { group, name } = goofi_codec::rpc::decode_request(req)? else {
-            return Err("a pulse was expected".into());
-        };
-        inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&inst.params)).map_err(|e| e.0)?;
-        Ok(Answer::Done)
-    })
+        Request::Process { slots } => {
+            let mut singles: IndexMap<&'static str, Option<Data>> =
+                inst.manifest.inputs.iter().filter(|s| !s.multi).map(|s| (s.name, None)).collect();
+            let mut multis: crate::MultiFrames =
+                inst.manifest.inputs.iter().filter(|s| s.multi).map(|s| (s.name, Vec::new())).collect();
+            for (name, source, data) in slots {
+                if let Some(frames) = multis.get_mut(name.as_str()) {
+                    frames.push((source, data));
+                } else if let Some(slot) = singles.get_mut(name.as_str()) {
+                    *slot = Some(data);
+                }
+            }
+            let mut outputs: IndexMap<&'static str, Option<Data>> =
+                inst.manifest.outputs.iter().map(|o| (o.name, None)).collect();
+            let inputs = Inputs::with_multi(&singles, &multis);
+            let mut out = Outputs::new(&mut outputs);
+            inst.ctx.take_cleared_inputs();
+            inst.node.process(&inputs, &mut out, &mut inst.ctx, &Params::new(&inst.params)).map_err(|e| e.0)?;
+            let inputs = singles
+                .iter()
+                .filter_map(|(slot, d)| d.clone().map(|d| (*slot, 0, d)))
+                .chain(multis.iter().flat_map(|(slot, frames)| frames.iter().enumerate().map(|(i, (_, d))| (*slot, i, d.clone()))))
+                .collect();
+            Ok(Answer::Process { outputs, inputs, clears: inst.ctx.take_cleared_inputs() })
+        }
+        Request::Param { group, name, value } => {
+            inst.params.entry(group.clone()).or_default().insert(name.clone(), value.clone());
+            inst.node.on_param_changed(&ParamKey::new(group, name), &value).map_err(|e| e.0)?;
+            Ok(Answer::Done)
+        }
+        Request::Refresh { group, name } => {
+            Ok(Answer::Options(inst.node.on_param_refreshed(&ParamKey::new(group, name), &Params::new(&inst.params))))
+        }
+        Request::Pulse { group, name } => {
+            inst.node.on_pulse(&ParamKey::new(group, name), &Params::new(&inst.params)).map_err(|e| e.0)?;
+            Ok(Answer::Done)
+        }
+        // The drop destroys: a node in this process holds nothing a stop must release first.
+        Request::Stop => Ok(Answer::Done),
+    }
 }
 
 /// What a node file spells once: the type that implements [`Node`] and the manifest it declares.
@@ -241,11 +201,7 @@ macro_rules! cdylib {
         static __GOOFI_VTABLE: $crate::abi::VTable = $crate::abi::VTable {
             create: __goofi_create_raw,
             destroy: $crate::abi::destroy,
-            setup: $crate::abi::setup,
-            process: $crate::abi::process,
-            on_param_changed: $crate::abi::on_param_changed,
-            on_param_refreshed: $crate::abi::on_param_refreshed,
-            on_pulse: $crate::abi::on_pulse,
+            call: $crate::abi::call,
         };
         #[no_mangle]
         pub extern "C" fn goofi_host_node() -> *const $crate::abi::VTable {

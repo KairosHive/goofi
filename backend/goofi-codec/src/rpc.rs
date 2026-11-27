@@ -1,4 +1,4 @@
-//! The call a node answers across a process boundary: `[entry][now]` then a codec request, and
+//! The call a node answers across a process boundary: `[now]` then a codec request, and
 //! the response. Hosted Rust and subprocess Python children speak exactly this.
 
 use std::borrow::Cow;
@@ -8,46 +8,21 @@ use goofi_core::Data;
 
 use crate::{decode_at, decode_owned, encode_into, encoded_len, packed, u16_of, u32_of, Cursor, EncodeError, Out, Segments};
 
-/// Which entry of a node a call is for: the first byte of every call frame.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Entry {
-    Setup = 0,
-    Process = 1,
-    ParamChanged = 2,
-    Refresh = 3,
-    Pulse = 4,
-    /// The node goes: the child releases what it holds, answers, and exits.
-    Stop = 5,
+/// A call frame as the child reads it: `[f64 now LE]`, then the request, which says what it asks.
+pub fn split_call(frame: &[u8]) -> Result<(f64, &[u8]), String> {
+    let (now, request) = frame.split_first_chunk::<8>().ok_or("a call with no clock")?;
+    Ok((f64::from_le_bytes(*now), request))
 }
 
-impl Entry {
-    pub fn from_u8(byte: u8) -> Option<Entry> {
-        [Entry::Setup, Entry::Process, Entry::ParamChanged, Entry::Refresh, Entry::Pulse, Entry::Stop]
-            .into_iter()
-            .find(|e| *e as u8 == byte)
-    }
+/// The request a node's last call is: the child releases what it holds, answers, and exits.
+pub const STOP: &[u8] = &[5];
+
+/// Whether `request` is the [`STOP`] one.
+pub fn is_stop(request: &[&[u8]]) -> bool {
+    request.first().and_then(|run| run.first()) == Some(&STOP[0])
 }
 
-/// A call frame's head, `[u8 entry][f64 now LE]`; the request's runs follow it.
-pub fn call_head(entry: Entry, now: f64) -> [u8; 9] {
-    let mut head = [0u8; 9];
-    head[0] = entry as u8;
-    head[1..].copy_from_slice(&now.to_le_bytes());
-    head
-}
-
-/// A call frame as the child reads it: the entry, its `now`, and the request after them.
-pub fn split_call(frame: &[u8]) -> Result<(Entry, f64, &[u8]), String> {
-    let (&byte, rest) = frame.split_first().ok_or("an empty call")?;
-    let entry = Entry::from_u8(byte).ok_or_else(|| format!("unknown entry {byte}"))?;
-    if rest.len() < 8 {
-        return Err("a call with no clock".into());
-    }
-    Ok((entry, f64::from_le_bytes(rest[..8].try_into().unwrap()), &rest[8..]))
-}
-
-/// The reply to an entry that answers nothing.
+/// The reply to a request that answers nothing.
 pub fn done() -> Vec<u8> {
     let mut out = Vec::new();
     encode_response(&[], &[], &mut out).expect("an empty response encodes");
@@ -119,6 +94,7 @@ pub enum Request {
     Param { group: String, name: String, value: goofi_core::Param },
     Refresh { group: String, name: String },
     Pulse { group: String, name: String },
+    Stop,
 }
 
 /// Encode a setup request: `[3][params msgpack]` — the whole map the child seeds from.
@@ -181,6 +157,7 @@ pub fn decode_request(segments: &[&[u8]]) -> std::result::Result<Request, String
             let (group, name, value) = rmp_serde::from_slice(cur.rest()?).map_err(|e| e.to_string())?;
             Ok(Request::Param { group, name, value })
         }
+        5 => Ok(Request::Stop),
         other => Err(format!("unknown request tag {other}")),
     }
 }
