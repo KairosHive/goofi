@@ -20,10 +20,16 @@ fn text(g: &Goofi, name: &str) -> String {
 
 /// Whether the playhead rests in `state`, off the KIND of its `progress` frame: a functional
 /// while it flies, the plain 1 once the machine has landed it. The number alone cannot say: a
-/// flight's progress rounds to 1 just before it lands.
+/// flight's progress rounds to 1 just before it lands. The two snapshots are two reducers, and
+/// one behind the other answers a departure as a rest, so the store says it too: both frames
+/// read under its one lock, as the machines write a pass under it.
 fn resting_in(g: &Goofi, playhead: &str, state: &str) -> bool {
     let snapshot = |name: &str| g.call("node snapshot", j!({ "output": format!("variables/{playhead}.{name}") }));
-    snapshot("state")["value"] == j!(state) && snapshot("progress")["shape"].is_array()
+    let shown = snapshot("state")["value"] == j!(state) && snapshot("progress")["shape"].is_array();
+    let graph = g.graph();
+    let store = graph.variables();
+    let held = |name: &str| store.get(&format!("{playhead}.{name}")).cloned();
+    shown && held("state").is_some_and(|d| d.as_str() == Ok(state)) && held("progress").is_some_and(|d| d.as_functional().is_none())
 }
 
 /// Poll until the playhead is at rest in `state`.
