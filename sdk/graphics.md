@@ -39,7 +39,7 @@ contiguous. Dimensions must be within 1 through 8192.
 Return `(goofi.Texture(pixels), {"sfreq": fps})` to state the frame rate. The recorder files an
 armed texture output as video at that rate, and refuses a texture that states none.
 
-In Rust, use `goofi_signal_sdk` and declare a `SlotType::Texture` output:
+In Rust, use `goofi_sdk::signal` and declare a `SlotType::Texture` output:
 
 ```rust
 let pixels = Pixels {
@@ -108,7 +108,7 @@ In Python, a picture has three forms, and each one converts to each other one:
 ## A Python node the graphics tick calls
 
 Derive `goofi.GraphicsNode` in a Python file, or end a Rust file with
-`goofi_graphics_sdk::export!`. The node is a stage of the render plan, as a shader is:
+`goofi_sdk::graphics::export!`. The node is a stage of the render plan, as a shader is:
 
 ```python
 import goofi
@@ -162,6 +162,3 @@ works on the CPU where it does not:
   last picture stays.
 - The node runs in a child process of the subprocess interpreter. Load a model in `setup`: the
   tick passes the stage by until `setup` is done.
-
-A Rust file against `goofi_graphics_sdk` is refused: that name is kept for a Rust node the tick
-calls (`roadmap/texture-plane.md`).

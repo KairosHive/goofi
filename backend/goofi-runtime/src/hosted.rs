@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use goofi_codec::rpc::{self, Entry};
-use goofi_node::NodeManifest;
-use goofi_host_sdk::host::{in_slots, Call, CodecNode};
+use goofi_core::node::NodeManifest;
+use crate::loaded::{in_slots, Call, CodecNode};
 use goofi_supervisor::child::Child;
 use goofi_transport::{Exchange, Hub, Served};
 
@@ -20,12 +20,12 @@ pub fn factory(
     artifact: PathBuf,
     host: Option<PathBuf>,
     manifest: &'static NodeManifest,
-) -> Result<(goofi_host_sdk::NodeFactory, &'static goofi_node::IsolationCell), String> {
+) -> Result<(goofi_sdk::node::NodeFactory, &'static goofi_core::node::IsolationCell), String> {
     Ok(match host {
-        Some(host) => (Box::new(move |_| Box::new(node(hub.clone(), host.clone(), artifact.clone(), manifest))), &goofi_node::HOSTED),
+        Some(host) => (Box::new(move |_| Box::new(node(hub.clone(), host.clone(), artifact.clone(), manifest))), &goofi_core::node::HOSTED),
         None => {
-            let loaded = unsafe { goofi_host_sdk::host::Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
-            (Box::new(move |_| loaded.instantiate()), &goofi_node::NATIVE)
+            let loaded = unsafe { crate::loaded::Loaded::open(goofi_build::open(&artifact)?.library, manifest) }?;
+            (Box::new(move |_| loaded.instantiate()), &goofi_core::node::NATIVE)
         }
     })
 }
@@ -137,10 +137,10 @@ fn serve(artifact: &Path, type_name: &str) -> Result<(), String> {
     // FIRST, before the library loads, so a child orphaned during a slow load still stops.
     goofi_supervisor::child::watch_parent().map_err(|e| format!("parent-liveness watcher: {e}"))?;
     let opened = goofi_build::open(artifact)?;
-    let intro = goofi_node::parse_introspection(&opened.describe)?;
-    let manifest = goofi_node::leak_manifest(type_name.to_string(), &intro)?;
+    let intro = goofi_core::node::parse_introspection(&opened.describe)?;
+    let manifest = goofi_core::node::leak_manifest(type_name.to_string(), &intro)?;
     // SAFETY: `open` matched the library's version before handing it out.
-    let loaded = unsafe { goofi_host_sdk::host::Loaded::open(opened.library, manifest) }?;
+    let loaded = unsafe { crate::loaded::Loaded::open(opened.library, manifest) }?;
     let mut raw = loaded.raw();
     let mut served = Served::open_from_env()?;
     loop {

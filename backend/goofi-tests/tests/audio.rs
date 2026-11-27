@@ -670,7 +670,7 @@ fn a_patch_sounds_under_the_external_clock() {
     // Step: a param bound to a machine attribute in flight holds a FUNCTIONAL, and the control half
     // renders it as a ramp through the block boundaries ahead: the gain climbs block by block from
     // the level it left toward the target, never past it, and holds the target once the flight ends.
-    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.graph().set_evaluator(Arc::new(goofi_runtime::python::inproc::PyExprEvaluator::new().unwrap()));
     for (op, payload) in [
         ("machine add", j!({ "name": "amp" })),
         ("machine attribute add", j!({ "machine": "amp", "name": "level", "value": 0.25, "kind": { "type": "num", "vmin": 0.0, "vmax": 1.0 } })),
@@ -717,7 +717,7 @@ fn a_patch_sounds_under_the_external_clock() {
     evaluator.latch.store(false, std::sync::atomic::Ordering::Relaxed);
     g.until("the stalled evaluation to answer", |_| (!stalled(&evaluator)).then_some(()));
     assert!(g.stays(|g| g.error(gain3).is_none()), "the corpse's answer is not the newborn's: {:?}", g.error(gain3));
-    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.graph().set_evaluator(Arc::new(goofi_runtime::python::inproc::PyExprEvaluator::new().unwrap()));
     g.call("node param edit", j!({ "node": hex(gain3), "param": "gain/gain", "expression": "vars.h.level" }));
     g.until("the gain back on the playhead", |g| g.error(gain3).is_none().then_some(()));
 
@@ -1158,9 +1158,9 @@ fn a_patch_sounds_under_the_external_clock() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("Trap.rs"),
-        "use goofi_audio_sdk::goofi_core::SlotType;\n\
-         use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec};\n\
-         goofi_audio_sdk::params! {\n    \
+        "use goofi_sdk::audio::goofi_core::SlotType;\n\
+         use goofi_sdk::audio::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec};\n\
+         goofi_sdk::audio::params! {\n    \
          ARM = ParamDecl { group: \"trap\", name: \"arm\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: &[], role: None },\n    \
          POISON = ParamDecl { group: \"trap\", name: \"poison\", spec: ParamSpec::Bool { default: false }, expression: None, doc: None, section: 0, show: &[], role: None },\n\
          }\n\
@@ -1174,7 +1174,7 @@ fn a_patch_sounds_under_the_external_clock() {
          if b.params[P::POISON].chan(0)[0] > 0.5 { b.outs[0].chan_mut(0).fill(f32::NAN); return; }\n        \
          b.outs[0].chan_mut(0).fill(0.25);\n    \
          }\n}\n\
-         goofi_audio_sdk::export!(Trap, MANIFEST);\n",
+         goofi_sdk::audio::export!(Trap, MANIFEST);\n",
     )
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Trap"]));
@@ -1236,21 +1236,21 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // Step: a panic anywhere else in the contract is the same fault at the first block — a
     // constructor that panics, and a `prepare` that does, each named for where it happened.
-    let stillborn = "use goofi_audio_sdk::{AudioNode, Block, Manifest};\n\
+    let stillborn = "use goofi_sdk::audio::{AudioNode, Block, Manifest};\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"never born\", inputs: &[], outputs: &[], params: &[] };\n\
          struct Stillborn;\n\
          impl Default for Stillborn { fn default() -> Stillborn { panic!(\"no birth\") } }\n\
          impl AudioNode for Stillborn {\n    \
          fn prepare(&mut self, _rate: f64) {}\n    \
          fn process(&mut self, _b: &mut Block<'_>) {}\n}\n\
-         goofi_audio_sdk::export!(Stillborn, MANIFEST);\n";
-    let unready = "use goofi_audio_sdk::{AudioNode, Block, Manifest};\n\
+         goofi_sdk::audio::export!(Stillborn, MANIFEST);\n";
+    let unready = "use goofi_sdk::audio::{AudioNode, Block, Manifest};\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"never ready\", inputs: &[], outputs: &[], params: &[] };\n\
          #[derive(Default)]\nstruct Unready;\n\
          impl AudioNode for Unready {\n    \
          fn prepare(&mut self, _rate: f64) { panic!(\"not at this rate\") }\n    \
          fn process(&mut self, _b: &mut Block<'_>) {}\n}\n\
-         goofi_audio_sdk::export!(Unready, MANIFEST);\n";
+         goofi_sdk::audio::export!(Unready, MANIFEST);\n";
     std::fs::write(dir.join("Stillborn.rs"), stillborn).unwrap();
     std::fs::write(dir.join("Unready.rs"), unready).unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Stillborn", "audio:Unready"]));
@@ -1267,8 +1267,8 @@ fn a_patch_sounds_under_the_external_clock() {
     // Exact, not near: the node puts out the count it was born with.
     std::fs::write(
         dir.join("Ticks.rs"),
-        "use goofi_audio_sdk::goofi_core::SlotType;\n\
-         use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl};\n\
+        "use goofi_sdk::audio::goofi_core::SlotType;\n\
+         use goofi_sdk::audio::{AudioNode, Block, Manifest, OutputDecl};\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"counts its blocks, and says the count it was born with\", inputs: &[], outputs: OUTS, params: &[] };\n\
          #[derive(Default)]\nstruct Ticks { born: u32, count: u32 }\n\
@@ -1282,7 +1282,7 @@ fn a_patch_sounds_under_the_external_clock() {
          fn load(&mut self, bytes: &[u8]) {\n        \
          if let Ok(b) = bytes.try_into() { self.count = u32::from_le_bytes(b); self.born = self.count; }\n    \
          }\n}\n\
-         goofi_audio_sdk::export!(Ticks, MANIFEST);\n",
+         goofi_sdk::audio::export!(Ticks, MANIFEST);\n",
     )
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Ticks"]));
@@ -1297,7 +1297,7 @@ fn a_patch_sounds_under_the_external_clock() {
         drive(g, TENTH);
         g.until(what, |_| probe.latest().and_then(|d| f32s(&d).first().copied()))
     };
-    let blocks = (TENTH / goofi_audio_sdk::BLOCK) as f32;
+    let blocks = (TENTH / goofi_sdk::audio::BLOCK) as f32;
     drive(&g, 2 * TENTH);
     g.call("node restart", j!({ "node": hex(ticks) }));
     assert_eq!(born_at(&g, ticks, "the count after a restart"), 2.0 * blocks);
@@ -1571,7 +1571,7 @@ fn a_moving_param_glides_across_the_block() {
     });
     // The steepest slope a glide of three quarters allows: the whole move across one block. Read
     // across the tenths' seams too, where a step that landed on a drive's first block would hide.
-    let slope = 0.75 / goofi_audio_sdk::BLOCK as f32 + 1e-4;
+    let slope = 0.75 / goofi_sdk::audio::BLOCK as f32 + 1e-4;
     let mut tail = 1.0f32;
     let mut steepest = |x: &[f32]| {
         let s = std::iter::once(tail).chain(x.iter().copied()).collect::<Vec<f32>>();

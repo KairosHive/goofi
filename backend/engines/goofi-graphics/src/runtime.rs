@@ -15,7 +15,7 @@ use goofi_supervisor::sync::{Mailbox, Mutex};
 use goofi_supervisor::timing::Pace;
 use std::time::{Duration, Instant};
 
-use goofi_node::Uid;
+use goofi_core::node::Uid;
 
 use crate::gpu::{padded_row, Gpu, Want};
 use crate::half::Cells;
@@ -788,8 +788,8 @@ fn post(cell: &Arc<Present>, ui: &goofi_window::Ui, id: goofi_window::Id) {
 }
 
 /// A stage's uniform block length, measured by the writer so there is one layout.
-pub fn params_len(manifest: &goofi_node::NodeManifest) -> usize {
-    let zeros = goofi_runtime::cells_of(&goofi_node::ParamGroups::new(), manifest.params);
+pub fn params_len(manifest: &goofi_core::node::NodeManifest) -> usize {
+    let zeros = goofi_runtime::cells_of(&goofi_core::node::ParamGroups::new(), manifest.params);
     let ranges = vec![[0.0, 1.0, 1.0, 1.0]; shader::array_inputs(manifest).count()];
     shader::uniform_bytes(manifest.params, &zeros, &ranges).len()
 }

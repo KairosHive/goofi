@@ -3,7 +3,7 @@
 
 use goofi_core::scale::{Recipe, C4_HZ, MAX_DEGREES, NOTES, OCTAVE, PRESET_NAMES};
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Quantize;
@@ -124,4 +124,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Quantize, MANIFEST);
+goofi_sdk::signal::export!(Quantize, MANIFEST);

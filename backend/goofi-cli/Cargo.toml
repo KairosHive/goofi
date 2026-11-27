@@ -15,14 +15,13 @@ path = "src/main.rs"
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-graphics = { path = "../engines/goofi-graphics" }
 goofi-bridge = { path = "../goofi-bridge" }
-goofi-client = { path = "../goofi-client" }
 goofi-core = { path = "../goofi-core" }
 goofi-record = { path = "../goofi-record" }
 # Client argv re-quoted into the ONE line /exec parses — the same word rules bash used.
 shell-words = "1"
 serde_json = "1"
-# The scan's outcome vocabulary, which the boot report reads.
-goofi-node = { path = "../goofi-node" }
+# An ARRAY snapshot travels as base64 NPY; the client's render rule decodes it onto stdout.
+base64 = "0.22"
 goofi-transport = { path = "../goofi-transport" }
 # The engine's Python door, handed the interpreters at boot.
 goofi-signal = { path = "../engines/goofi-signal" }
@@ -35,7 +34,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # points pyo3 at it, so `cargo run` needs no env vars. The build script only CHECKS that this happened — it
 # cannot provision, because cargo reads that config once, at startup. Build a pure-native binary
 # (no Python, no interpreter needed) with `--no-default-features`.
-goofi-python = { path = "../goofi-python", optional = true }
 # How a development build is provisioned, and the requirements check the scan shares with it.
 goofi-init = { path = "../goofi-init" }
 # The terminal width the human style lays out for.
@@ -55,5 +53,5 @@ goofi-supervisor = { path = "../goofi-supervisor" }
 # `--no-default-features` is what a build with no libclang takes.
 asio = ["goofi-audio/asio"]
 default = ["python", "asio"]
-python = ["dep:goofi-python", "goofi-python/embed", "goofi-signal/embed"]
+python = ["goofi-runtime/embed", "goofi-signal/embed"]
 

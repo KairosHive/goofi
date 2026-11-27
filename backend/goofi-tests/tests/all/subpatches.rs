@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
+use goofi_core::node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 
 /// Compiles anything and hands the first variable back. With one installed, a binding error in the

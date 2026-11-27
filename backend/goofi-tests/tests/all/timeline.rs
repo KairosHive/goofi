@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use goofi_python::inproc::PyExprEvaluator;
+use goofi_runtime::python::inproc::PyExprEvaluator;
 use goofi_tests::{hex, j, number, Goofi};
 use serde_json::Value;
 
@@ -351,7 +351,7 @@ fn a_recording_takes_its_input_at_the_inputs_pace_and_no_faster_than_its_rate() 
     use goofi_graph::expr_rewrite::Target;
     use goofi_graph::machine::Machines;
     use goofi_graph::timeline::{Lanes, Sample, Take, Track};
-    use goofi_node::Local;
+    use goofi_core::node::Local;
     // What the inputs hold: a node's newest frame, its value stamped with the instant it left
     // the node; a playhead's element, which is a variable; and a device's keys.
     let frame = std::cell::Cell::new((0.0f32, 0.0));

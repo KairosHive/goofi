@@ -1,6 +1,6 @@
 use goofi_core::texture::{PixelFormat, Pixels, Texture};
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params};
 
 #[derive(Default)]
 struct TextureHost;
@@ -16,4 +16,4 @@ static MANIFEST: Manifest = Manifest {
     doc: "Padded RGB rows for graphics integration tests.", tags: &[], inputs: &[], params: &[], producer: true,
     outputs: &[OutputDecl { name: "out", kind: SlotType::Texture }],
 };
-goofi_signal_sdk::export!(TextureHost, MANIFEST);
+goofi_sdk::signal::export!(TextureHost, MANIFEST);

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use goofi_core::SlotType;
-use goofi_node::{GraphView, ParamDecl, Uid};
+use goofi_core::node::{GraphView, ParamDecl, Uid};
 
 use crate::gpu::{Gpu, Want};
 use crate::half::Cells;

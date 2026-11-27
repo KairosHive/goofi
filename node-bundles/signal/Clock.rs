@@ -7,7 +7,7 @@
 //! through `count`, which never skips one.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_sdk::signal::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
 
 /// Seconds between ticks, or `None` when the settings name no rate at all.
 fn interval(rate: f64, unit: &str, division: f64) -> Option<f64> {
@@ -155,4 +155,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Clock, MANIFEST);
+goofi_sdk::signal::export!(Clock, MANIFEST);

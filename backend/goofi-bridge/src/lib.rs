@@ -12,6 +12,7 @@ pub mod phrase;
 pub mod text;
 /// The control-plane document and its deltas — shape-agnostic.
 pub mod doc;
+mod drawing;
 mod fsbrowse;
 mod inspect;
 mod mcp;
@@ -36,7 +37,7 @@ use std::sync::{Arc, MutexGuard};
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use goofi_node::{ScannedType, Stamp};
+use goofi_core::node::{ScannedType, Stamp};
 use goofi_core::indexmap::IndexMap;
 
 /// How long a closing socket waits for the peer's own close before it drops the connection.
@@ -160,7 +161,7 @@ pub struct AppState {
     /// shipped node and loses to the open patch's own file.
     pub custom: PathBuf,
     /// The one reader of node files: what every scan registers from.
-    pub library: Arc<goofi_build::Library>,
+    pub library: Arc<goofi_runtime::Library>,
     /// What the last scan found, by type name → the file's stamp: the baseline the next [`rescan`]
     /// diffs against, and the only list it removes from.
     node_index: Arc<Mutex<std::collections::BTreeMap<String, Seen>>>,
@@ -172,7 +173,7 @@ pub struct AppState {
     workspace_baseline: Arc<Mutex<Fingerprint>>,
     /// Pulsed whenever what the autosave keeps may have moved: a settle, a dirty transition, a
     /// workspace file. The autosave parks on it; nothing polls.
-    changed: Arc<goofi_node::DrainWaker>,
+    changed: Arc<goofi_core::node::DrainWaker>,
     /// Where the open patch lives on disk. Manager-owned rather than per tab, so it rides the
     /// snapshot every client connects with.
     save_path: Arc<Mutex<Option<String>>>,
@@ -272,11 +273,11 @@ impl AppState {
             data_liveness: DataLiveness::DEFAULT,
             roots: materialise_shipped(mode),
             custom: goofi_supervisor::layout::custom_nodes(),
-            library: Arc::new(goofi_build::Library::new(None, None)),
+            library: Arc::new(goofi_runtime::Library::new(None, None)),
             node_index: Arc::new(Mutex::new(Default::default())),
             mount: Arc::new(Mutex::new(Some(mount))),
             workspace_baseline: Arc::new(Mutex::new(workspace_baseline)),
-            changed: Arc::new(goofi_node::DrainWaker::default()),
+            changed: Arc::new(goofi_core::node::DrainWaker::default()),
             save_path: Arc::new(Mutex::new(None)),
             bound: Arc::new(Mutex::new(([127, 0, 0, 1], 8000).into())),
             agents: Arc::new(goofi_agent::Agents::of(hub.id())),
@@ -609,7 +610,7 @@ pub(crate) enum Measure {
 }
 
 impl Measure {
-    fn of(g: &goofi_graph::Graph, uid: goofi_node::Uid) -> Option<Measure> {
+    fn of(g: &goofi_graph::Graph, uid: goofi_core::node::Uid) -> Option<Measure> {
         g.node_frame_share(uid).map(Measure::FrameShare).or_else(|| g.node_ufreq(uid).map(Measure::Rate))
     }
 
@@ -763,7 +764,7 @@ pub fn spawn_workers(state: &AppState) {
                         let err = g.last_error(u).map(str::to_string);
                         // The tier rides the TRANSITION channel, not the snapshot alone: a node
                         // added after connecting is in no snapshot, and a demotion changes it live.
-                        let tier = g.node_tier(u).map(goofi_node::Isolation::wire);
+                        let tier = g.node_tier(u).map(goofi_core::node::Isolation::wire);
                         stages.push((hex, leaves.contains(&u), (g.node_generation(u), g.node_stage(u), err, tier)));
                     }
                     let refreshed: Vec<Event> = refreshed
@@ -778,7 +779,7 @@ pub fn spawn_workers(state: &AppState) {
             };
             // A knob turned in a plugin's own window is authoring, and enters by the door every
             // other author uses — its own actor, so a tab's undo never takes a window's edit.
-            let (authored, projected): (Vec<_>, Vec<_>) = edits.into_iter().partition(|e| e.origin == goofi_node::Origin::Authored);
+            let (authored, projected): (Vec<_>, Vec<_>) = edits.into_iter().partition(|e| e.origin == goofi_core::node::Origin::Authored);
             for e in authored {
                 let payload = json!({ "node": e.uid.to_hex(), "param": format!("{}/{}", e.key.group, e.key.name), "value": goofi_graph::param_value_json(&e.value) });
                 let _ = state.call("node param edit", payload, "editor");
@@ -790,7 +791,7 @@ pub fn spawn_workers(state: &AppState) {
                 let mut g = graph.lock();
                 for e in projected {
                     let moved = g.project_param(e.uid, &e.key, e.value).unwrap_or(false);
-                    changed |= moved && e.origin == goofi_node::Origin::Changed;
+                    changed |= moved && e.origin == goofi_core::node::Origin::Changed;
                 }
                 let (doc, projection) = settle_and_project(&state, &mut g);
                 drop(g);
@@ -1005,10 +1006,10 @@ pub fn bundled_custom(state: &AppState, g: &Graph) -> Vec<(String, PathBuf)> {
         if g.origin(&ty) != Some(&goofi_graph::Origin::Custom) {
             continue;
         }
-        let (Some(engine), bare) = goofi_node::split_type_id(&ty) else { continue };
+        let (Some(engine), bare) = goofi_core::node::split_type_id(&ty) else { continue };
         let Some(path) = state.library.find(&state.custom, bare, engine) else { continue };
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-        let rel = format!("{}/{name}", goofi_node::folder_of(engine));
+        let rel = format!("{}/{name}", goofi_core::node::folder_of(engine));
         if !out.iter().any(|(at, _)| *at == rel) {
             out.push((rel, path));
         }
@@ -1020,9 +1021,9 @@ pub fn bundled_custom(state: &AppState, g: &Graph) -> Vec<(String, PathBuf)> {
 /// library keeps the one copy. One that DIFFERS stays, and wins the name as any patch file does.
 fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
     let Ok(folders) = std::fs::read_dir(mount) else { return };
-    for folder in folders.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_node::engine_of_folder(p).is_some()) {
+    for folder in folders.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_core::node::engine_of_folder(p).is_some()) {
         let Ok(carried) = std::fs::read_dir(&folder) else { continue };
-        for theirs in carried.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_node::type_name_of(p).is_some()) {
+        for theirs in carried.filter_map(Result::ok).map(|e| e.path()).filter(|p| goofi_core::node::type_name_of(p).is_some()) {
             let Some(name) = theirs.file_name() else { continue };
             if let (Ok(a), Ok(b)) = (std::fs::read(custom.join(name)), std::fs::read(&theirs)) {
                 if a == b {
@@ -1036,7 +1037,7 @@ fn adopt_custom(mount: &std::path::Path, custom: &std::path::Path) {
 /// Every folder a scan reads, in precedence order: the roots outside the patch, then the
 /// patch's own workspace, whose node wins a shared name.
 fn scan_dirs(state: &AppState, engines: &[&'static str], patch: &std::path::Path) -> Vec<(PathBuf, goofi_graph::Origin)> {
-    let workspace = engines.iter().map(|id| (patch.join(goofi_node::folder_of(id)), goofi_graph::Origin::Patch));
+    let workspace = engines.iter().map(|id| (patch.join(goofi_core::node::folder_of(id)), goofi_graph::Origin::Patch));
     state.node_roots().into_iter().chain(workspace).collect()
 }
 
@@ -1089,12 +1090,12 @@ pub fn signal_engine(g: &mut Graph) -> &mut goofi_signal::SignalEngine {
 /// pairing: a name must never hold a live registration and an unavailable row at once.
 pub fn register_dyn_type(
     g: &mut Graph,
-    manifest: &'static goofi_node::NodeManifest,
-    factory: goofi_host_sdk::NodeFactory,
-    tier: &'static goofi_node::IsolationCell,
+    manifest: &'static goofi_core::node::NodeManifest,
+    factory: goofi_sdk::node::NodeFactory,
+    tier: &'static goofi_core::node::IsolationCell,
 ) -> bool {
     let replaced = signal_engine(g).register_dyn_type(manifest, factory, tier);
-    let ty = goofi_node::qualify("signal", manifest.type_name);
+    let ty = goofi_core::node::qualify("signal", manifest.type_name);
     g.forget_unavailable(&ty);
     g.add_patch_type(&ty);
     replaced
@@ -1124,7 +1125,7 @@ pub fn catalog_type_names(g: &Graph) -> Vec<String> {
     g.library_entries()
         .into_iter()
         .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
-        .map(|(engine, l)| goofi_node::qualify(engine, l.manifest.type_name))
+        .map(|(engine, l)| goofi_core::node::qualify(engine, l.manifest.type_name))
         .chain(g.unavailable_types().map(|(name, _)| name.to_string()))
         .collect()
 }
@@ -1580,8 +1581,8 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             (g.variable_store(), g.time())
         };
         let mut pace = goofi_supervisor::timing::Grid::new();
-        let mut held: IndexMap<String, goofi_node::Expression> = IndexMap::new();
-        let mut evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>> = None;
+        let mut held: IndexMap<String, goofi_core::node::Expression> = IndexMap::new();
+        let mut evaluator: Option<Arc<dyn goofi_core::node::ExprEvaluator>> = None;
         loop {
             // A bounded wait, so the stop is read between batches; a timed expression runs on it.
             let first = match rx.recv_timeout(state.reducers.cap_interval()) {
@@ -1606,7 +1607,7 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
                         evaluator = ev;
                         let previous = std::mem::take(&mut held);
                         for f in wanted {
-                            let mut expr = goofi_node::Expression::new(f.rewritten, f.id, f.vars);
+                            let mut expr = goofi_core::node::Expression::new(f.rewritten, f.id, f.vars);
                             if let Some(p) = previous.get(&f.name) {
                                 expr.carry(p, |var| p.vars.contains_key(var));
                             }
@@ -1624,20 +1625,20 @@ fn spawn_follower(state: AppState, rx: std::sync::mpsc::Receiver<reducer::Follow
             }
             // An expression of the time follows it every interval: one computed with no stream
             // behind it, or one that reads a functional.
-            touched.extend(held.iter().filter(|(_, e)| e.holds_functional() || e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_node::Local::Value(_))))).map(|(n, _)| n.clone()));
+            touched.extend(held.iter().filter(|(_, e)| e.holds_functional() || e.id.is_some() && e.vars.values().all(|m| matches!(m.value(), Some(goofi_core::node::Local::Value(_))))).map(|(n, _)| n.clone()));
             touched.sort();
             touched.dedup();
             let t = time.position();
             for name in touched {
                 let Some(expr) = held.get(&name) else { continue };
                 let value = match expr.inputs() {
-                    Ok(Some(goofi_node::mailbox::Inputs::Bare(frame))) => match (&evaluator, frame.as_functional()) {
-                        (Some(ev), Some(_)) => goofi_node::at(&**ev, &frame, t, (0.0, 1.0)).map_err(|e| e.0),
+                    Ok(Some(goofi_core::node::mailbox::Inputs::Bare(frame))) => match (&evaluator, frame.as_functional()) {
+                        (Some(ev), Some(_)) => goofi_core::node::at(&**ev, &frame, t, (0.0, 1.0)).map_err(|e| e.0),
                         (None, Some(_)) => Err("no expression evaluator available".to_string()),
                         (_, None) => Ok(frame),
                     },
-                    Ok(Some(goofi_node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
-                        (Some(ev), Some(id)) => ev.eval(id, &goofi_node::EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: None }).map_err(|e| e.0),
+                    Ok(Some(goofi_core::node::mailbox::Inputs::Computed(locals))) => match (&evaluator, expr.id) {
+                        (Some(ev), Some(id)) => ev.eval(id, &goofi_core::node::EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: None }).map_err(|e| e.0),
                         _ => Err("no expression evaluator available".to_string()),
                     },
                     Ok(None) => continue,
@@ -1674,12 +1675,12 @@ fn sync_followers(state: &AppState, g: &Graph, marks: goofi_graph::Marks) {
         let vars = b.vars.iter().map(|v| {
             let (var, resolved) = match v {
                 // The reducer brings the frame; the follower subscribes to nothing itself.
-                goofi_node::BoundVar::Stream { var, producer, slot, .. } => {
+                goofi_core::node::BoundVar::Stream { var, producer, slot, .. } => {
                     taps.entry((*producer, slot.to_string())).or_default().push(reducer::Tap { variable: b.name.to_string(), var: var.clone() });
-                    (var, goofi_node::Var::Stream { service: String::new() })
+                    (var, goofi_core::node::Var::Stream { service: String::new() })
                 }
-                goofi_node::BoundVar::Value { var, value } => (var, goofi_node::Var::Value(value.clone())),
-                goofi_node::BoundVar::Missing { var, reason } => (var, goofi_node::Var::Missing(reason.clone())),
+                goofi_core::node::BoundVar::Value { var, value } => (var, goofi_core::node::Var::Value(value.clone())),
+                goofi_core::node::BoundVar::Missing { var, reason } => (var, goofi_core::node::Var::Missing(reason.clone())),
             };
             (var.clone(), resolved)
         });

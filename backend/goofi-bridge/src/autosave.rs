@@ -105,7 +105,7 @@ fn watch(mount: &Path, mode: notify::RecursiveMode) -> bool {
 /// This manager's mount on the shared watcher, re-aimed when a load replaces it. The tick then
 /// walks, so an ignored file's churn costs a walk and never a write.
 struct Watch {
-    changed: Arc<goofi_node::DrainWaker>,
+    changed: Arc<goofi_core::node::DrainWaker>,
     at: Option<PathBuf>,
 }
 

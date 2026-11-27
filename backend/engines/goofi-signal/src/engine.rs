@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use goofi_node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Uid};
+use goofi_core::node::{DrainWaker, Engine, GraphView, IsolationCell, LibraryEntry, NodeManifest, ParamGroups, Status, Uid};
 use goofi_runtime::{Handle, HostExecutor, Plane, Shared};
 
-/// A [`goofi_host_sdk::NodeFactory`] shared with the node's own thread, which is where the build happens.
-type SharedFactory = Arc<dyn Fn(&ParamGroups) -> Box<dyn goofi_host_sdk::Node> + Send + Sync>;
+/// A [`goofi_sdk::node::NodeFactory`] shared with the node's own thread, which is where the build happens.
+type SharedFactory = Arc<dyn Fn(&ParamGroups) -> Box<dyn goofi_sdk::node::Node> + Send + Sync>;
 
 /// A registered type: its manifest, its tier cell and how an instance is built.
 pub(crate) struct DynType {
@@ -49,7 +49,7 @@ impl SignalEngine {
     pub fn register_dyn_type(
         &mut self,
         manifest: &'static NodeManifest,
-        factory: goofi_host_sdk::NodeFactory,
+        factory: goofi_sdk::node::NodeFactory,
         isolation: &'static IsolationCell,
     ) -> bool {
         let name = manifest.type_name;
@@ -57,7 +57,7 @@ impl SignalEngine {
     }
 
     /// The params as this engine counts them: the author's, then the universal `common` group.
-    fn decls_of(manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
+    fn decls_of(manifest: &'static NodeManifest) -> Vec<goofi_core::node::ParamDecl> {
         manifest.params.iter().copied().chain(goofi_runtime::common_decls(manifest)).collect()
     }
 }
@@ -71,7 +71,7 @@ impl Engine for SignalEngine {
         self.dirty || self.shared.replan.load(Ordering::Acquire)
     }
 
-    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+    fn register(&mut self, file: &goofi_core::node::NodeFile, read: &goofi_core::node::Read) -> goofi_core::node::Scanned {
         self.register_file(file, read)
     }
 
@@ -139,19 +139,19 @@ impl Engine for SignalEngine {
         self.shared.drain(&mut Vec::new(), &|u, born| self.hosts.get(&u).is_some_and(|h| h.born() == born), apply)
     }
 
-    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
+    fn request(&mut self, uid: Uid, request: goofi_core::node::Request) {
         if let Some(handle) = self.hosts.get(&uid) {
             handle.request(request);
         }
     }
 
     /// Every node born after computes from the new origin.
-    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
+    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_core::node::ExprEvaluator>) {
         *self.shared.evaluator.lock() = Some(evaluator);
     }
 
     /// The `common` scheduling group: signal semantics, added to every signal node.
-    fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<goofi_node::ParamDecl> {
+    fn universal_decls(&self, manifest: &'static NodeManifest) -> Vec<goofi_core::node::ParamDecl> {
         goofi_runtime::common_decls(manifest).to_vec()
     }
 

@@ -6,11 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 
-use goofi_audio_sdk::{high, AudioNode, Block, BLOCK};
+use goofi_sdk::audio::{high, AudioNode, Block, BLOCK};
 
 /// A voice is a MIDI channel, and MIDI has sixteen: the protocol's bound, not the engine's.
 const MIDI_CHANNELS: usize = 16;
-use goofi_node::Stamp;
+use goofi_core::node::Stamp;
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{ComPtr, ComWrapper};
@@ -21,7 +21,7 @@ use super::module;
 use super::ok;
 use crate::control::AudioShared;
 use goofi_window::{self as ui, Ui};
-use goofi_node::{Origin, Uid};
+use goofi_core::node::{Origin, Uid};
 
 /// The tempo the host reports: a constant, as goofi has no transport, but a synced plugin stops
 /// at zero.

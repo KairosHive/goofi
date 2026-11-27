@@ -10,7 +10,7 @@ whatever it reads or makes.
   is the CPU form and the one a wire carries. `Texture::Shared` exists only between the graphics
   engine and the child of a node its tick calls; every other reader refuses it.
 - **The graphics engine runs what its tick runs.** A detached node is a signal node. A Python
-  class on `goofi.GraphicsNode`, or a Rust file against `goofi_graphics_sdk`, is a stage the
+  class on `goofi.GraphicsNode`, or a Rust file against `goofi_sdk::graphics`, is a stage the
   render thread calls and waits for.
 - **The tick waits for a node.** A node that overruns the frame period holds the frame, as a slow
   shader does, and its share of the frame says so. Its `setup` runs off the tick.
@@ -43,18 +43,16 @@ whatever it reads or makes.
 
 ## Remaining work
 
-1. **A Rust node the tick calls**, against `goofi_graphics_sdk`. `signal:VariableTexture` is the
-   one shipped Rust node that makes a texture.
-2. **A texture as a value.** A bare expression read of a texture output is refused
+1. **A texture as a value.** A bare expression read of a texture output is refused
    (`SlotType::is_value`), and a machine's expression reads one as `None`.
-3. **The pixel form of a tick node is slow for a large picture.** It is the form a machine
+2. **The pixel form of a tick node is slow for a large picture.** It is the form a machine
    without CUDA has. Measured 2026-11-25 (debug profile, RTX 4090 Laptop, CUDA hidden from the
    child): `graphics:VideoFile` at 1440x1920 holds 38 to 64% of a 60 Hz frame, against 10 to
    13% through shared memory. A node that read a 1920x1080 shader output took 268 to 288 ms a
    tick; that was before the codec stopped packing a texture twice, and is not measured since.
    What is left: an input's readback converts `f16` to `f32` on the CPU, and each direction
    copies the frame into the exchange and out of it.
-4. **`signal:NdiOut` as a reader of the engine.** It reads a texture as `float32` pixels and
+3. **`signal:NdiOut` as a reader of the engine.** It reads a texture as `float32` pixels and
    makes bytes of them on the CPU. The engine's 8-bit readback (what the recorder takes) would
    give it the bytes; a tick node would hold the frame for the conversion instead.
 

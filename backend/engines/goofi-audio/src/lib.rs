@@ -10,9 +10,9 @@ use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, StreamTrait};
-use goofi_audio_sdk::{AudioNode, BLOCK, MAX_PORTS};
+use goofi_sdk::audio::{AudioNode, BLOCK, MAX_PORTS};
 use goofi_core::{Param, SlotType};
-use goofi_node::{
+use goofi_core::node::{
     DrainWaker, Edit, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeView,
     ParamGroups, ParamKey, Status, Uid, NATIVE,
 };
@@ -20,6 +20,7 @@ use goofi_node::{
 mod chanmap;
 mod control;
 mod host;
+mod loaded;
 pub use host::{hosts, NO_ASIO_NOTE};
 pub use rt::performance_cores;
 pub(crate) use rt::Realtime;
@@ -345,7 +346,7 @@ fn render_period(runtime: &Mutex<Runtime>, stats: &Stats, scratch: &mut [f32], c
             rt.pool.realtime(frames as u32, rate);
             if let Err(p) = catch_unwind(AssertUnwindSafe(|| rt.render_into(scratch))) {
                 scratch.fill(0.0);
-                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_node::panic_message(p)));
+                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("the render panicked: {}", goofi_core::node::panic_message(p)));
             }
             let (waited, worst) = rt.pool.waited();
             stats.pool_wait_ns.store(waited.as_nanos() as u64, Ordering::Relaxed);
@@ -587,7 +588,7 @@ impl AudioEngine {
             .iter()
             .map(|(type_name, m, make)| {
                 // One per process, whatever the engine count: keyed by the static descriptor.
-                let manifest = goofi_node::interned(type_name, *m as *const _ as u64, || NodeManifest {
+                let manifest = goofi_core::node::interned(type_name, *m as *const _ as u64, || NodeManifest {
                     type_name,
                     tags: m.tags,
                     doc: m.doc,
@@ -1092,7 +1093,7 @@ impl Engine for AudioEngine {
         self.classes.values().map(|c| LibraryEntry { manifest: c.manifest, isolation: &NATIVE }).collect()
     }
 
-    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+    fn register(&mut self, file: &goofi_core::node::NodeFile, read: &goofi_core::node::Read) -> goofi_core::node::Scanned {
         self.register_file(file, read)
     }
 
@@ -1100,11 +1101,11 @@ impl Engine for AudioEngine {
         nodes::built_in(type_name)
     }
 
-    fn scan(&mut self, dir: &Path) -> Vec<goofi_node::ScannedType> {
+    fn scan(&mut self, dir: &Path) -> Vec<goofi_core::node::ScannedType> {
         vst3::scan_dir(self, dir)
     }
 
-    fn scan_own(&mut self) -> Vec<goofi_node::ScannedType> {
+    fn scan_own(&mut self) -> Vec<goofi_core::node::ScannedType> {
         let dirs = self.vst3.as_ref().map(|(_, dirs)| dirs.clone()).unwrap_or_default();
         dirs.iter().filter(|d| d.is_dir()).flat_map(|d| vst3::scan_dir(self, d)).collect()
     }
@@ -1421,7 +1422,7 @@ impl Engine for AudioEngine {
 
     /// A refresh runs on the node's own thread, never under the graph lock.
     /// Both reach the control half; a pulse raises the param for one control tick.
-    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
+    fn request(&mut self, uid: Uid, request: goofi_core::node::Request) {
         if let Some(inst) = self.live.get(&uid) {
             inst.control.request(request);
         }
@@ -1465,7 +1466,7 @@ impl Engine for AudioEngine {
         edits
     }
 
-    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
+    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_core::node::ExprEvaluator>) {
         *self.shared.evaluator.lock() = Some(evaluator);
     }
 

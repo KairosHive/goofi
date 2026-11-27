@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Param, SlotType};
-use goofi_node::mailbox::Inputs;
-use goofi_node::{
+use goofi_core::node::mailbox::Inputs;
+use goofi_core::node::{
     BindingId, BindingView, DrainWaker, EvalCtx, EventId, ExprEvaluator, Expression, GraphView, NodeFault, NodeManifest,
     NodeStage, NodeView, ParamDecl, ParamGroups, ParamKey, Status, Uid, Var,
 };
@@ -23,8 +23,12 @@ use indexmap::IndexMap;
 mod common;
 pub mod host;
 pub mod hosted;
+mod library;
+pub mod loaded;
+pub mod python;
 
 pub use common::*;
+pub use library::{Library, Python};
 pub use host::{HostExecutor, NodeBuild};
 
 /// The pace of the paced duties: an executor's tick, a binding with no stream re-evaluated, a
@@ -72,11 +76,11 @@ pub struct Plane<'a> {
 /// Everything one node's runtime holds, read off the settled view: the constants per `decls`,
 /// the wires and bindings it subscribes, the doors each output rings, and the armed slots.
 pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[ParamDecl], plane: &Plane<'_>) -> Desired {
-    let carried = |s: &goofi_node::SlotDecl| plane.kind == Some(s.kind);
+    let carried = |s: &goofi_core::node::SlotDecl| plane.kind == Some(s.kind);
     let consts = decls.iter().map(|d| param_of(nv.params, d)).collect();
     // A feed param names a variable: that variable's wire enters the slot the role names.
-    let feeds: Vec<(&str, String)> = goofi_node::feed_decls(nv.manifest)
-        .filter_map(|(slot, group, d)| Some((slot, goofi_node::feed_name(nv.params, group, d)?)))
+    let feeds: Vec<(&str, String)> = goofi_core::node::feed_decls(nv.manifest)
+        .filter_map(|(slot, group, d)| Some((slot, goofi_core::node::feed_name(nv.params, group, d)?)))
         .filter(|(_, name)| view.variables.contains(name))
         .collect();
     let mut subs = Vec::new();
@@ -106,7 +110,7 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
     for (param, d) in decls.iter().enumerate() {
         // A param may carry a binding of its own AND one per element; each is subscribed alone.
         for b in nv.bindings.iter().filter(|b| b.live && !(plane.planned)(b) && b.key.group == d.group) {
-            let (base, elem) = goofi_node::element(&b.key.name);
+            let (base, elem) = goofi_core::node::element(&b.key.name);
             if base != d.name {
                 continue;
             }
@@ -116,13 +120,13 @@ pub fn desired_of(view: &GraphView<'_>, uid: Uid, nv: &NodeView<'_>, decls: &[Pa
     }
     // A ring would wake a same-engine consumer for what its plan already carries; a consumer on
     // another engine subscribes to the wire whatever its slot's kind.
-    let rides = |r: &goofi_node::Ringer<'_>| match r.via {
-        goofi_node::Via::Slot(s) => view
+    let rides = |r: &goofi_core::node::Ringer<'_>| match r.via {
+        goofi_core::node::Via::Slot(s) => view
             .nodes
             .get(&r.consumer)
             .filter(|c| c.engine == nv.engine)
             .is_some_and(|c| c.manifest.inputs.iter().any(|i| i.name == s && carried(i))),
-        goofi_node::Via::Binding(b) => (plane.planned)(b),
+        goofi_core::node::Via::Binding(b) => (plane.planned)(b),
     };
     let targets = nv
         .manifest
@@ -424,11 +428,11 @@ impl Handle {
         fresh
     }
 
-    pub fn request(&self, request: goofi_node::Request) {
+    pub fn request(&self, request: goofi_core::node::Request) {
         let mut mail = self.mail.lock();
         match request.kind {
-            goofi_node::RequestKind::Refresh => mail.refresh.push(request.key),
-            goofi_node::RequestKind::Pulse => mail.pulse.push(request.key),
+            goofi_core::node::RequestKind::Refresh => mail.refresh.push(request.key),
+            goofi_core::node::RequestKind::Pulse => mail.pulse.push(request.key),
         }
         drop(mail);
         self.bell.ring(0);
@@ -490,7 +494,7 @@ pub fn spawn<E: Executor + 'static>(
     let refresh = spawn
         .decls
         .iter()
-        .filter(|d| matches!(d.spec, goofi_node::ParamSpec::Str { refresh: true, .. }))
+        .filter(|d| matches!(d.spec, goofi_core::node::ParamSpec::Str { refresh: true, .. }))
         .map(|d| ParamKey::new(d.group, d.name))
         .collect();
     let mail = Arc::new(Mutex::new(Mail { refresh, ..Mail::default() }));
@@ -1082,7 +1086,7 @@ impl<E: Executor> Runtime<E> {
                 let b = &self.binds[i];
                 let evaluated = match (self.shared.evaluator.lock().clone(), inputs) {
                     (None, _) => Err("no expression evaluator available".to_string()),
-                    (Some(ev), Inputs::Bare(frame)) => goofi_node::at(&*ev, &frame, self.time.position(), range).map_err(|e| e.0),
+                    (Some(ev), Inputs::Bare(frame)) => goofi_core::node::at(&*ev, &frame, self.time.position(), range).map_err(|e| e.0),
                     (Some(ev), Inputs::Computed(locals)) => {
                         ev.eval(b.expr.id.expect("computed"), &EvalCtx { locals: &locals, t: self.time.position(), range, state: Some(&b.expr.state) }).map_err(|e| e.0)
                     }
@@ -1172,7 +1176,7 @@ pub fn scalar(p: &Param) -> f64 {
 
 /// The record's value for one declared param, the declared default where the record has none.
 pub fn param_of(params: &ParamGroups, d: &ParamDecl) -> Param {
-    goofi_node::param(params, d.group, d.name).cloned().unwrap_or_else(|| d.spec.to_param())
+    goofi_core::node::param(params, d.group, d.name).cloned().unwrap_or_else(|| d.spec.to_param())
 }
 
 pub fn scalar_of(params: &ParamGroups, d: &ParamDecl) -> f64 {
@@ -1182,7 +1186,7 @@ pub fn scalar_of(params: &ParamGroups, d: &ParamDecl) -> f64 {
 /// How many dimensions a declared param has.
 pub fn dims_of(d: &ParamDecl) -> usize {
     match d.spec {
-        goofi_node::ParamSpec::Num { default, .. } => default.len().max(1),
+        goofi_core::node::ParamSpec::Num { default, .. } => default.len().max(1),
         _ => 1,
     }
 }

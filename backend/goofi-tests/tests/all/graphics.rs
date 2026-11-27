@@ -1258,14 +1258,14 @@ fn a_rust_node_makes_a_texture_a_shader_reads() {
     assert!(close(px(&frame, 1, 1), [1.0; 4]));
 }
 
-/// The same file against `goofi_graphics_sdk` is a graphics node: the tick calls it at its place,
+/// The same file against `goofi_sdk::graphics` is a graphics node: the tick calls it at its place,
 /// as it calls a Python one, and a shader reads its picture as a stage of the plan.
 #[test]
 fn a_rust_node_runs_on_the_graphics_tick() {
     let g = Goofi::new();
     let dir = g.state.mount().join("nodes_graphics");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs").replace("goofi_signal_sdk", "goofi_graphics_sdk")).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs").replace("goofi_sdk::signal", "goofi_sdk::graphics")).unwrap();
     g.call("library refresh", j!({}));
     let r = g.call("library get", j!({ "type": "graphics:TextureHost" }));
     assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");

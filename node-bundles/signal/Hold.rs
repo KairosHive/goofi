@@ -8,7 +8,7 @@
 //! smooth as the input is fast — a ramp longer than a few frames of the source is what this is for.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Hold {
@@ -118,4 +118,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Hold, MANIFEST);
+goofi_sdk::signal::export!(Hold, MANIFEST);

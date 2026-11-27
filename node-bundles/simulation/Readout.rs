@@ -2,7 +2,7 @@
 //! what turns `Reservoir` from a decoration into a predictor, and the error is itself a signal.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 fn floats(d: &Data) -> Result<(Vec<usize>, Vec<f64>), String> {
     let a = d.as_array()?;
@@ -174,4 +174,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Readout, MANIFEST);
+goofi_sdk::signal::export!(Readout, MANIFEST);

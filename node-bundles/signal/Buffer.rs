@@ -2,7 +2,7 @@
 //! An axis past the rank is a new trailing one, and each frame is one entry along it.
 
 use goofi_core::{resolve_axis, Axis, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Buffer {
@@ -137,4 +137,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Buffer, MANIFEST);
+goofi_sdk::signal::export!(Buffer, MANIFEST);

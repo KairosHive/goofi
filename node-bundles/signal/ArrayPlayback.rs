@@ -3,7 +3,7 @@
 
 use goofi_core::replay::{open, Fallback, Kind, Player};
 use goofi_core::SlotType;
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Tag};
 
 /// The file and fallback a player was opened with, and what opening it gave.
 type Loaded = ((String, usize, u64), Result<Player, String>);
@@ -102,4 +102,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(ArrayPlayback, MANIFEST);
+goofi_sdk::signal::export!(ArrayPlayback, MANIFEST);

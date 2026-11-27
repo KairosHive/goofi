@@ -1,10 +1,10 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
 
 const WAVEFORM: &[Show] = &[Show { param: "mode", any_of: &["waveform"] }];
 const OSCILLATOR: &[Show] = &[Show { param: "mode", any_of: &["oscillator"] }];
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     MODE = ParamDecl {
         group: "signal",
         name: "mode",
@@ -143,4 +143,4 @@ impl AudioNode for SignalIn {
     }
 }
 
-goofi_audio_sdk::export!(SignalIn, MANIFEST);
+goofi_sdk::audio::export!(SignalIn, MANIFEST);

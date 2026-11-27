@@ -2,7 +2,7 @@
 //! or a closed Catmull-Rom curve through all of them. `position` counts in frames and loops.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// A frame named by its sender's stamps: the run index and when that run ended.
 type Stamp = (Option<u64>, Option<f64>);
@@ -147,4 +147,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Morph, MANIFEST);
+goofi_sdk::signal::export!(Morph, MANIFEST);

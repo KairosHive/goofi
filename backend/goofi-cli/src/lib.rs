@@ -1,5 +1,7 @@
 //! The serve command line: its grammar, and what a bind beyond this machine exposes.
 
+pub mod client;
+
 #[derive(Debug)]
 pub struct Cli {
     /// `None` until `--port` names one; [`DEFAULT_PORT`] otherwise.

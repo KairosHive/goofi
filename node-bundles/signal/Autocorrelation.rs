@@ -2,7 +2,7 @@
 //! the frame it is handed. It keeps no past: put a `Buffer` in front for the window it should see.
 
 use goofi_core::{resolve_axis, stream, Axis, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Autocorrelation {
@@ -140,4 +140,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Autocorrelation, MANIFEST);
+goofi_sdk::signal::export!(Autocorrelation, MANIFEST);

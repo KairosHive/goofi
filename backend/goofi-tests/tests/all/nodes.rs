@@ -22,7 +22,7 @@ fn write_rust_node(dir: &Path, file: &str, value: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let source = format!(
         "use goofi_core::{{Data, Meta, SlotType}};\n\
-         use goofi_signal_sdk::{{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params}};\n\n\
+         use goofi_sdk::signal::{{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params}};\n\n\
          #[derive(Default)]\nstruct Emit;\n\n\
          impl Node for Emit {{\n    \
          fn process(&mut self, _i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {{\n        \
@@ -32,7 +32,7 @@ fn write_rust_node(dir: &Path, file: &str, value: &str) {
          static OUTPUTS: &[OutputDecl] = &[OutputDecl {{ name: \"out\", kind: SlotType::Array }}];\n\
          static MANIFEST: Manifest = Manifest {{\n    \
          tags: &[], doc: \"emits a number\", inputs: &[], outputs: OUTPUTS, params: &[], producer: true,\n}};\n\n\
-         goofi_signal_sdk::export!(Emit, MANIFEST);\n"
+         goofi_sdk::signal::export!(Emit, MANIFEST);\n"
     );
     std::fs::write(dir.join(file), source).unwrap();
 }
@@ -210,8 +210,8 @@ fn loading_a_patch_registers_the_nodes_it_ships_before_resolving_them() {
 fn write_audio_node(dir: &Path, file: &str, value: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let source = format!(
-        "use goofi_audio_sdk::goofi_core::SlotType;\n\
-         use goofi_audio_sdk::{{AudioNode, Block, Manifest, OutputDecl}};\n\n\
+        "use goofi_sdk::audio::goofi_core::SlotType;\n\
+         use goofi_sdk::audio::{{AudioNode, Block, Manifest, OutputDecl}};\n\n\
          #[derive(Default)]\nstruct Level;\n\n\
          impl AudioNode for Level {{\n    \
          fn prepare(&mut self, _rate: f64) {{}}\n    \
@@ -220,7 +220,7 @@ fn write_audio_node(dir: &Path, file: &str, value: &str) {
          }}\n}}\n\n\
          static OUTS: &[OutputDecl] = &[OutputDecl {{ name: \"out\", kind: SlotType::Audio }}];\n\
          static MANIFEST: Manifest = Manifest {{ tags: &[], doc: \"holds a level\", inputs: &[], outputs: OUTS, params: &[] }};\n\n\
-         goofi_audio_sdk::export!(Level, MANIFEST);\n"
+         goofi_sdk::audio::export!(Level, MANIFEST);\n"
     );
     std::fs::write(dir.join(file), source).unwrap();
 }
@@ -361,8 +361,8 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     // A file that does not compile greys the type out with rustc's own words, and the instance
     // built from the last good file runs on.
     // The `export!` line is what names the SDK the file is built against.
-    std::fs::write(mount.join("nodes_signal").join("Twice.rs"), "fn broken( {\ngoofi_signal_sdk::export!(Twice, MANIFEST);\n").unwrap();
-    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\ngoofi_audio_sdk::export!(Level, MANIFEST);\n").unwrap();
+    std::fs::write(mount.join("nodes_signal").join("Twice.rs"), "fn broken( {\ngoofi_sdk::signal::export!(Twice, MANIFEST);\n").unwrap();
+    std::fs::write(mount.join("nodes_audio").join("Level.rs"), "fn broken( {\ngoofi_sdk::audio::export!(Level, MANIFEST);\n").unwrap();
     rescan(&g);
     let listed = g.call("library list", j!({ "full": true }));
     let greyed = |ty: &str| {
@@ -408,13 +408,13 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     // catches at every entry, teardown included.
     std::fs::write(
         mount.join("nodes_signal").join("Doomed.rs"),
-        "use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, Outputs, Params};\n\
+        "use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, Outputs, Params};\n\
          #[derive(Default)]\nstruct Doomed;\n\
          impl Drop for Doomed { fn drop(&mut self) { panic!(\"doomed\") } }\n\
          impl Node for Doomed {\n    \
          fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult { Ok(()) }\n}\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"panics on drop\", inputs: &[], outputs: &[], params: &[], producer: true };\n\
-         goofi_signal_sdk::export!(Doomed, MANIFEST);\n",
+         goofi_sdk::signal::export!(Doomed, MANIFEST);\n",
     )
     .unwrap();
     assert_eq!(rescan(&g)["added"], j!(["signal:Doomed"]));
@@ -427,12 +427,12 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     // next run starts a fresh child.
     std::fs::write(
         mount.join("nodes_signal").join("Crash.rs"),
-        "use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, Outputs, Params};\n\
+        "use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, Outputs, Params};\n\
          #[derive(Default)]\nstruct Crash;\n\
          impl Node for Crash {\n    \
          fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult { std::process::abort() }\n}\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"aborts\", inputs: &[], outputs: &[], params: &[], producer: true };\n\
-         goofi_signal_sdk::export!(Crash, MANIFEST);\n",
+         goofi_sdk::signal::export!(Crash, MANIFEST);\n",
     )
     .unwrap();
     assert_eq!(rescan(&g)["added"], j!(["signal:Crash"]));
@@ -446,7 +446,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     std::fs::write(
         mount.join("nodes_signal").join("Through.rs"),
         "use goofi_core::SlotType;\n\
-         use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};\n\
+         use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};\n\
          #[derive(Default)]\nstruct Through;\n\
          impl Node for Through {\n    \
          fn process(&mut self, i: &Inputs<'_>, o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult {\n        \
@@ -454,7 +454,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
          static INS: &[SlotDecl] = &[SlotDecl { name: \"data\", kind: SlotType::Array, trigger_process: true, multi: false, required: true }];\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Array }];\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"passes its input on\", inputs: INS, outputs: OUTS, params: &[], producer: false };\n\
-         goofi_signal_sdk::export!(Through, MANIFEST);\n",
+         goofi_sdk::signal::export!(Through, MANIFEST);\n",
     )
     .unwrap();
     assert_eq!(rescan(&g)["added"], j!(["signal:Through"]));
@@ -467,20 +467,20 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
     std::fs::write(
         mount.join("nodes_signal").join("Loud.rs"),
         "use goofi_core::SlotType;\n\
-         use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params};\n\
+         use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params};\n\
          #[derive(Default)]\nstruct Loud;\n\
          impl Node for Loud {\n    \
          fn process(&mut self, _i: &Inputs<'_>, _o: &mut Outputs<'_>, _c: &mut NodeCtx, _p: &Params<'_>) -> NodeResult { Ok(()) }\n}\n\
          static OUTS: &[OutputDecl] = &[OutputDecl { name: \"out\", kind: SlotType::Audio }];\n\
          static MANIFEST: Manifest = Manifest { tags: &[], doc: \"claims an audio slot\", inputs: &[], outputs: OUTS, params: &[], producer: true };\n\
-         goofi_signal_sdk::export!(Loud, MANIFEST);\n",
+         goofi_sdk::signal::export!(Loud, MANIFEST);\n",
     )
     .unwrap();
     rescan(&g);
     let loud = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|v| v["type"] == "signal:Loud").cloned().expect("listed, greyed");
     assert_eq!(loud["available"], false, "{loud}");
-    assert!(loud["doc"].as_str().is_some_and(|d| d.contains("goofi_audio_sdk")), "{loud}");
+    assert!(loud["doc"].as_str().is_some_and(|d| d.contains("goofi_sdk::audio")), "{loud}");
 
     // A shipped file copied into the patch shadows it, and the palette says so — a copy that kept
     // its source's mtime included, which is what a Finder copy and `fs::copy` on macOS make.
@@ -509,7 +509,7 @@ fn a_rust_node_file_builds_loads_follows_its_edits_shadows_a_shipped_one_and_rid
 
     std::fs::write(mount.join("nodes_signal").join("Consume.rs"), r#"
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl};
 #[derive(Default)]
 struct Consume { frames: u32 }
 impl Node for Consume {
@@ -527,7 +527,7 @@ impl Node for Consume {
 static INPUTS: &[SlotDecl] = &[SlotDecl { name: "data", kind: SlotType::Array, trigger_process: true, multi: false, required: false }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
 static MANIFEST: Manifest = Manifest { tags: &[], doc: "consumes each input frame", inputs: INPUTS, outputs: OUTPUTS, params: &[], producer: false };
-goofi_signal_sdk::export!(Consume, MANIFEST);
+goofi_sdk::signal::export!(Consume, MANIFEST);
 "#).unwrap();
     assert_eq!(rescan(&g)["added"], j!(["signal:Consume"]));
     g.set_param(live, "common", "max_frequency", 2.0);

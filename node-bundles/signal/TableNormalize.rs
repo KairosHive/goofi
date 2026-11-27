@@ -2,7 +2,7 @@
 
 use goofi_core::normalize::{apply, scale_of, validate, Running};
 use goofi_core::{indexmap::IndexMap, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Member {
@@ -140,4 +140,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(TableNormalize, MANIFEST);
+goofi_sdk::signal::export!(TableNormalize, MANIFEST);

@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, high, AudioNode, Block, Edge, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     GATE = ParamDecl {
         group: "env",
         name: "gate",
@@ -138,4 +138,4 @@ impl AudioNode for Env {
     }
 }
 
-goofi_audio_sdk::export!(Env, MANIFEST);
+goofi_sdk::audio::export!(Env, MANIFEST);

@@ -59,7 +59,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn build(len: i64, hops: usize, cap: f64) -> (Goofi, Uid, Vec<Uid>, Vec<OutputProbe>) {
     let g = Goofi::new();
-    g.graph().set_evaluator(std::sync::Arc::new(goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator")));
+    g.graph().set_evaluator(std::sync::Arc::new(goofi_runtime::python::inproc::PyExprEvaluator::new().expect("the evaluator")));
     g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": cap }));
     let src = g.add("_TestConst");
     g.set_param(src, "constant", "length", len);

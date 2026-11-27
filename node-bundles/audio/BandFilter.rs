@@ -1,9 +1,9 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
     BLOCK,
 };
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     GAINS = ParamDecl {
         group: "band",
         name: "gains",
@@ -178,4 +178,4 @@ impl AudioNode for BandFilter {
     }
 }
 
-goofi_audio_sdk::export!(BandFilter, MANIFEST);
+goofi_sdk::audio::export!(BandFilter, MANIFEST);

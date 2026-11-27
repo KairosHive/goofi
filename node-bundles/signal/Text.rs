@@ -2,7 +2,7 @@
 //! number from anywhere in the patch becomes text here, with a Python format spec.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
 
 #[derive(Default)]
 struct Text;
@@ -42,4 +42,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Text, MANIFEST);
+goofi_sdk::signal::export!(Text, MANIFEST);

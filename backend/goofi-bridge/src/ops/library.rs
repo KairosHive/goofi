@@ -55,9 +55,9 @@ impl EffectOp for Save {
         let (engine, bare, from) = {
             let g = state.graph.lock();
             let (engine, entry) = g.resolve_type(&a.ty)?;
-            let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+            let ty = goofi_core::node::qualify(engine, entry.manifest.type_name);
             let folder = match g.origin(&ty) {
-                Some(goofi_graph::Origin::Patch) => mount.join(goofi_node::folder_of(engine)),
+                Some(goofi_graph::Origin::Patch) => mount.join(goofi_core::node::folder_of(engine)),
                 Some(goofi_graph::Origin::Custom) => state.custom.clone(),
                 _ => return Err(format!("`{ty}` is not a custom node")),
             };
@@ -76,7 +76,7 @@ impl EffectOp for Save {
                 if path.extension().is_none() {
                     path.set_extension(from.extension().ok_or("missing source extension")?);
                 }
-                if path.extension() != from.extension() || goofi_node::describe::type_name_of(&path).is_none() {
+                if path.extension() != from.extension() || goofi_core::node::describe::type_name_of(&path).is_none() {
                     return Err("use a valid node file name with the source extension".into());
                 }
                 path.into_os_string()
@@ -84,7 +84,7 @@ impl EffectOp for Save {
             None => from.file_name().ok_or("the source file has no name")?.to_owned(),
         };
         let to = library.join(&name);
-        let saved_type = goofi_node::describe::type_name_of(&to).ok_or("invalid file name")?;
+        let saved_type = goofi_core::node::describe::type_name_of(&to).ok_or("invalid file name")?;
         let held = state.library.find(&library, &saved_type, engine).or_else(|| to.exists().then(|| to.clone()));
         if let Some(held) = &held {
             if held.extension() != from.extension() {
@@ -134,7 +134,7 @@ impl EffectOp for Save {
             state.events.send(Event::NodeTypes { types: schemas::catalog_types(&g, Detail::Full) });
         }
         crate::resync_and_broadcast(state);
-        Ok(json!({ "type": goofi_node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
+        Ok(json!({ "type": goofi_core::node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
     }
 }
 

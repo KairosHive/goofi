@@ -197,7 +197,7 @@ These are work in the goofi repository, needed by goofi-data and built with it.
 
 - **The one transport crate.** `goofi_transport` has slots, queues, doors and the exchange (a
   shared-memory mailbox each way and a loopback doorbell, called by request and reply) now, and
-  depends on `goofi_supervisor` (timing, session, sync), `goofi_core` and `goofi_node`. It becomes
+  depends on `goofi_supervisor` (timing, session, sync), and `goofi_core`. It becomes
   the one API: a connection between two points, queued or unqueued, its mode detected from their
   processes, with the packet, the channels and the Python bindings. The exchange and the `rpc`
   call frames of `goofi_codec` go. The browser data plane (the GOOF frame, behind the reducer)

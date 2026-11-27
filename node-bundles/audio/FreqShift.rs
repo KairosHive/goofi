@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     FREQUENCY = ParamDecl {
         group: "freq_shift",
         name: "frequency",
@@ -110,4 +110,4 @@ impl AudioNode for FreqShift {
     }
 }
 
-goofi_audio_sdk::export!(FreqShift, MANIFEST);
+goofi_sdk::audio::export!(FreqShift, MANIFEST);

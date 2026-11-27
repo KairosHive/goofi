@@ -13,13 +13,7 @@ use goofi_supervisor::sync::Mutex;
 
 use sha2::{Digest, Sha256};
 
-mod library;
-mod python;
-mod rust;
-mod shader;
 
-pub use library::Library;
-pub use python::Python;
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -32,15 +26,10 @@ pub fn built_against() -> String {
     format!("{VERSION}+{SDK_HASH}")
 }
 
-/// One engine's authoring crate as a node file names it: what the file compiles against, and
-/// the crates it may reach beyond it. The SDK a file names is the engine its node declares.
+/// One engine as a node file names it: the module of `goofi_sdk` whose `export!` the file
+/// spells, and the crates it may reach beyond the SDK.
 pub struct Sdk {
     pub engine: &'static str,
-    /// The name a node file spells. Two engines call one node the same way, so two names can
-    /// be one `package`.
-    pub name: &'static str,
-    pub package: &'static str,
-    pub dir: &'static str,
     pub allow: &'static [(&'static str, &'static str)],
     /// Whether a library built after boot runs in a child, where the engine can call one.
     pub hosted: bool,
@@ -48,53 +37,31 @@ pub struct Sdk {
 
 pub const SIGNAL: Sdk = Sdk {
     engine: "signal",
-    name: "goofi-signal-sdk",
-    package: "goofi-host-sdk",
-    dir: "backend/goofi-host-sdk",
     allow: &[("rustfft", "6.4.1"), ("realfft", "3"), ("libm", "0.2")],
     hosted: true,
 };
 
-pub const AUDIO: Sdk = Sdk {
-    engine: "audio",
-    name: "goofi-audio-sdk",
-    package: "goofi-audio-sdk",
-    dir: "backend/goofi-audio-sdk",
-    allow: &[("libm", "0.2")],
-    hosted: false,
-};
+pub const AUDIO: Sdk = Sdk { engine: "audio", allow: &[("libm", "0.2")], hosted: false };
 
-pub const GRAPHICS: Sdk = Sdk {
-    engine: "graphics",
-    name: "goofi-graphics-sdk",
-    package: "goofi-host-sdk",
-    dir: "backend/goofi-host-sdk",
-    allow: &[("libm", "0.2")],
-    hosted: true,
-};
+pub const GRAPHICS: Sdk = Sdk { engine: "graphics", allow: &[("libm", "0.2")], hosted: true };
 
 pub const SDKS: [&Sdk; 3] = [&SIGNAL, &AUDIO, &GRAPHICS];
 
 impl Sdk {
-    /// The crate as a path in source: `goofi_signal_sdk`.
-    fn ident(&self) -> String {
-        self.name.replace('-', "_")
-    }
-
     /// The line that makes the generated crate a cdylib of this engine.
     fn glue(&self) -> String {
-        format!("{}::cdylib!(node, {:?}, {SDK_HASH:?});", self.ident(), self.engine)
+        format!("goofi_sdk::{}::cdylib!(node, {:?}, {SDK_HASH:?});", self.engine, self.engine)
     }
 }
 
 /// The SDK an `.rs` node file declares: the one whose `export!` it spells. None for a file that
 /// spells none, which is not a node yet.
 pub fn sdk_of(source: &str) -> Option<&'static Sdk> {
-    SDKS.into_iter().find(|sdk| source.contains(&format!("{}::export!", sdk.ident())))
+    SDKS.into_iter().find(|sdk| source.contains(&format!("goofi_sdk::{}::export!", sdk.engine)))
 }
 
 /// Why an `.rs` file that names no SDK is not a node.
-pub const NO_SDK: &str = "the file exports no node: end it with `goofi_signal_sdk::export!`, `goofi_audio_sdk::export!` or `goofi_graphics_sdk::export!`";
+pub const NO_SDK: &str = "the file exports no node: end it with `goofi_sdk::signal::export!`, `goofi_sdk::audio::export!` or `goofi_sdk::graphics::export!`";
 
 /// How long one node build may run. A first build compiles the SDK's dependency tree, which is
 /// minutes on a slow machine; a build past this is stuck, not slow.
@@ -106,7 +73,7 @@ fn cache_key(sdk: &Sdk, source: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(VERSION.as_bytes());
     hash.update(SDK_HASH.as_bytes());
-    hash.update(sdk.name.as_bytes());
+    hash.update(sdk.engine.as_bytes());
     for (name, version) in sdk.allow {
         hash.update(name.as_bytes());
         hash.update(version.as_bytes());
@@ -265,12 +232,10 @@ fn generate(sdk: &Sdk, source: &Path, sdk_root: &Path, crate_dir: &Path, crate_n
     let manifest = format!(
         "[package]\nname = {crate_name:?}\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n\
          [lib]\ncrate-type = [\"cdylib\"]\n\n\
-         [dependencies]\n{} = {{ package = {:?}, path = {:?} }}\ngoofi-core = {{ path = {:?} }}\n{deps}\n\
+         [dependencies]\ngoofi-sdk = {{ path = {:?} }}\ngoofi-core = {{ path = {:?} }}\n{deps}\n\
          [profile.release]\nopt-level = 3\ndebug = false\nincremental = true\ncodegen-units = 16\npanic = \"unwind\"\n\n\
          [workspace]\n",
-        sdk.name,
-        sdk.package,
-        slash(&sdk_root.join(sdk.dir)),
+        slash(&sdk_root.join("backend/goofi-sdk")),
         slash(&sdk_root.join("backend/goofi-core")),
     );
     let lib = format!(

@@ -3,7 +3,7 @@
 //! kernel convolution.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 
@@ -391,4 +391,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Smoothing, MANIFEST);
+goofi_sdk::signal::export!(Smoothing, MANIFEST);

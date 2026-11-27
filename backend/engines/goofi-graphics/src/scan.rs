@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use goofi_node::{Body, NodeFile, NodeManifest, Read, Scanned};
+use goofi_core::node::{Body, NodeFile, NodeManifest, Read, Scanned};
 
 use crate::gpu::Gpu;
 use crate::{shader, GraphicsEngine};
@@ -25,7 +25,7 @@ pub enum Runs {
     /// A Python file's source, and the interpreter of the child that runs it.
     Python { interpreter: String, source: String },
     /// A Rust library, in this process or in a child.
-    Rust(Arc<goofi_host_sdk::NodeFactory>),
+    Rust(Arc<goofi_sdk::node::NodeFactory>),
 }
 
 /// A shader naga passed: its pipeline is asked of the device at the first node of the type.
@@ -61,7 +61,7 @@ pub struct Class {
     /// The buffers this type carries between two ticks, in the order the prelude binds them.
     pub state: Vec<String>,
     pub kind: Kind,
-    pub isolation: &'static goofi_node::IsolationCell,
+    pub isolation: &'static goofi_core::node::IsolationCell,
 }
 
 impl Class {
@@ -112,11 +112,11 @@ impl GraphicsEngine {
     fn class(&self, type_name: &str, read: &Read) -> Result<Arc<Class>, String> {
         if let Body::Shader { source } = &read.body {
             let intro = shader::complete(&read.intro)?;
-            let manifest = goofi_node::manifest_of(type_name, &intro)?;
+            let manifest = goofi_core::node::manifest_of(type_name, &intro)?;
             let shader = shader(manifest, source, &intro.state)?;
-            return Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(shader), isolation: &goofi_node::SHADER }));
+            return Ok(Arc::new(Class { manifest, feedback: intro.feedback, window: intro.window, state: intro.state, kind: Kind::Shader(shader), isolation: &goofi_core::node::SHADER }));
         }
-        let manifest = goofi_node::manifest_of(type_name, &read.intro)?;
+        let manifest = goofi_core::node::manifest_of(type_name, &read.intro)?;
         if manifest.outputs.len() != 1 || manifest.outputs[0].kind != goofi_core::SlotType::Texture {
             return Err("a graphics node has one output, a TEXTURE".into());
         }
@@ -130,7 +130,7 @@ impl GraphicsEngine {
             }
             Body::Python { source, interpreter } => {
                 let runs = Runs::Python { interpreter: interpreter.clone(), source: source.clone() };
-                (runs, goofi_node::IsolationCell::leak(goofi_node::Isolation::Subprocess))
+                (runs, goofi_core::node::IsolationCell::leak(goofi_core::node::Isolation::Subprocess))
             }
             Body::Shader { .. } => unreachable!("a shader returned above"),
         };

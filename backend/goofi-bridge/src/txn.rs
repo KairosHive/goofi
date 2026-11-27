@@ -16,7 +16,7 @@ pub struct Txn<'a> {
     pub history: MutexGuard<'a, History>,
     outbox: Vec<Event>,
     /// The nodes whose runtime state is echoed after the settle, as a `state_update` each.
-    echo: Vec<goofi_node::Uid>,
+    echo: Vec<goofi_core::node::Uid>,
     /// The snapshot from before a write; none for a read.
     before: Option<Snapshot>,
     /// What a drag is keyed by, named by the op that previews: the commit that ends it takes the
@@ -67,7 +67,7 @@ impl<'a> Txn<'a> {
 
     /// Echo a node's runtime state after the settle: what the doc does not carry — its error,
     /// its descriptors — read from settled state, not from the step that asked.
-    pub fn echo(&mut self, uid: goofi_node::Uid) {
+    pub fn echo(&mut self, uid: goofi_core::node::Uid) {
         if !self.echo.contains(&uid) {
             self.echo.push(uid);
         }

@@ -301,8 +301,8 @@ impl Executor for GraphicsHalf {
     fn refresh(&mut self, param: usize) -> Option<Vec<String>> {
         self.node.as_mut().and_then(|(node, _)| node.refresh(param))
     }
-    fn stage(&self) -> goofi_node::NodeStage {
-        self.node.as_ref().map_or(goofi_node::NodeStage::Ready, |(node, _)| node.stage())
+    fn stage(&self) -> goofi_core::node::NodeStage {
+        self.node.as_ref().map_or(goofi_core::node::NodeStage::Ready, |(node, _)| node.stage())
     }
     /// Now, while the render thread has left a readback to take; else the tap's pace.
     fn next_wake(&self, last_run: Instant) -> Option<Instant> {

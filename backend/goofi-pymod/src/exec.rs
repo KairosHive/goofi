@@ -11,8 +11,8 @@ use pyo3::IntoPyObjectExt;
 
 use crate::data::{any_to_core, array_to_f32, dict_to_meta, Data};
 
-/// `group -> name -> Param` — the same shape as `goofi_node::ParamGroups`, so a caller passes
-/// its own directly and pymod needs no dependency on goofi-node.
+/// `group -> name -> Param` — the same shape as `goofi_core::node::ParamGroups`, so a caller passes
+/// its own directly.
 pub type Groups = IndexMap<String, IndexMap<String, Param>>;
 
 /// Apply the live params and the clock, then call `node.setup()`.

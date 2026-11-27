@@ -1,5 +1,5 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, SlotDecl, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{AudioNode, Block, Manifest, OutputDecl, SlotDecl, Tag};
 
 static INS: &[SlotDecl] =
     &[SlotDecl { name: "input", kind: SlotType::Audio, trigger_process: false, multi: false, required: false }];
@@ -33,4 +33,4 @@ impl AudioNode for Feedback {
     }
 }
 
-goofi_audio_sdk::export!(Feedback, MANIFEST);
+goofi_sdk::audio::export!(Feedback, MANIFEST);

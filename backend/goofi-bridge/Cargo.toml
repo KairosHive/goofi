@@ -14,17 +14,19 @@ goofi-build = { path = "../goofi-build" }
 goofi-supervisor = { path = "../goofi-supervisor" }
 
 [dependencies]
+goofi-runtime = { path = "../goofi-runtime" }
+# The paint pad's raster.
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-audio = { path = "../engines/goofi-audio" }
 goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../engines/goofi-graphics" }
 goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }
-goofi-node = { path = "../goofi-node" }
 goofi-graph = { path = "../goofi-graph" }
 goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../engines/goofi-signal" }
-goofi-host-sdk = { path = "../goofi-host-sdk" }
+goofi-sdk = { path = "../goofi-sdk" }
 goofi-transport = { path = "../goofi-transport" }
 # The harness plane the agent ops and `/term` are doors onto.
 goofi-agent = { path = "../goofi-agent" }

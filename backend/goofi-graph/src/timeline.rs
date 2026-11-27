@@ -8,7 +8,7 @@ use std::sync::Arc;
 use goofi_core::ease::Curve;
 use goofi_core::variables::MIDI_ENTRIES;
 use goofi_core::{Data, Face, Meta};
-use goofi_node::ExprEvaluator;
+use goofi_core::node::ExprEvaluator;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -213,11 +213,11 @@ impl Track {
 
 /// The variables a track's input reads: an expression as a param's, but with no node of its own,
 /// so no `me`. A playhead's element is the variable it is published as.
-pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_node::ExprError> {
+pub fn input_refs(text: &str) -> Result<(String, Vec<crate::expr_rewrite::VarRef>), goofi_core::node::ExprError> {
     let (rewritten, mut refs) = crate::expr_rewrite::rewrite(text)?;
     for r in &mut refs {
         match &r.target {
-            Target::MeOut { .. } | Target::MeParam { .. } => return Err(goofi_node::ExprError("a track has no `me`".into())),
+            Target::MeOut { .. } | Target::MeParam { .. } => return Err(goofi_core::node::ExprError("a track has no `me`".into())),
             Target::PlayheadField { playhead, field } => r.target = Target::Variable { key: format!("{playhead}.{field}") },
             _ => {}
         }

@@ -2,7 +2,7 @@
 //! labels go.
 
 use goofi_core::{resolve_axis, Data, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Reduce;
@@ -163,4 +163,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Reduce, MANIFEST);
+goofi_sdk::signal::export!(Reduce, MANIFEST);

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use goofi_audio_sdk::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
-use goofi_node::{NodeManifest, ParamSpec, Uid};
+use goofi_sdk::audio::{cross, AudioNode, Block, Port, PortMut, BLOCK, MAX_PORTS};
+use goofi_core::node::{NodeManifest, ParamSpec, Uid};
 
 use crate::plan::{Plan, Source, Stage, SILENCE};
 
@@ -1075,7 +1075,7 @@ unsafe fn run_stage(stage: &Stage, slot: &mut Slot, arena: Arena, n: u64, epoch:
     }
     let fault = match ran {
         None => None,
-        Some(Err(p)) => Some(Fault::Panic(goofi_node::panic_message(p))),
+        Some(Err(p)) => Some(Fault::Panic(goofi_core::node::panic_message(p))),
         Some(Ok(())) if (0..stage.outs.len()).any(|k| outs.peek(k).iter().any(|v| !v.is_finite())) => Some(Fault::NotANumber),
         Some(Ok(())) if slot.cost.unwrap_or_else(|| started.elapsed()) > budget => {
             slot.overruns = slot.overruns.saturating_add(1);

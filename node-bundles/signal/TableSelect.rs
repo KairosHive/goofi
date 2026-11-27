@@ -2,7 +2,7 @@
 //! `a.b.c` reaches through a table inside a table.
 
 use goofi_core::{Data, SlotType, Value};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct TableSelect;
@@ -71,4 +71,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(TableSelect, MANIFEST);
+goofi_sdk::signal::export!(TableSelect, MANIFEST);

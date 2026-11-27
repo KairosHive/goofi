@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     MODE = ParamDecl {
         group: "filter",
         name: "mode",
@@ -94,4 +94,4 @@ impl AudioNode for Filter {
     }
 }
 
-goofi_audio_sdk::export!(Filter, MANIFEST);
+goofi_sdk::audio::export!(Filter, MANIFEST);

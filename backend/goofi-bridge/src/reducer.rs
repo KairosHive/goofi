@@ -29,15 +29,15 @@ pub struct Tap {
 pub struct Following {
     pub name: String,
     pub rewritten: String,
-    pub id: Option<goofi_node::BindingId>,
-    pub vars: Vec<(String, goofi_node::Var)>,
+    pub id: Option<goofi_core::node::BindingId>,
+    pub vars: Vec<(String, goofi_core::node::Var)>,
 }
 
 /// What reaches the follower: a tap's frame, or the whole set of variables it computes, from
 /// settled state, with the evaluator the graph compiled them against.
 pub enum Followed {
     Frame { variable: String, var: String, frame: goofi_core::Data },
-    Desired(Vec<Following>, Option<Arc<dyn goofi_node::ExprEvaluator>>),
+    Desired(Vec<Following>, Option<Arc<dyn goofi_core::node::ExprEvaluator>>),
 }
 
 /// What one connection declares for a slot: the viewers' specs and the rate its display paints at.
@@ -552,7 +552,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             let held = match (&made, latest.lock().clone()) {
                 (Some(_), _) | (None, None) => None,
                 (None, Some(d)) if d.as_functional().is_none() => Some(d),
-                (None, Some(d)) => match graph.lock().evaluator().map(|ev| goofi_node::at(&*ev, &d, time.position(), (0.0, 1.0))) {
+                (None, Some(d)) => match graph.lock().evaluator().map(|ev| goofi_core::node::at(&*ev, &d, time.position(), (0.0, 1.0))) {
                     Some(Ok(v)) => Some(v),
                     Some(Err(e)) => {
                         goofi_supervisor::log::record(goofi_supervisor::log::Source::component("reducer"), goofi_supervisor::log::Level::Error, None, format!("{door}: {}", e.0));

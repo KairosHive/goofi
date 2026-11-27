@@ -8,10 +8,8 @@ license.workspace = true
 # The 8-bit tap goes out as the GOOF frame it is.
 bytes = "1"
 goofi-supervisor = { path = "../../goofi-supervisor" }
-goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
-goofi-python = { path = "../../goofi-python" }
+goofi-sdk = { path = "../../goofi-sdk" }
 goofi-core = { path = "../../goofi-core" }
-goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }
 goofi-runtime = { path = "../../goofi-runtime" }

@@ -1,9 +1,9 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
     BLOCK,
 };
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     PITCH = ParamDecl {
         group: "band",
         name: "pitch",
@@ -193,4 +193,4 @@ impl AudioNode for BandFollow {
     }
 }
 
-goofi_audio_sdk::export!(BandFollow, MANIFEST);
+goofi_sdk::audio::export!(BandFollow, MANIFEST);

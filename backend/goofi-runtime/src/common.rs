@@ -1,7 +1,7 @@
 //! The universal `common` scheduling group and the policy a host node reads off it.
 
 use goofi_core::Param;
-use goofi_node::{Face, param, ExprDecl, ExprMode, NodeManifest, ParamDecl, ParamGroups, ParamSpec};
+use goofi_core::node::{Face, param, ExprDecl, ExprMode, NodeManifest, ParamDecl, ParamGroups, ParamSpec};
 
 use crate::COMMON;
 

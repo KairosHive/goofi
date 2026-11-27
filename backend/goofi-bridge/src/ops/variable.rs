@@ -497,14 +497,14 @@ fn sheet_of(g: &Graph, group: &str, element: &str) -> Result<(String, Data), Str
 impl WriteOp for ControlPaint {
     fn run(tx: &mut Txn, a: ControlPaintArgs) -> Result<Value, String> {
         let (name, sheet) = sheet_of(&tx.g, &a.group, &a.element)?;
-        let ops = goofi_core::drawing::parse(&a.ops)?;
+        let ops = crate::drawing::parse(&a.ops)?;
         if ops.is_empty() {
             return Err("no ops to draw".into());
         }
         let goofi_core::Value::Array(held) = sheet.value() else { return Err(format!("`{name}` holds no sheet")) };
         let [h, w, 4] = held.shape() else { return Err(format!("`{name}` holds {:?}, not a sheet", held.shape())) };
         let texels: Vec<f32> = held.values().collect();
-        let drawn = goofi_core::drawing::raster(&texels, *w as u32, *h as u32, &ops)?;
+        let drawn = crate::drawing::raster(&texels, *w as u32, *h as u32, &ops)?;
         let bytes = drawn.iter().flat_map(|v| v.to_le_bytes()).collect();
         let value = Data::array_f32(vec![*h, *w, 4], bytes, goofi_core::Meta::default()).map_err(|e| e.to_string())?;
         tx.key(format!("variable {name}"));

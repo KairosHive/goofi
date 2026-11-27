@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use goofi_core::{control, Data, Param};
-use goofi_node::{
+use goofi_core::node::{
     Edit, EditorAction,
     BindingView, BoundVar, DrainWaker, Edge, Engine, EventId, ExprMode, GraphView, Isolation,
     IsolationCell, LibraryEntry, NodeManifest, NodeView, ParamDecl, ParamGroups, ParamKey,
@@ -29,7 +29,7 @@ pub mod expr_rewrite;
 pub mod machine;
 pub mod timeline;
 
-pub use goofi_node::Uid;
+pub use goofi_core::node::Uid;
 
 use expr_rewrite::Target;
 use goofi_core::variables::NAME_RULE;
@@ -299,7 +299,7 @@ impl Graph {
                 // `name[i]` is one dimension of a vector: it edits that element's literal or source.
                 let existing = declared
                     .as_ref()
-                    .and_then(|p| goofi_node::param_dim(p, group, name))
+                    .and_then(|p| goofi_core::node::param_dim(p, group, name))
                     .ok_or_else(|| format!("no param {group}.{name}"))?;
                 let cur = self.param_source(uid, group, name).map(|s| s.state);
                 let (value, source) = param_change(&existing, cur, spec)
@@ -355,7 +355,7 @@ fn coerced_value(existing: &Param, v: &serde_json::Value) -> Result<Param, Strin
 /// item per element; anything else — a scalar, an element, a list of another length or an
 /// expression that merely evaluates to a list — is none of this.
 fn element_expressions(existing: &Param, name: &str, spec: &serde_json::Value) -> Option<Vec<String>> {
-    if goofi_node::element(name).1.is_some() || existing.dims() < 2 {
+    if goofi_core::node::element(name).1.is_some() || existing.dims() < 2 {
         return None;
     }
     let text = spec.get("expression")?.as_str()?.trim();
@@ -366,7 +366,7 @@ fn element_expressions(existing: &Param, name: &str, spec: &serde_json::Value) -
 
 /// `text` split on the commas outside every bracket, parenthesis, brace and string.
 fn split_top_level(text: &str) -> Vec<String> {
-    use goofi_node::expr::{tokens, Kind};
+    use goofi_core::node::expr::{tokens, Kind};
     let mut items = Vec::new();
     let mut depth = 0i32;
     let mut start = 0;
@@ -473,7 +473,7 @@ struct Binding {
     state: SourceState,
     /// Compiled from [`Self::rewritten`], never from the authored text: the evaluator is handed
     /// variables, not names. `None` when the compile failed, or there is no evaluator.
-    id: Option<goofi_node::BindingId>,
+    id: Option<goofi_core::node::BindingId>,
     /// Derived: the text with every term replaced by a generated variable.
     rewritten: String,
     /// Derived: one entry per variable `rewritten` names, resolved against the graph.
@@ -510,7 +510,7 @@ impl Binding {
 pub struct VariableBinding<'a> {
     pub name: &'a str,
     pub rewritten: &'a str,
-    pub id: Option<goofi_node::BindingId>,
+    pub id: Option<goofi_core::node::BindingId>,
     pub vars: &'a [BoundVar],
 }
 
@@ -608,7 +608,7 @@ struct Runtime {
     /// The patch's time, shared with every engine — one object, never a copy of what it says.
     time: Arc<goofi_supervisor::timing::Time>,
     /// `None` ⇒ bindings are stored and round-trip but never evaluate; the literal stands.
-    evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
+    evaluator: Option<Arc<dyn goofi_core::node::ExprEvaluator>>,
     /// Every variable with an expression, derived at settle as a param's source is.
     variable_binds: IndexMap<String, Binding>,
     /// Every leaf's authored sources derived against the graph, at the last settle and at the
@@ -819,9 +819,9 @@ impl Graph {
             }
             // A feed: the variable it names enters an input slot, rung by that slot's id.
             let typed = self.typed(leaf);
-            for (slot, group, d) in goofi_node::feed_decls(leaf.manifest) {
+            for (slot, group, d) in goofi_core::node::feed_decls(leaf.manifest) {
                 let Some(at) = leaf.manifest.inputs.iter().position(|s| s.name == slot) else { continue };
-                if let Some(name) = goofi_node::feed_name(&typed, group, d) {
+                if let Some(name) = goofi_core::node::feed_name(&typed, group, d) {
                     out.push((name, *uid, self.node_generation(*uid), (at + 1).min(64) as EventId));
                 }
             }
@@ -849,8 +849,8 @@ impl Graph {
         }
         for (_, leaf) in self.leaves() {
             let typed = self.typed(leaf);
-            for (_, group, d) in goofi_node::feed_decls(leaf.manifest) {
-                if let Some(goofi_core::Param::Str { value, .. }) = goofi_node::param(&typed, d.group, group) {
+            for (_, group, d) in goofi_core::node::feed_decls(leaf.manifest) {
+                if let Some(goofi_core::Param::Str { value, .. }) = goofi_core::node::param(&typed, d.group, group) {
                     if !value.is_empty() {
                         out.insert(value.clone());
                     }
@@ -1276,7 +1276,7 @@ impl Graph {
     /// BARE text compiles to nothing: the engine reads its one target in Rust. The mode is the
     /// derived one, never the prior's: an expression an undo or a mode brings back to a binding
     /// that was constant compiles.
-    fn compiled(&self, prior: &Binding, mode: Mode, next: &Derived) -> (Option<goofi_node::BindingId>, Option<String>) {
+    fn compiled(&self, prior: &Binding, mode: Mode, next: &Derived) -> (Option<goofi_core::node::BindingId>, Option<String>) {
         let evaluator = self.runtime.evaluator.as_ref();
         if mode == Mode::Expression && next.error.is_none() && !expr_rewrite::is_bare(&next.rewritten) {
             if prior.id.is_some() && prior.rewritten == next.rewritten {
@@ -1304,13 +1304,13 @@ impl Graph {
     }
 
     /// The evaluator the graph compiles against, for the manager's own worker.
-    pub fn evaluator(&self) -> Option<Arc<dyn goofi_node::ExprEvaluator>> {
+    pub fn evaluator(&self) -> Option<Arc<dyn goofi_core::node::ExprEvaluator>> {
         self.runtime.evaluator.clone()
     }
 
-    /// Inject the param-expression evaluator (pyo3, from goofi-python). Wired by the CLI at
+    /// Inject the param-expression evaluator (pyo3, from `goofi_runtime::python`). Wired by the CLI at
     /// startup; without it, expression bindings are stored but not evaluated.
-    pub fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
+    pub fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_core::node::ExprEvaluator>) {
         self.runtime.evaluator = Some(evaluator.clone());
         for e in self.engines_mut() {
             e.set_evaluator(evaluator.clone());
@@ -1432,7 +1432,7 @@ impl Graph {
             self.leaf(uid).map(|e| (e.engine, e.manifest.type_name)).ok_or_else(|| format!("no such node {uid}"))?;
         let e = self.engine_mut(engine).expect("a leaf's engine is registered");
         if !e.has_editor(type_name) {
-            return Err(format!("`{}` has no editor", goofi_node::qualify(engine, type_name)));
+            return Err(format!("`{}` has no editor", goofi_core::node::qualify(engine, type_name)));
         }
         e.editor(uid, show)
     }
@@ -1451,7 +1451,7 @@ impl Graph {
     /// The one entry a type reference names. A qualified id names its engine; a bare name resolves
     /// only when exactly one engine offers it.
     pub fn resolve_type(&self, type_ref: &str) -> Result<(&'static str, LibraryEntry), String> {
-        let (engine, name) = goofi_node::split_type_id(type_ref);
+        let (engine, name) = goofi_core::node::split_type_id(type_ref);
         let mut hits = self
             .library_entries()
             .into_iter()
@@ -1460,8 +1460,8 @@ impl Graph {
             (Some(hit), None) => Ok(hit),
             (None, _) => Err(self.reject_type(type_ref)),
             (Some(a), Some(b)) => {
-                let mut all = vec![goofi_node::qualify(a.0, name), goofi_node::qualify(b.0, name)];
-                all.extend(hits.map(|(e, _)| goofi_node::qualify(e, name)));
+                let mut all = vec![goofi_core::node::qualify(a.0, name), goofi_core::node::qualify(b.0, name)];
+                all.extend(hits.map(|(e, _)| goofi_core::node::qualify(e, name)));
                 Err(format!("`{name}` is offered by more than one engine: {}", all.join(", ")))
             }
         }
@@ -1487,14 +1487,14 @@ impl Graph {
 
     /// Register the node `files` the library read in `root`, each with the engine it declares,
     /// and keep the greyed overlay in step: a name holds a registration or a reason, never both.
-    pub fn scan_root(&mut self, root: &std::path::Path, files: &[goofi_node::NodeFile]) -> Vec<goofi_node::ScannedType> {
+    pub fn scan_root(&mut self, root: &std::path::Path, files: &[goofi_core::node::NodeFile]) -> Vec<goofi_core::node::ScannedType> {
         let held = self.held_manifests();
         let mut out = Vec::new();
         if root.is_dir() {
             for file in files {
                 let Some(engine) = self.runtime.engines.iter_mut().find(|e| e.id() == file.engine) else {
                     let reason = format!("this machine has no `{}` engine", file.engine);
-                    out.push(goofi_node::ScannedType { type_name: goofi_node::qualify(&file.engine, &file.type_name), stamp: file.stamp, outcome: goofi_node::Scanned::Unavailable(reason) });
+                    out.push(goofi_core::node::ScannedType { type_name: goofi_core::node::qualify(&file.engine, &file.type_name), stamp: file.stamp, outcome: goofi_core::node::Scanned::Unavailable(reason) });
                     continue;
                 };
                 if engine.built_in(&file.type_name) {
@@ -1505,16 +1505,16 @@ impl Graph {
                     // The latest scan is the answer: a file that no longer reads displaces its type.
                     Err(reason) => {
                         engine.remove_type(&file.type_name);
-                        goofi_node::Scanned::Unavailable(reason.clone())
+                        goofi_core::node::Scanned::Unavailable(reason.clone())
                     }
                 };
-                out.push(goofi_node::ScannedType { type_name: goofi_node::qualify(engine.id(), &file.type_name), stamp: file.stamp, outcome });
+                out.push(goofi_core::node::ScannedType { type_name: goofi_core::node::qualify(engine.id(), &file.type_name), stamp: file.stamp, outcome });
             }
             for engine in &mut self.runtime.engines {
                 out.extend(qualified(engine.id(), engine.scan(root)));
             }
             self.forget_typed();
-            let unavailable = out.iter().filter(|t| matches!(t.outcome, goofi_node::Scanned::Unavailable(_))).count();
+            let unavailable = out.iter().filter(|t| matches!(t.outcome, goofi_core::node::Scanned::Unavailable(_))).count();
             goofi_supervisor::progress::indexed(root, out.len() - unavailable, unavailable);
         }
         self.note_scanned(&out, &held);
@@ -1526,7 +1526,7 @@ impl Graph {
     }
 
     /// What the engines find on their own account, after every root.
-    pub fn scan_own(&mut self) -> Vec<goofi_node::ScannedType> {
+    pub fn scan_own(&mut self) -> Vec<goofi_core::node::ScannedType> {
         let held = self.held_manifests();
         let out: Vec<_> =
             self.runtime.engines.iter_mut().flat_map(|e| qualified(e.id(), e.scan_own())).collect();
@@ -1540,24 +1540,24 @@ impl Graph {
     fn held_manifests(&self) -> HashMap<String, (&'static str, &'static NodeManifest)> {
         self.library_entries()
             .into_iter()
-            .map(|(id, l)| (goofi_node::qualify(id, l.manifest.type_name), (id, l.manifest)))
+            .map(|(id, l)| (goofi_core::node::qualify(id, l.manifest.type_name), (id, l.manifest)))
             .collect()
     }
 
-    fn note_scanned(&mut self, out: &[goofi_node::ScannedType], held: &HashMap<String, (&'static str, &'static NodeManifest)>) {
+    fn note_scanned(&mut self, out: &[goofi_core::node::ScannedType], held: &HashMap<String, (&'static str, &'static NodeManifest)>) {
         for t in out {
             match &t.outcome {
-                goofi_node::Scanned::Registered { .. } => {
+                goofi_core::node::Scanned::Registered { .. } => {
                     self.runtime.unavailable.remove(&t.type_name);
                 }
                 // A name a library still answers is never greyed: one name, one row.
-                goofi_node::Scanned::Unavailable(reason) if self.library_entry(&t.type_name).is_none() => {
+                goofi_core::node::Scanned::Unavailable(reason) if self.library_entry(&t.type_name).is_none() => {
                     // A file that broke keeps the manifest it last loaded: its instances are still
                     // running on it, still wired, and a row with no slots would erase them.
                     let last = held.get(&t.type_name).copied().or_else(|| self.last_owner(&t.type_name));
                     self.runtime.unavailable.insert(t.type_name.clone(), Greyed { reason: reason.clone(), last });
                 }
-                goofi_node::Scanned::Unavailable(_) => {}
+                goofi_core::node::Scanned::Unavailable(_) => {}
             }
         }
     }
@@ -1575,7 +1575,7 @@ impl Graph {
     /// Forget a scanned type from every registry — the engine that held it and the greyed
     /// overlay. Whether anything was forgotten.
     pub fn remove_type(&mut self, type_name: &str) -> bool {
-        let (engine, name) = goofi_node::split_type_id(type_name);
+        let (engine, name) = goofi_core::node::split_type_id(type_name);
         let mut had = false;
         for e in self.runtime.engines.iter_mut().filter(|e| engine.is_none_or(|want| want == e.id())) {
             had |= e.remove_type(name);
@@ -1655,8 +1655,8 @@ impl Graph {
         // The overlay is keyed by the qualified name the scan registered; a bare reference to a
         // greyed type must read as unavailable rather than unknown.
         let greyed = self.runtime.unavailable.get(type_name).or_else(|| {
-            let bare = goofi_node::bare(type_name);
-            self.runtime.unavailable.iter().find(|(k, _)| goofi_node::bare(k) == bare).map(|(_, g)| g)
+            let bare = goofi_core::node::bare(type_name);
+            self.runtime.unavailable.iter().find(|(k, _)| goofi_core::node::bare(k) == bare).map(|(_, g)| g)
         });
         match greyed {
             Some(Greyed { reason, .. }) => format!("node type `{type_name}` is unavailable: {reason}"),
@@ -1924,7 +1924,7 @@ impl Graph {
                 let (engine, entry) = self.resolve_type(type_name)?;
                 let values = values_of(&self.folded(type_name, &params.unwrap_or_default())?);
                 let uid = self.claim(uid);
-                let born = self.pick_name(name, &name_base(goofi_node::bare(type_name)), None);
+                let born = self.pick_name(name, &name_base(goofi_core::node::bare(type_name)), None);
                 self.insert_node_at(uid, born.clone(), engine, entry, values);
                 let manifest = entry.manifest;
                 if seed {
@@ -2087,7 +2087,7 @@ impl Graph {
     fn typed(&self, leaf: &Leaf) -> Arc<ParamGroups> {
         leaf.values
             .typed
-            .get_or_init(|| Arc::new(self.folded(&goofi_node::qualify(leaf.engine, leaf.manifest.type_name), leaf.values.get()).unwrap_or_default()))
+            .get_or_init(|| Arc::new(self.folded(&goofi_core::node::qualify(leaf.engine, leaf.manifest.type_name), leaf.values.get()).unwrap_or_default()))
             .clone()
     }
 
@@ -2317,7 +2317,7 @@ impl Graph {
         if let Some((_, st)) = self.stub(uid) {
             return Some(subpatch::boundary_type_name(st.dir, st.dtype).to_string());
         }
-        self.leaf(uid).map(|e| goofi_node::qualify(e.engine, e.manifest.type_name))
+        self.leaf(uid).map(|e| goofi_core::node::qualify(e.engine, e.manifest.type_name))
     }
 
     /// A facade address, folded one level onto the port it names. Everything else is itself. What
@@ -2778,7 +2778,7 @@ impl Graph {
         }
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         // Qualified, because the node's own engine is the one to re-resolve it in.
-        let type_ref = &goofi_node::qualify(entry.engine, entry.manifest.type_name);
+        let type_ref = &goofi_core::node::qualify(entry.engine, entry.manifest.type_name);
         // Resolve BEFORE touching the entry: a type that no longer resolves leaves the old
         // instance running rather than half-killing the node.
         let (engine, lib) = self.resolve_type(type_ref)?;
@@ -2810,7 +2810,7 @@ impl Graph {
         }
         // A source on a param the class no longer declares goes with it.
         let retired: Vec<ParamKey> =
-            entry.sources.keys().filter(|key| goofi_node::param_dim(&declared, &key.group, &key.name).is_none()).cloned().collect();
+            entry.sources.keys().filter(|key| goofi_core::node::param_dim(&declared, &key.group, &key.name).is_none()).cloned().collect();
         for key in retired {
             self.unbind(uid, &key);
         }
@@ -2854,8 +2854,8 @@ impl Graph {
     ) -> Result<(), String> {
         let leaf = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let declared = self.typed(leaf);
-        let (base, element) = goofi_node::element(name);
-        let Some(existing) = goofi_node::param_dim(&declared, group, name) else {
+        let (base, element) = goofi_core::node::element(name);
+        let Some(existing) = goofi_core::node::param_dim(&declared, group, name) else {
             return Err(format!("no such param `{group}/{name}`"));
         };
         // Read into the DECLARED kind: a literal is only ever a value of the class's param. An
@@ -2863,7 +2863,7 @@ impl Graph {
         let coerced = control::data_of(&value).map_or(existing.clone(), |d| control::read(&d, &existing));
         let whole = match element {
             Some(k) => {
-                let whole = goofi_node::param(&declared, group, base).expect("the element's param");
+                let whole = goofi_core::node::param(&declared, group, base).expect("the element's param");
                 let mut values = whole.as_vec().unwrap_or_default().to_vec();
                 values[k] = coerced.as_f64().unwrap_or(0.0);
                 control::read(&Data::numbers(values), whole)
@@ -2885,7 +2885,7 @@ impl Graph {
         // `on_param_changed` runs on the node's own thread, so its failure arrives as a fault.
         // A feed's group chosen: the elements offered beside it are that group's now.
         let manifest = self.leaf(uid).expect("looked up above").manifest;
-        let elements: Vec<ParamKey> = goofi_node::feed_decls(manifest)
+        let elements: Vec<ParamKey> = goofi_core::node::feed_decls(manifest)
             .filter(|(_, g, d)| d.group == group && *g == name)
             .map(|(_, _, d)| ParamKey::new(d.group, d.name))
             .collect();
@@ -2898,30 +2898,30 @@ impl Graph {
 
     /// One request to a node's own thread: a refresh re-enumerates a `Str`'s options, a pulse fires.
     /// Not a write: a request holds no state, so there is nothing to undo.
-    pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_node::RequestKind) -> Result<(), String> {
+    pub fn request(&mut self, uid: Uid, group: &str, name: &str, kind: goofi_core::node::RequestKind) -> Result<(), String> {
         let entry = self.leaf(uid).ok_or_else(|| format!("no such node {uid}"))?;
         let typed = self.typed(entry);
-        let param = goofi_node::param(&typed, group, name)
+        let param = goofi_core::node::param(&typed, group, name)
             .ok_or_else(|| format!("no such param `{group}.{name}`"))?;
-        let feed = goofi_node::feed_decls(entry.manifest).any(|(_, g, d)| d.group == group && (d.name == name || g == name));
+        let feed = goofi_core::node::feed_decls(entry.manifest).any(|(_, g, d)| d.group == group && (d.name == name || g == name));
         match kind {
-            goofi_node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
+            goofi_core::node::RequestKind::Refresh if !matches!(param, Param::Str { refresh: true, .. }) => {
                 return Err(format!("param `{group}.{name}` is not refreshable"));
             }
             // A feed names a variable: the graph holds the list, so it answers in the node's place.
-            goofi_node::RequestKind::Refresh if feed => {
+            goofi_core::node::RequestKind::Refresh if feed => {
                 self.offer_variables(uid);
                 self.runtime.refreshed.push((uid, ParamKey::new(group, name)));
                 return Ok(());
             }
-            goofi_node::RequestKind::Pulse if !matches!(param, Param::Pulse) => {
+            goofi_core::node::RequestKind::Pulse if !matches!(param, Param::Pulse) => {
                 return Err(format!("param `{group}.{name}` is not a pulse"));
             }
             _ => {}
         }
         let engine = entry.engine;
         if let Some(e) = self.engine_mut(engine) {
-            e.request(uid, goofi_node::Request { kind, key: ParamKey::new(group, name) });
+            e.request(uid, goofi_core::node::Request { kind, key: ParamKey::new(group, name) });
         }
         Ok(())
     }
@@ -2946,7 +2946,7 @@ impl Graph {
         }
         // A record binds a real param: a dangling one is invisible in the descriptor and
         // unclearable from the UI.
-        if goofi_node::param_dim(&self.typed(leaf), group, name).is_none() {
+        if goofi_core::node::param_dim(&self.typed(leaf), group, name).is_none() {
             return Err(format!("no such param `{group}/{name}`"));
         }
         if self.leaf(uid).and_then(|e| e.sources.get(&key)) != Some(&state) {
@@ -2963,7 +2963,7 @@ impl Graph {
     /// What a source's active text derives to against the graph: the rewrite, its variables
     /// resolved, and why it cannot bind.
     fn derive(&self, uid: Uid, key: &ParamKey, state: &SourceState) -> Derived {
-        let param = self.leaf(uid).and_then(|e| goofi_node::param_dim(&self.typed(e), &key.group, &key.name));
+        let param = self.leaf(uid).and_then(|e| goofi_core::node::param_dim(&self.typed(e), &key.group, &key.name));
         let scanned = (!state.expression.is_empty()).then(|| expr_rewrite::rewrite(&state.expression));
         let missing = |vars: &[BoundVar]| {
             vars.iter().find_map(|v| match v {
@@ -3158,7 +3158,7 @@ impl Graph {
             .ok_or_else(|| format!("`{who}` holds no params: a port relays and a facade fronts"))?;
         self.health(uid)
             .and_then(|h| h.evaluated.get(&ParamKey::new(group, name)).cloned())
-            .or_else(|| goofi_node::param(&self.typed(entry), group, name).cloned())
+            .or_else(|| goofi_core::node::param(&self.typed(entry), group, name).cloned())
             .ok_or_else(|| format!("`{who}` has no param `{group}/{name}`"))
     }
 
@@ -3603,9 +3603,9 @@ impl Graph {
     fn offer_variables(&mut self, uid: Uid) {
         let Some(leaf) = self.leaf(uid) else { return };
         let typed = self.typed(leaf);
-        let feeds: Vec<(ParamKey, ParamKey, Option<String>)> = goofi_node::feed_decls(leaf.manifest)
+        let feeds: Vec<(ParamKey, ParamKey, Option<String>)> = goofi_core::node::feed_decls(leaf.manifest)
             .map(|(_, group, d)| {
-                let chosen = match goofi_node::param(&typed, d.group, group) {
+                let chosen = match goofi_core::node::param(&typed, d.group, group) {
                     Some(goofi_core::Param::Str { value, .. }) => Some(value.clone()),
                     _ => None,
                 };
@@ -4009,7 +4009,7 @@ impl Graph {
             self.patch.nodes.values().map(|e| e.name.clone()).collect();
         let mut renamed: HashMap<String, String> = HashMap::new();
         for rec in nodes.values() {
-            let base = name_base(goofi_node::bare(&rec.type_id));
+            let base = name_base(goofi_core::node::bare(&rec.type_id));
             let fresh = goofi_core::fresh_name(&base, 0, |c| taken.contains(c));
             taken.insert(fresh.clone());
             renamed.insert(rec.name.clone(), fresh);
@@ -4250,10 +4250,10 @@ impl Graph {
 }
 
 /// One engine's scan outcomes under the `engine:Name` ids the rest of the graph keys them by.
-fn qualified(engine: &'static str, scanned: Vec<goofi_node::ScannedType>) -> Vec<goofi_node::ScannedType> {
+fn qualified(engine: &'static str, scanned: Vec<goofi_core::node::ScannedType>) -> Vec<goofi_core::node::ScannedType> {
     scanned
         .into_iter()
-        .map(|t| goofi_node::ScannedType { type_name: goofi_node::qualify(engine, &t.type_name), ..t })
+        .map(|t| goofi_core::node::ScannedType { type_name: goofi_core::node::qualify(engine, &t.type_name), ..t })
         .collect()
 }
 
@@ -4334,7 +4334,7 @@ fn element_sources(leaf: &Leaf, group: &str, names: &IndexMap<String, Param>) ->
         .sources
         .iter()
         .filter(|(key, _)| {
-            let (base, element) = goofi_node::element(&key.name);
+            let (base, element) = goofi_core::node::element(&key.name);
             key.group == group && element.is_some() && names.contains_key(base)
         })
         .map(|(key, s)| (key.name.clone(), doc::ParamEntry::default().with_source(s)))
@@ -4402,8 +4402,8 @@ fn apply_status_to(
                 health.setup_error = None;
                 health.last_error = None;
             }
-            Some(goofi_node::NodeFault::Setup { msg, .. }) => health.setup_error = Some(msg),
-            Some(goofi_node::NodeFault::Process { msg, .. }) => health.last_error = Some(msg),
+            Some(goofi_core::node::NodeFault::Setup { msg, .. }) => health.setup_error = Some(msg),
+            Some(goofi_core::node::NodeFault::Process { msg, .. }) => health.last_error = Some(msg),
         },
         // One record for what the instance reported, bound param or not. On the binding it would
         // outlive the instance, since a reborn node has nothing to announce clearing.
@@ -4515,7 +4515,7 @@ fn entry_error<'a>(bindings: Option<&'a HashMap<ParamKey, Binding>>, health: Opt
 fn drop_held(patch: &mut doc::PatchDoc, mut manifest_of: impl FnMut(&str, &doc::NodeRecord) -> Option<&'static NodeManifest>) {
     for (hex, record) in &mut patch.nodes {
         let Some(manifest) = manifest_of(hex, record) else { continue };
-        for d in manifest.params.iter().filter(|d| d.role == Some(goofi_node::Role::Held)) {
+        for d in manifest.params.iter().filter(|d| d.role == Some(goofi_core::node::Role::Held)) {
             let Some(group) = record.params.get_mut(d.group) else { continue };
             if let Some(entry) = group.get_mut(d.name) {
                 entry.value = None;

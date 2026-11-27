@@ -11,10 +11,10 @@
 //! stereo input stays stereo and every band filters both sides. `amps` is optional: without it
 //! every band is at full amplitude.
 
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     SHIFT = ParamDecl {
         group: "band",
         name: "shift",
@@ -190,4 +190,4 @@ impl AudioNode for BioFilter {
     }
 }
 
-goofi_audio_sdk::export!(BioFilter, MANIFEST);
+goofi_sdk::audio::export!(BioFilter, MANIFEST);

@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
+use goofi_core::node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
 use goofi_tests::{Goofi, ep, hex, j};
 use serde_json::Value;
 
@@ -283,11 +283,11 @@ fn one_named_type_is_the_catalog_entry_plus_the_file_behind_it() {
 #[test]
 fn a_discovered_types_file_is_found_by_re_deriving_its_name() {
     // The path is RE-DERIVED from the type name rather than recorded, so this pins the derivation.
-    static OUT: &[goofi_node::OutputDecl] =
-        &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
-    static BOOM_TIER: goofi_node::IsolationCell =
-        goofi_node::IsolationCell::new(goofi_node::Isolation::InProcess);
-    static BOOM: goofi_node::NodeManifest = goofi_node::NodeManifest {
+    static OUT: &[goofi_core::node::OutputDecl] =
+        &[goofi_core::node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
+    static BOOM_TIER: goofi_core::node::IsolationCell =
+        goofi_core::node::IsolationCell::new(goofi_core::node::Isolation::InProcess);
+    static BOOM: goofi_core::node::NodeManifest = goofi_core::node::NodeManifest {
         type_name: "Boom",
         tags: &[],
         doc: "a discovered type",

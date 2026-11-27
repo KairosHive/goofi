@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 indexmap = "2"
-tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 # Canonicalisation WITHOUT the `\\?\` verbatim prefix that `std::fs::canonicalize` always returns
 # on Windows — see `src/path.rs`. It keeps the prefix on the paths that genuinely need it (past
 # MAX_PATH), which is the part a hand-rolled strip gets wrong.

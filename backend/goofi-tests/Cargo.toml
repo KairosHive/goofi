@@ -8,34 +8,29 @@ license.workspace = true
 publish = false
 
 [features]
-# Forwards to goofi-python's, which LINKS libpython. On by default: goofi-cli's `python` feature
+# Forwards to goofi-runtime's, which LINKS libpython. On by default: goofi-cli's `python` feature
 # turns the same crates' `embed` on in every workspace build, so the suite agrees with it.
 default = ["embed"]
-embed = ["goofi-python/embed", "goofi-signal/embed", "dep:pyo3"]
+embed = ["goofi-runtime/embed", "goofi-signal/embed", "dep:pyo3"]
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-bridge = { path = "../goofi-bridge" }
-goofi-client = { path = "../goofi-client" }
 goofi-core = { path = "../goofi-core" }
 goofi-init = { path = "../goofi-init" }
 goofi-codec = { path = "../goofi-codec" }
 goofi-graph = { path = "../goofi-graph" }
 goofi-record = { path = "../goofi-record" }
 goofi-signal = { path = "../engines/goofi-signal" }
-goofi-host-sdk = { path = "../goofi-host-sdk" }
-goofi-build = { path = "../goofi-build" }
-goofi-audio-sdk = { path = "../goofi-audio-sdk" }
+goofi-sdk = { path = "../goofi-sdk" }
 goofi-audio = { path = "../engines/goofi-audio" }
 goofi-window = { path = "../goofi-window" }
 goofi-graphics = { path = "../engines/goofi-graphics" }
-goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
 goofi-agent = { path = "../goofi-agent" }
 goofi-runtime = { path = "../goofi-runtime" }
 # The manager side of both Python tiers. `subproc` is unconditional — it only SPAWNS an
 # interpreter — so its suite runs in the default build.
-goofi-python = { path = "../goofi-python" }
 # The embed-only suites drive the interpreter directly (module hygiene, bootstrap order).
 pyo3 = { version = "0.29", features = ["auto-initialize"], optional = true }
 serde_json = "1"

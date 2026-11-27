@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 
 use goofi_core::probe::Introspection;
 use goofi_core::SlotType;
-use goofi_node::{NodeManifest, ParamDecl, ParamSpec, Role};
+use goofi_core::node::{NodeManifest, ParamDecl, ParamSpec, Role};
 
 /// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
 const RESERVED: &[&str] =

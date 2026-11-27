@@ -9,10 +9,8 @@ use sha2::{Digest, Sha256};
 const CRATES: &[&str] = &[
     "backend/goofi-supervisor",
     "backend/goofi-core",
-    "backend/goofi-node",
     "backend/goofi-codec",
-    "backend/goofi-host-sdk",
-    "backend/goofi-audio-sdk",
+    "backend/goofi-sdk",
 ];
 
 fn main() {

@@ -185,7 +185,7 @@ fn style() -> goofi_bridge::text::Style {
 /// Send lines to the resolved server and print each entry — decoded NPY bytes when the result
 /// carries them, the text in this shell's style otherwise, or the raw JSON under `--json`.
 fn forward(lines: &[String], json: bool) -> i32 {
-    let target = match goofi_client::resolve_target() {
+    let target = match goofi_cli::client::resolve_target() {
         Ok(t) => t,
         Err(e) => {
             eprintln!("{e}");
@@ -193,7 +193,7 @@ fn forward(lines: &[String], json: bool) -> i32 {
         }
     };
     let style = style();
-    match goofi_client::exec_styled(&target.url, lines, None, style.human, style.width, style.color) {
+    match goofi_cli::client::exec_styled(&target.url, lines, None, style.human, style.width, style.color) {
         Ok(entries) => {
             use std::io::Write;
             let mut out = std::io::stdout().lock();
@@ -208,9 +208,9 @@ fn forward(lines: &[String], json: bool) -> i32 {
                     }
                     // A human's text as this terminal shows it; NPY bytes and compact text verbatim.
                     false if style.human && e["result"].get("npy_b64").is_none() => {
-                        goofi_init::screen::fit(&String::from_utf8_lossy(&goofi_client::rendered(e))).into_owned().into_bytes()
+                        goofi_init::screen::fit(&String::from_utf8_lossy(&goofi_cli::client::rendered(e))).into_owned().into_bytes()
                     }
-                    false => goofi_client::rendered(e),
+                    false => goofi_cli::client::rendered(e),
                 };
                 let _ = out.write_all(&bytes);
             }
@@ -254,9 +254,9 @@ fn client_main(mut words: Vec<String>) -> i32 {
 /// registry. Quiet on every failure: a completion must never print into a half-typed line.
 fn complete_line(rest: &[String]) -> i32 {
     let line = rest.first().map(String::as_str).unwrap_or_default();
-    if let Ok(target) = goofi_client::resolve_target() {
+    if let Ok(target) = goofi_cli::client::resolve_target() {
         let cmd = shell_words::join(["op", "complete", line]);
-        if let Ok(entries) = goofi_client::exec(&target.url, &[cmd], None) {
+        if let Ok(entries) = goofi_cli::client::exec(&target.url, &[cmd], None) {
             if let Some(text) = entries.first().and_then(|e| e["text"].as_str()) {
                 println!("{text}");
                 return 0;
@@ -334,7 +334,7 @@ fn client_stdin(rest: &[String]) -> i32 {
 }
 
 fn print_sessions(json: bool) -> i32 {
-    let rows = goofi_client::list();
+    let rows = goofi_cli::client::list();
     let current = std::env::var("GOOFI_SESSION").ok();
     let current = |s: &goofi_supervisor::session::Record| current.as_deref() == Some(&s.id);
     if json {
@@ -367,9 +367,9 @@ fn print_sessions(json: bool) -> i32 {
 fn help_main(rest: &[String]) -> i32 {
     let mut rest = rest.to_vec();
     take_json(&mut rest); // help is text; the flag is not a word to look up
-    let rows = goofi_client::list();
+    let rows = goofi_cli::client::list();
     let style = style();
-    let resolved = goofi_client::resolve_target().ok();
+    let resolved = goofi_cli::client::resolve_target().ok();
     let Some(live) = resolved.as_ref().or(rows.first()) else {
         let words: Vec<String> = std::iter::once("help".to_string()).chain(rest.clone()).collect();
         match goofi_bridge::phrase::help(&goofi_bridge::ops::table(goofi_bridge::Mode::default()), &words) {
@@ -386,7 +386,7 @@ fn help_main(rest: &[String]) -> i32 {
     };
     let words: Vec<&str> =
         std::iter::once("help").chain(rest.iter().map(String::as_str)).collect();
-    match goofi_client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width, style.color) {
+    match goofi_cli::client::exec_styled(&live.url, &[shell_words::join(words)], None, style.human, style.width, style.color) {
         Ok(entries) => {
             for e in &entries {
                 println!("{}", goofi_init::screen::fit(e["text"].as_str().unwrap_or_default()));
@@ -643,8 +643,8 @@ async fn managed_stop() {
 
 /// The pyo3 param-expression evaluator the graph is booted with.
 #[cfg(feature = "python")]
-fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
-    let ev = goofi_python::inproc::PyExprEvaluator::new()
+fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_core::node::ExprEvaluator>>, String> {
+    let ev = goofi_runtime::python::inproc::PyExprEvaluator::new()
         .map_err(|e| format!("param-expression evaluator unavailable: {e}"))?;
     goofi_supervisor::progress::note("the evaluator runs on free-threaded Python");
     Ok(Some(std::sync::Arc::new(ev)))
@@ -652,7 +652,7 @@ fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, 
 
 #[cfg(feature = "python")]
 fn configure_embedded() {
-    goofi_python::inproc::configure_embedded();
+    goofi_runtime::python::inproc::configure_embedded();
 }
 
 #[cfg(not(feature = "python"))]
@@ -717,7 +717,7 @@ fn ensure_packages(dirs: &[PathBuf], subproc_python: &str) -> Result<(), String>
 fn ensure_packages(_dirs: &[PathBuf], _subproc_python: &str) -> Result<(), String> { Ok(()) }
 
 #[cfg(not(feature = "python"))]
-fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_node::ExprEvaluator>>, String> {
+fn evaluator() -> Result<Option<std::sync::Arc<dyn goofi_core::node::ExprEvaluator>>, String> {
     goofi_supervisor::progress::note("param expressions are off — rebuild with `--features python` to turn them on");
     Ok(None)
 }

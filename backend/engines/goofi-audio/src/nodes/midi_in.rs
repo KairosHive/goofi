@@ -1,5 +1,5 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 /// The most voices a `MidiIn` deals out.
 const VOICES: u16 = 64;
@@ -10,7 +10,7 @@ pub const TYPE: &str = "MidiIn";
 /// What the `port` param says when no port is opened.
 pub const NO_PORT: &str = "none";
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     PORT = ParamDecl {
         group: "midi",
         name: "port",

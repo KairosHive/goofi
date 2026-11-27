@@ -1,7 +1,7 @@
 //! The embedded interpreter from cold, in a child process so nothing started it first: the
 //! evaluator starts it, Python nodes are built after, and none leaves its module behind.
 
-use goofi_python::inproc::{PyExprEvaluator, PyNode};
+use goofi_runtime::python::inproc::{PyExprEvaluator, PyNode};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 

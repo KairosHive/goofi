@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use goofi_bridge::ops::{find, registry, typescript};
 use goofi_bridge::vocab;
 use goofi_core::SlotType;
-use goofi_node::{Face, NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
+use goofi_core::node::{Face, NodeManifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl};
 use goofi_tests::{fixtures::LibraryEngine, hex, j, Client, Goofi};
 use serde_json::Value;
 
@@ -85,8 +85,8 @@ fn every_op_and_vocabulary_row_is_well_formed_documented_and_reachable() {
     }
 
     // A tier crosses its shared cell as a byte, and must come back as itself.
-    for tier in goofi_node::Isolation::ALL {
-        let cell = goofi_node::IsolationCell::new(tier);
+    for tier in goofi_core::node::Isolation::ALL {
+        let cell = goofi_core::node::IsolationCell::new(tier);
         assert_eq!(cell.get().wire(), tier.wire(), "`{}` does not survive its cell", tier.wire());
     }
 
@@ -175,12 +175,12 @@ fn the_generated_frontend_artifacts_still_match_the_tables_they_come_from() {
         .and_then(|rest| rest.split(';').next())
         .unwrap_or_else(|| panic!("no NodeRuntime in {}", path.display()));
     let named: Vec<&str> = union.split('|').map(|w| w.trim().trim_matches('\'')).collect();
-    let ours: Vec<&str> = goofi_node::Isolation::ALL.iter().map(|i| i.wire()).collect();
+    let ours: Vec<&str> = goofi_core::node::Isolation::ALL.iter().map(|i| i.wire()).collect();
     assert_eq!(named, ours, "the client's tiers and this manager's — declare a new one in both");
 }
 
 static OUT: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
-fn never() -> Box<dyn goofi_host_sdk::Node> {
+fn never() -> Box<dyn goofi_sdk::node::Node> {
     unreachable!("the catalog never instantiates")
 }
 const fn manifest(type_name: &'static str, inputs: &'static [SlotDecl],
@@ -265,7 +265,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
                     }
                 }
                 groups.extend(universal);
-                (goofi_node::qualify(engine, l.manifest.type_name), groups)
+                (goofi_core::node::qualify(engine, l.manifest.type_name), groups)
             })
             .collect();
         (declared, graph.library_entries().into_iter().map(|(_, l)| l.manifest.type_name).collect())
@@ -279,12 +279,12 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
         assert!(want.starts_with('_'), "{want} would show in the palette");
     }
     // Registering a type is boot-time configuration, and there is no op for "a type that failed to load".
-    g.register_dyn(&SOURCE, Box::new(|_| never()), &goofi_node::NATIVE);
-    g.register_dyn(&TRANSFORM, Box::new(|_| never()), &goofi_node::NATIVE);
-    g.register_dyn(&DOCUMENTED, Box::new(|_| never()), &goofi_node::NATIVE);
-    g.register_dyn(&OVERRIDES_COMMON, Box::new(|_| never()), &goofi_node::NATIVE);
-    g.register_dyn(&PULSING, Box::new(|_| never()), &goofi_node::NATIVE);
-    g.register_dyn(&SECTIONED, Box::new(|_| never()), &goofi_node::NATIVE);
+    g.register_dyn(&SOURCE, Box::new(|_| never()), &goofi_core::node::NATIVE);
+    g.register_dyn(&TRANSFORM, Box::new(|_| never()), &goofi_core::node::NATIVE);
+    g.register_dyn(&DOCUMENTED, Box::new(|_| never()), &goofi_core::node::NATIVE);
+    g.register_dyn(&OVERRIDES_COMMON, Box::new(|_| never()), &goofi_core::node::NATIVE);
+    g.register_dyn(&PULSING, Box::new(|_| never()), &goofi_core::node::NATIVE);
+    g.register_dyn(&SECTIONED, Box::new(|_| never()), &goofi_core::node::NATIVE);
 
     let palette = g.call("library list", j!({ "full": true }))["types"].as_array().expect("a palette").clone();
     let row = |ty: &str| palette.iter().find(|v| v["type"] == ty).unwrap_or_else(|| panic!("{ty} is in the palette"));
@@ -292,7 +292,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
     // nutshell, short enough that seventy-five of them are a list and not a manual.
     let index = g.call("library list", j!({}))["types"].as_array().expect("an index").clone();
     let listed: Vec<&str> = index.iter().map(|t| t["type"].as_str().unwrap()).collect();
-    assert!(!listed.iter().any(|t| goofi_node::bare(t).starts_with('_')),
+    assert!(!listed.iter().any(|t| goofi_core::node::bare(t).starts_with('_')),
             "a test node reached the palette: {listed:?}");
     assert!(listed.contains(&"signal:LFO") && listed.contains(&"signal:Buffer"), "{listed:?}");
     // The built-in bundles are the backend's own; the other bundles are not under test here.
@@ -316,7 +316,7 @@ fn every_palette_row_carries_what_a_client_renders_a_node_from() {
         // wheel looks: the probe emits no tags and the feature is inert while the suite is green.
         assert!(!tags.is_empty(), "{ty}: a shipped type declares a tag");
         for t in tags {
-            assert!(goofi_node::Tag::parse(t.as_str().unwrap()).is_some(), "{ty}: tag {t}");
+            assert!(goofi_core::node::Tag::parse(t.as_str().unwrap()).is_some(), "{ty}: tag {t}");
         }
         let pages: Vec<&str> = row["params"].as_object().expect("pages").keys().map(String::as_str).collect();
         assert_eq!(pages, groups, "{ty}: the author's pages in declared order, then the engine's own");
@@ -371,8 +371,8 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
     // A built node answers its manifest through `describe`, and every tier reads one back through
     // `leak_manifest`: the declaration crosses intact, and one the inspector cannot draw is refused.
     let read = |params: &[ParamDecl]| {
-        let json = goofi_node::describe("signal", &[], "a fixture", &[], OUT, params, false);
-        goofi_node::leak_manifest("Shown".into(), &goofi_node::parse_introspection(&json).unwrap())
+        let json = goofi_core::node::describe("signal", &[], "a fixture", &[], OUT, params, false);
+        goofi_core::node::leak_manifest("Shown".into(), &goofi_core::node::parse_introspection(&json).unwrap())
     };
     let crossed = read(SECTIONED_PARAMS).expect("a coherent declaration loads");
     let layout = |ps: &[ParamDecl]| ps.iter().map(|d| (d.section, d.show)).collect::<Vec<_>>();
@@ -395,7 +395,7 @@ fn a_param_shows_only_by_a_fixed_choice_of_another_param() {
     // The declarations a fresh goofi carries in its own binary pass the same rule.
     let g = Goofi::new();
     for (_, l) in g.graph().library_entries() {
-        assert_eq!(goofi_node::illegal_param(l.manifest.params), None, "{}", l.manifest.type_name);
+        assert_eq!(goofi_core::node::illegal_param(l.manifest.params), None, "{}", l.manifest.type_name);
     }
 }
 
@@ -405,7 +405,7 @@ fn a_node_that_could_not_load_explains_itself_instead_of_vanishing() {
     {
         let mut graph = g.graph();
         graph.register_unavailable("signal:PsdScipy".into(), "scipy".into());
-        goofi_bridge::register_dyn_type(&mut graph, &SOURCE, Box::new(|_| never()), &goofi_node::NATIVE);
+        goofi_bridge::register_dyn_type(&mut graph, &SOURCE, Box::new(|_| never()), &goofi_core::node::NATIVE);
         // Provenance is the only thing the scan knows that the catalog cannot re-derive, greyed rows too.
         graph.add_patch_type("signal:PsdScipy");
     }
@@ -527,7 +527,7 @@ fn every_declared_expression_reads_only_a_variable_a_fresh_patch_has() {
         let Some(expr) = decl.expression else { continue };
         assert!(!expr.source.trim().is_empty(),
                 "{owner}: {}/{} has an empty expression", decl.group, decl.name);
-        for read in goofi_node::expr::scan_variables(expr.source) {
+        for read in goofi_core::node::expr::scan_variables(expr.source) {
             assert!(goofi_core::variables::SYSTEM_VARIABLES.iter().any(|g| g.name == read.name),
                     "{owner}: the expression on {}/{} reads `vars.{}`, which no fresh patch has",
                     decl.group, decl.name, read.name);

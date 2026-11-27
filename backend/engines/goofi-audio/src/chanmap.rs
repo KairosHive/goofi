@@ -1,7 +1,7 @@
 //! Which of a device's channels a patch means, for `AudioIn` and `AudioOut` alike: a 1-based,
 //! ordered selection that may repeat a channel, or `all` for the whole device.
 
-use goofi_audio_sdk::{ParamDecl, ParamSpec};
+use goofi_sdk::audio::{ParamDecl, ParamSpec};
 
 use crate::plan::CEILING;
 

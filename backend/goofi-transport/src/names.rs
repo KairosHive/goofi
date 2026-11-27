@@ -1,7 +1,7 @@
 //! Service names: pure derivation from the graph's facts, so every end of a wire spells it alike,
 //! and the hub hands both ends the same slot, door or queue by it.
 
-use goofi_node::{BoundVar, EventId, GraphView, Uid, Var};
+use goofi_core::node::{BoundVar, EventId, GraphView, Uid, Var};
 
 use crate::ServiceName;
 
@@ -66,7 +66,7 @@ pub fn targets_of<'a>(
     view: &GraphView<'_>,
     producer: Uid,
     slot: &str,
-    ringers: impl IntoIterator<Item = goofi_node::Ringer<'a>>,
+    ringers: impl IntoIterator<Item = goofi_core::node::Ringer<'a>>,
 ) -> Vec<(ServiceName, EventId)> {
     let mut targets: Vec<(ServiceName, EventId)> =
         ringers.into_iter().filter_map(|r| Some((door_of(view, r.consumer)?, r.event_id))).collect();

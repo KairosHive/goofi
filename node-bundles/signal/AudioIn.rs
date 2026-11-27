@@ -3,7 +3,7 @@
 //! signal node wants, cut from the samples themselves.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct AudioIn {
@@ -133,4 +133,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(AudioIn, MANIFEST);
+goofi_sdk::signal::export!(AudioIn, MANIFEST);

@@ -239,12 +239,12 @@ fn a_required_input_refuses_to_run_on_a_hole_and_says_so() {
 }
 
 /// A node whose FIRST instance fails to boot and whose second succeeds, so a restart shows as recovery.
-static FLAKY: goofi_node::NodeManifest = goofi_node::NodeManifest {
+static FLAKY: goofi_core::node::NodeManifest = goofi_core::node::NodeManifest {
     type_name: "_TestFlaky",
     tags: &[],
     doc: "fails setup once, then succeeds",
     inputs: &[],
-    outputs: &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }],
+    outputs: &[goofi_core::node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }],
     params: &[],
     producer: true,
 };
@@ -254,12 +254,12 @@ struct Flaky {
     generation: f32,
     n: f32,
 }
-impl goofi_host_sdk::Node for Flaky {
-    fn setup(&mut self, _c: &mut goofi_host_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_host_sdk::NodeResult {
+impl goofi_sdk::node::Node for Flaky {
+    fn setup(&mut self, _c: &mut goofi_sdk::node::NodeCtx, _p: &goofi_core::node::Params<'_>) -> goofi_sdk::node::NodeResult {
         if self.generation == 0.0 { Err("the device did not open".into()) } else { Ok(()) }
     }
-    fn process(&mut self, _i: &goofi_host_sdk::Inputs<'_>, o: &mut goofi_host_sdk::Outputs<'_>,
-               _c: &mut goofi_host_sdk::NodeCtx, _p: &goofi_node::Params<'_>) -> goofi_host_sdk::NodeResult {
+    fn process(&mut self, _i: &goofi_sdk::node::Inputs<'_>, o: &mut goofi_sdk::node::Outputs<'_>,
+               _c: &mut goofi_sdk::node::NodeCtx, _p: &goofi_core::node::Params<'_>) -> goofi_sdk::node::NodeResult {
         self.n += 1.0;
         let mut body = self.generation.to_le_bytes().to_vec();
         body.extend_from_slice(&self.n.to_le_bytes());
@@ -275,7 +275,7 @@ async fn a_restart_recovers_a_node_and_the_viewer_follows_it_to_its_new_home() {
     let builds = Arc::new(AtomicUsize::new(0));
     g.register_dyn(&FLAKY, Box::new(move |_| {
         Box::new(Flaky { generation: builds.fetch_add(1, Ordering::SeqCst) as f32, n: 0.0 })
-    }), &goofi_node::NATIVE);
+    }), &goofi_core::node::NATIVE);
     let base = g.serve().await;
     let uid = g.add("_TestFlaky");
     // Paced, so the run count steps in ones: an uncapped producer laps its own viewer.
@@ -653,7 +653,7 @@ fn a_pulse_fires_from_the_op_and_from_a_rising_edge_and_holds_no_value() {
     // A param never runs a node. With `autotrigger` off and nothing wired in, the count stands;
     // a param edit leaves it standing; the `common.trigger` pulse runs it once. An expression of
     // the time on a param is read for a run, so it moves only when the node runs.
-    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.graph().set_evaluator(Arc::new(goofi_runtime::python::inproc::PyExprEvaluator::new().unwrap()));
     g.set_param(gate, "common", "autotrigger", false);
     g.call("node param edit", j!({ "node": hex(gate), "param": "control/value", "expression": "lfo(freq=1000)" }));
     let gate_probe = g.probe(gate, "out");
@@ -740,7 +740,7 @@ fn a_gate_expression_opens_on_a_rising_edge_and_closes_after_its_decay() {
     // the gate once, the decay closes it while the source stays high, and only the next edge
     // opens it again — what a VST's gate param needs from a state change.
     let g = Goofi::new();
-    g.graph().set_evaluator(Arc::new(goofi_python::inproc::PyExprEvaluator::new().unwrap()));
+    g.graph().set_evaluator(Arc::new(goofi_runtime::python::inproc::PyExprEvaluator::new().unwrap()));
     let src = g.add("_TestScalar");
     let out = g.add("_TestScalar");
     let src_name = g.doc()["nodes"][hex(src)]["name"].as_str().expect("a minted name").to_string();

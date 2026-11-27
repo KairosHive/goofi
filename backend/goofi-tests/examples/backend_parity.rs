@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 use goofi_core::{Data, Param, Value};
 use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
-use goofi_node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, Params, SlotDecl};
-use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
-use goofi_python::inproc::PyNode;
-use goofi_python::subproc::{subproc, RemoteNode};
+use goofi_core::node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, Params, SlotDecl};
+use goofi_sdk::node::{Inputs, Node, NodeCtx, NodeResult, Outputs};
+use goofi_runtime::python::inproc::PyNode;
+use goofi_runtime::python::subproc::{subproc, RemoteNode};
 
 static BENCH_TIER: IsolationCell = IsolationCell::new(Isolation::InProcess);
 

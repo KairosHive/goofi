@@ -1,8 +1,8 @@
 //! Parameter modulation through the public expression interface.
 
 use goofi_core::{control, Param};
-use goofi_node::{EvalCtx, ExprEvaluator, ExprState, Local};
-use goofi_python::inproc::PyExprEvaluator;
+use goofi_core::node::{EvalCtx, ExprEvaluator, ExprState, Local};
+use goofi_runtime::python::inproc::PyExprEvaluator;
 
 #[test]
 fn modulation_uses_the_current_target_range_and_coordinate() {
@@ -69,13 +69,13 @@ fn modulation_uses_the_current_target_range_and_coordinate() {
     assert_eq!(crossed, frame);
     assert_eq!(crossed.as_functional(), frame.as_functional());
     for (t, want) in [(0.0, 2.0), (0.5, 3.5), (1.0, 5.0), (7.0, 5.0)] {
-        let value = goofi_node::at(&evaluator, &crossed, t, (0.0, 1.0)).unwrap();
+        let value = goofi_core::node::at(&evaluator, &crossed, t, (0.0, 1.0)).unwrap();
         assert_eq!(control::number_of(&value), want, "at t={t}");
     }
     let plain = goofi_core::Data::number(4.0);
-    assert_eq!(goofi_node::at(&evaluator, &plain, 9.0, (0.0, 1.0)).unwrap(), plain, "a plain frame is itself");
+    assert_eq!(goofi_core::node::at(&evaluator, &plain, 9.0, (0.0, 1.0)).unwrap(), plain, "a plain frame is itself");
     assert!(goofi_codec::decode(&goofi_codec::encode(&goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default())).unwrap()).is_ok());
-    assert!(goofi_node::at(&evaluator, &goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default()), 0.0, (0.0, 1.0)).is_err(), "code that is not code is a run error, not a panic");
+    assert!(goofi_core::node::at(&evaluator, &goofi_core::Data::functional(b"junk".to_vec(), goofi_core::Meta::default()), 0.0, (0.0, 1.0)).is_err(), "code that is not code is a run error, not a panic");
 }
 
 /// Compiles, evaluations and a free-threaded collection run on their own threads at once, as a
@@ -165,8 +165,8 @@ fn qtz_snaps_volts_per_octave_onto_a_scale() {
     assert!(why.contains("F#"), "{why}");
 }
 
-/// The harness's functions as the editor documents them: `goofi_node::expr::BUILTINS` is what the
-/// completion offers, and the Python in `goofi_python::inproc::expr` is what runs, so the two are
+/// The harness's functions as the editor documents them: `goofi_core::node::expr::BUILTINS` is what the
+/// completion offers, and the Python in `goofi_runtime::python::inproc::expr` is what runs, so the two are
 /// held together here — names, keyword-only arguments, every option, and the math names.
 #[test]
 fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_run() {
@@ -180,7 +180,7 @@ fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_ru
     let number = |source: &str| evaluate(source).map(|d| control::number_of(&d));
     let text = |source: &str| evaluate(source).map(|d| control::text(&d));
 
-    for b in goofi_node::expr::BUILTINS.iter().filter(|b| b.kind == "function" && b.pick.is_none()) {
+    for b in goofi_core::node::expr::BUILTINS.iter().filter(|b| b.kind == "function" && b.pick.is_none()) {
         let signature = text(&format!("str(__import__('inspect').signature({}))", b.name)).unwrap();
         let documented: Vec<&str> = b.args.iter().map(|a| a.name).collect();
         let python: Vec<&str> = signature.trim_matches(|c| c == '(' || c == ')').split(", ").filter(|p| *p != "*").map(|p| p.split('=').next().unwrap()).collect();
@@ -199,8 +199,8 @@ fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_ru
             }
         }
     }
-    let names = goofi_node::expr::MATH.iter().chain(goofi_node::expr::MATH_CONSTANTS).copied().collect::<Vec<_>>().join(", ");
-    assert_eq!(number(&format!("len([{names}])")).unwrap() as usize, goofi_node::expr::MATH.len() + goofi_node::expr::MATH_CONSTANTS.len());
+    let names = goofi_core::node::expr::MATH.iter().chain(goofi_core::node::expr::MATH_CONSTANTS).copied().collect::<Vec<_>>().join(", ");
+    assert_eq!(number(&format!("len([{names}])")).unwrap() as usize, goofi_core::node::expr::MATH.len() + goofi_core::node::expr::MATH_CONSTANTS.len());
     assert!(evaluate("time()").is_err(), "the wall clock is not in scope; `t` is the patch's");
 
     // Every waveform spans the range over one cycle of `freq * src`; `sin` is the old default.
@@ -230,7 +230,7 @@ fn the_documented_builtins_are_the_harness_and_its_waveforms_scales_and_modes_ru
 #[test]
 fn a_stateful_function_keeps_its_state_in_the_bindings_cell_by_call_site() {
     let evaluator = PyExprEvaluator::new().unwrap();
-    let at = |id: goofi_node::BindingId, t: f64, x: goofi_core::Data, cell: Option<&ExprState>| {
+    let at = |id: goofi_core::node::BindingId, t: f64, x: goofi_core::Data, cell: Option<&ExprState>| {
         let locals = vec![("__v0".to_string(), Local::Frame(x))];
         evaluator.eval(id, &EvalCtx { locals: &locals, t, range: (0.0, 1.0), state: cell }).map(|d| control::number_of(&d))
     };

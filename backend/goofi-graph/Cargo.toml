@@ -9,7 +9,6 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
-goofi-node = { path = "../goofi-node" }
 goofi-record = { path = "../goofi-record" }
 
 indexmap = { version = "2", features = ["serde"] }

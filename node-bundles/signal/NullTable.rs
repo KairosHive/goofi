@@ -2,7 +2,7 @@
 //! with `nd()`, and the chain behind it can be rebuilt without touching the mappings.
 
 use goofi_core::SlotType;
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl, Tag};
 
 #[derive(Default)]
 struct NullTable;
@@ -29,4 +29,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(NullTable, MANIFEST);
+goofi_sdk::signal::export!(NullTable, MANIFEST);

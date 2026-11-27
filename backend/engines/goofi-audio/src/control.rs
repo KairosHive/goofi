@@ -9,10 +9,10 @@ use goofi_supervisor::sync::Mutex;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::FromSample;
-use goofi_audio_sdk::BLOCK;
+use goofi_sdk::audio::BLOCK;
 use goofi_runtime::{flag, text, Cx, Executor, Out, Ticked};
 use goofi_core::{Data, Meta, Param};
-use goofi_node::{NodeManifest, ParamKey};
+use goofi_core::node::{NodeManifest, ParamKey};
 
 use crate::nodes::midi_in::{Note, NO_PORT};
 use crate::nodes::{audio_in, audio_out, audio_playback, midi_in};
@@ -87,16 +87,16 @@ pub struct AudioShared {
     pub retry: AtomicBool,
     /// What a plugin reported of its own values — node, plugin param id, normalized value, and
     /// what moved it — for the worker to put into the document.
-    pub edits: Mutex<Vec<(goofi_node::Uid, u32, f64, goofi_node::Origin)>>,
+    pub edits: Mutex<Vec<(goofi_core::node::Uid, u32, f64, goofi_core::node::Origin)>>,
     /// The drain's door, so an edit made on the window thread is taken without waiting for a tick.
-    pub waker: Arc<goofi_node::DrainWaker>,
+    pub waker: Arc<goofi_core::node::DrainWaker>,
     /// The block count and its one tie to the clock: what dates every recorded block.
     pub anchor: Arc<crate::runtime::Anchor>,
     /// The control halves' ends of rings the engine grew, by node, taken at the half's next tick.
-    pub swaps: Mutex<HashMap<goofi_node::Uid, Swap>>,
+    pub swaps: Mutex<HashMap<goofi_core::node::Uid, Swap>>,
     /// A plugin's state, readable OFF the runtime lock — VST3 lets a host read it beside
     /// `process` — so a save never holds the callback's lock for the plugin's serialization.
-    pub savers: Mutex<HashMap<goofi_node::Uid, Saver>>,
+    pub savers: Mutex<HashMap<goofi_core::node::Uid, Saver>>,
     pub tracks: TrackPorts,
 }
 
@@ -169,7 +169,7 @@ fn key_of(manifest: &NodeManifest, param: usize) -> ParamKey {
 
 /// The audio plane's half of a control thread.
 pub struct AudioHalf {
-    uid: goofi_node::Uid,
+    uid: goofi_core::node::Uid,
     manifest: &'static NodeManifest,
     /// The node's scalar params, which say how its inboxes play what enters them.
     params: Arc<[AtomicU64]>,
@@ -209,7 +209,7 @@ pub struct AudioHalf {
 
 /// What the engine hands a birth for its half; the half itself is built on the control thread.
 pub struct Birth {
-    pub uid: goofi_node::Uid,
+    pub uid: goofi_core::node::Uid,
     pub manifest: &'static NodeManifest,
     pub params: Arc<[AtomicU64]>,
     pub ramps: Arc<[crate::runtime::Ramps]>,
@@ -489,7 +489,7 @@ impl AudioHalf {
             let mut whole = true;
             for (i, v) in values.iter_mut().enumerate() {
                 let t = at(i);
-                match ev.run(code, &goofi_node::EvalCtx { locals: &[], t, range, state: None }) {
+                match ev.run(code, &goofi_core::node::EvalCtx { locals: &[], t, range, state: None }) {
                     Ok(frame) => *v = goofi_core::control::number_of(&frame) as f32,
                     Err(_) => {
                         whole = false;
@@ -509,8 +509,8 @@ impl AudioHalf {
 
 impl Executor for AudioHalf {
     /// Setup while the node is still being made on its own thread; ready once it processes.
-    fn stage(&self) -> goofi_node::NodeStage {
-        if self.born.load(Ordering::Acquire) { goofi_node::NodeStage::Ready } else { goofi_node::NodeStage::Setup }
+    fn stage(&self) -> goofi_core::node::NodeStage {
+        if self.born.load(Ordering::Acquire) { goofi_core::node::NodeStage::Ready } else { goofi_core::node::NodeStage::Setup }
     }
 
     /// One frame into the crossing that resamples it by its `speed`, or that enters its values as
@@ -700,7 +700,7 @@ impl Inbox {
                 let head = [width as f32, (n / width) as f32];
                 // Row 0 is the pitch; row 1, where there is one, stays the phase.
                 let values = values.enumerate().map(|(i, v)| match v.is_finite() {
-                    true if volts && i < n / width => goofi_audio_sdk::hz_of(v),
+                    true if volts && i < n / width => goofi_sdk::audio::hz_of(v),
                     true => v,
                     false => 0.0,
                 });

@@ -97,7 +97,7 @@ fn a_recording_is_a_folder_of_files_their_own_tools_open() {
     let time = std::sync::Arc::new(Time::new());
     let hub = goofi_tests::hub();
     let rec = std::sync::Arc::new(goofi_record::Recorder::new(time.clone(), hub.clone()));
-    let id = goofi_record::StreamId { uid: goofi_node::Uid(1), node: "src".into(), slot: "out".into(), engine: "signal" };
+    let id = goofi_record::StreamId { uid: goofi_core::node::Uid(1), node: "src".into(), slot: "out".into(), engine: "signal" };
     // An arming, as the settled graph would name it: the queue its frames ride, and how its
     // frames are dated.
     let armed = |queue: &str, engine: &'static str, timeline: goofi_record::Timeline| goofi_record::Armed {
@@ -407,7 +407,7 @@ fn a_video_loses_no_frame_to_its_encoders_start_and_keeps_real_time() {
     // Armed as the settled graph arms a graphics slot: on the queue depth the engine sends at.
     let depth = goofi_transport::record_depth("graphics");
     rec.arm(vec![goofi_record::Armed {
-        id: goofi_record::StreamId { uid: goofi_node::Uid(1), node: "stage".into(), slot: "out".into(), engine: "graphics" },
+        id: goofi_record::StreamId { uid: goofi_core::node::Uid(1), node: "stage".into(), slot: "out".into(), engine: "graphics" },
         service: "test-rec-film".into(),
         depth,
         timeline: goofi_record::Timeline::Measured,

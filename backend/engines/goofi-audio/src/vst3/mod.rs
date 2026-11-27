@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use goofi_audio_sdk::{AudioNode, MAX_PORTS};
+use goofi_sdk::audio::{AudioNode, MAX_PORTS};
 use goofi_core::probe;
-use goofi_node::{Isolation, Scanned, ScannedType, Stamp, Tag};
+use goofi_core::node::{Isolation, Scanned, ScannedType, Stamp, Tag};
 use serde::{Deserialize, Serialize};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
@@ -374,7 +374,7 @@ impl AudioEngine {
             return ScannedType { type_name, stamp: Some(stamp), outcome: Scanned::Unavailable(reason) };
         }
         let derived = Arc::new(Derived { binary: binary.to_path_buf(), stamp, cid, inputs: class.inputs, outputs: class.outputs, params });
-        let manifest = match goofi_node::leak_manifest(type_name.clone(), &intro) {
+        let manifest = match goofi_core::node::leak_manifest(type_name.clone(), &intro) {
             Ok(manifest) => manifest,
             Err(reason) => return ScannedType { type_name, stamp: Some(stamp), outcome: Scanned::Unavailable(reason) },
         };

@@ -1,7 +1,7 @@
 //! ToJson — a table becomes JSON text. A table is an object, an array a list, a string a string.
 
 use goofi_core::{Data, Meta, SlotType, Value};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct ToJson;
@@ -169,4 +169,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(ToJson, MANIFEST);
+goofi_sdk::signal::export!(ToJson, MANIFEST);

@@ -10,7 +10,7 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
-use goofi_node::Uid;
+use goofi_core::node::Uid;
 #[cfg(target_os = "linux")]
 use vst3::Steinberg::Linux::{IEventHandlerTrait, ITimerHandlerTrait};
 use vst3::Steinberg::Vst::*;
@@ -171,7 +171,7 @@ impl IComponentHandlerTrait for Handler {
         if self.quiet.get() {
             return kResultOk;
         }
-        self.shared.edits.lock().push((self.uid, id, value, goofi_node::Origin::Authored));
+        self.shared.edits.lock().push((self.uid, id, value, goofi_core::node::Origin::Authored));
         self.shared.waker.notify();
         kResultOk
     }
@@ -189,7 +189,7 @@ impl IComponentHandlerTrait for Handler {
         }
         PLUGINS.with(|p| {
             if let Some(r) = p.borrow().get(&self.uid) {
-                super::node::read_back(&r.controller, &r.class, &r.known, self.uid, &self.shared, goofi_node::Origin::Changed);
+                super::node::read_back(&r.controller, &r.class, &r.known, self.uid, &self.shared, goofi_core::node::Origin::Changed);
             }
         });
         kResultOk

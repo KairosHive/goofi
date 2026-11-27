@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use goofi_node::Isolation;
+use goofi_core::node::Isolation;
 
 /// What the library's read of one file answers, as these tests ask it.
 struct Found {
-    manifest: &'static goofi_node::NodeManifest,
+    manifest: &'static goofi_core::node::NodeManifest,
     gil_safe: bool,
 }
 
@@ -20,9 +20,9 @@ enum Discovery {
 /// Read `path` through the library with `py` alone: as the in-process interpreter for that tier.
 fn discover_one(path: &Path, py: &str, tier: Isolation, memo: &Path) -> Discovery {
     let free_threaded = (tier == Isolation::InProcess).then(|| py.to_string());
-    let python = goofi_build::Python { subproc: py.to_string(), free_threaded, memo: memo.to_path_buf() };
-    let Some(file) = goofi_build::Library::new(Some(python), None).read_one(path) else { return Discovery::Skip };
-    let declared = file.read.and_then(|read| Ok(Found { manifest: goofi_node::manifest_of(&file.type_name, &read.intro)?, gil_safe: read.intro.gil_safe }));
+    let python = goofi_runtime::Python { subproc: py.to_string(), free_threaded, memo: memo.to_path_buf() };
+    let Some(file) = goofi_runtime::Library::new(Some(python), None).read_one(path) else { return Discovery::Skip };
+    let declared = file.read.and_then(|read| Ok(Found { manifest: goofi_core::node::manifest_of(&file.type_name, &read.intro)?, gil_safe: read.intro.gil_safe }));
     match declared {
         Ok(found) => Discovery::Found(found),
         Err(reason) => Discovery::Unavailable { type_name: file.type_name, reason },
@@ -268,7 +268,7 @@ fn every_param_kind_carries_its_doc_section_and_show_across_the_probe() {
     };
     assert_eq!(doc("count"), Some("how many"));
     let count = d.manifest.params.iter().find(|p| p.name == "count").unwrap();
-    assert!(matches!(count.spec, goofi_node::ParamSpec::Num { int: true, options: &[1, 2, 4, 8], .. }));
+    assert!(matches!(count.spec, goofi_core::node::ParamSpec::Num { int: true, options: &[1, 2, 4, 8], .. }));
     assert_eq!(doc("gain"), Some("how loud"));
     assert_eq!(doc("enabled"), Some("whether to run"));
     assert_eq!(doc("mode"), Some("which mode"));

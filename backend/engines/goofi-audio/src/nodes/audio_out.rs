@@ -1,9 +1,9 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, ParamDecl, ParamSpec, SlotDecl, Tag};
 
 pub const TYPE: &str = "AudioOut";
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     DEVICE = crate::nodes::device("the output device the engine's clock follows; every AudioOut names the same one"),
     CHANNELS = crate::chanmap::PARAM,
     GAIN = ParamDecl {

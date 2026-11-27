@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use goofi_node::{Isolation, Scanned};
+use goofi_core::node::{Isolation, Scanned};
 use goofi_init::demo::Module;
 use goofi_supervisor::progress::{note, report};
 
@@ -35,7 +35,7 @@ pub struct Config {
     pub host: Option<PathBuf>,
     pub vst3_dirs: Vec<PathBuf>,
     pub ui: Option<goofi_window::Ui>,
-    pub evaluator: Option<Arc<dyn goofi_node::ExprEvaluator>>,
+    pub evaluator: Option<Arc<dyn goofi_core::node::ExprEvaluator>>,
     /// The plugins home; none loads no plugins.
     pub plugins: Option<PathBuf>,
     /// The `--extra-nodes` roots.
@@ -108,8 +108,8 @@ pub fn boot(config: Config) -> Result<Manager, String> {
     }
     manager.state.roots.extend(roots);
     // Made before anything scans, so the boot scan and every rescan read through the one library.
-    let interpreters = python.clone().map(|python| goofi_build::Python::new(python, goofi_signal::free_threaded()));
-    manager.state.library = Arc::new(goofi_build::Library::new(interpreters, host.clone()));
+    let interpreters = python.clone().map(|python| goofi_runtime::Python::new(python, goofi_signal::free_threaded()));
+    manager.state.library = Arc::new(goofi_runtime::Library::new(interpreters, host.clone()));
     if let Some(check) = requirements {
         report("Checking node package requirements");
         // Every root the scan reads, the private library included: a node saved there may name

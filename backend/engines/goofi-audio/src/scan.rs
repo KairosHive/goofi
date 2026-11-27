@@ -1,11 +1,11 @@
 //! What the audio engine registers from a node file: a Rust node built against
-//! `goofi_audio_sdk`, loaded behind its version symbol. A `.vst3` bundle in a folder is `vst3`'s.
+//! `goofi_sdk::audio`, loaded behind its version symbol. A `.vst3` bundle in a folder is `vst3`'s.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use goofi_audio_sdk::host::Loaded;
-use goofi_node::{Body, Isolation, NodeFile, Read, Scanned};
+use crate::loaded::Loaded;
+use goofi_core::node::{Body, Isolation, NodeFile, Read, Scanned};
 
 use crate::nodes::Class;
 use crate::AudioEngine;
@@ -28,8 +28,8 @@ impl AudioEngine {
     }
 
     fn load_rust(&mut self, artifact: &Path, file: &NodeFile, read: &Read) -> Result<bool, String> {
-        let manifest = goofi_node::manifest_of(&file.type_name, &read.intro)?;
-        let loaded = unsafe { Loaded::open(goofi_build::open(artifact)?.library, manifest) }?;
+        let manifest = goofi_core::node::manifest_of(&file.type_name, &read.intro)?;
+        let loaded = unsafe { Loaded::open(goofi_build::open(artifact)?.library) }?;
         let class = Class { manifest, make: Arc::new(move |_| loaded.instantiate()), plugin: None };
         Ok(self.classes.insert(manifest.type_name, class).is_some())
     }

@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 pub mod variables;
 pub mod view;
 pub mod control;
-pub mod drawing;
+pub mod node;
 pub mod ease;
 pub mod normalize;
 pub mod path;

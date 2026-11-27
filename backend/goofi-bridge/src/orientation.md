@@ -113,8 +113,8 @@ Rust node that makes a picture is a signal node: a `goofi.DataType.TEXTURE` outp
 `goofi.Texture(pixels)` for RGB/RGBA uint8 or float32, which a shader takes as its input. A `TEXTURE` input reads `data.numpy()`. `signal:GraphicsIn` is a texture as
 an array. The base class is the engine: the same class on `goofi.GraphicsNode` is a graphics node
 (`graphics:Camera` is one), and the render thread calls it inside the tick and waits for its
-picture. A Rust file says its engine by the SDK of its last line: `goofi_signal_sdk::export!`,
-`goofi_audio_sdk::export!` or `goofi_graphics_sdk::export!`.
+picture. A Rust file says its engine by the SDK of its last line: `goofi_sdk::signal::export!`,
+`goofi_sdk::audio::export!` or `goofi_sdk::graphics::export!`.
 `data.torch()` and `goofi.Texture(tensor)` keep such a node's pictures in CUDA memory where the
 device shares it; `data.cuda()`, `goofi.gpu.cuda(array)` and `goofi.gpu.numpy(tensor)` convert
 in any node.

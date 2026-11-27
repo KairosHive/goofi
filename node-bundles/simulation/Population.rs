@@ -2,7 +2,7 @@
 //! its course, and a single population folding into chaos.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Tag};
 
 /// The steps a frame owes, counted from the start so the model cannot drift, and capped at a
 /// second's worth so a stalled frame does not become a freeze.
@@ -293,4 +293,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Population, MANIFEST);
+goofi_sdk::signal::export!(Population, MANIFEST);

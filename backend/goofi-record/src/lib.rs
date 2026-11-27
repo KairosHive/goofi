@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use goofi_core::record::VideoQuality;
 use goofi_supervisor::timing::{stamp, stamp_nanos, Time};
-use goofi_node::Uid;
+use goofi_core::node::Uid;
 use goofi_supervisor::sync::{Condvar, Mutex};
 use goofi_supervisor::timing::Event;
 use goofi_transport::Hub;

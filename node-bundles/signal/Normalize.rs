@@ -3,7 +3,7 @@
 
 use goofi_core::normalize::{apply, scale_with, Scale};
 use goofi_core::{resolve_axis, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 
@@ -301,4 +301,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Normalize, MANIFEST);
+goofi_sdk::signal::export!(Normalize, MANIFEST);

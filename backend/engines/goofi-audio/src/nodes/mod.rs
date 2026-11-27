@@ -10,8 +10,8 @@ pub mod midi_in;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 
-use goofi_audio_sdk::{AudioNode, Block, Manifest};
-use goofi_node::NodeManifest;
+use goofi_sdk::audio::{AudioNode, Block, Manifest};
+use goofi_core::node::NodeManifest;
 
 use crate::runtime::Inbox;
 
@@ -26,7 +26,7 @@ pub struct Birth {
     pub ui: Option<goofi_window::Ui>,
     /// Which node this is, and the engine's inbox — what a plugin's editor writes through. None
     /// for the twin, which is no instance.
-    pub uid: Option<goofi_node::Uid>,
+    pub uid: Option<goofi_core::node::Uid>,
     pub shared: Option<Arc<crate::control::AudioShared>>,
 }
 
@@ -68,11 +68,11 @@ impl AudioNode for Fed {
 pub type Born = fn(Birth) -> Box<dyn AudioNode>;
 
 /// The `device` param of a device node, with its own doc.
-pub const fn device(doc: &'static str) -> goofi_audio_sdk::ParamDecl {
-    goofi_audio_sdk::ParamDecl {
+pub const fn device(doc: &'static str) -> goofi_sdk::audio::ParamDecl {
+    goofi_sdk::audio::ParamDecl {
         group: "audio",
         name: "device",
-        spec: goofi_audio_sdk::ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
+        spec: goofi_sdk::audio::ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
         expression: None,
         doc: Some(doc),
         section: 0,

@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     PITCH = ParamDecl {
         group: "osc",
         name: "pitch",
@@ -71,4 +71,4 @@ impl AudioNode for Osc {
     }
 }
 
-goofi_audio_sdk::export!(Osc, MANIFEST);
+goofi_sdk::audio::export!(Osc, MANIFEST);

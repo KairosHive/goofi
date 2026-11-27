@@ -54,7 +54,7 @@ pub fn done() -> Vec<u8> {
     out
 }
 
-/// `group -> name -> Param`, spelled out because the codec has no goofi-node dep.
+/// `group -> name -> Param`, spelled out because the codec has no `goofi_core::node` dep.
 pub type ParamMap = indexmap::IndexMap<String, indexmap::IndexMap<String, goofi_core::Param>>;
 
 /// The slot entries of a run request: `(slot, source, frame)`, the source empty on a single slot.

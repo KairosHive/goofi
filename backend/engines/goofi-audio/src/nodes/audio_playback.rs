@@ -1,9 +1,9 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, Manifest, OutputDecl, ParamDecl, ParamSpec, Tag};
 
 pub const TYPE: &str = "AudioPlayback";
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     FILE = ParamDecl {
         group: "play",
         name: "file",

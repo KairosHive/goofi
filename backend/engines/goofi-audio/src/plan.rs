@@ -4,10 +4,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 
-use goofi_audio_sdk::BLOCK;
+use goofi_sdk::audio::BLOCK;
 use goofi_core::SlotType;
 use goofi_runtime::{param_of, scalar_of};
-use goofi_node::{BindingView, GraphView, NodeManifest, NodeView, ParamSpec, Uid};
+use goofi_core::node::{BindingView, GraphView, NodeManifest, NodeView, ParamSpec, Uid};
 
 use crate::Instance;
 
@@ -88,14 +88,14 @@ impl Plan {
 
 /// Whether a feed param of the node names, for `slot`, a variable the patch holds.
 fn fed(view: &GraphView<'_>, nv: &NodeView<'_>, slot: &str) -> bool {
-    goofi_node::feed_decls(nv.manifest)
-        .any(|(fed, group, d)| fed == slot && goofi_node::feed_name(nv.params, group, d).is_some_and(|n| view.variables.contains(&n)))
+    goofi_core::node::feed_decls(nv.manifest)
+        .any(|(fed, group, d)| fed == slot && goofi_core::node::feed_name(nv.params, group, d).is_some_and(|n| view.variables.contains(&n)))
 }
 
 /// The inbox an Array input reads — its index among the node's Array inputs — and `None` for an
 /// audio one.
 pub(crate) fn inbox_of(manifest: &NodeManifest, input: usize) -> Option<usize> {
-    let array = |s: &goofi_node::SlotDecl| s.kind != SlotType::Audio;
+    let array = |s: &goofi_core::node::SlotDecl| s.kind != SlotType::Audio;
     array(&manifest.inputs[input]).then(|| manifest.inputs[..input].iter().filter(|s| array(s)).count())
 }
 
@@ -320,7 +320,7 @@ fn levels(order: &[Uid], inbound: &HashMap<Uid, Vec<Uid>>, looped: impl Fn(Uid) 
 
 /// A `Str` param's text at plan time, off the node's record rather than a control half's consts:
 /// the plan is compiled from the desired state, and that is where a channel selection lives.
-pub(crate) fn str_of(params: &goofi_node::ParamGroups, d: &goofi_audio_sdk::ParamDecl) -> String {
+pub(crate) fn str_of(params: &goofi_core::node::ParamGroups, d: &goofi_sdk::audio::ParamDecl) -> String {
     match param_of(params, d) {
         goofi_core::Param::Str { value, .. } => value,
         _ => String::new(),

@@ -1,7 +1,7 @@
 //! What the signal engine registers from a node file: a Python node on the tier its imports
-//! allow, and a Rust node that names `goofi_signal_sdk`, in this process or in a child.
+//! allow, and a Rust node that names `goofi_sdk::signal`, in this process or in a child.
 
-use goofi_node::{Body, Isolation, NodeFile, Read, Scanned};
+use goofi_core::node::{Body, Isolation, NodeFile, Read, Scanned};
 
 use crate::SignalEngine;
 
@@ -18,10 +18,10 @@ impl SignalEngine {
     }
 
     fn load(&mut self, file: &NodeFile, read: &Read) -> Result<(bool, Isolation), String> {
-        let manifest = goofi_node::manifest_of(&file.type_name, &read.intro)?;
+        let manifest = goofi_core::node::manifest_of(&file.type_name, &read.intro)?;
         let (factory, tier) = match &read.body {
             Body::Python { source, interpreter } => {
-                goofi_python::catalog::factory(self.hub.clone(), manifest, source.clone(), interpreter.clone(), read.intro.gil_safe)
+                goofi_runtime::python::catalog::factory(self.hub.clone(), manifest, source.clone(), interpreter.clone(), read.intro.gil_safe)
             }
             Body::Rust { artifact, host } => goofi_runtime::hosted::factory(self.hub.clone(), artifact.clone(), host.clone(), manifest)?,
             body => return Err(format!("the signal engine runs Python and Rust nodes, not {}", body.language())),

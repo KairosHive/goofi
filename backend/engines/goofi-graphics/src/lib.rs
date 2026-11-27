@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use goofi_runtime::{Desired, Handle, Plane, Shared};
 use goofi_core::SlotType;
-use goofi_node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
+use goofi_core::node::{Face, DrainWaker, Engine, ExprDecl, ExprMode, GraphView, LibraryEntry, NodeManifest, NodeView,
     ParamDecl, ParamGroups, ParamSpec, Status, Uid,
 };
 
@@ -105,7 +105,7 @@ pub struct GraphicsEngine {
     pub(crate) classes: HashMap<String, Arc<Class>>,
     /// The file and stamp each class was registered from, so a rescan skips one that did not
     /// move rather than validating and recompiling every shipped shader for one edit elsewhere.
-    pub(crate) stamps: HashMap<String, (std::path::PathBuf, goofi_node::Stamp)>,
+    pub(crate) stamps: HashMap<String, (std::path::PathBuf, goofi_core::node::Stamp)>,
     /// Every pipeline build still on its thread, a replaced class's too: `shutdown` waits for
     /// them, because a compile inside the driver must not outlive the device or the process.
     pub(crate) compiles: Vec<scan::Built>,
@@ -193,8 +193,8 @@ impl GraphicsEngine {
             scan::Runs::Python { interpreter, source } => {
                 let (interpreter, source) = (interpreter.clone(), source.clone());
                 Box::new(move |_| {
-                    let child = goofi_python::subproc::subproc_in(hub, interpreter, source, env);
-                    Box::new(goofi_python::subproc::RemoteNode::new(child, goofi_host_sdk::host::in_slots(manifest)))
+                    let child = goofi_runtime::python::subproc::subproc_in(hub, interpreter, source, env);
+                    Box::new(goofi_runtime::python::subproc::RemoteNode::new(child, goofi_runtime::loaded::in_slots(manifest)))
                 })
             }
             scan::Runs::Rust(factory) => {
@@ -239,7 +239,7 @@ impl GraphicsEngine {
                             // A tick that panics ends no clock: the cause is logged and the next
                             // tick runs on what the runtime still holds.
                             let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())).unwrap_or_else(|p| {
-                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_core::node::panic_message(p)));
                                 true
                             });
                             // Nothing asked for a stage: the clock parks until its door rings.
@@ -461,7 +461,7 @@ impl Engine for GraphicsEngine {
             .collect()
     }
 
-    fn register(&mut self, file: &goofi_node::NodeFile, read: &goofi_node::Read) -> goofi_node::Scanned {
+    fn register(&mut self, file: &goofi_core::node::NodeFile, read: &goofi_core::node::Read) -> goofi_core::node::Scanned {
         self.register_file(file, read)
     }
 
@@ -594,7 +594,7 @@ impl Engine for GraphicsEngine {
         self.shared.drain(&mut self.pending, &|u, born| self.live.get(&u).is_some_and(|i| i.control.born() == born), apply)
     }
 
-    fn request(&mut self, uid: Uid, request: goofi_node::Request) {
+    fn request(&mut self, uid: Uid, request: goofi_core::node::Request) {
         if let Some(inst) = self.live.get(&uid) {
             inst.control.request(request);
         }
@@ -611,7 +611,7 @@ impl Engine for GraphicsEngine {
         }
     }
 
-    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_node::ExprEvaluator>) {
+    fn set_evaluator(&mut self, evaluator: Arc<dyn goofi_core::node::ExprEvaluator>) {
         *self.shared.evaluator.lock() = Some(evaluator);
     }
 

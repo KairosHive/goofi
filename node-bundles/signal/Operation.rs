@@ -2,7 +2,7 @@
 //! frame. Arithmetic folds left in wire order and broadcasts the way numpy does.
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Operation;
@@ -352,4 +352,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Operation, MANIFEST);
+goofi_sdk::signal::export!(Operation, MANIFEST);

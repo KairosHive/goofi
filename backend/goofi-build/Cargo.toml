@@ -10,8 +10,5 @@ sha2 = "0.10"
 
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
-goofi-core = { path = "../goofi-core" }
-goofi-node = { path = "../goofi-node" }
-serde_json = "1"
 libloading = "0.8"
 sha2 = "0.10"

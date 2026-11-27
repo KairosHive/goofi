@@ -333,14 +333,14 @@ fn a_node_missing_a_dependency_is_listed_greyed_rather_than_vanishing() {
     let memo = tempfile::tempdir().unwrap();
     // A library of its own each time, as a boot is: one process keeps what it probed.
     let probe = || {
-        let python = goofi_build::Python { subproc: own_py.clone(), free_threaded: None, memo: memo.path().to_path_buf() };
-        goofi_build::Library::new(Some(python), None).read_one(&path).expect("the file names a node type")
+        let python = goofi_runtime::Python { subproc: own_py.clone(), free_threaded: None, memo: memo.path().to_path_buf() };
+        goofi_runtime::Library::new(Some(python), None).read_one(&path).expect("the file names a node type")
     };
     let file = probe();
     assert_eq!((file.type_name.as_str(), file.engine.as_str()), ("NeedsScipy", "signal"), "a file whose import fails still says its engine");
     let reason = file.read.err().expect("a node with a missing import must not probe as loadable");
     assert!(reason.contains(&module), "the reason names the module: {reason}");
-    g.graph().register_unavailable(goofi_node::qualify(&file.engine, &file.type_name), reason);
+    g.graph().register_unavailable(goofi_core::node::qualify(&file.engine, &file.type_name), reason);
     let row = g.call("library list", j!({}))["types"].as_array().unwrap().iter()
         .find(|t| t["type"] == "signal:NeedsScipy").expect("the greyed row is in the palette").clone();
     assert_eq!(row["available"], false, "{row}");
@@ -540,16 +540,16 @@ mod inproc {
 
     use super::*;
     use goofi_core::{Data, Meta, Param, Value};
-    use goofi_node::{ParamGroups, Params};
-    use goofi_host_sdk::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
-    use goofi_python::inproc::PyNode;
-    use goofi_python::subproc::{subproc, RemoteNode};
+    use goofi_core::node::{ParamGroups, Params};
+    use goofi_sdk::node::{Inputs, MultiFrames, Node, NodeCtx, Outputs};
+    use goofi_runtime::python::inproc::PyNode;
+    use goofi_runtime::python::subproc::{subproc, RemoteNode};
     use indexmap::IndexMap;
 
     /// Run one node once with `data` on its single slot, one frame per source on its multi slot
     /// `input`, and params, reading back `out`. Below the graph: what is compared is the MARSHALLING.
     fn once(node: &mut dyn Node, input: Option<Data>, sources: &[&str], params: &ParamGroups)
-        -> (goofi_host_sdk::NodeResult, Option<Data>) {
+        -> (goofi_sdk::node::NodeResult, Option<Data>) {
         let singles: IndexMap<&'static str, Option<Data>> = IndexMap::from([("data", input)]);
         let mut multis = MultiFrames::new();
         multis.insert("input", sources.iter().map(|s| (s.to_string(), frame())).collect());
@@ -571,7 +571,7 @@ mod inproc {
 
     /// The interpreter the subprocess half of a parity test spawns.
     fn subproc_python() -> String {
-        let ft = goofi_python::inproc::interpreter_path()
+        let ft = goofi_runtime::python::inproc::interpreter_path()
             .expect("no FT interpreter in the runtime — run `cargo run -p goofi-init`");
         std::env::var("GOOFI_SUBPROC_TEST_PYTHON").unwrap_or(ft)
     }
@@ -669,14 +669,14 @@ class Meeting(goofi.SignalNode):
             self.met = True
         return {"out": data.data * 2.0}
 "#;
-        static IN: &[goofi_node::SlotDecl] = &[goofi_node::SlotDecl {
+        static IN: &[goofi_core::node::SlotDecl] = &[goofi_core::node::SlotDecl {
             name: "data", kind: goofi_core::SlotType::Array,
             trigger_process: true, multi: false, required: false }];
-        static OUT: &[goofi_node::OutputDecl] =
-            &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
-        static MEETING_TIER: goofi_node::IsolationCell =
-            goofi_node::IsolationCell::new(goofi_node::Isolation::InProcess);
-        static MANIFEST: goofi_node::NodeManifest = goofi_node::NodeManifest {
+        static OUT: &[goofi_core::node::OutputDecl] =
+            &[goofi_core::node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }];
+        static MEETING_TIER: goofi_core::node::IsolationCell =
+            goofi_core::node::IsolationCell::new(goofi_core::node::Isolation::InProcess);
+        static MANIFEST: goofi_core::node::NodeManifest = goofi_core::node::NodeManifest {
             type_name: "Meeting", tags: &[], doc: "meets three siblings inside its first run",
             inputs: IN, outputs: OUT, params: &[],
             producer: false,
@@ -702,7 +702,7 @@ class Meeting(goofi.SignalNode):
     fn a_param_reference_reads_this_node_and_follows_its_edit() {
         let g = Goofi::new();
         g.graph().set_evaluator(std::sync::Arc::new(
-            goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
+            goofi_runtime::python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
         let osc = g.add("LFO");
         let probe = g.probe(osc, "out");
         g.ready(osc);
@@ -739,7 +739,7 @@ class Meeting(goofi.SignalNode):
         // `common.max_frequency` is BOUND to `vars.signal.default_ufreq`, and a binding needs the evaluator.
         let g = Goofi::new();
         g.graph().set_evaluator(std::sync::Arc::new(
-            goofi_python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
+            goofi_runtime::python::inproc::PyExprEvaluator::new().expect("the evaluator constructs")));
         g.call("variable entry edit", j!({ "name": "signal.default_ufreq", "value": 5.0 }));
 
         let osc = g.add("LFO");
