@@ -292,6 +292,52 @@ async fn two_agents_drive_one_server_at_once_and_read_their_work_back_out_of_it(
     assert_eq!(r["result"]["protocolVersion"], json!("2025-06-18"), "the documented default: {r}");
 }
 
+#[tokio::test]
+async fn what_the_endpoint_cannot_serve_is_answered_in_the_codes_of_json_rpc() {
+    let (_serial, g, addr, _s) = start_server().await;
+    let post = async |body: &str| http(&addr, "POST", "/mcp", "Content-Type: application/json\r\n", body.as_bytes()).await;
+    let error = |raw: &[u8]| -> (Value, i64, String) {
+        let reply: Value = serde_json::from_slice(raw).expect("a JSON-RPC reply");
+        assert_eq!(reply["jsonrpc"], "2.0", "{reply}");
+        assert!(reply.get("result").is_none(), "an error carries no result: {reply}");
+        (reply["id"].clone(), reply["error"]["code"].as_i64().expect("a code"), reply["error"]["message"].as_str().expect("a message").to_string())
+    };
+
+    // A body that is no JSON, and a batch, which this endpoint does not take: an error with no
+    // id to answer, each under its own code.
+    let (status, _, raw) = post("{ not json").await;
+    let (id, code, said) = error(&raw);
+    assert_eq!((status, id, code), (200, Value::Null, -32700), "{said}");
+    let (_, _, raw) = post(r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#).await;
+    let (id, code, said) = error(&raw);
+    assert_eq!((id, code), (Value::Null, -32600), "{said}");
+
+    // A notification carries no id and gets no reply: accepted, and nothing in the body.
+    let (status, _, raw) = post(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await;
+    assert_eq!((status, raw.len()), (202, 0), "{}", String::from_utf8_lossy(&raw));
+
+    // A method the endpoint has not is refused under the caller's id, by name; a ping is answered.
+    let (_, _, raw) = post(r#"{"jsonrpc":"2.0","id":"abc","method":"resources/list"}"#).await;
+    let (id, code, said) = error(&raw);
+    assert_eq!((id, code), (json!("abc"), -32601));
+    assert!(said.contains("resources/list"), "{said}");
+    assert_eq!(rpc(&addr, "/mcp", 7, "ping", json!({})).await["result"], json!({}));
+
+    // A tool call that cannot run is a RESULT that says so, never a protocol error: a tool this
+    // server has not, and the one it has with no command to run.
+    let unknown = rpc(&addr, "/mcp", 8, "tools/call", json!({ "name": "goofi_shell", "arguments": {} })).await;
+    assert_eq!(unknown["result"]["isError"], json!(true), "{unknown}");
+    let said = unknown["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(said.contains("goofi_shell") && said.contains("goofi_exec"), "the refusal names the tool there is: {said}");
+    let (said, failed) = exec(&addr, "/mcp", 9, &[]).await;
+    assert!(failed && said.contains("non-empty"), "{said}");
+
+    // The endpoint is a POST: the stream a GET once opened is not served.
+    let (status, ..) = http(&addr, "GET", "/mcp", "", b"").await;
+    assert_eq!(status, 405);
+    assert_eq!(g.call("session state", json!({}))["nodes"], json!({}), "and none of it touched the patch");
+}
+
 async fn recv_text_by(ws: &mut Ws, deadline: tokio::time::Instant) -> Value {
     loop {
         let msg = tokio::time::timeout_at(deadline, ws.next())
