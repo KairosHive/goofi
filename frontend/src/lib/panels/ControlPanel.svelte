@@ -461,7 +461,7 @@
 									value={draft}
 									oninput={(e) => (draft = e.currentTarget.value)}
 									onblur={() => {
-										// Escape and a commit null `renaming` first: the unmount's blur is a no-op.
+										// Escape and a commit clear the rename first, so the blur of the unmount is a no-op.
 										if (renaming === gv.name) void rename(gv, draft);
 									}}
 									onkeydown={(e) => {
@@ -787,7 +787,7 @@
 		padding: 0 var(--space-2);
 		border-color: var(--accent);
 	}
-	/* Restates app.css's 16px coarse floor, which the size above outranks: no iOS focus zoom. */
+	/* Restates app.css's 16px coarse floor, which the size above would outrank, so iOS does not zoom. */
 	@media (hover: none) and (pointer: coarse) {
 		.rename {
 			font-size: 16px;
