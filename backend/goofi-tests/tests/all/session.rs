@@ -415,6 +415,35 @@ fn a_save_packs_the_live_mount_refuses_to_pack_into_it_and_never_truncates_a_goo
 }
 
 #[test]
+fn a_variable_file_whose_shape_no_file_holds_is_a_warning_and_the_load_goes_on() {
+    // A wide variable's array is a file beside the manifest, and a load is best-effort: a file
+    // it cannot read costs that variable its value and nothing else. A header that names more
+    // values than a machine can count is such a file, whoever wrote it.
+    let g = Goofi::new();
+    g.call("variable entry add", j!({ "name": "patch.wide", "value": (0..100).collect::<Vec<i32>>() }));
+    g.call("variable entry add", j!({ "name": "patch.kept", "value": 7.0 }));
+    let manifest = g.graph().serialize();
+    let tmp = tempfile::tempdir().unwrap();
+    let made = tmp.path().join("made.gfi");
+    let dict = "{'descr': '<f4', 'fortran_order': False, 'shape': (4611686018427387904,), }";
+    let mut npy = b"\x93NUMPY\x01\x00".to_vec();
+    npy.extend_from_slice(&((dict.len() + 1) as u16).to_le_bytes());
+    npy.extend_from_slice(dict.as_bytes());
+    npy.push(b'\n');
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&made).unwrap());
+    for (entry, bytes) in [("patch.yaml", manifest.as_bytes()), ("workspace/variables/patch.wide.npy", &npy[..])] {
+        zip.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, bytes).unwrap();
+    }
+    zip.finish().unwrap();
+
+    let other = Goofi::new();
+    other.call("session load", j!({ "path": made.to_string_lossy() }));
+    assert_eq!(goofi_tests::number(&other, "patch.kept"), 7.0, "the rest of the patch came in");
+    assert_eq!(goofi_tests::number(&other, "patch.wide"), 0.0, "the variable is there, at the value it is born with");
+}
+
+#[test]
 fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits_nothing() {
     // There is no watcher: the manager compares the mount against the fingerprint of the last pack.
     let g = Goofi::new();

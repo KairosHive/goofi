@@ -54,10 +54,16 @@ pub fn read_npy(file: &[u8]) -> Result<(Vec<usize>, Vec<u8>), String> {
     let (dims, _) = tail.split_once(')').ok_or_else(short)?;
     let shape: Vec<usize> = dims.split(',').map(str::trim).filter(|d| !d.is_empty()).map(|d| d.parse().map_err(|_| short())).collect::<Result<_, _>>()?;
     let samples = file[head..].to_vec();
-    if shape.iter().product::<usize>() * 4 != samples.len() {
+    if bytes_of(&shape) != Some(samples.len()) {
         return Err("the file's size does not match its shape".into());
     }
     Ok((shape, samples))
+}
+
+/// The bytes a frame of `shape` takes, four a value; `None` for a shape that names more than a
+/// machine counts. A shape is read off a file, so nothing here trusts its product.
+fn bytes_of(shape: &[usize]) -> Option<usize> {
+    shape.iter().try_fold(4usize, |n, &d| n.checked_mul(d))
 }
 
 /// Read the stream at `path`, with its sidecar when there is one, else its folder's manifest and
@@ -78,7 +84,7 @@ pub fn open(path: &Path, fallback: Fallback) -> Result<Recording, String> {
                     let sfreq = entry.as_ref().and_then(|e| e.get("sfreq")).and_then(Json::as_f64).unwrap_or(fallback.sfreq);
                     let per = if frame.len() >= 2 { *frame.last().unwrap() as f64 / sfreq } else { 1.0 / sfreq };
                     let meta = Meta::new().with_sfreq(entry.as_ref().and_then(|e| e.get("sfreq")).and_then(Json::as_f64));
-                    let size = frame.iter().product::<usize>() * 4;
+                    let size = bytes_of(&frame).ok_or("a frame shape too large to hold")?;
                     if size == 0 {
                         return Err("a frame shape with no values".into());
                     }
@@ -160,15 +166,16 @@ fn manifest_entry(path: &Path) -> Option<Json> {
 
 /// The flat samples cut into one frame per line, each line's shape held until the next names one.
 fn arrays(samples: &[u8], lines: &[Line]) -> Result<Vec<(f64, Data)>, String> {
-    let (mut shape, mut at, mut out) = (None::<Vec<usize>>, 0, Vec::with_capacity(lines.len()));
+    let (mut shape, mut at, mut out) = (None::<Vec<usize>>, 0usize, Vec::with_capacity(lines.len()));
     for line in lines {
         if line.shape.is_some() {
             shape.clone_from(&line.shape);
         }
         let shape = shape.clone().ok_or("the sidecar's first line names no shape")?;
-        let size = shape.iter().product::<usize>() * 4;
-        // A recording cut short holds fewer samples than its sidecar names: it ends there.
-        let Some(chunk) = samples.get(at..at + size) else { break };
+        // A recording cut short holds fewer samples than its sidecar names: it ends there, as it
+        // does at a shape no file holds.
+        let Some(chunk) = bytes_of(&shape).and_then(|size| samples.get(at..at.checked_add(size)?)) else { break };
+        let size = chunk.len();
         out.push((line.t, array(shape, chunk, line.meta.clone())?));
         at += size;
     }
