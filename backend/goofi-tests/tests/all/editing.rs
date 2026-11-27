@@ -957,13 +957,11 @@ fn a_restart_is_recovery_and_touches_neither_the_stack_nor_the_file() {
     // leaves the patch exactly as clean as it found it, though a step landed on the way.
     g.refuse("compound", j!({ "ops": [
         { "op": "node edit", "payload": { "node": uid, "pos": [5.0, 5.0] } },
-        { "op": "node edit", "payload": { "node": "ffffffffffff", "name": "ghost" } },
+        { "op": "node edit", "payload": { "node": GHOST, "name": "ghost" } },
     ] }));
     assert_eq!(g.call("session status", j!({}))["dirty"], false,
                "a rolled-back batch must not leave the unsaved dot raised");
 }
-
-/// A canonical 12-hex uid that names nothing.
 
 #[test]
 fn a_reply_says_what_the_write_actually_did() {
