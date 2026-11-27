@@ -47,32 +47,25 @@ fn prebuild_nodes(started: SystemTime) {
     // The runtime a goofi from this build loads from, so a boot finds what this step built.
     println!("cargo:rerun-if-env-changed={}", goofi_supervisor::layout::RUNTIME_ENV);
     let base = goofi_supervisor::layout::runtime().build();
-    println!("cargo:rerun-if-changed={}", bundles.display());
     let (mut sources, mut artifacts) = (String::new(), String::new());
     let mut key: Vec<Vec<u8>> = Vec::new();
-    for bundle in dirs_under(&bundles) {
-        println!("cargo:rerun-if-changed={}", bundle.display());
-        let name = bundle.file_name().unwrap().to_string_lossy().into_owned();
-        for path in files_under(&bundle) {
-            println!("cargo:rerun-if-changed={}", path.display());
-            let within = path.strip_prefix(&bundle).unwrap().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
-            sources += &format!("    ({:?}, include_bytes!({:?})),\n", format!("{name}/{within}"), path.display().to_string());
-            key.push(format!("{name}/{within}").into_bytes());
-            key.push(std::fs::read(&path).expect("a bundle file reads"));
-            let Some(sdk) = sdk_of(&path) else { continue };
-            let held = goofi_build::built(sdk, &path, &base).is_ok();
-            let artifact = goofi_build::ensure(sdk, &path, &base)
-                .unwrap_or_else(|why| panic!("the shipped node {} does not build:\n{why}", path.display()));
-            // Watched, so an artifact removed or replaced by hand re-runs this script; one built
-            // here is dated as this run's product, so a build after reads it as current.
-            if !held {
-                date_tree(&artifact, started);
-            }
-            println!("cargo:rerun-if-changed={}", artifact.display());
-            let key = artifact.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
-            let file = artifact.file_name().unwrap().to_string_lossy().into_owned();
-            artifacts += &format!("    ({key:?}, {file:?}, include_bytes!({:?})),\n", artifact.display().to_string());
+    for (name, path) in tree(&bundles) {
+        sources += &row(&name, &path);
+        key.push(name.into_bytes());
+        key.push(std::fs::read(&path).expect("a bundle file reads"));
+        let Some(sdk) = sdk_of(&path) else { continue };
+        let held = goofi_build::built(sdk, &path, &base).is_ok();
+        let artifact = goofi_build::ensure(sdk, &path, &base)
+            .unwrap_or_else(|why| panic!("the shipped node {} does not build:\n{why}", path.display()));
+        // Watched, so an artifact removed or replaced by hand re-runs this script; one built
+        // here is dated as this run's product, so a build after reads it as current.
+        if !held {
+            date_tree(&artifact, started);
         }
+        println!("cargo:rerun-if-changed={}", artifact.display());
+        let key = artifact.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
+        let file = artifact.file_name().unwrap().to_string_lossy().into_owned();
+        artifacts += &format!("    ({key:?}, {file:?}, include_bytes!({:?})),\n", artifact.display().to_string());
     }
     std::fs::write(
         out.join("shipped.rs"),
@@ -98,29 +91,38 @@ fn sdk_of(path: &Path) -> Option<&'static goofi_build::Sdk> {
     }
 }
 
-/// The directories directly under `dir`, sorted.
 /// Emit `$OUT_DIR/skills.rs`: every file of every `skills/<name>/`, keyed `<name>/<within>`, so a
 /// workspace can be seeded with them and an agent spawned into it reads them from its own cwd.
-/// Sorted by `dirs_under`/`files_under`, so the table is stable across builds.
 fn embed_skills() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills");
-    println!("cargo:rerun-if-changed={}", root.display());
-    let mut files = String::new();
-    for skill in dirs_under(&root) {
-        let name = skill.file_name().unwrap().to_string_lossy().into_owned();
-        println!("cargo:rerun-if-changed={}", skill.display());
-        for path in files_under(&skill) {
-            println!("cargo:rerun-if-changed={}", path.display());
-            let within =
-                path.strip_prefix(&skill).unwrap().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
-            files += &format!("    ({:?}, include_bytes!({:?})),\n", format!("{name}/{within}"), path.display().to_string());
-        }
-    }
+    let files: String = tree(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills")).iter().map(|(key, path)| row(key, path)).collect();
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("skills.rs");
     std::fs::write(out, format!("pub static SHIPPED_SKILLS: &[(&str, &[u8])] = &[\n{files}];\n"))
         .expect("write skills.rs");
 }
 
+/// Every file of every folder directly under `root`, keyed `<folder>/<within>` and watched with
+/// its folder. Sorted by `dirs_under`/`files_under`, so a table of them is stable across builds.
+fn tree(root: &Path) -> Vec<(String, PathBuf)> {
+    println!("cargo:rerun-if-changed={}", root.display());
+    let mut files = Vec::new();
+    for dir in dirs_under(root) {
+        println!("cargo:rerun-if-changed={}", dir.display());
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        for path in files_under(&dir) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let within = path.strip_prefix(&dir).unwrap().to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+            files.push((format!("{name}/{within}"), path));
+        }
+    }
+    files
+}
+
+/// One `(key, bytes)` row of an embedded table.
+fn row(key: &str, path: &Path) -> String {
+    format!("    ({key:?}, include_bytes!({:?})),\n", path.display().to_string())
+}
+
+/// The directories directly under `dir`, sorted.
 fn dirs_under(dir: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> =
         std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
