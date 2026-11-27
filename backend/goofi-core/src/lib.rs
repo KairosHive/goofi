@@ -189,11 +189,6 @@ pub struct ArrayStore {
 }
 
 impl ArrayStore {
-    /// Build without normalization — the caller guarantees `buf.len() == nelem * 4`.
-    pub fn new(shape: Vec<usize>, buf: Arc<Vec<u8>>) -> ArrayStore {
-        let samples = 0..buf.len();
-        ArrayStore { shape, buf, samples }
-    }
     /// The samples at `samples` of `buf`, the rest of which is the wire around them: the caller
     /// guarantees the range is within `buf` and `samples.len() == nelem * 4`.
     pub fn view(shape: Vec<usize>, buf: Arc<Vec<u8>>, samples: std::ops::Range<usize>) -> ArrayStore {
@@ -946,16 +941,6 @@ impl Param {
     }
     pub fn int(value: i64, vmin: i64, vmax: i64) -> Param {
         Param::Num { value: vec![value as f64], vmin: vmin as f64, vmax: vmax as f64, int: true, options: Vec::new(), face: Face::Plain }
-    }
-    pub fn vec(value: Vec<f64>, vmin: f64, vmax: f64) -> Param {
-        Param::Num { value, vmin, vmax, int: false, options: Vec::new(), face: Face::Plain }
-    }
-    pub fn color(rgba: [f64; 4]) -> Param {
-        Param::Num { value: rgba.to_vec(), vmin: 0.0, vmax: 1.0, int: false, options: Vec::new(), face: Face::Color }
-    }
-    /// An ADSR envelope; `vmax` bounds the three times in seconds, the sustain is in 0..1.
-    pub fn envelope(adsr: [f64; 4], vmax: f64) -> Param {
-        Param::Num { value: adsr.to_vec(), vmin: 0.0, vmax, int: false, options: Vec::new(), face: Face::Envelope }
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }

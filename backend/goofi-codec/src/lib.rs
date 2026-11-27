@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 pub mod rpc;
 use std::hash::Hasher;
-use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -106,32 +105,6 @@ struct Count(usize);
 impl<'a> Out<'a> for Count {
     fn put(&mut self, bytes: &[u8]) {
         self.0 += bytes.len();
-    }
-}
-
-/// A sink over uninitialised memory, sized by [`encoded_len`] beforehand.
-pub struct Fill<'m> {
-    buf: &'m mut [MaybeUninit<u8>],
-    at: usize,
-}
-
-impl<'m> Fill<'m> {
-    pub fn new(buf: &'m mut [MaybeUninit<u8>]) -> Fill<'m> {
-        Fill { buf, at: 0 }
-    }
-    /// Every byte of the loan was written — the one state in which it may be sent.
-    pub fn full(&self) -> bool {
-        self.at == self.buf.len()
-    }
-}
-
-impl<'a, 'm> Out<'a> for Fill<'m> {
-    fn put(&mut self, bytes: &[u8]) {
-        let end = self.at + bytes.len();
-        // SAFETY: `MaybeUninit<u8>` and `u8` share a layout, and the range is bounds-checked.
-        let dst = &mut self.buf[self.at..end];
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.as_mut_ptr() as *mut u8, bytes.len()) };
-        self.at = end;
     }
 }
 
