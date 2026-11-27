@@ -133,3 +133,49 @@ fn a_machine_steps_by_the_position() {
     g.until("the playhead to step to a after the jump", |g| (state(g) == "a").then_some(()));
     g.until("the playhead to step on to b", |g| (state(g) == "b").then_some(()));
 }
+
+/// The time module's own instruments, on instants the test states: a rate is the smoothed gap
+/// between arrivals, every duty at one interval lands on one grid, and a stamp sorts as time does.
+#[test]
+fn a_rate_is_measured_between_arrivals_and_one_interval_is_one_grid() {
+    use goofi_supervisor::timing::{stamp, stamp_nanos, Deadline, Grid, RateMeter};
+    use std::time::{Duration, Instant, UNIX_EPOCH};
+
+    let mut rate = RateMeter::default();
+    assert_eq!(rate.note(10.0, 1.0), None, "one arrival is no rate");
+    assert_eq!(rate.note(10.5, 1.0), Some(2.0));
+    assert_eq!(rate.note(10.5, 1.0), Some(2.0), "a clock that did not advance keeps the estimate");
+    // Half of the new gap and half of the gap held: 0.25 s and 0.5 s are 0.375 s.
+    let smoothed = rate.note(10.75, 0.5).expect("a rate");
+    assert!((smoothed - 1.0 / 0.375).abs() < 1e-12, "{smoothed}");
+
+    // The first tick at or after `now`, and the same one for every duty at that interval.
+    let interval = Duration::from_millis(40);
+    let now = Instant::now();
+    let (mut a, mut b) = (Grid::new(), Grid::new());
+    let tick = a.due(interval, now);
+    assert!(tick >= now && tick - now <= interval, "{:?} after now", tick.saturating_duration_since(now));
+    assert_eq!(b.due(interval, now), tick, "two duties at one interval share the tick");
+    // A wake a little late is still that tick's; an idle stretch past it is the next one's.
+    assert_eq!(a.due(interval, tick + interval / 4), tick);
+    assert_eq!(a.due(interval, tick + interval), tick + interval);
+    // A tick taken is nobody's: the next ask arms the one after it, even a quarter in.
+    b.take(interval, tick);
+    assert_eq!(b.due(interval, tick + interval / 4), tick + interval);
+    // Another interval is another grid from the same origin: every tick of 80 ms is one of 40.
+    let wide = b.due(interval * 2, now);
+    assert!(wide >= tick && (wide - tick).as_nanos().is_multiple_of(interval.as_nanos()), "{:?}", wide - tick);
+
+    // A stamp is UTC to the millisecond, or to the nanosecond, and sorts in the order of time.
+    let at = UNIX_EPOCH + Duration::new(86_400 + 3_600 + 61, 5_000_000);
+    assert_eq!(stamp(at), "19700102-010101.005");
+    assert_eq!(stamp_nanos(at + Duration::from_nanos(7)), "19700102-010101.005000007");
+    assert_eq!(stamp(UNIX_EPOCH + Duration::from_secs(1_709_164_800)), "20240229-000000.000", "a leap day");
+    assert!(stamp(at) < stamp(at + Duration::from_millis(1)) && stamp(at) < stamp(at + Duration::from_secs(86_400 * 400)));
+
+    // A deadline passed leaves nothing; one ahead leaves what is left of it.
+    let passed = Deadline::within(Duration::ZERO);
+    assert!(passed.passed() && passed.left() == Duration::ZERO);
+    let ahead = Deadline::within(Duration::from_secs(3600));
+    assert!(!ahead.passed() && ahead.left() > Duration::from_secs(3500) && ahead.left() <= Duration::from_secs(3600));
+}
