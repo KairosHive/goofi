@@ -390,10 +390,6 @@ impl Pace {
         Pace { period, next: Instant::now() + period }
     }
 
-    pub fn period(&self) -> Duration {
-        self.period
-    }
-
     /// Change the period; the next deadline is a period from now.
     pub fn set_period(&mut self, period: Duration) {
         if period != self.period {

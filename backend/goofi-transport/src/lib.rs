@@ -132,7 +132,7 @@ pub fn wait_released<'a>(halts: impl Iterator<Item = &'a Halt>) -> bool {
     let deadline = goofi_supervisor::timing::Deadline::within(SHUTDOWN_WAIT);
     let mut all = true;
     for halt in halts {
-        all &= halt.wait_released_until(deadline.instant());
+        all &= halt.released.wait_until(deadline.instant());
     }
     all
 }
@@ -179,9 +179,5 @@ impl Halt {
     /// Whether the halt the calling thread wears, if any, was raised.
     pub fn worn_stopped() -> bool {
         WORN.with(|w| w.borrow().as_ref().is_some_and(|h| h.stopped()))
-    }
-    /// Park until released or `deadline`; whether it was released.
-    pub fn wait_released_until(&self, deadline: Instant) -> bool {
-        self.released.wait_until(deadline)
     }
 }

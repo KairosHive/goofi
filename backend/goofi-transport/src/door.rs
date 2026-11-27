@@ -2,35 +2,13 @@
 //! producer feeding it and by the engine that owns it.
 
 use std::sync::Arc;
-use std::time::Instant;
 
-use goofi_supervisor::timing::{Event, Woken};
+use goofi_supervisor::timing::Event;
 
 use crate::EventId;
 
-pub struct Door {
-    event: Event,
-}
-
-impl Door {
-    pub(crate) fn new() -> Door {
-        Door { event: Event::new() }
-    }
-
-    pub fn ring(&self, id: EventId) {
-        self.event.ring(id);
-    }
-
-    /// Park until a ring.
-    pub fn wait(&self) -> Woken {
-        self.event.wait()
-    }
-
-    /// Park until a ring or `deadline`.
-    pub fn wait_until(&self, deadline: Instant) -> Woken {
-        self.event.wait_until(deadline)
-    }
-}
+/// A door is an event: parked on by its owner, rung by anyone holding it.
+pub type Door = Event;
 
 /// The end a thread parks on.
 pub type Listener = Arc<Door>;
