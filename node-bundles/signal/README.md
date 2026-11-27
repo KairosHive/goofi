@@ -30,6 +30,18 @@ Map any number of inputs to `map.outputs` values through a seeded random matrix.
 Every input is flattened and joined; the matrix is scaled so its largest singular
 value is 1, and rebuilt when `map.seed`, the output count or the input size changes.
 
+## Splice
+
+Two frames of one shape, `[rows, columns, ...]`, cut together: each cell of the first two axes
+takes `a`, `b` or a mix, by a fractal map, or by a wired `mask` (`[height, width]` in 0..1, 1 for
+`a`, read at each cell). The map is value noise over three octaves with blobs `scale` cells
+across, thresholded so `a` keeps its `share` of the cells, and `edge` cells wide at each seam.
+Between two `DINO` token grids and `DinoDecode`, `scale` 2 cuts a collage of small fragments and
+`scale` 9 lets two textures meet along organic seams, each keeping its forms; the decoder draws
+each seam as one surface. `drift` moves the map through a third axis of the noise, and the
+weights follow it continuously: one unit grows a new map, and about 0.05 a second at 30 frames a
+second makes the pieces glide. On pictures it is a pixel patchwork.
+
 ## ArrayPlayback, StringPlayback, TablePlayback
 
 Play back a stream that goofi recorded: `playback.file` is the `.npy`, `.txt` or `.csv` file in a
