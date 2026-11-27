@@ -72,7 +72,8 @@ fn decoded_of(d: &Data) -> serde_json::Value {
 fn json_number(v: f32) -> serde_json::Value {
     match serde_json::Number::from_f64(f64::from(v)) {
         Some(n) if v.is_finite() => serde_json::Value::Number(n),
-        _ => serde_json::Value::String(v.to_string()),
+        _ if v.is_nan() => "NaN".into(),
+        _ => if v > 0.0 { "Infinity" } else { "-Infinity" }.into(),
     }
 }
 
@@ -123,6 +124,16 @@ fn build_cases() -> Vec<(&'static str, Case)> {
         .with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("Fz".into()), Coord::Str("Cz".into())])));
     let meta_index = Meta::new().with_index(Some(42));
 
+    // Every kind a meta value comes in but bytes, which JSON cannot spell for the browser's half.
+    let meta_kinds = Meta::new()
+        .with("flag", MetaValue::Bool(true))
+        .with("count", MetaValue::Int(-3))
+        .with("ratio", MetaValue::Float(0.5))
+        .with("unit", MetaValue::Str("uV".into()))
+        .with("list", MetaValue::List(vec![MetaValue::Int(1), MetaValue::Str("a".into())]))
+        .with("map", MetaValue::Map([("k".to_string(), MetaValue::Float(2.5))].into_iter().collect()));
+    let meta_freqs = Meta::new().with_channels(Axes::new().with(1, Axis::coords(vec![Coord::Num(0.5), Coord::Num(8.0)])));
+
     let mut table = IndexMap::new();
     table.insert("a".to_string(), arr(&[2], le_bytes(&[1.0, 2.0]), Meta::empty()));
     table.insert("b".to_string(), Data::string("x", Meta::empty()));
@@ -137,6 +148,11 @@ fn build_cases() -> Vec<(&'static str, Case)> {
             arr(&[2, 3], le_bytes(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]), meta_sfreq_ch),
         ),
         ("with_index", arr(&[4], le_bytes(&[1.0, 2.0, 3.0, 4.0]), meta_index)),
+        ("with_meta_kinds", arr(&[1], le_bytes(&[1.0]), meta_kinds)),
+        // A numeric axis on the second dim alone: the first carries no labels and no key.
+        ("with_numeric_coords", arr(&[2, 2], le_bytes(&[0.0, 1.0, 2.0, 3.0]), meta_freqs)),
+        ("f32_3d", arr(&[2, 1, 2], le_bytes(&[0.0, 1.0, 2.0, 3.0]), Meta::empty())),
+        ("nonfinite", arr(&[3], le_bytes(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]), Meta::empty())),
         ("string", Data::string("hello world éà", Meta::empty())),
         ("string_empty", Data::string("", Meta::empty())),
         ("table", Data::table(table, Meta::empty())),
@@ -191,6 +207,9 @@ fn a_frame_is_laid_out_as_the_codec_says_and_survives_its_round_trip() {
             assert_eq!(encode(&back), frame, "[{name}] did not survive the round trip");
             assert_eq!(back.meta().sfreq(), d.meta().sfreq(), "[{name}] sfreq");
             assert_eq!(back.meta().channels(), d.meta().channels(), "[{name}] axis labels ride the frame");
+            for (key, value) in d.meta().iter().filter(|(_, v)| !matches!(v, MetaValue::Null | MetaValue::Axes(_))) {
+                assert_eq!(back.meta().get(key).map(mv_json), Some(mv_json(value)), "[{name}] meta `{key}`");
+            }
         }
         // The half-float hop comes back as the f32 it was made from: these values it holds exactly.
         if let Case::Halves(d) = &case {
