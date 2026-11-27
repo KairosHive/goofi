@@ -11,15 +11,12 @@
 	let {
 		subject,
 		enabled,
-		onClose,
 		onToggle,
 		children
 	}: {
 		/** What the pane shows; null parks it. */
 		subject: T | null;
 		enabled: boolean;
-		/** The ✕: dismiss this pane until the selection changes. */
-		onClose: () => void;
 		/** The ◧: flip the standing preference. */
 		onToggle: () => void;
 		children: Snippet<[T]>;

@@ -4,7 +4,6 @@ import { graph } from '$lib/stores/graph.svelte';
 import { listen } from '$lib/stores/listen.svelte';
 import { selection } from '$lib/stores/selection.svelte';
 import { workspace } from 'panelty';
-import { history } from '$lib/stores/history.svelte';
 import { arrivalRate, latestHead } from '$lib/api/frames';
 import type { FrameHead } from '$lib/api/dataProtocol';
 import { collectPanels } from 'panelty';
@@ -117,11 +116,7 @@ export const query = {
 				kind: typeof s.kind === 'string' ? s.kind : null,
 				state: s
 			};
-		}),
-
-	canUndo: (): boolean => history().canUndo,
-	canRedo: (): boolean => history().canRedo,
-	undoLabel: (): string | null => history().undoLabel
+		})
 };
 
 export type Query = typeof query;

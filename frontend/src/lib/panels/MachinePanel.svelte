@@ -602,7 +602,7 @@
 					</div>
 				{/if}
 				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
-				<SidePane {subject} enabled={inspectorOn} onClose={dismiss} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
+				<SidePane {subject} enabled={inspectorOn} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
 					{#snippet children(shown)}
 						<MachineInspector {name} m={machine} subject={shown} {panelId} onClose={dismiss} />
 					{/snippet}

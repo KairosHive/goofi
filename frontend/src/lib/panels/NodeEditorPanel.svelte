@@ -63,7 +63,7 @@
 	import SidePane from './SidePane.svelte';
 	import Inspector from '$lib/inspector/Inspector.svelte';
 	import { arrayToPath, asStateObject, pathToArray } from 'panelty';
-	import { Button, EmptyState, Icon, IconButton, isTextEditingTarget } from '$lib/ui';
+	import { Button, EmptyState, Icon, isTextEditingTarget } from '$lib/ui';
 	import { clampToViewport, overlayViewport } from 'panelty';
 	import { onMount, tick, untrack } from 'svelte';
 	import { on } from 'svelte/events';
@@ -1112,7 +1112,6 @@
 		<SidePane
 			subject={selectedNode}
 			enabled={inspectorOn}
-			onClose={() => sel.dismissInspectorFor(panelId)}
 			onToggle={() => sel.setInspector(panelId, !inspectorOn)}
 		>
 			{#snippet children(node)}

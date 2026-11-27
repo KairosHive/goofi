@@ -1,7 +1,7 @@
 /** The machine as the panel and the inspector read it: a state's decision and the transitions out
  * of it in the order the manager picks among them, the shares of a `random` draw linked so they
  * sum to one, a transition's label, and an edit of several states as one step. */
-import type { Decision, Literal, Machine, State } from '$lib/api/generated';
+import type { Decision, Machine, State } from '$lib/api/generated';
 import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 import { history } from '$lib/stores/history.svelte';
 import { notify } from '$lib/stores/notify.svelte';
@@ -92,14 +92,6 @@ export function stateOf(m: Machine, p: string): string {
 
 /** Whether `values` hold more than one value. */
 export const mixed = (values: unknown[]): boolean => new Set(values.map((v) => JSON.stringify(v))).size > 1;
-
-/** What the states hold for `attr`: the value shown (the first set, else the default), whether
- * any sets it, and whether they differ, unset counting as a value of its own. */
-export function held(m: Machine, ids: string[], attr: string): { value: Literal; set: boolean; mixed: boolean } {
-	const values = ids.map((id) => m.states[id]?.values?.[attr]);
-	const first = values.find((v) => v !== undefined);
-	return { value: first ?? m.attributes[attr].default, set: first !== undefined, mixed: mixed(values) };
-}
 
 /** Transitions `pairs` as ONE step, each `[from, to]`; a pair already wired is left alone. */
 export async function connect(machine: string, m: Machine, pairs: [string, string][], label = 'Connect states'): Promise<void> {
