@@ -417,3 +417,52 @@ fn a_foreign_dtype_is_cast_to_f32_where_it_enters() {
     assert!(decoded("<i2", &[3], &[1, 0, 2, 0]).is_err(), "two samples under a shape of three");
     assert!(decoded("<f4", &[3], &[0; 8]).is_err(), "and the same of f32 itself");
 }
+
+#[test]
+fn a_frames_hash_tells_what_it_says_from_when_it_was_made() {
+    use goofi_codec::{content_hash, encode_stamps, frame_meta, is_stamps, stamp_hash, wire_hashes};
+    // A frame of two samples at a rate, as the engine stamps the run numbered `index` at `at`.
+    let said = |value: f32, sfreq: f64, index: u64, at: f64| {
+        let mut meta = Meta::new().with_sfreq(Some(sfreq)).with_index(Some(index));
+        meta.set_procstart(Some(at));
+        meta.set_procend(Some(at + 0.001));
+        meta.set_ufreq(Some(30.0));
+        arr(&[2], le_bytes(&[value, 2.0]), meta)
+    };
+    let content = |d: &Data| content_hash(d).expect("a frame that hashes");
+    let stamps = |d: &Data| stamp_hash(d).expect("a frame that hashes");
+    let wire = |d: &Data| wire_hashes(&encode(d)).expect("a frame off the wire");
+    let (first, later) = (said(1.0, 250.0, 1, 0.5), said(1.0, 250.0, 2, 0.6));
+
+    // The same samples at the same rate on a later run say the same thing, at another time.
+    assert_eq!(content(&first), content(&later), "the stamps are no part of what a frame says");
+    assert_ne!(stamps(&first), stamps(&later));
+    assert_eq!(stamps(&first), stamps(&said(9.0, 1.0, 1, 0.5)), "and what it says is no part of its stamps");
+    // A sample, a rate or an axis label that moved is another frame.
+    let named = first.with_meta(first.meta().clone().with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("Fz".into()), Coord::Str("Cz".into())]))));
+    assert_ne!(content(&first), content(&named), "an axis label moved and the hash stood");
+    for (what, other) in [("a sample", said(1.5, 250.0, 1, 0.5)), ("the rate", said(1.0, 500.0, 1, 0.5))] {
+        assert_ne!(content(&first), content(&other), "{what} moved and the hash stood");
+        assert_ne!(wire(&first).0, wire(&other).0, "{what} moved and the wire's hash stood");
+    }
+    // Read off the encoded bytes the two halves part the same way, and the meta comes with them.
+    let ((said_first, at_first, meta), (said_later, at_later, _)) = (wire(&first), wire(&later));
+    assert_eq!(said_first, said_later);
+    assert_ne!(at_first, at_later);
+    assert_eq!((meta.index(), meta.sfreq(), meta.procstart()), (Some(1), Some(250.0), Some(0.5)));
+    // A table's child stamps are its body: equal values from a later run are another table.
+    let table = |child: &Data| Data::table([("value".to_string(), child.clone())].into_iter().collect(), Meta::empty());
+    assert_ne!(content(&table(&first)), content(&table(&later)));
+    assert_ne!(wire(&table(&first)).0, wire(&table(&later)).0);
+    assert_eq!(content(&table(&first)), content(&table(&first)));
+
+    // The stamps travel alone as a frame with no body: it holds every stamp and nothing the
+    // frame says, and it is no data to decode.
+    let alone = encode_stamps(later.meta()).expect("a stamps frame");
+    assert!(is_stamps(&alone) && !is_stamps(&encode(&later)) && !is_stamps(b"GOOF"));
+    let carried = frame_meta(&alone).expect("its meta");
+    assert_eq!((carried.index(), carried.procstart(), carried.procend(), carried.ufreq()), (Some(2), Some(0.6), Some(0.601), Some(30.0)));
+    assert_eq!(carried.sfreq(), None, "the rate is the frame's, not the run's");
+    assert!(goofi_codec::decode(&alone).unwrap_err().contains("carries no data"));
+    assert!(wire_hashes(b"NOPE").is_err() && frame_meta(&encode(&first)[..8]).is_err());
+}
