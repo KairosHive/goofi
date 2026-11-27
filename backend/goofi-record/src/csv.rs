@@ -52,10 +52,6 @@ impl Format for Csv {
     fn sync(&mut self) -> Result<(), String> {
         crate::stream::sync_file(&mut self.file)
     }
-
-    fn finish(&mut self) -> Result<(), String> {
-        self.sync()
-    }
 }
 
 /// A table's cell as text. A column holding one number is that number; anything wider is the

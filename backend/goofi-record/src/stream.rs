@@ -110,8 +110,10 @@ pub trait Format {
     }
     /// Reach the disk, on the cadence.
     fn sync(&mut self) -> Result<(), String>;
-    /// Close the file, which for a video is what completes the container.
-    fn finish(&mut self) -> Result<(), String>;
+    /// Close the file: a last sync, or for a video what completes the container.
+    fn finish(&mut self) -> Result<(), String> {
+        self.sync()
+    }
 }
 
 const SYNC_EVERY: Duration = Duration::from_secs(1);

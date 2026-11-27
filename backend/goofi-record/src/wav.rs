@@ -101,8 +101,4 @@ impl Format for Wav {
         self.file.seek(SeekFrom::Start(end)).map_err(|e| e.to_string())?;
         crate::stream::sync_file(&mut self.file)
     }
-
-    fn finish(&mut self) -> Result<(), String> {
-        self.sync()
-    }
 }
