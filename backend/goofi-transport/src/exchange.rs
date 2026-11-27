@@ -143,9 +143,11 @@ impl Mailbox {
             if seq == self.taken || seq == 0 {
                 return Ok(None);
             }
+            // A write is in flight: nothing is there to take yet, and its writer rings once it
+            // is. Waiting here instead never ends on a writer that died inside its copy, and
+            // keeps the caller from the look at its peer that would say so.
             if seq & 1 == 1 {
-                std::thread::yield_now();
-                continue;
+                return Ok(None);
             }
             // SAFETY: the message area, read under the sequence and checked against it after.
             let copied = unsafe {
