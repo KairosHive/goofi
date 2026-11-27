@@ -369,10 +369,6 @@ export class GraphStore {
 			case 'logs':
 				consoleStore().apply(ev.payload);
 				break;
-			case 'error':
-				// A REPORT, so only a node that RUNS raises one — a facade's health rides `node_stage`.
-				this._runtimeOf(ev.payload.node).error = ev.payload.error;
-				break;
 			case 'unsaved_changes':
 				this.unsavedChanges = ev.payload.unsaved_changes;
 				break;

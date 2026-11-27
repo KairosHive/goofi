@@ -232,7 +232,6 @@ export type ControlEvent =
 				refreshed_params?: [string, string][];
 			};
 	  }
-	| { event: 'error'; payload: { node: string; error: string | null } }
 	| {
 			event: 'node_stage';
 			payload: { node: string; stage: NodeStage; error?: string | null; runtime?: NodeRuntime | null };

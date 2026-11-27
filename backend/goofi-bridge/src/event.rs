@@ -19,7 +19,6 @@ pub enum Event {
     StateUpdate(Value),
     ParamValues { nodes: Value },
     NodeStats { stats: Value },
-    Error { node: String, error: Option<String> },
     NodeStage(Value),
     RecordChanged(Value),
     HarnessChanged(Value),

@@ -835,7 +835,6 @@ pub fn spawn_workers(state: &AppState) {
                     if let Some(text) = &now.2 {
                         goofi_supervisor::log::record(goofi_supervisor::log::Source { component: "node".into(), node: Some(node.clone()) }, goofi_supervisor::log::Level::Error, None, text.clone());
                     }
-                    events.send(Event::Error { node: node.clone(), error: now.2.clone() });
                 }
                 let ev =
                     json!({ "node": &node, "stage": now.1, "error": &now.2, "runtime": now.3 });
