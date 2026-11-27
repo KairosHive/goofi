@@ -299,8 +299,9 @@ impl Executor for HostExecutor {
         false
     }
 
-    /// A surviving wire keeps its frame, and a wire that left takes its frame with it; a single
-    /// slot with no wire left holds no frame, or a node keeps running on a producer it left.
+    /// A surviving wire keeps its frame, and a wire that left takes its frame with it. A single
+    /// slot is told only when its one wire moved: left, or gave way to another producer's. Either
+    /// way it holds no frame, or a node keeps running on a producer it left.
     fn rewire(&mut self, inbox: usize, wires: &[(String, String)]) {
         let Some(decl) = self.manifest.inputs.get(inbox) else { return };
         if let Some(cells) = self.multi_wires.get_mut(decl.name) {
@@ -312,7 +313,7 @@ impl Executor for HostExecutor {
                     (service.clone(), source.clone(), held)
                 })
                 .collect();
-        } else if wires.is_empty() {
+        } else {
             self.inputs.insert(decl.name, None);
         }
     }

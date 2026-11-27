@@ -229,6 +229,33 @@ fn each_way_a_node_can_fail_is_reported_and_none_of_them_stops_the_patch() {
 }
 
 #[test]
+fn a_cable_that_replaces_a_cable_takes_the_frame_of_the_one_it_replaced() {
+    // A single input holds the newest frame of the wire it has. A wire that gave way to another
+    // producer's takes its frame with it: the node must not run on a producer it left.
+    let g = Goofi::new();
+    let (a, b, echo) = (g.add("_TestScalar"), g.add("_TestScalar"), g.add("_TestEcho"));
+    g.set_param(a, "control", "value", 1.0);
+    g.set_param(b, "control", "value", 2.0);
+    // B runs when it is asked alone, so nothing of B arrives until the test says.
+    g.set_param(b, "common", "autotrigger", false);
+    g.link(a, "out", echo, "input");
+    let probe = g.probe(echo, "out");
+    g.until("the echo to carry A", |_| probe.latest().filter(|d| f32s(d)[0] == 1.0));
+
+    // One write: B's cable evicts A's on the echo's one input.
+    g.link(b, "out", echo, "input");
+    let rests = |g: &Goofi| {
+        let seen = probe.count();
+        g.stays(|_| probe.count() == seen)
+    };
+    g.until("the echo to fall silent with A gone", |g| rests(g).then_some(()));
+    g.call("node param request", j!({ "node": hex(echo), "param": "common/trigger", "request": "pulse" }));
+    assert!(rests(&g), "asked to run with nothing of B arrived, the echo has nothing to pass on: {:?}", probe.latest().map(|d| f32s(&d)));
+    g.call("node param request", j!({ "node": hex(b), "param": "common/trigger", "request": "pulse" }));
+    g.until("the echo to carry B", |_| probe.latest().filter(|d| f32s(d)[0] == 2.0));
+}
+
+#[test]
 fn a_required_input_refuses_to_run_on_a_hole_and_says_so() {
     // A `required` slot lets `process` read it unconditionally, which is worth something only if
     // the runtime enforces the refusal.
