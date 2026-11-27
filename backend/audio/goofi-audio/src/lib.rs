@@ -164,30 +164,29 @@ impl DeviceClock {
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
         let device = name.to_string();
-        goofi_supervisor::worker::thread("goofi-audio-clock")
-            .spawn(move || {
-                let stream = match open_output(&device, buffer, runtime, stats.clone(), waker.clone()) {
-                    Ok((stream, rate, channels)) => {
-                        let _ = opened.send(Ok((rate, channels, stream.buffer_size().ok())));
-                        stream
-                    }
-                    Err(e) => {
-                        let _ = opened.send(Err(e));
-                        return;
-                    }
-                };
-                if on_go.recv().is_ok() {
-                    if let Err(e) = stream.play() {
-                        goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: {e}"));
-                        stats.dead.store(true, Ordering::Release);
-                        waker.notify();
-                    }
-                    let _ = on_go.recv();
+        goofi_supervisor::worker::spawn("goofi-audio-clock", move || {
+            let stream = match open_output(&device, buffer, runtime, stats.clone(), waker.clone()) {
+                Ok((stream, rate, channels)) => {
+                    let _ = opened.send(Ok((rate, channels, stream.buffer_size().ok())));
+                    stream
                 }
-                drop(stream);
-                let _ = done.send(());
-            })
-            .map_err(|e| format!("could not start the clock thread: {e}"))?;
+                Err(e) => {
+                    let _ = opened.send(Err(e));
+                    return;
+                }
+            };
+            if on_go.recv().is_ok() {
+                if let Err(e) = stream.play() {
+                    goofi_supervisor::log::record(goofi_supervisor::log::Source::component("audio"), goofi_supervisor::log::Level::Error, None, format!("audio: {e}"));
+                    stats.dead.store(true, Ordering::Release);
+                    waker.notify();
+                }
+                let _ = on_go.recv();
+            }
+            drop(stream);
+            let _ = done.send(());
+        })
+        .map_err(|e| format!("could not start the clock thread: {e}"))?;
         let wait = if crate::host::asio_driver(name).is_some() { ASIO_OPEN_WAIT } else { OPEN_WAIT };
         let (rate, channels, period) = on_open
             .recv_timeout(wait)
@@ -202,26 +201,25 @@ impl DeviceClock {
         let frames = if buffer > 0 { buffer } else { BROWSER_PERIOD };
         let (go, on_go) = mpsc::channel::<()>();
         let (done, on_done) = mpsc::channel::<()>();
-        goofi_supervisor::worker::thread("goofi-audio-clock")
-            .spawn(move || {
-                if on_go.recv().is_ok() {
-                    let channels = usize::from(BROWSER_CHANNELS);
-                    let mut realtime = Realtime::Unasked;
-                    let mut scratch = vec![0.0; frames as usize * channels];
-                    let mut pace = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(f64::from(frames) / f64::from(BROWSER_RATE)));
-                    let mut first = 0u64;
-                    while matches!(on_go.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-                        realtime.claim(frames as usize, BROWSER_RATE);
-                        render_period(&runtime, &stats, &mut scratch, channels, BROWSER_RATE);
-                        outlet.offer(first, &scratch);
-                        first += u64::from(frames);
-                        goofi_supervisor::timing::sleep_until(pace.next());
-                        pace.advance();
-                    }
+        goofi_supervisor::worker::spawn("goofi-audio-clock", move || {
+            if on_go.recv().is_ok() {
+                let channels = usize::from(BROWSER_CHANNELS);
+                let mut realtime = Realtime::Unasked;
+                let mut scratch = vec![0.0; frames as usize * channels];
+                let mut pace = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(f64::from(frames) / f64::from(BROWSER_RATE)));
+                let mut first = 0u64;
+                while matches!(on_go.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                    realtime.claim(frames as usize, BROWSER_RATE);
+                    render_period(&runtime, &stats, &mut scratch, channels, BROWSER_RATE);
+                    outlet.offer(first, &scratch);
+                    first += u64::from(frames);
+                    goofi_supervisor::timing::sleep_until(pace.next());
+                    pace.advance();
                 }
-                let _ = done.send(());
-            })
-            .map_err(|e| format!("could not start the clock thread: {e}"))?;
+            }
+            let _ = done.send(());
+        })
+        .map_err(|e| format!("could not start the clock thread: {e}"))?;
         let lease = goofi_supervisor::scope::lease(goofi_supervisor::scope::Kind::Device, format!("audio out {BROWSER_DEVICE}"));
         Ok(DeviceClock { name: BROWSER_DEVICE.to_string(), channels: BROWSER_CHANNELS, buffer, period: Some(frames), go: Some(go), done: on_done, _lease: lease })
     }

@@ -50,14 +50,13 @@ fn main() {
     };
     // Where a display answers, the main thread is the window thread; the server runs beside it on a
     // goofi thread (a Windows main-thread stack is too small), and its death ends the process.
-    let served = goofi_supervisor::worker::thread("goofi-serve")
-        .spawn(|| {
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
-                release_session();
-                std::process::exit(101);
-            }
-        })
-        .expect("the serve thread");
+    let served = goofi_supervisor::worker::spawn("goofi-serve", || {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(serve)).is_err() {
+            release_session();
+            std::process::exit(101);
+        }
+    })
+    .expect("the serve thread");
     if let Some(windows) = windows {
         windows.run();
     }
@@ -582,7 +581,7 @@ fn record_url(url: &str) {
 /// The first signal to stop stops the server the orderly way; a second forces.
 fn watch_shutdown() -> tokio::sync::oneshot::Receiver<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
-    goofi_supervisor::worker::thread("goofi-signals").spawn(move || {
+    goofi_supervisor::worker::spawn("goofi-signals", move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

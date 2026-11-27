@@ -72,7 +72,7 @@ pub(crate) fn spawn(rec: &Arc<Recorder>, armed: Armed) -> Option<Handle> {
     let name = format!("goofi-record {}/{}", armed.id.node, armed.id.slot);
     let armed = Arc::new(Mutex::new(armed));
     let (weak, held, said) = (Arc::downgrade(rec), armed.clone(), shared.clone());
-    let thread = goofi_supervisor::worker::thread(name).spawn(move || run(weak, receiver, held, said)).ok()?;
+    let thread = goofi_supervisor::worker::spawn(name, move || run(weak, receiver, held, said)).ok()?;
     Some(Handle { armed, shared, thread: Some(thread) })
 }
 

@@ -491,54 +491,53 @@ pub fn spawn<E: Executor + 'static>(
     let mail = Arc::new(Mutex::new(Mail { refresh, ..Mail::default() }));
     let halt = Arc::new(Halt::default());
     let (thread_mail, thread_halt) = (mail.clone(), halt.clone());
-    goofi_supervisor::worker::thread(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name))
-        .spawn(move || {
-            goofi_supervisor::log::set_source(goofi_supervisor::log::Source {
-                component: spawn.engine.into(),
-                node: Some(spawn.uid.to_hex()),
-            });
-            // The executor is BUILT in here too: a factory that panics must still release the
-            // halt, or the exit waits its whole ceiling on a node that never started.
-            let inner = thread_halt.clone();
-            inner.wear();
-            let posted = thread_mail.clone();
-            let run = AssertUnwindSafe(move || {
-                let runtime = Runtime {
-                    uid: spawn.uid,
-                    born,
-                    engine: spawn.engine,
-                    base: spawn.base,
-                    manifest: spawn.manifest,
-                    decls: spawn.decls,
-                    time: spawn.time.clone(),
-                    params: spawn.params,
-                    consts: Vec::new(),
-                    values: Vec::new(),
-                    outs,
-                    retired: Vec::new(),
-                    slots: Vec::new(),
-                    binds: Vec::new(),
-                    evaluated: IndexMap::new(),
-                    errors: IndexMap::new(),
-                    bad_inputs: IndexMap::new(),
-                    fault: None,
-                    stage: NodeStage::Setup,
-                    pulsed: Vec::new(),
-                    shared,
-                    mail: thread_mail,
-                    last_run: Instant::now(),
-                    last_measured: None,
-                    listener,
-                    exec: make(),
-                    hub,
-                };
-                runtime.run(&inner);
-            });
-            let _ = std::panic::catch_unwind(run);
-            *posted.lock() = Mail { closed: true, ..Mail::default() };
-            thread_halt.release();
-        })
-        .map_err(|e| format!("could not start the node's runtime thread: {e}"))?;
+    goofi_supervisor::worker::spawn(format!("goofi-{}-{}", spawn.engine, spawn.manifest.type_name), move || {
+        goofi_supervisor::log::set_source(goofi_supervisor::log::Source {
+            component: spawn.engine.into(),
+            node: Some(spawn.uid.to_hex()),
+        });
+        // The executor is BUILT in here too: a factory that panics must still release the
+        // halt, or the exit waits its whole ceiling on a node that never started.
+        let inner = thread_halt.clone();
+        inner.wear();
+        let posted = thread_mail.clone();
+        let run = AssertUnwindSafe(move || {
+            let runtime = Runtime {
+                uid: spawn.uid,
+                born,
+                engine: spawn.engine,
+                base: spawn.base,
+                manifest: spawn.manifest,
+                decls: spawn.decls,
+                time: spawn.time.clone(),
+                params: spawn.params,
+                consts: Vec::new(),
+                values: Vec::new(),
+                outs,
+                retired: Vec::new(),
+                slots: Vec::new(),
+                binds: Vec::new(),
+                evaluated: IndexMap::new(),
+                errors: IndexMap::new(),
+                bad_inputs: IndexMap::new(),
+                fault: None,
+                stage: NodeStage::Setup,
+                pulsed: Vec::new(),
+                shared,
+                mail: thread_mail,
+                last_run: Instant::now(),
+                last_measured: None,
+                listener,
+                exec: make(),
+                hub,
+            };
+            runtime.run(&inner);
+        });
+        let _ = std::panic::catch_unwind(run);
+        *posted.lock() = Mail { closed: true, ..Mail::default() };
+        thread_halt.release();
+    })
+    .map_err(|e| format!("could not start the node's runtime thread: {e}"))?;
     Ok(Handle { born, mail, halt, bell, last: Mutex::new(None) })
 }
 

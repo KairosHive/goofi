@@ -238,7 +238,7 @@ impl Ffmpeg {
             .spawn()
             .map_err(|e| format!("could not start FFmpeg: {e}"))?;
         let mut stderr = child.stderr.take().ok_or("FFmpeg has no error pipe")?;
-        let errors = goofi_supervisor::worker::thread("goofi-record-errors").spawn(move || {
+        let errors = goofi_supervisor::worker::spawn("goofi-record-errors", move || {
             let mut message = Vec::new();
             let mut buffer = [0u8; 1024];
             while let Ok(n) = stderr.read(&mut buffer) {

@@ -232,32 +232,31 @@ impl GraphicsEngine {
             Clock::Internal => {
                 let stop = Arc::new(AtomicBool::new(false));
                 let (halt, pace, door, stats) = (stop.clone(), fps.clone(), wake.clone(), stats.clone());
-                let thread = goofi_supervisor::worker::thread("goofi-graphics-clock")
-                    .spawn(move || {
-                        let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
-                        while !halt.load(Ordering::Relaxed) {
-                            // A tick that panics ends no clock: the cause is logged and the next
-                            // tick runs on what the runtime still holds.
-                            let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())).unwrap_or_else(|p| {
-                                goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
-                                true
-                            });
-                            // Nothing asked for a stage: the clock parks until its door rings.
-                            if !drew && !halt.load(Ordering::Relaxed) {
-                                stats.parked.store(true, Ordering::Relaxed);
-                                door.wait();
-                                stats.parked.store(false, Ordering::Relaxed);
-                                continue;
-                            }
-                            grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
-                            // A tick that overran does not try to catch up: the grid restarts from now.
-                            goofi_supervisor::timing::sleep_until(grid.advance());
+                let thread = goofi_supervisor::worker::spawn("goofi-graphics-clock", move || {
+                    let mut grid = goofi_supervisor::timing::Pace::new(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
+                    while !halt.load(Ordering::Relaxed) {
+                        // A tick that panics ends no clock: the cause is logged and the next
+                        // tick runs on what the runtime still holds.
+                        let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.tick())).unwrap_or_else(|p| {
+                            goofi_supervisor::log::record(goofi_supervisor::log::Source::component("graphics"), goofi_supervisor::log::Level::Error, None, format!("the tick panicked: {}", goofi_node::panic_message(p)));
+                            true
+                        });
+                        // Nothing asked for a stage: the clock parks until its door rings.
+                        if !drew && !halt.load(Ordering::Relaxed) {
+                            stats.parked.store(true, Ordering::Relaxed);
+                            door.wait();
+                            stats.parked.store(false, Ordering::Relaxed);
+                            continue;
                         }
-                        // Every GPU object goes back on the thread that made it, before the
-                        // engine closes the windows the surfaces were made on.
-                        runtime.clear();
-                    })
-                    .expect("the render clock");
+                        grid.set_period(Duration::from_secs_f64(1.0 / f64::from(pace.load(Ordering::Relaxed))));
+                        // A tick that overran does not try to catch up: the grid restarts from now.
+                        goofi_supervisor::timing::sleep_until(grid.advance());
+                    }
+                    // Every GPU object goes back on the thread that made it, before the
+                    // engine closes the windows the surfaces were made on.
+                    runtime.clear();
+                })
+                .expect("the render clock");
                 Ticker::Clock { stop, thread }
             }
         };

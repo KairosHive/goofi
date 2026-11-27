@@ -132,7 +132,7 @@ pub fn prepare<T: Send + 'static>(name: impl Into<String>, work: impl FnOnce() -
     let ready = Ready::new();
     let filled = ready.clone();
     let name = name.into();
-    let spawned = crate::worker::thread(name.clone()).spawn(move || {
+    let spawned = crate::worker::spawn(name.clone(), move || {
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
             Ok(outcome) => outcome,
             Err(payload) => Err(format!("panicked: {}", panic_message(&payload))),
