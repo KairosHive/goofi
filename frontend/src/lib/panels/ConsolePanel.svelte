@@ -212,7 +212,7 @@
 	});
 </script>
 
-<div class="wrap" data-testid="console-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}>
+<div class="panel-wrap wrap" data-testid="console-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}>
 	<Bar>
 		{#snippet start()}
 			{#each LEVELS as level}
@@ -331,11 +331,6 @@
 
 	.wrap {
 		position: relative;
-		container-type: inline-size;
-		height: 100%;
-		display: flex;
-		flex-direction: column;
-		min-height: 0;
 	}
 	/* A native div, not ScrollArea: the virtual scroller keeps its own DOM handle. */
 	.scroll {

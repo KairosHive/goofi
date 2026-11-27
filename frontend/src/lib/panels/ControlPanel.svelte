@@ -364,7 +364,7 @@
 	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 
-<div class="wrap" data-testid="control-panel" data-group={group} data-edit={edit} bind:this={wrap}>
+<div class="panel-wrap" data-testid="control-panel" data-group={group} data-edit={edit} bind:this={wrap}>
 	<InstanceBar testid="control-tabs" items={tabs} active={group} onSelect={pick} onAdd={() => void addGroup()} onRename={nameGroup} onClose={(t) => void removeGroup(t)}>
 		{#snippet end()}
 			<IconButton
@@ -628,12 +628,6 @@
 </div>
 
 <style>
-	.wrap {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
-	}
 	.palette {
 		display: flex;
 		flex-wrap: wrap;

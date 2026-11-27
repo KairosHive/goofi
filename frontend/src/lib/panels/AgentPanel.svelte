@@ -88,7 +88,7 @@
 	});
 </script>
 
-<div class="agent">
+<div class="panel-wrap agent">
 	{#if id}
 		<!-- Its ＋ is the launcher: an agent is started from there, never blind. A ✕ asks detach or kill. -->
 		<InstanceBar testid="agent-switcher" items={hs.instances.map((i) => ({ id: i.id, label: harnessLabel(i) }))} active={id}
@@ -115,10 +115,6 @@
 
 <style>
 	.agent {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
 		background: var(--surface-1);
 	}
 	/* The terminal's box is the PANEL's: xterm lays out against this element, so a host that grew

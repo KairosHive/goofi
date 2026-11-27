@@ -31,7 +31,7 @@
 </script>
 
 <div
-	class="linked"
+	class="panel-wrap linked"
 	role="group"
 	data-testid="node-linked-panel"
 	use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source }) => ws.linkNodeToPanel(panelId, source.key) }}
@@ -78,10 +78,6 @@
 <style>
 	.linked {
 		position: relative;
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
 	}
 	/* `gap: inherit` — the bar group's own gap, so the picker and these read as one row of siblings. */
 	.controls {

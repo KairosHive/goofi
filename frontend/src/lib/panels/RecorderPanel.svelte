@@ -126,14 +126,14 @@
 </script>
 
 {#if g.demo}
-	<div class="recorder" data-testid="recorder-panel">
+	<div class="panel-wrap recorder" data-testid="recorder-panel">
 		<EmptyState>
 			{#snippet title()}Recording is off in this demo{/snippet}
 			{#snippet hint()}A public goofi writes no files. Run goofi locally to record.{/snippet}
 		</EmptyState>
 	</div>
 {:else}
-<div class="recorder" data-testid="recorder-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source, at }) => chooseSlots(source.key, at) }}>
+<div class="panel-wrap recorder" data-testid="recorder-panel" use:dropTarget={{ id: panelId, tags: ['node'], onDrop: ({ source, at }) => chooseSlots(source.key, at) }}>
 	<Bar>
 		{#snippet start()}
 			<StatusDot
@@ -257,10 +257,6 @@
 <style>
 	.recorder {
 		position: relative;
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		min-height: 0;
 	}
 	.elapsed,
 	.num {
