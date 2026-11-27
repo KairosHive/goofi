@@ -7,13 +7,12 @@ use sha2::{Digest, Sha256};
 
 /// The crates a node crate reaches by path, in the layout the repo keeps them in.
 const CRATES: &[&str] = &[
-    "backend/goofi-view",
     "backend/goofi-supervisor",
     "backend/goofi-core",
     "backend/goofi-node",
     "backend/goofi-codec",
     "backend/goofi-host-sdk",
-    "backend/audio/goofi-audio-sdk",
+    "backend/goofi-audio-sdk",
 ];
 
 fn main() {

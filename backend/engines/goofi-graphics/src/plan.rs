@@ -18,18 +18,18 @@ use crate::Instance;
 /// axes — [`MAX_SIZE`] is 8192, so they fit — and the depth on one bit above them. Zero is the
 /// frame itself at f32, which is what a snapshot and a variable following the slot need. One packer
 /// and one reader, so the cell has one owner and no second field to keep in step.
-pub fn pack(want: Option<goofi_view::ViewWant>) -> u64 {
+pub fn pack(want: Option<goofi_core::view::ViewWant>) -> u64 {
     want.map_or(0, |w| {
-        let depth = u64::from(w.depth == goofi_view::Depth::U8) << 32;
+        let depth = u64::from(w.depth == goofi_core::view::Depth::U8) << 32;
         depth | (u64::from(w.size.0.min(MAX_SIZE)) << 16) | u64::from(w.size.1.min(MAX_SIZE))
     })
 }
 
 /// The cell read back, or `None` where nothing narrowed it.
-fn unpack(cell: u64) -> Option<goofi_view::ViewWant> {
-    (cell != 0).then_some(goofi_view::ViewWant {
+fn unpack(cell: u64) -> Option<goofi_core::view::ViewWant> {
+    (cell != 0).then_some(goofi_core::view::ViewWant {
         size: (((cell >> 16) & 0xffff) as u32, (cell & 0xffff) as u32),
-        depth: if cell & (1 << 32) == 0 { goofi_view::Depth::F32 } else { goofi_view::Depth::U8 },
+        depth: if cell & (1 << 32) == 0 { goofi_core::view::Depth::F32 } else { goofi_core::view::Depth::U8 },
     })
 }
 
@@ -103,10 +103,10 @@ impl Stage {
         let mut wants = [None; 4];
         wants[Want::Screen as usize] = self.window.filter(|_| self.surface.is_none()).map(|_| self.size);
         let asked = unpack(self.cells.tap_box.load(Ordering::Relaxed));
-        let tap = asked.map_or(self.size, |w| goofi_view::fit(self.size, w.size));
+        let tap = asked.map_or(self.size, |w| goofi_core::view::fit(self.size, w.size));
         // The two taps are one reader in two formats, so at most one of them is ever wanted.
         let which = match asked.map(|w| w.depth) {
-            Some(goofi_view::Depth::U8) => Want::TapU8,
+            Some(goofi_core::view::Depth::U8) => Want::TapU8,
             _ => Want::Tap,
         };
         wants[which as usize] = self.cells.readers.load(Ordering::Relaxed).then_some(tap);

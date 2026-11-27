@@ -17,7 +17,7 @@ export interface AxisReduce {
 }
 
 /** Per-viewer ViewSpec: a compatibility predicate plus a reduction request. The wire shape
- * mirrors Rust `goofi_view::ViewSpec`; `ndim` is a conjunction. */
+ * mirrors Rust `goofi_core::view::ViewSpec`; `ndim` is a conjunction. */
 export interface ViewSpec {
 	dtype: ViewDtype;
 	ndim: [DimCmp, number][];

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use goofi_graph::{Graph, Uid};
-use goofi_view::ViewSpec;
+use goofi_core::view::ViewSpec;
 use tokio::sync::broadcast;
 
 /// The physical stream a reducer serves: a node uid + one of its output slot names.
@@ -375,7 +375,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
         let mut pace = goofi_supervisor::timing::Grid::new();
         // What the producer was last told its readers want. Pushed only on a CHANGE: it takes the
         // graph lock, and a viewer's box moves rarely — the frontend quantizes it to 32-px steps.
-        let mut demanded: Option<Option<goofi_view::ViewWant>> = None;
+        let mut demanded: Option<Option<goofi_core::view::ViewWant>> = None;
         // The last frame's kind and shape, off its header — what the planner reads for a frame
         // this loop never decoded. `made` is that frame itself, ready to forward as it stands.
         let mut peeked: Option<Peek> = None;
@@ -525,7 +525,7 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
             } else {
                 // Planned against the frame's HEADER, so a frame this loop forwarded without
                 // decoding still says what the viewers may ask of the one after it.
-                peeked.as_ref().map_or(Some(goofi_view::UNDECLARED_WANT), |p| goofi_view::asked_box(&union_specs(&specs.lock()), p))
+                peeked.as_ref().map_or(Some(goofi_core::view::UNDECLARED_WANT), |p| goofi_core::view::asked_box(&union_specs(&specs.lock()), p))
             };
             // Only while subscribed — the producer this names is the one the feed is open on — and
             // on a change alone, because it takes the graph lock.
@@ -592,9 +592,9 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                         let specs = union_specs(&specs.lock());
                         // A table has no texels to plan; an array is reduced to its viewers' plan.
                         let (out, depth) = match d.value() {
-                            goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_view::Depth::F32),
+                            goofi_core::Value::Table(_) => (goofi_core::reduce::reduce_table(&d, &specs), goofi_core::view::Depth::F32),
                             _ => {
-                                let plan = goofi_view::plan(&specs, &d);
+                                let plan = goofi_core::view::plan(&specs, &d);
                                 (goofi_core::reduce::reduce_for_view(&d, &plan), plan.depth)
                             }
                         };
@@ -602,10 +602,10 @@ fn spawn_reducer(reducers: &SlotReducers, key: SlotKey, reducer: &SlotReducer, d
                         // As narrow as the widest viewer of the slot draws; the reduction itself is
                         // f32 either way, and a half or a texel only for a frame they can hold.
                         let narrowed = match depth {
-                            goofi_view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
+                            goofi_core::view::Depth::U8 => goofi_core::reduce::quantize_u8(&out)
                                 .map(|(shape, texels, meta)| goofi_codec::encode_u8(&shape, &texels, &meta)).transpose(),
-                            goofi_view::Depth::F16 => goofi_codec::encode_f16(&out),
-                            goofi_view::Depth::F32 => Ok(None),
+                            goofi_core::view::Depth::F16 => goofi_codec::encode_f16(&out),
+                            goofi_core::view::Depth::F32 => Ok(None),
                         };
                         narrowed.and_then(|n| n.map_or_else(|| goofi_codec::encode(&out), Ok))
                     };
@@ -649,7 +649,7 @@ struct Peek {
     ready: bool,
 }
 
-impl goofi_view::Reducible for Peek {
+impl goofi_core::view::Reducible for Peek {
     fn dtype_tag(&self) -> u8 {
         self.tag
     }

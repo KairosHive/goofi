@@ -7,6 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 pub mod variables;
+pub mod view;
 pub mod control;
 pub mod drawing;
 pub mod ease;
@@ -602,7 +603,7 @@ impl PartialEq for Data {
 }
 
 /// Non-array frames report an empty shape.
-impl goofi_view::Reducible for Data {
+impl crate::view::Reducible for Data {
     fn dtype_tag(&self) -> u8 {
         self.0.value.dtype_tag()
     }

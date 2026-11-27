@@ -665,7 +665,7 @@ struct Runtime {
     watched: HashSet<(Uid, String)>,
     /// What each watched slot's viewers asked the producer to make; offered only while no wire
     /// reads the slot, since a consumer takes the frame itself, never a viewer's preview.
-    view_wants: HashMap<(Uid, String), Option<goofi_view::ViewWant>>,
+    view_wants: HashMap<(Uid, String), Option<goofi_core::view::ViewWant>>,
     /// Every leaf an engine runs, by uid. A leaf absent here is born at the next settle.
     instances: HashMap<Uid, Instance>,
 }
@@ -1358,7 +1358,7 @@ impl Graph {
 
     /// Tell whichever engine owns `uid` what its readers want of `slot`. Offered to every engine
     /// rather than routed: an engine that does not hold the uid, or cannot render to size, no-ops.
-    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_view::ViewWant>) {
+    pub fn set_view_demand(&mut self, uid: Uid, slot: &str, want: Option<goofi_core::view::ViewWant>) {
         if uid == Uid::VARIABLES {
             return;
         }

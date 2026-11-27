@@ -9,9 +9,8 @@ license.workspace = true
 bytes = "1"
 goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
-goofi-python = { path = "../../signal/goofi-python" }
+goofi-python = { path = "../../goofi-python" }
 goofi-core = { path = "../../goofi-core" }
-goofi-view = { path = "../../goofi-view" }
 goofi-node = { path = "../../goofi-node" }
 goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }

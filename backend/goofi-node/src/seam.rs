@@ -384,7 +384,7 @@ pub trait Engine: Send {
     }
     /// What a slot's viewers want of its frames, or `None` for the frame itself. A producer that
     /// can make exactly that spends nothing downstream; one that cannot ignores this.
-    fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<goofi_view::ViewWant>) {}
+    fn view_demand(&mut self, _uid: Uid, _slot: &str, _want: Option<goofi_core::view::ViewWant>) {}
     /// The graph's expression evaluator, shared with every engine that evaluates `nd()` bindings
     /// on its own thread. No-op for an engine that never does.
     fn set_evaluator(&mut self, _evaluator: Arc<dyn ExprEvaluator>) {}

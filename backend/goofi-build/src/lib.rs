@@ -59,7 +59,7 @@ pub const AUDIO: Sdk = Sdk {
     engine: "audio",
     name: "goofi-audio-sdk",
     package: "goofi-audio-sdk",
-    dir: "backend/audio/goofi-audio-sdk",
+    dir: "backend/goofi-audio-sdk",
     allow: &[("libm", "0.2")],
     hosted: false,
 };

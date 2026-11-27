@@ -962,7 +962,6 @@ dependencies = [
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "midir",
  "notify",
@@ -1002,7 +1001,6 @@ dependencies = [
  "goofi-python",
  "goofi-record",
  "goofi-runtime",
- "goofi-screen",
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
@@ -1042,7 +1040,6 @@ version = "3.0.0"
 dependencies = [
  "dunce",
  "goofi-supervisor",
- "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
@@ -1058,7 +1055,6 @@ dependencies = [
  "goofi-node",
  "goofi-record",
  "goofi-supervisor",
- "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
@@ -1082,7 +1078,6 @@ dependencies = [
  "goofi-runtime",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "half",
  "libc",
@@ -1108,8 +1103,9 @@ dependencies = [
 name = "goofi-init"
 version = "3.0.0"
 dependencies = [
- "goofi-screen",
+ "console",
  "goofi-supervisor",
+ "indicatif",
  "serde",
  "sha2",
  "toml",
@@ -1121,7 +1117,6 @@ version = "3.0.0"
 dependencies = [
  "goofi-core",
  "goofi-supervisor",
- "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
@@ -1188,15 +1183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "goofi-screen"
-version = "3.0.0"
-dependencies = [
- "console",
- "goofi-supervisor",
- "indicatif",
-]
-
-[[package]]
 name = "goofi-signal"
 version = "3.0.0"
 dependencies = [
@@ -1250,7 +1236,6 @@ dependencies = [
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "indexmap",
  "libc",
@@ -1278,14 +1263,6 @@ dependencies = [
  "goofi-supervisor",
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "goofi-view"
-version = "3.0.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

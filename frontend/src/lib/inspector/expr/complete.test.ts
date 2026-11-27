@@ -283,7 +283,7 @@ describe('the machine scope', () => {
 	});
 });
 
-/* The names the evaluator injects (`backend/signal/goofi-python/src/inproc/expr.rs`) are the scope,
+/* The names the evaluator injects (`backend/goofi-python/src/inproc/expr.rs`) are the scope,
  * and nothing else in the app tells the user they exist. They are offered at every position a name
  * may begin — the empty field, after an operator, a comma or a paren — not only once one is typed. */
 describe('the injected scope', () => {

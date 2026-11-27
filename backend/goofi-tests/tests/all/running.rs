@@ -316,9 +316,9 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     let mut undeclared = Viewer::open(&base, &hex(osc), "out").await;
     let preview = undeclared.until(|d| d.meta().reduced().is_some()).await;
     let raw = g.state.reducers.latest(key.clone()).expect("the slot keeps its raw frame");
-    assert!(f32s(&raw).len() > goofi_view::UNDECLARED_MAX,
+    assert!(f32s(&raw).len() > goofi_core::view::UNDECLARED_MAX,
             "the fixture has to out-run the cap for the cap to be visible at all");
-    assert!(f32s(&preview).len() <= goofi_view::UNDECLARED_MAX,
+    assert!(f32s(&preview).len() <= goofi_core::view::UNDECLARED_MAX,
             "an undeclared viewer draws a preview, never the full frame");
     drop(undeclared);
     eventually("the undeclared viewer to leave before the counted ones arrive",
@@ -481,7 +481,7 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     let d = cell.until(|d| matches!(d.value(), goofi_core::Value::Table(t) if t.contains_key("wave"))).await;
     let goofi_core::Value::Table(fields) = d.value() else { unreachable!("matched above") };
     let wave = &fields["wave"];
-    assert!(f32s(wave).len() <= goofi_view::UNDECLARED_MAX, "the nested array is a preview: {} samples", f32s(wave).len());
+    assert!(f32s(wave).len() <= goofi_core::view::UNDECLARED_MAX, "the nested array is a preview: {} samples", f32s(wave).len());
     assert!(wave.meta().reduced().is_some(), "and it says it was reduced");
     drop(cell);
     g.call("node remove", j!({ "node": hex(table) }));

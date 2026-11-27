@@ -4,8 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-/// The Data kind a viewer draws; the tags are goofi-core's wire dtype tags, restated to keep
-/// this crate free of that dependency.
+/// The Data kind a viewer draws, by its wire dtype tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewDtype {

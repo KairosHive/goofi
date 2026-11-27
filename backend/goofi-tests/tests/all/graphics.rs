@@ -818,7 +818,7 @@ fn shaders_render_on_the_gpu() {
     waited(&g, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
     // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
     // whole frame, in the engine's own 0..1.
-    let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
+    let tiny = goofi_core::view::ViewWant { size: (8, 8), depth: goofi_core::view::Depth::U8 };
     g.graph().set_view_demand(field, "out", Some(tiny));
     render(&g, 3);
     let whole = waited(&g, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);

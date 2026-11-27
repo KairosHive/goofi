@@ -12,7 +12,7 @@ embed = ["goofi-python/embed"]
 goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 # The scan's Python door: both tiers' probes and node types.
-goofi-python = { path = "../goofi-python" }
+goofi-python = { path = "../../goofi-python" }
 goofi-node = { path = "../../goofi-node" }
 goofi-host-sdk = { path = "../../goofi-host-sdk", features = ["host"] }
 # The scan's Rust door: build a node file, load the artifact.

@@ -2,7 +2,7 @@
 //! nothing computed. Returns `None` when it would not shrink the axis.
 
 use crate::{Coord, Data, Meta, MetaValue, Value};
-use goofi_view::{MergedViewSpec, ViewSpec};
+use crate::view::{MergedViewSpec, ViewSpec};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -73,7 +73,7 @@ pub fn reduce_table(frame: &Data, specs: &[ViewSpec]) -> Data {
     for (key, entry) in map.iter() {
         let reduced = match entry.value() {
             Value::Table(_) => reduce_table(entry, specs),
-            Value::Array(_) => reduce_for_view(entry, &goofi_view::plan(specs, entry)),
+            Value::Array(_) => reduce_for_view(entry, &crate::view::plan(specs, entry)),
             _ => entry.clone(),
         };
         shrunk |= !std::sync::Arc::ptr_eq(&reduced.0, &entry.0);

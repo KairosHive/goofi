@@ -10,7 +10,7 @@ license.workspace = true
 host = ["dep:libloading", "dep:goofi-build"]
 
 [dependencies]
-goofi-core = { path = "../../goofi-core" }
-goofi-node = { path = "../../goofi-node" }
+goofi-core = { path = "../goofi-core" }
+goofi-node = { path = "../goofi-node" }
 libloading = { version = "0.8", optional = true }
-goofi-build = { path = "../../goofi-build", optional = true }
+goofi-build = { path = "../goofi-build", optional = true }
