@@ -7,6 +7,7 @@ import { history } from './history.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
+import { numParam } from '$lib/test/param';
 
 /** Seed a node — a param leaf-write targets the replica's node, so it no-ops unless it is there. */
 function docAddNode(d: DocSeed, uid: string): void {
@@ -23,24 +24,7 @@ function catalog(): NodeTypeInfo[] {
 			output_slots: { out: 'ARRAY' },
 			params: {
 				common: {
-					frequency: {
-						type: 'num',
-						value: 1,
-						default: 1,
-						vmin: 0,
-						vmax: 1000,
-						int: false,
-						options: [],
-						face: 'plain',
-						doc: null,
-						refreshable: false,
-						expression: null,
-						mode: 'constant',
-						error: null,
-						section: 0,
-						show: [],
-						role: null
-					}
+					frequency: numParam({ value: 1, default: 1, vmax: 1000 })
 				},
 				count: {
 					reset: {

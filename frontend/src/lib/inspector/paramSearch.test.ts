@@ -1,27 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { matchParams, scoreParam, type ParamGroups } from './paramSearch';
 import type { ParamDescriptor } from '$lib/api/types';
+import { numParam } from '$lib/test/param';
 
-function param(doc: string | null = null): ParamDescriptor {
-	return {
-		type: 'num',
-		value: 0,
-		default: 0,
-		vmin: 0,
-		vmax: 1,
-		int: false,
-		options: [],
-		face: 'plain',
-		doc,
-		refreshable: false,
-		mode: 'constant',
-		expression: null,
-		error: null,
-		section: 0,
-		show: [],
-		role: null
-	};
-}
+const param = (doc: string | null = null): ParamDescriptor => numParam({ doc });
 
 const params: ParamGroups = {
 	osc: { tune: param(), model: param('Which oscillator model.') },

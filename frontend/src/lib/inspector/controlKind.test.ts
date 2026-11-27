@@ -9,6 +9,7 @@ import type {
 	PulseParam,
 	UnknownParam
 } from '$lib/api/types';
+import { numParam } from '$lib/test/param';
 
 // The pure descriptor → control discriminant (spec §2, D-N2), over the TYPE alone: a pulse is a
 // button, numeric = float|int, a bool is a toggle, a string with options OR that is refreshable is a
@@ -28,18 +29,7 @@ const base: ParamBase = {
 	role: null
 };
 
-const floatParam = (over: Partial<NumParam> = {}): NumParam => ({
-	...base,
-	type: 'num',
-	value: 0,
-	default: 0,
-	vmin: 0,
-	vmax: 1,
-	int: false,
-	options: [],
-	face: 'plain',
-	...over
-});
+const floatParam = numParam;
 const intParam = (over: Partial<NumParam> = {}): NumParam => ({
 	...floatParam(),
 	int: true,

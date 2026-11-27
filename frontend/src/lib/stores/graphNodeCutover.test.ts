@@ -6,6 +6,7 @@ import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { typeInfo } from '$lib/test/typeInfo';
+import { numParam } from '$lib/test/param';
 import { snapshot } from '$lib/test/snapshot';
 
 /** A minimal hello/graph_replaced snapshot; `node_types` optionally carries the palette inline. */
@@ -23,24 +24,7 @@ function catalog(): NodeTypeInfo[] {
 			output_slots: { out: 'ARRAY' },
 			params: {
 				common: {
-					max_frequency: {
-						type: 'num',
-						value: 30,
-						default: 30,
-						vmin: 0,
-						vmax: 1000,
-						int: false,
-						options: [],
-						face: 'plain',
-						doc: null,
-						refreshable: false,
-						expression: null,
-						mode: 'constant',
-						error: null,
-						section: 0,
-						show: [],
-						role: null
-					}
+					max_frequency: numParam({ value: 30, default: 30, vmax: 1000 })
 				}
 			}
 		})
