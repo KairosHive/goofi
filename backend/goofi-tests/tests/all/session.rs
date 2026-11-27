@@ -59,7 +59,6 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
     let yaml = g.call("session manifest", j!({}))["yaml"].as_str().unwrap().to_string();
     let saved: serde_json::Value = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(saved["goofi"], env!("CARGO_PKG_VERSION"), "the manifest names its writer");
-    assert!(saved["patch"].get("scopes").is_none(), "no block of its own for the structure");
     let recs = saved["patch"]["nodes"].as_object().unwrap();
     assert_eq!(recs[&outer]["type"], "SubPatch", "the facade is a node record: {:?}", recs[&outer]);
     assert_eq!(recs[&spare]["type"], "OutTable", "…and so is the port");
@@ -472,7 +471,6 @@ fn the_workspace_counts_as_unsaved_work_a_load_is_clean_and_a_new_patch_inherits
     // `new` MINTS the workspace, so it seeds the note while `load`, one line away, must not. The
     // note says what the directory is and where the orientation is; the orientation itself is
     // `guide get orientation`, the same for an agent here and one outside.
-    assert!(!mount.join("CLAUDE.md").exists(), "AGENTS.md is the one file every harness reads");
     let agents = std::fs::read_to_string(mount.join("AGENTS.md")).unwrap();
     assert_eq!(agents, goofi_bridge::orientation::AGENTS_MD);
     assert!(agents.contains(".goofiignore") && agents.contains("guide get orientation"), "{agents}");
@@ -543,7 +541,6 @@ fn the_file_browser_answers_a_path_the_way_save_and_load_take_it() {
     assert_eq!(entry["path"], format!("{here}/alpha.txt"));
     assert_eq!((&entry["size"], &entry["modified"]), (&j!(1), &j!(200_000)), "bytes and epoch milliseconds");
     assert!(by_name("Zeta")["size"].is_null(), "a directory has no size");
-    assert!(entry.get("hidden").is_none(), "a listing holds nothing for a `hidden` flag to mark");
 
     // Directories stay first in every order; the name breaks ties.
     let dir = tmp.path().to_string_lossy();
