@@ -1,4 +1,5 @@
 import { bindPath, type Program } from './gl';
+import { BasePlot } from './plot';
 import { rgba, type Rect } from './math';
 
 /** A colour as floats in 0..1. */
@@ -62,31 +63,10 @@ interface PathGpu {
 
 /** Strokes and dots the host lays out itself, in fractions of the rect: a picture the surface
  * has no data model for, such as a diagram or a projection. */
-export class PathPlot {
-	rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-	order = 0;
-	background: [number, number, number, number] = [0, 0, 0, 1];
+export class PathPlot extends BasePlot {
 	private data: PathData | null = null;
 	private gpu: PathGpu | null = null;
 
-	constructor(private readonly invalidate: () => void, private readonly detach: (p: PathPlot) => void) {}
-
-	setRect(x: number, y: number, w: number, h: number): void {
-		this.rect = { x, y, w, h };
-		this.invalidate();
-	}
-	setOrder(z: number): void {
-		this.order = z;
-		this.invalidate();
-	}
-	setBackground(hex: string): void {
-		this.background = rgba(hex);
-		this.invalidate();
-	}
-	remove(): void {
-		this.detach(this);
-		this.release();
-	}
 	/** Drop the picture: `draw` paints the background alone until the next push. */
 	clear(): void {
 		this.data = null;

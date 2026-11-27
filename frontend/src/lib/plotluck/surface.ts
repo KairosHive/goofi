@@ -227,8 +227,8 @@ export function createRenderer(): Renderer {
 			pane.touched.delete(p);
 			pane.painted.delete(p);
 		};
-		const add = <P extends Plot>(make: (touch: () => void) => P): P => {
-			const p: P = make(() => touch(p));
+		const add = <P extends Plot>(make: (touch: () => void, detach: () => void) => P): P => {
+			const p: P = make(() => touch(p), () => detach(p));
 			pane.plots.add(p);
 			return p;
 		};
@@ -242,10 +242,10 @@ export function createRenderer(): Renderer {
 				pane.all = true;
 				invalidate();
 			},
-			addLine: () => add((t) => new LinePlot(t, detach)),
-			addImage: () => add((t) => new ImagePlot(t, detach)),
-			addPath: () => add((t) => new PathPlot(t, detach)),
-			addField: () => add((t) => new FieldPlot(t, detach)),
+			addLine: () => add((t, d) => new LinePlot(t, d)),
+			addImage: () => add((t, d) => new ImagePlot(t, d)),
+			addPath: () => add((t, d) => new PathPlot(t, d)),
+			addField: () => add((t, d) => new FieldPlot(t, d)),
 			dispose() {
 				for (const p of pane.plots) p.release();
 				pane.plots.clear();

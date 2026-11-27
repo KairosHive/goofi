@@ -1,5 +1,6 @@
 import { grayLut, lutTexture, type Program } from './gl';
-import { rgba, type Rect } from './math';
+import { BasePlot } from './plot';
+import type { Rect } from './math';
 
 /** The most centres a field may sum: the shader's uniform array. */
 export const MAX_CENTRES = 128;
@@ -33,35 +34,14 @@ interface FieldGpu {
 	lutUploaded: Uint8Array | null;
 }
 
-export class FieldPlot {
-	rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-	order = 0;
-	background: [number, number, number, number] = [0, 0, 0, 1];
+export class FieldPlot extends BasePlot {
 	private settings: FieldSettings = { lut: grayLut(), bands: 0 };
 	private data: FieldData | null = null;
 	private gpu: FieldGpu | null = null;
 
-	constructor(private readonly invalidate: () => void, private readonly detach: (p: FieldPlot) => void) {}
-
-	setRect(x: number, y: number, w: number, h: number): void {
-		this.rect = { x, y, w, h };
-		this.invalidate();
-	}
-	setOrder(z: number): void {
-		this.order = z;
-		this.invalidate();
-	}
-	setBackground(hex: string): void {
-		this.background = rgba(hex);
-		this.invalidate();
-	}
 	setSettings(s: Partial<FieldSettings>): void {
 		this.settings = { ...this.settings, ...s };
 		this.invalidate();
-	}
-	remove(): void {
-		this.detach(this);
-		this.release();
 	}
 	/** Drop the field: `draw` paints the background alone until the next push. */
 	clear(): void {

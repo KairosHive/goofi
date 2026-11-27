@@ -1,10 +1,10 @@
 import { bindSegments, type Program } from './gl';
+import { BasePlot } from './plot';
 import { seriesRgba } from './color';
 import {
 	extent,
 	layoutSeries,
 	perRow,
-	rgba,
 	settled,
 	unmapped,
 	axisWindow,
@@ -79,10 +79,7 @@ interface LineGpu {
 	minorUploaded: Float32Array | null;
 }
 
-export class LinePlot {
-	rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-	order = 0;
-	background: [number, number, number, number] = [0, 0, 0, 1];
+export class LinePlot extends BasePlot {
 	private settings: LineSettings = {
 		logX: false,
 		logY: false,
@@ -112,29 +109,11 @@ export class LinePlot {
 	private minor = gridSegments([], []);
 	private gpu: LineGpu | null = null;
 
-	constructor(private readonly invalidate: () => void, private readonly detach: (p: LinePlot) => void) {}
-
-	setRect(x: number, y: number, w: number, h: number): void {
-		this.rect = { x, y, w, h };
-		this.invalidate();
-	}
-	setOrder(z: number): void {
-		this.order = z;
-		this.invalidate();
-	}
-	setBackground(hex: string): void {
-		this.background = rgba(hex);
-		this.invalidate();
-	}
 	setSettings(s: Partial<LineSettings>): void {
 		this.settings = { ...this.settings, ...s };
 		this.auto = null;
 		this.fitWindows();
 		this.invalidate();
-	}
-	remove(): void {
-		this.detach(this);
-		this.release();
 	}
 	/** Drop the series: `draw` paints the background alone and `range()` is null until the next push. */
 	clear(): void {

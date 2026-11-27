@@ -1,5 +1,6 @@
 import { clampTexture, grayLut, lutTexture, type Program } from './gl';
-import { fitImage, rgba, type Rect } from './math';
+import { BasePlot } from './plot';
+import { fitImage, type Rect } from './math';
 
 export interface ImageSettings {
 	/** 256 RGB triplets the single-channel mode samples through. */
@@ -30,35 +31,14 @@ interface ImageGpu {
 	floatLinear: boolean;
 }
 
-export class ImagePlot {
-	rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
-	order = 0;
-	background: [number, number, number, number] = [0, 0, 0, 1];
+export class ImagePlot extends BasePlot {
 	private settings: ImageSettings = { lut: grayLut(), stretch: false };
 	private data: ImageData | null = null;
 	private gpu: ImageGpu | null = null;
 
-	constructor(private readonly invalidate: () => void, private readonly detach: (p: ImagePlot) => void) {}
-
-	setRect(x: number, y: number, w: number, h: number): void {
-		this.rect = { x, y, w, h };
-		this.invalidate();
-	}
-	setOrder(z: number): void {
-		this.order = z;
-		this.invalidate();
-	}
-	setBackground(hex: string): void {
-		this.background = rgba(hex);
-		this.invalidate();
-	}
 	setSettings(s: Partial<ImageSettings>): void {
 		this.settings = { ...this.settings, ...s };
 		this.invalidate();
-	}
-	remove(): void {
-		this.detach(this);
-		this.release();
 	}
 	/** Drop the image: `draw` paints the background alone until the next push. */
 	clear(): void {
