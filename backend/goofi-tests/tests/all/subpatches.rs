@@ -8,25 +8,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use goofi_core::node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
-use goofi_tests::{Goofi, ep, hex, j};
-
-/// Compiles anything and hands the first variable back. With one installed, a binding error in the
-/// reply is the GRAPH's own resolution talking rather than "no evaluator here".
-struct Always;
-
-impl ExprEvaluator for Always {
-    fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
-        Ok(Compiled { id: 1, code: Arc::from(&b""[..]) })
-    }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
-        goofi_tests::first_var(ctx)
-    }
-    fn release(&self, _id: BindingId) {}
-    fn run(&self, _code: &[u8], _ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
-        Err(ExprError("no functional here".into()))
-    }
-}
+use goofi_tests::{FirstVar, Goofi, ep, hex, j};
 
 fn uid(hex: &str) -> goofi_graph::Uid {
     goofi_graph::Uid::from_hex(hex).expect("a uid")
@@ -412,7 +394,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     // unlike a node's, that stream MOVES when somebody wires the sub-patch, so the binding has to
     // be re-resolved by the graph rather than re-written by the user.
     let g = Goofi::new();
-    g.graph().set_evaluator(Arc::new(Always));
+    g.graph().set_evaluator(Arc::new(FirstVar::default()));
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
     let inst = group(&g, &[hex(buf)]);
@@ -546,7 +528,7 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     let path = dir.path().join("renamed.gfi");
     g.call("session save", j!({ "path": path.to_string_lossy() }));
     let back = Goofi::new();
-    back.graph().set_evaluator(Arc::new(Always));
+    back.graph().set_evaluator(Arc::new(FirstVar::default()));
     back.call("session load", j!({ "path": path.to_string_lossy() }));
     let loaded_buf = back.nodes().into_iter()
         .find(|u| back.doc()["nodes"][u]["name"] == "buffer0")
