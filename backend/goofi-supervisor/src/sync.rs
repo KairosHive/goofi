@@ -15,10 +15,6 @@ impl<T> Mutex<T> {
     pub const fn new(value: T) -> Self {
         Mutex { poisoned: AtomicBool::new(false), inner: std::sync::Mutex::new(value) }
     }
-
-    pub fn into_inner(self) -> T {
-        self.inner.into_inner().unwrap_or_else(PoisonError::into_inner)
-    }
 }
 
 impl<T: ?Sized> Mutex<T> {
@@ -33,10 +29,6 @@ impl<T: ?Sized> Mutex<T> {
             Err(TryLockError::Poisoned(e)) => Some(self.taken_over(e)),
             Err(TryLockError::WouldBlock) => None,
         }
-    }
-
-    pub fn get_mut(&mut self) -> &mut T {
-        self.inner.get_mut().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn taken_over<'a>(&self, e: PoisonError<MutexGuard<'a, T>>) -> MutexGuard<'a, T> {
@@ -66,7 +58,6 @@ pub struct Condvar(std::sync::Condvar);
 
 impl Condvar {
     pub const fn new() -> Self { Condvar(std::sync::Condvar::new()) }
-    pub fn notify_one(&self) { self.0.notify_one() }
     pub fn notify_all(&self) { self.0.notify_all() }
 
     pub fn wait<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
@@ -75,10 +66,6 @@ impl Condvar {
 
     pub fn wait_while<'a, T>(&self, guard: MutexGuard<'a, T>, condition: impl FnMut(&mut T) -> bool) -> MutexGuard<'a, T> {
         self.0.wait_while(guard, condition).unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub fn wait_timeout<'a, T>(&self, guard: MutexGuard<'a, T>, dur: std::time::Duration) -> MutexGuard<'a, T> {
-        self.0.wait_timeout(guard, dur).unwrap_or_else(PoisonError::into_inner).0
     }
 
     pub fn wait_timeout_while<'a, T>(&self, guard: MutexGuard<'a, T>, dur: std::time::Duration, condition: impl FnMut(&mut T) -> bool) -> MutexGuard<'a, T> {

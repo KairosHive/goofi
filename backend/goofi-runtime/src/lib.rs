@@ -318,11 +318,6 @@ pub struct Ticked {
 pub trait Executor {
     /// A frame arrived on wire `wire` of Array input `inbox`; `true` asks for a settle.
     fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool;
-    /// Whether only the NEWEST frame on an input matters: yes is handed one per pass, and no (an
-    /// executor that accumulates every sample, as audio's resampling inbox does) is handed all.
-    fn latest_only(&self) -> bool {
-        false
-    }
     /// The wires into Array input `inbox` moved: the full set, as `(service, node.slot)`.
     fn rewire(&mut self, _inbox: usize, _wires: &[(ServiceName, String)]) {}
     /// The live values moved. A param never asks for a run: `process` runs on the executor's

@@ -882,10 +882,6 @@ impl VariableStore {
         Ok(())
     }
 
-    pub fn group_index(&self, group: &str) -> Option<usize> {
-        self.groups.get_index_of(group)
-    }
-
     /// Remove an empty, unlocked group.
     pub fn remove_group(&mut self, group: &str) -> Result<(), String> {
         self.reconfigured();
@@ -969,10 +965,6 @@ impl VariableStore {
         Ok(())
     }
 
-    /// Ordered position of `name` — a delete's inverse captures it to re-add at the original slot.
-    pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.entries.get_index_of(name)
-    }
 
     /// Remove a variable; errors when it is config-locked or absent.
     pub fn remove(&mut self, name: &str) -> Result<(), String> {

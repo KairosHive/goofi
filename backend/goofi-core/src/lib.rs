@@ -895,8 +895,6 @@ pub enum Face {
 pub const ENVELOPE_BORN: [f64; 4] = [0.01, 0.1, 1.0, 0.3];
 
 impl Face {
-    pub const ALL: [Face; 3] = [Face::Plain, Face::Color, Face::Envelope];
-
     pub fn as_str(self) -> &'static str {
         match self {
             Face::Plain => "plain",
@@ -961,13 +959,6 @@ impl Param {
     }
     pub fn boolean(value: bool) -> Param {
         Param::Bool { value }
-    }
-    pub fn str_free(value: impl Into<String>) -> Param {
-        Param::Str {
-            value: value.into(),
-            options: None,
-            refresh: false,
-        }
     }
 
     /// The first dimension of a number; a bool as 0 or 1.

@@ -397,10 +397,6 @@ impl Tree {
         }
     }
 
-    pub fn pid(&self) -> u32 {
-        self.pid
-    }
-
     /// Ask everything in the tree to leave, so it can save its state on the way out: `SIGTERM` to
     /// the group on unix; Ctrl+Break to the console group on Windows, which a console child with no
     /// handler leaves on, and one in a console of its own never hears — the liveness pipe, closed

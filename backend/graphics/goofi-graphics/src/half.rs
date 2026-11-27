@@ -248,10 +248,6 @@ impl Drop for GraphicsHalf {
 }
 
 impl Executor for GraphicsHalf {
-    fn latest_only(&self) -> bool {
-        true
-    }
-
     /// An arrival replaces whatever the render thread has not taken yet: latest wins, as every
     /// crossing into a scheduled engine is. A node the tick calls holds the frame for its next run.
     fn arrive(&mut self, inbox: usize, wire: usize, frame: &Data) -> bool {

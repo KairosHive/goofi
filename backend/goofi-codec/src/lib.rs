@@ -546,17 +546,6 @@ fn read_array_head<'a>(cur: &mut Cursor<'_, 'a>) -> std::result::Result<(&'a [u8
     Ok((dtype, shape))
 }
 
-/// An array body's shape and its samples, BORROWED. The engine's own arrays are `<f4` already, so
-/// a recorder appends the bytes it was handed; a foreign dtype answers `None` and takes [`decode`].
-pub fn array_view(body: &[u8]) -> Option<(Vec<usize>, &[u8])> {
-    let (dtype, shape, samples) = array_head(body)?;
-    if dtype != b"<f4" {
-        return None;
-    }
-    let bytes = shape.iter().try_fold(4usize, |n, &d| n.checked_mul(d))?;
-    (samples.len() == bytes).then_some((shape, samples))
-}
-
 /// Decode a GOOF frame into a `Data`. The inverse of [`encode`].
 pub fn decode(frame: &[u8]) -> std::result::Result<Data, String> {
     decode_owned(frame.to_vec())

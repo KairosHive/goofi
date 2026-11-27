@@ -10,7 +10,6 @@
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use goofi_core::record::Frame;
 use goofi_supervisor::timing::Event;
@@ -185,11 +184,6 @@ impl Receiver {
     /// Park until a send or a poke.
     pub fn wait(&self) {
         self.queue.event.wait();
-    }
-
-    /// Park until a send, a poke or `deadline`; whether anything rang.
-    pub fn wait_until(&self, deadline: Instant) -> bool {
-        !self.queue.event.wait_until(deadline).is_empty()
     }
 
     /// The event the receiver parks on, for whoever must wake it without sending.

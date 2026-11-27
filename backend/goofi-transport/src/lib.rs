@@ -90,7 +90,7 @@ impl Hub {
 
     /// The door `name` names: parked on by its owner, rung by anyone holding it.
     pub fn door(&self, name: &str) -> Arc<Door> {
-        Self::entry(&self.doors, name, || Door::new(name))
+        Self::entry(&self.doors, name, Door::new)
     }
 
     /// A producer's end of a queue `depth` frames deep: an armed slot's, feeding the recorder.

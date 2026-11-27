@@ -71,24 +71,6 @@ pub struct Op {
 
 const CAPS: [(Cap, &str); 3] = [(Cap::Round, "round"), (Cap::Butt, "butt"), (Cap::Square, "square")];
 const DASHES: [(Dash, &str); 3] = [(Dash::Solid, "solid"), (Dash::Dash, "dash"), (Dash::Dot, "dot")];
-impl Seg {
-    fn tag(&self) -> usize {
-        match self {
-            Seg::Move(_) => 0,
-            Seg::Line(_) => 1,
-            Seg::Cubic(..) => 2,
-            Seg::Close => 3,
-        }
-    }
-
-    fn points(&self) -> Vec<Point> {
-        match *self {
-            Seg::Move(p) | Seg::Line(p) => vec![p],
-            Seg::Cubic(a, b, c) => vec![a, b, c],
-            Seg::Close => vec![],
-        }
-    }
-}
 
 fn check_path(path: &[Segment]) -> Result<(), String> {
     match path.first() {
@@ -103,11 +85,6 @@ fn quantize(v: &str, what: &str) -> Result<u16, String> {
         return Err(format!("{what} `{v}` is outside 0..{SPAN}"));
     }
     Ok((x / SPAN * Q).round() as u16)
-}
-
-fn spell(q: u16) -> String {
-    let s = format!("{:.2}", q as f32 * SPAN / Q);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn parse_ink(word: &str) -> Option<Ink> {
@@ -130,13 +107,6 @@ fn parse_ink(word: &str) -> Option<Ink> {
     Some(Ink::Rgba(c))
 }
 
-fn spell_ink(ink: Ink) -> String {
-    match ink {
-        Ink::Erase => "erase".into(),
-        Ink::Rgba([r, g, b, 255]) => format!("#{r:02x}{g:02x}{b:02x}"),
-        Ink::Rgba([r, g, b, a]) => format!("#{r:02x}{g:02x}{b:02x}{a:02x}"),
-    }
-}
 
 /// A `+ms` time word, or None for any other word.
 fn time(word: &str) -> Option<Result<u32, String>> {
@@ -231,37 +201,6 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
         }
     }
     Ok(ops)
-}
-
-/// The text form of `ops`, one op per line, which [`parse`] reads back to the same ops.
-pub fn print(ops: &[Op]) -> String {
-    let at = |dt: u32| if dt == 0 { String::new() } else { format!("+{dt} ") };
-    let path = |p: &[Segment]| {
-        p.iter()
-            .map(|s| {
-                let pts: Vec<String> = s.seg.points().iter().map(|p| format!(" {} {}", spell(p[0]), spell(p[1]))).collect();
-                let tag = ["M", "L", "C", "Z"][s.seg.tag()];
-                format!("{}{tag}{}", at(s.dt), pts.concat())
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let lines: Vec<String> = ops
-        .iter()
-        .map(|o| match &o.kind {
-            Kind::Clear => format!("{}clear", at(o.dt)),
-            Kind::Stroke(s, p) => {
-                let cap = CAPS.iter().find(|c| c.0 == s.cap).unwrap().1;
-                let dash = DASHES.iter().find(|d| d.0 == s.dash).unwrap().1;
-                format!(
-                    "{}stroke {} width {} soft {} cap {cap} dash {dash} : {}",
-                    at(o.dt), spell_ink(s.ink), spell(s.width), spell(s.soft), path(p)
-                )
-            }
-            Kind::Fill(ink, p) => format!("{}fill {} : {}", at(o.dt), spell_ink(*ink), path(p)),
-        })
-        .collect();
-    lines.join("\n")
 }
 
 /// `ops` drawn onto `sheet`, an `[height, width, 4]` straight RGBA array in 0..1, row 0 the top:

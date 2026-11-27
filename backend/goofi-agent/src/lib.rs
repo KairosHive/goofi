@@ -193,10 +193,6 @@ impl Agents {
         session::current().map(|s| Agents::of(&s)).ok_or_else(|| "not inside a goofi session".to_string())
     }
 
-    pub fn session(&self) -> &str {
-        &self.session
-    }
-
     /// The agents the config offers to launch, `_`-test entries withheld, and why a malformed
     /// config degraded to the default list when it did.
     pub fn offered() -> (Vec<layout::Agent>, Option<String>) {

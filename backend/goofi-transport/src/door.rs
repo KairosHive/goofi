@@ -2,24 +2,19 @@
 //! producer feeding it and by the engine that owns it.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use goofi_supervisor::timing::{Event, Woken};
 
 use crate::EventId;
 
 pub struct Door {
-    name: String,
     event: Event,
 }
 
 impl Door {
-    pub(crate) fn new(name: &str) -> Door {
-        Door { name: name.to_string(), event: Event::new() }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
+    pub(crate) fn new() -> Door {
+        Door { event: Event::new() }
     }
 
     pub fn ring(&self, id: EventId) {
@@ -34,11 +29,6 @@ impl Door {
     /// Park until a ring or `deadline`.
     pub fn wait_until(&self, deadline: Instant) -> Woken {
         self.event.wait_until(deadline)
-    }
-
-    /// What rang since the last wait, without parking.
-    pub fn take(&self) -> Woken {
-        self.event.take()
     }
 }
 
@@ -56,12 +46,5 @@ impl Doorbell {
 
     pub fn ring(&self, id: EventId) {
         self.0.ring(id);
-    }
-}
-
-/// Park on `listener` for at most `within`, handing `f` each id that rang.
-pub fn wait_within(listener: &Door, within: Duration, mut f: impl FnMut(EventId)) {
-    for id in listener.wait_until(Instant::now() + within).ids() {
-        f(id);
     }
 }

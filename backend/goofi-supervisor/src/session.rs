@@ -160,16 +160,6 @@ impl Session {
         Ok(Session { id, lock: Some(lock) })
     }
 
-    /// Join the session `GOOFI_SESSION` names, when a living process holds it.
-    pub fn join_from_env() -> Result<Session, String> {
-        let id = std::env::var(ENV).map_err(|_| format!("{ENV} is not set: not started by goofi"))?;
-        if !alive(&id) {
-            return Err(format!("{ENV}={id} names no live session"));
-        }
-        let _ = ID.set(id.clone());
-        Ok(Session { id, lock: None })
-    }
-
     pub fn id(&self) -> &str {
         &self.id
     }
