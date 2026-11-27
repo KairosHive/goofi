@@ -12,8 +12,9 @@
 		initialClient: { x: number; y: number };
 		/** The ghost's footprint, which a touch holds by its centre. */
 		size: { width: number; height: number };
-		onMove: (pos: [number, number]) => void;
-		onCommit: (pos: [number, number]) => void;
+		/** `pos` is the ghost's corner on the grid, `at` the pointer in client coords. */
+		onMove: (pos: [number, number], at: { x: number; y: number }) => void;
+		onCommit: (pos: [number, number], at: { x: number; y: number }) => void;
 		onCancel: () => void;
 	}
 
@@ -31,7 +32,7 @@
 	// The one magnet: the grid cell under the ghost's corner, as a drag lands too.
 	const snappedX = $derived(Math.round(origin.x / GRID) * GRID);
 	const snappedY = $derived(Math.round(origin.y / GRID) * GRID);
-	$effect(() => onMove([snappedX, snappedY]));
+	$effect(() => onMove([snappedX, snappedY], mouseClient));
 
 	function onMouseMove(e: MouseEvent): void {
 		mouseClient = { x: e.clientX, y: e.clientY };
@@ -59,7 +60,7 @@
 		// Block SF's pane-click / node-click from also firing.
 		e.stopPropagation();
 		e.preventDefault();
-		onCommit([snappedX, snappedY]);
+		onCommit([snappedX, snappedY], mouseClient);
 	}
 
 	function onWindowMouseDown(e: MouseEvent): void {
@@ -89,7 +90,7 @@
 		const at = touch.up(e);
 		if (!at) return;
 		mouseClient = at;
-		onCommit([snappedX, snappedY]);
+		onCommit([snappedX, snappedY], at);
 	}
 
 	/** The pan block and the synthetic-click suppression: SvelteFlow pans off `touchstart`, and

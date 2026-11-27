@@ -18,7 +18,7 @@
 		onPick,
 		onClose
 	}: {
-		/** The point the popover hangs at, in client pixels. */
+		/** The point the popover opens centred on, in client pixels. */
 		x: number;
 		y: number;
 		inputs: SlotChoice[];
@@ -37,7 +37,9 @@
 	$effect(() => {
 		if (!el) return;
 		const r = el.getBoundingClientRect();
-		const p = clampToViewport({ left: x, top: y, right: x, bottom: y, width: 0, height: 0 }, { width: r.width, height: r.height }, overlayViewport());
+		const left = x - r.width / 2;
+		const top = y - r.height / 2;
+		const p = clampToViewport({ left, top, right: left, bottom: top, width: 0, height: 0 }, { width: r.width, height: r.height }, overlayViewport());
 		pos = { x: p.left, y: p.top };
 	});
 

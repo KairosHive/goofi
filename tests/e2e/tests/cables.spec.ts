@@ -168,6 +168,7 @@ test('cables are inserted into, replaced, swapped and unplugged by drags', async
 		});
 
 		const g = await born('g', 'graphics:Gradient', [0, 960]);
+		let conv = '';
 		await fit();
 
 		await test.step('a cable of another kind lights the cable in the converter\'s colour and places a converter', async () => {
@@ -179,9 +180,34 @@ test('cables are inserted into, replaced, swapped and unplugged by drags', async
 			await expect
 				.poll(() => page.evaluate(() => ((window as any).goofi.query.graph().nodes as { uid: string; type: string }[]).find((x) => x.type === 'signal:GraphicsIn')?.uid ?? null))
 				.not.toBeNull();
-			const conv = await page.evaluate(() => ((window as any).goofi.query.graph().nodes as { uid: string; type: string }[]).find((x) => x.type === 'signal:GraphicsIn')!.uid);
+			conv = await page.evaluate(() => ((window as any).goofi.query.graph().nodes as { uid: string; type: string }[]).find((x) => x.type === 'signal:GraphicsIn')!.uid);
 			names[conv] = 'conv';
 			await expect.poll(links).toEqual(['a.out>s.b', 'a.out>s.mask', 'c.out>s.a', 'conv.out>n.input', 'g.out>conv.input']);
+		});
+
+		await test.step('a node placed from the add menu goes into the cable its ghost is let go on, and the popover opens centred on the pointer', async () => {
+			const pane = (await page.locator('.svelte-flow__pane').boundingBox())!;
+			await page.mouse.dblclick(pane.x + pane.width - 30, pane.y + pane.height - 30);
+			await page.getByTestId('add-menu-search').fill('Splice');
+			await page.getByTestId('add-menu-list').locator('.item', { hasText: 'Splice' }).first().click();
+			const at = await cableMid(page, [conv, 'out'], [n, 'input']);
+			await page.mouse.move(at.x - 40, at.y - 40);
+			await page.mouse.move(at.x, at.y, { steps: 4 });
+			await expect(page.getByTestId('placement-ghost')).toBeVisible();
+			await expect(lit).toHaveCount(1);
+			await page.mouse.click(at.x, at.y);
+			const born2 = (): Promise<string | null> =>
+				page.evaluate((old) => ((window as any).goofi.query.graph().nodes as { uid: string; type: string }[]).find((x) => x.type === 'signal:Splice' && x.uid !== old)?.uid ?? null, s);
+			await expect.poll(born2).not.toBeNull();
+			names[(await born2())!] = 's2';
+			await expect.poll(links).toEqual(['a.out>s.b', 'a.out>s.mask', 'c.out>s.a', 'conv.out>s2.a', 'g.out>conv.input', 's2.out>n.input']);
+			await expect(lit).toHaveCount(0);
+			await expect(picker).toBeVisible();
+			const box = (await picker.boundingBox())!;
+			expect(Math.abs(box.x + box.width / 2 - at.x), 'centred across').toBeLessThanOrEqual(1);
+			expect(Math.abs(box.y + box.height / 2 - at.y), 'centred down').toBeLessThanOrEqual(1);
+			await page.keyboard.press('Escape');
+			await expect(picker).toHaveCount(0);
 		});
 	} finally {
 		await page.keyboard.up('Control');

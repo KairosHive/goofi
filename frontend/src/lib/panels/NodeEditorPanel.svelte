@@ -493,7 +493,7 @@
 		id: string;
 		label: string;
 		edits: Edit[];
-		insert?: { node: string; cable: Cable; input: End; output: End };
+		insert?: { cable: Cable; input: End; output: End; many: boolean };
 	}
 	let drop: CableDrop | null = null;
 	// The cable a drag is over, and whether a release there places a converter: the glow's colour.
@@ -716,16 +716,18 @@
 		else rewireNow('Unplug cable', u.moved.map((c) => ({ op: 'remove', link: rewire.linkOf(c) })));
 	}
 
-	/** The plan a node held over a cable would run: the cable through its default slots. */
-	function insertPlan(uid: string, p: Point): CableDrop | null {
-		const n = g.nodeById(uid);
-		const hit = n ? cableAt(p, (c) => c.from.node === uid || c.to.node === uid) : null;
+	/** The plan a node held over a cable would run: the cable through its default slots. The
+	 * node is a live one or a placement's ghost. */
+	function insertPlan(n: NodeInstanceInfo | null | undefined, p: Point): CableDrop | null {
+		const hit = n ? cableAt(p, (c) => c.from.node === n.uid || c.to.node === n.uid) : null;
 		if (!n || !hit) return null;
 		const all = cables();
 		const input = rewire.defaultInput(rewire.slotChoices(types(), n, 'input', hit.cable.from, all));
 		const output = rewire.defaultOutput(rewire.slotChoices(types(), n, 'output', hit.cable.to, all));
 		const edits = input && output ? rewire.insertEdits(types(), hit.cable, input, output) : null;
-		return input && output && edits ? { id: hit.id, label: 'Insert node into cable', edits, insert: { node: uid, cable: hit.cable, input, output } } : null;
+		if (!input || !output || !edits) return null;
+		const many = Object.keys(n.input_slots).length > 1 || Object.keys(n.output_slots).length > 1;
+		return { id: hit.id, label: 'Insert node into cable', edits, insert: { cable: hit.cable, input, output, many } };
 	}
 
 	// The slots of the node last put into a cable, open to a second choice. `convIn` and `convOut`
@@ -743,18 +745,19 @@
 	} | null>(null);
 	let picking = false;
 
-	/** Move the node and put it into the cable as one undo step, then offer its other slots. */
-	async function insertNode(plan: CableDrop, moves: [string, [number, number]][], at: Point): Promise<void> {
+	/** Land the node (`land` moves it or gives it birth, and answers its uid) and put it into the
+	 * cable, as one undo step; then offer its other slots. */
+	async function insertNode(plan: CableDrop, at: Point, land: (step: Step) => Promise<string>): Promise<void> {
 		const insert = plan.insert;
 		if (!insert) return;
-		const base = cables().filter((c) => c.to.node === insert.node);
 		try {
 			await history().transaction(plan.label, async (step) => {
-				await g.setNodePositions(moves, step);
-				const [convIn, convOut] = await applyEdits(plan.edits, step);
-				const n = g.nodeById(insert.node);
-				if (!n || Object.keys(n.input_slots).length + Object.keys(n.output_slots).length <= 2) return;
-				picker = { at, node: insert.node, cable: insert.cable, input: insert.input.slot, output: insert.output.slot, convIn, convOut, base, step };
+				const node = await land(step);
+				const edits = node ? rewire.insertEdits(types(), insert.cable, { ...insert.input, node }, { ...insert.output, node }) : null;
+				if (!edits) return;
+				const base = cables().filter((c) => c.to.node === node);
+				const [convIn, convOut] = await applyEdits(edits, step);
+				if (insert.many) picker = { at, node, cable: insert.cable, input: insert.input.slot, output: insert.output.slot, convIn, convOut, base, step };
 			});
 		} catch (e) {
 			notify().failure(plan.label, e);
@@ -911,7 +914,7 @@
 		if (moved) snapDragged(args.nodes);
 		else revertDragged(args.nodes);
 		// One node held over a cable lights it: a release there puts the node into the cable.
-		setDrop(moved && at && args.nodes.length === 1 ? insertPlan(args.nodes[0].id, { x: at.clientX, y: at.clientY }) : null);
+		setDrop(moved && at && args.nodes.length === 1 ? insertPlan(g.nodeById(args.nodes[0].id), { x: at.clientX, y: at.clientY }) : null);
 	}
 
 	function onNodeDragStop(args: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }): void {
@@ -926,7 +929,13 @@
 				const p = at.get(n.id) ?? n.position;
 				return [n.id, [Math.round(p.x), Math.round(p.y)]] as [string, [number, number]];
 			});
-			const landed = plan?.insert && point ? insertNode(plan, moves, { x: point.clientX, y: point.clientY }) : g.setNodePositions(moves);
+			const landed =
+				plan?.insert && point
+					? insertNode(plan, { x: point.clientX, y: point.clientY }, async (step) => {
+							await g.setNodePositions(moves, step);
+							return moves[0][0];
+						})
+					: g.setNodePositions(moves);
 			void landed.finally(() => {
 				for (const [id] of moves) pinned.delete(id);
 			});
@@ -1222,11 +1231,23 @@
 		}
 	}
 
-	async function commitPlacement(pos: [number, number]): Promise<void> {
+	/** Give the placed node birth in `step`, selected. */
+	async function bearNode(type: string, pos: [number, number], step: Step): Promise<string> {
+		const uid = await g.addNode(type, pos, entered ?? undefined, step);
+		// Safe before `node_added` lands: flowNodes derives `selected` from this set.
+		if (uid) sel.selectNodes(panelId, [uid]);
+		return uid;
+	}
+
+	async function commitPlacement(pos: [number, number], at: Point): Promise<void> {
 		const placement = pendingPlacement;
 		if (!placement) return;
+		const plan = drop;
+		setDrop(null);
 		pendingPlacement = null;
 		ghostPos = null;
+		// A ghost let go over a lit cable is born into it.
+		if (plan?.insert) return insertNode(plan, at, (step) => bearNode(placement.typeInfo.type, pos, step));
 		// A boundary type takes this same path: `add_node` with `inst_id` is what makes a PORT of the
 		// entered sub-patch, and the catalog gives it the slots `autoLink` matches against.
 		const label = placement.seed
@@ -1234,9 +1255,7 @@
 			: `Add ${bareName(placement.typeInfo.type)}`;
 		await history().transaction(label, async (step) => {
 			try {
-				const newName = await g.addNode(placement.typeInfo.type, pos, entered ?? undefined, step);
-				// Safe before `node_added` lands: flowNodes derives `selected` from this set.
-				if (newName) sel.selectNodes(panelId, [newName]);
+				const newName = await bearNode(placement.typeInfo.type, pos, step);
 				if (placement.seed && newName) await autoLink(placement.seed, placement.typeInfo, newName, step);
 			} catch (e) {
 				console.warn('node add failed', e);
@@ -1409,11 +1428,16 @@
 				<PlacementPreview
 					initialClient={pendingPlacement.initialClient}
 					size={nodeFallbackSize(ghost)}
-					onMove={(pos) => (ghostPos = pos)}
-					onCommit={(pos) => void commitPlacement(pos)}
+					onMove={(pos, at) => {
+						ghostPos = pos;
+						// A placement seeded from a slot is wired to that slot, not into a cable.
+						setDrop(pendingPlacement?.seed ? null : insertPlan(ghost, at));
+					}}
+					onCommit={(pos, at) => void commitPlacement(pos, at)}
 					onCancel={() => {
 						pendingPlacement = null;
 						ghostPos = null;
+						setDrop(null);
 					}}
 				/>
 			{/if}
