@@ -10,7 +10,8 @@ export function brief(doc: Doc): string {
 	return 'builtin' in doc ? doc.builtin.doc : doc.text;
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
+/** An element of `tag` wearing `cls`, holding `text` when given. */
+export function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
 	const node = document.createElement(tag);
 	node.className = cls;
 	if (text !== undefined) node.textContent = text;

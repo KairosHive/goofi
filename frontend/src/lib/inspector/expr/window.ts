@@ -7,7 +7,7 @@ import type { Extension } from '@codemirror/state';
 import { acceptCompletion, completionStatus, currentCompletions, selectedCompletionIndex, setSelectedCompletion, type Completion } from '@codemirror/autocomplete';
 import { MARGIN, overlayViewport } from 'panelty';
 import { docSite, type GoofiCompletion } from './complete';
-import { brief, renderBuiltin, renderScope } from './doc';
+import { brief, el, renderBuiltin, renderScope } from './doc';
 import type { ExprCatalogue } from './catalogue';
 
 /** What the keys decide about the window: Escape dismisses it until Ctrl+Space or a new focus. */
@@ -70,13 +70,6 @@ function mountStyle(): void {
 	style.id = 'gx-win-style';
 	style.textContent = WINDOW_STYLE;
 	document.head.appendChild(style);
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
-	const node = document.createElement(tag);
-	node.className = cls;
-	if (text !== undefined) node.textContent = text;
-	return node;
 }
 
 /** One option's row: its name, its line, its kind. */
