@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 use super::{op, EffectOp, PanelType, ReadOp, WriteOp};
 use crate::{inspect, vocab, AppState, Caller, Txn};
+use goofi_graph::layout::Side;
 use goofi_graph::machine::Machine;
 use goofi_graph::{Graph, Uid};
 
@@ -22,7 +23,8 @@ op!(Inspect, "layout inspect", 1, InspectArgs {
 
 op!(PanelAdd, "layout panel add", 0, PanelAddArgs {
     pub beside: Option<String>,
-    pub side: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub side: Option<Side>,
     pub ratio: Option<f64>,
     pub name: Option<String>,
     pub index: Option<i64>,
@@ -42,7 +44,8 @@ op!(PanelEdit, "layout panel edit", 1, PanelEditArgs {
 op!(Move, "layout move", 1, MoveArgs {
     pub entry: String,
     pub beside: Option<String>,
-    pub side: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub side: Option<Side>,
     pub ratio: Option<f64>,
     #[serde(rename = "in")]
     pub within: Option<String>,
@@ -90,16 +93,6 @@ fn apply_writes(tx: &mut Txn, writes: &[goofi_graph::layout::Write]) -> Result<V
     Ok(json!({ "text": inspect::layout_tree(&tx.g, None) }))
 }
 
-/// Which side of a target a newcomer lands on. ONE argument, because an axis and a half are two
-/// halves of one answer; absent defaults right, and a word that is not a side is refused.
-fn parse_side(side: Option<&str>) -> Result<goofi_graph::layout::Side, String> {
-    match side {
-        None => Ok(goofi_graph::layout::Side::Right),
-        Some(v) => goofi_graph::layout::Side::parse(v)
-            .ok_or_else(|| format!("side is `left`, `right`, `top` or `bottom`, not {v}")),
-    }
-}
-
 /// Is `node` something a panel could bind to? A UID, and only a uid: a display name stops resolving
 /// the moment somebody renames the node. A boundary port counts — it exposes a real stream.
 fn bindable_node(g: &Graph, node: &str) -> bool {
@@ -122,7 +115,7 @@ impl WriteOp for PanelAdd {
         match a.beside.as_deref() {
             // Beside a target, dividing it — the drop on a panel's edge.
             Some(target) => {
-                let side = parse_side(a.side.as_deref())?;
+                let side = a.side.unwrap_or(Side::Right);
                 let (plan, fresh) = tx.g.arrangement().split_panel(target, side, ratio)?;
                 let text = apply_layout(tx, plan)?;
                 let tab = tx.g.arrangement().tab_of(&fresh).unwrap_or_default();
@@ -241,7 +234,7 @@ impl WriteOp for Move {
             (Some(_), Some(_)) => return Err("`--beside` and `--in` are two destinations — give one".into()),
             // Beside a target, dividing it; the side defaults right, as a birth's does.
             (Some(target), None) => {
-                let side = parse_side(a.side.as_deref())?;
+                let side = a.side.unwrap_or(Side::Right);
                 (tx.g.arrangement().insert_at_panel(&entry, target, side, ratio)?, entry.clone())
             }
             // Inside a split, at an index — the drop into a container that exists.

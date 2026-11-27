@@ -59,7 +59,8 @@ impl Axis {
 /// Which SIDE of a target a newcomer lands on — the op vocabulary, and the one place it becomes an
 /// axis and a half of the seam. An axis says which way a split runs, never which of its two halves
 /// the newcomer takes, so naming both took two arguments that could disagree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
     Right,
@@ -68,15 +69,6 @@ pub enum Side {
 }
 
 impl Side {
-    pub fn parse(s: &str) -> Option<Side> {
-        match s {
-            "left" => Some(Side::Left),
-            "right" => Some(Side::Right),
-            "top" => Some(Side::Top),
-            "bottom" => Some(Side::Bottom),
-            _ => None,
-        }
-    }
     /// The axis a split along this side runs on.
     pub fn axis(self) -> Axis {
         match self {
@@ -230,14 +222,7 @@ impl Layout {
     /// The first `Tab n` no tab is wearing. A LABEL is not unique — this only keeps a fresh tab
     /// from arriving under a name already on screen.
     fn free_name(&self) -> String {
-        goofi_core::fresh_name("Tab ", 1, |n| self.tab_named(n).is_some())
-    }
-
-    /// The FIRST tab wearing this label. Two may: a name is not addressing, and the uniqueness it
-    /// used to carry was enforceable only on the way in — a rename's inverse must not refuse, so a
-    /// peer taking the freed name left an arrangement the loader would not open.
-    fn tab_named(&self, name: &str) -> Option<Id> {
-        self.tabs.iter().find(|t| t.name == name).map(|t| t.id.clone())
+        goofi_core::fresh_name("Tab ", 1, |n| self.tabs.iter().any(|t| t.name == n))
     }
 
     pub fn name_of(&self, tab: &str) -> Option<&str> {
@@ -412,8 +397,8 @@ impl Layout {
     }
 
     /// Put `node` beside `target` along `axis` — the ONE place split-or-wrap lives. `node`'s `size`
-    /// is READ as the share it asks for; `wrap` names the id a minted wrapper takes if still free.
-    fn insert_at(&mut self, mut node: Node, target: &str, axis: Axis, before: bool, wrap: Option<&str>) {
+    /// is READ as the share it asks for.
+    fn insert_at(&mut self, mut node: Node, target: &str, axis: Axis, before: bool) {
         let Some((tab, at)) = self.path_of(target) else { return };
         let f = node.size();
         if let Some((&mine, up)) = at.split_last() {
@@ -428,11 +413,7 @@ impl Layout {
                 return;
             }
         }
-        let free = wrap.filter(|w| self.node(w).is_none() && self.tab_index(w).is_none());
-        let id = match free {
-            Some(w) => w.to_string(),
-            None => self.mint("split"),
-        };
+        let id = self.mint("split");
         let p = (tab, at);
         let slot = self.at(&p).size();
         let held = std::mem::replace(
@@ -532,7 +513,7 @@ impl Layout {
         // the source can promote a sibling into the slot the newcomer is about to share.
         let mut moved = next.take(subtree)?;
         moved.set_size(f);
-        next.insert_at(moved, target, side.axis(), side.before(), None);
+        next.insert_at(moved, target, side.axis(), side.before());
         Ok(next)
     }
 
@@ -650,7 +631,7 @@ impl Layout {
             panel_type: EMPTY_PANEL_TYPE.into(),
             state: Value::Null,
         };
-        next.insert_at(born, panel, side.axis(), side.before(), None);
+        next.insert_at(born, panel, side.axis(), side.before());
         Ok((next, fresh))
     }
 
