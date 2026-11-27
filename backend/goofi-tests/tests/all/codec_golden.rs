@@ -466,3 +466,18 @@ fn a_frames_hash_tells_what_it_says_from_when_it_was_made() {
     assert!(goofi_codec::decode(&alone).unwrap_err().contains("carries no data"));
     assert!(wire_hashes(b"NOPE").is_err() && frame_meta(&encode(&first)[..8]).is_err());
 }
+
+#[test]
+#[ignore = "bug: goofi_codec::wire_hashes leaves the axis labels out of what a frame says, so the reducer serves a ready-encoded frame whose labels alone moved as stamps"]
+fn an_axis_label_is_part_of_what_an_encoded_frame_says() {
+    // `content_hash` counts a frame's axis labels, and `wire_hashes` is that hash read off the
+    // encoded bytes: a frame the viewers are served ready-made must not keep the labels before it.
+    let labelled = |name: &str| {
+        let axes = Axes::new().with(0, Axis::coords(vec![Coord::Str(name.into()), Coord::Str("Cz".into())]));
+        arr(&[2], le_bytes(&[1.0, 2.0]), Meta::new().with_channels(axes))
+    };
+    let (fz, pz) = (labelled("Fz"), labelled("Pz"));
+    assert_ne!(goofi_codec::content_hash(&fz).unwrap(), goofi_codec::content_hash(&pz).unwrap());
+    let said = |d: &Data| goofi_codec::wire_hashes(&encode(d)).expect("a frame off the wire").0;
+    assert_ne!(said(&fz), said(&pz), "a label moved and the wire's hash stood");
+}
