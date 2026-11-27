@@ -70,20 +70,7 @@ impl goofi_record::video::Encoders for NoEncoder {
 }
 
 use goofi_supervisor::timing::Time;
-use goofi_tests::j;
-
-/// Poll until `f` answers, against the harness budget: the recorder's workers write on threads
-/// of their own, and a frame handed to a queue is on the disk when they say so.
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let deadline = std::time::Instant::now() + goofi_tests::WAIT;
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
+use goofi_tests::{j, until};
 
 /// The frames every open stream of `rec` holds.
 fn written(rec: &goofi_record::Recorder) -> u64 {

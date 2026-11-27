@@ -963,6 +963,21 @@ impl Viewer {
     }
 }
 
+/// Poll `f` until it answers, or fail naming `what`: [`Goofi::until`] for a situation that drives a
+/// crate below the manager and has no instance to ask.
+#[track_caller]
+pub fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+    progressed();
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}; {}", said());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// Poll `f` until it holds, or fail naming `what`: [`Goofi::until`] for an async situation.
 pub async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
     progressed();

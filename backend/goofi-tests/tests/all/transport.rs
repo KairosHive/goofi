@@ -10,7 +10,7 @@ use goofi_graph::Uid;
 use goofi_core::node::{DrainWaker, NodeManifest, OutputDecl, ParamDecl, ParamKey, ParamSpec, SlotDecl, Status};
 use goofi_runtime::{Cx, Desired, Executor, Handle, Out, Shared, Spawn, Sub, Ticked};
 use goofi_supervisor::sync::Mutex;
-use goofi_tests::{f32s, frame, WAIT};
+use goofi_tests::{f32s, frame, until, WAIT};
 use goofi_transport::{door_service, output_service, service_base, Doorbell, Payload};
 
 static INPUTS: &[SlotDecl] = &[SlotDecl {
@@ -155,19 +155,6 @@ fn drinking(producers: &[Uid]) -> Desired {
 fn ringing(consumers: &[Uid]) -> Desired {
     let targets = consumers.iter().map(|c| (door_service(&base_of(*c)), 1)).collect();
     Desired { consts: vec![PARAMS[0].spec.to_param()], subs: Vec::new(), targets: vec![targets], record: Vec::new() }
-}
-
-/// Status and arrivals are asynchronous by design, so a test waits for them with a deadline
-/// rather than reading once.
-fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + WAIT;
-    loop {
-        if let Some(v) = f() {
-            return v;
-        }
-        assert!(Instant::now() < deadline, "waited {WAIT:?} for {what}");
-        std::thread::sleep(Duration::from_millis(1));
-    }
 }
 
 fn arrived(node: &Node) -> Vec<(usize, usize, Vec<f32>)> {
