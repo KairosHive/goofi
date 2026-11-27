@@ -29,18 +29,13 @@ describe('root-as-scope: ROOT is the canvas, and no record is it', () => {
 		expect(g.nodeById(ROOT_ID)).toBe(null); // …and the sentinel names no record
 	});
 
-	it('restartNode respawns in place via the restart_node RPC (keeps scope, no cascade)', async () => {
+	it('restartNode respawns in place: one `node restart` op and no other', async () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
-		const d = seed(fc);
 
 		await g.restartNode('m1');
 
-		const calls = fc.recordedCalls();
-		expect(calls.some((c) => c.op === 'node restart' && c.payload.node === 'm1')).toBe(true);
-		// must NOT do the old remove+add dance — that lands a member back at ROOT and, for a
-		// SHARED member, mirror-removes it across siblings (post Bug-C).
-		expect(calls.some((c) => c.op === 'node remove')).toBe(false);
-		expect(calls.some((c) => c.op === 'node add')).toBe(false);
+		// One op and no other: the manager respawns the node where it is.
+		expect(fc.recordedCalls()).toEqual([{ op: 'node restart', payload: { node: 'm1' } }]);
 	});
 });
