@@ -66,3 +66,54 @@ describe('codec golden parity on an engine without Float16Array', () => {
 		});
 	}
 });
+
+/* The data worker drops a frame whose decode throws and keeps the slot. A frame that is cut or
+ * that is not a frame must throw, or the viewer would draw what the node did not send. */
+describe('a frame the decoder cannot read is refused', () => {
+	const golden = (name: string): Uint8Array => hexToBytes(GOLDEN.entries.find((e) => e.name === name)!.hex);
+	/** `f32_1d` with the three characters of its sample dtype replaced. */
+	const withSampleDtype = (dtype: string): Uint8Array => {
+		const bytes = golden('f32_1d');
+		const metaLen = new DataView(bytes.buffer).getUint32(5, true);
+		const dtypeAt = Math.ceil((13 + metaLen) / 4) * 4 + 2;
+		expect(new TextDecoder().decode(bytes.slice(dtypeAt, dtypeAt + 3))).toBe('<f4');
+		bytes.set(new TextEncoder().encode(dtype), dtypeAt);
+		return bytes;
+	};
+
+	for (const entry of GOLDEN.entries) {
+		it(`refuses ${entry.name} cut short at every length`, () => {
+			const whole = hexToBytes(entry.hex);
+			const decoded: number[] = [];
+			for (let n = 0; n < whole.length; n++) {
+				try {
+					decodeData(whole.slice(0, n));
+					decoded.push(n);
+				} catch {
+					// refused
+				}
+			}
+			expect(decoded, 'the lengths that decoded').toEqual([]);
+		});
+	}
+
+	it('refuses bytes that do not start with the magic', () => {
+		const bytes = golden('f32_1d');
+		bytes[0] ^= 0xff;
+		expect(() => decodeData(bytes)).toThrow('bad magic');
+	});
+
+	it('refuses a tag it does not know and a kind the browser does not draw', () => {
+		const bytes = golden('string');
+		bytes[4] = 9;
+		expect(() => decodeData(bytes)).toThrow('Unknown dtype tag 9');
+		bytes[4] = 3;
+		expect(() => decodeData(bytes)).toThrow('A TEXTURE frame does not decode in the browser');
+	});
+
+	it('refuses samples in a byte order or a width the wire does not carry', () => {
+		expect(() => decodeData(withSampleDtype('>f4'))).toThrow('Big-endian arrays unsupported: >f4');
+		expect(() => decodeData(withSampleDtype('<i4'))).toThrow('Unsupported numpy dtype: <i4');
+		expect(() => decodeData(withSampleDtype('<f8'))).toThrow('Unsupported numpy dtype: <f8');
+	});
+});
