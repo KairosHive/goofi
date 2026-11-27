@@ -8,14 +8,10 @@ use futures_util::{SinkExt, StreamExt};
 use goofi_agent::Launch;
 use goofi_bridge::ops::registry;
 use goofi_bridge::AppState;
-use goofi_tests::{host, http, Client, Goofi, WAIT};
+use goofi_tests::{host, http, Client, Goofi, Ws, WAIT};
 use serde_json::{json, Value};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-
-type Ws = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
 
 /// A harness that reports the SIGTERM and refuses to leave — and the ONE entry whose spelling the
 /// platforms cannot share. On unix the trap must live in the harness shell ITSELF: an inner
