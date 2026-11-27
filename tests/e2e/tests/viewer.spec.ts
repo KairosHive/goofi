@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
 import { addNode, frameSummary, selectNode, updateParam, waitForNode } from '../lib/goofi';
 import { backendDoc, rawCall } from '../lib/raw';
@@ -281,6 +281,140 @@ test('the plot surface draws a viewer inside its card, and only while the card s
 	} finally {
 		await resetPatch(page);
 	}
+});
+
+/** A viewer body's size on screen, in device pixels: what a frame for it can show at most. */
+async function devicePx(page: Page, feed: Locator): Promise<{ w: number; h: number }> {
+	const box = (await feed.boundingBox())!;
+	const dpr = await page.evaluate(() => window.devicePixelRatio);
+	return { w: box.width * dpr, h: box.height * dpr };
+}
+
+/** The shape the page's stream of a slot carries. */
+async function wire(page: Page, uid: string): Promise<number[]> {
+	return (await frameSummary(page, uid))?.wire ?? [];
+}
+
+/** A demand moves in 32-px steps, so a wire axis is within one step of the pixels it is drawn on. */
+const STEP = 32;
+
+/** Poll until the 1-D stream of `uid` is as long as `feed` is wide on screen, in device pixels. */
+async function expectWidth(page: Page, uid: string, feed: Locator, message: string): Promise<void> {
+	await expect
+		.poll(
+			async () => {
+				const [n] = await wire(page, uid);
+				const { w } = await devicePx(page, feed);
+				return n >= w - STEP && n <= w + STEP ? 'fits' : `${n} samples for ${w} px`;
+			},
+			{ message }
+		)
+		.toBe('fits');
+}
+
+/** Poll until the picture of `uid` fits the box of `feed` in device pixels and fills one side. */
+async function expectBox(page: Page, uid: string, feed: Locator, message: string): Promise<void> {
+	await expect
+		.poll(
+			async () => {
+				const [h, w] = await wire(page, uid);
+				const [srcH, srcW] = (await frameSummary(page, uid))?.shape ?? [];
+				const px = await devicePx(page, feed);
+				const inside = w <= px.w + STEP && h <= px.h + STEP;
+				// A source smaller than the box is sent whole; a larger one reaches the box on one side.
+				const fills = (w === srcW && h === srcH) || w >= px.w - STEP || h >= px.h - STEP;
+				return inside && fills ? 'fits' : `${w}x${h} texels of ${srcW}x${srcH} for ${px.w}x${px.h} px`;
+			},
+			{ message }
+		)
+		.toBe('fits');
+}
+
+async function reductionFollowsTheScreen(page: Page): Promise<void> {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('/');
+	await waitForApp(page);
+	try {
+		// 20000 samples a frame and a picture: more than any viewer here has pixels for.
+		const osc = await addNode(page, 'LFO', [80, 60]);
+		const buf = await addNode(page, 'Buffer', [80, 320]);
+		const ramp = await addNode(page, 'graphics:Gradient', [420, 60]);
+		for (const u of [osc, buf, ramp]) await waitForNode(page, u);
+		await page.evaluate(
+			async ([a, b]) => {
+				const g = (window as any).goofi;
+				g.commands.updateParam(a, 'lfo', 'mode', 'block');
+				g.commands.updateParam(a, 'lfo', 'sfreq', 10000);
+				await g.commands.addLink({ node_out: a, slot_out: 'out', node_in: b, slot_in: 'input' });
+			},
+			[osc, buf] as const
+		);
+		const feedOf = (uid: string) => page.locator(`.svelte-flow__node[data-id="${uid}"] .viewer-feed`);
+		const line = feedOf(buf);
+		const picture = feedOf(ramp);
+		await expect.poll(async () => (await frameSummary(page, buf))?.shape?.[0] ?? 0, { message: 'the buffer fills' }).toBeGreaterThan(8000);
+
+		await test.step('a card is sent its own pixels, the line as samples and the picture as a box', async () => {
+			await expectWidth(page, buf, line, 'the line carries a sample a device pixel');
+			await expectBox(page, ramp, picture, 'the picture fits its card');
+		});
+
+		await test.step('a zoom into the canvas is followed, and so is the zoom back out', async () => {
+			const before = (await line.boundingBox())!;
+			const samples = (await wire(page, buf))[0];
+			await page.mouse.move(before.x + 4, before.y + 4);
+			await page.mouse.wheel(0, -600);
+			await expect.poll(async () => (await line.boundingBox())!.width / before.width).toBeGreaterThan(1.5);
+			await expectWidth(page, buf, line, 'the zoomed card is sent more');
+			expect((await wire(page, buf))[0]).toBeGreaterThan(samples);
+			await page.mouse.wheel(0, 600);
+			await expect.poll(async () => Math.abs((await line.boundingBox())!.width - before.width)).toBeLessThan(4);
+			await expectWidth(page, buf, line, 'and less again at the old zoom');
+		});
+
+		await test.step('the largest viewer of a slot sizes its stream, and only that slot', async () => {
+			const editor = await page.evaluate(() => (window as any).goofi.query.panels()[0].panelId as string);
+			const born = await rawCall(page, 'layout panel add', { beside: editor, side: 'left', ratio: 0.5 });
+			expect(born.error).toBeUndefined();
+			const state = { node: buf, slot: 'out', kind: 'line' };
+			expect((await rawCall(page, 'layout panel edit', { panel: born.result.id, type: 'viewer', state })).error).toBeUndefined();
+			const docked = page.locator('.vp-body .viewer-feed');
+			await expect(docked).toHaveCount(1);
+			expect((await docked.boundingBox())!.width).toBeGreaterThan((await line.boundingBox())!.width * 1.5);
+			await expectWidth(page, buf, docked, 'the docked viewer, the wider one, sizes the line');
+			await expectBox(page, ramp, picture, 'the picture keeps its own box');
+			expect((await rawCall(page, 'layout remove', { entry: born.result.id })).error).toBeUndefined();
+			await expect(docked).toHaveCount(0);
+			await expectWidth(page, buf, line, 'the card alone sizes the line again');
+		});
+
+		await test.step('a docked picture is sent the box of its panel', async () => {
+			const editor = await page.evaluate(() => (window as any).goofi.query.panels()[0].panelId as string);
+			const born = await rawCall(page, 'layout panel add', { beside: editor, side: 'left', ratio: 0.5 });
+			expect(born.error).toBeUndefined();
+			const state = { node: ramp, slot: 'out', kind: 'image' };
+			expect((await rawCall(page, 'layout panel edit', { panel: born.result.id, type: 'viewer', state })).error).toBeUndefined();
+			const docked = page.locator('.vp-body .viewer-feed');
+			await expect(docked).toHaveCount(1);
+			await expectBox(page, ramp, docked, 'the panel, the larger box, sizes the picture');
+			expect((await rawCall(page, 'layout remove', { entry: born.result.id })).error).toBeUndefined();
+			await expect(docked).toHaveCount(0);
+			await expectBox(page, ramp, picture, 'the card alone sizes the picture again');
+		});
+	} finally {
+		await resetPatch(page);
+	}
+}
+
+test('a stream carries what its largest viewer shows in device pixels, and no more', async ({ page }) => {
+	await reductionFollowsTheScreen(page);
+});
+
+test.describe('on a dense display', () => {
+	test.use({ deviceScaleFactor: 2 });
+	test('a stream carries two samples a CSS pixel', async ({ page }) => {
+		await reductionFollowsTheScreen(page);
+	});
 });
 
 test('the brain draws a scalp on the surface, names its channels in the DOM, and turns under its own drag', async ({ page }) => {

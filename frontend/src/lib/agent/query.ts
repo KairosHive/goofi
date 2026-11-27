@@ -18,6 +18,8 @@ import type { Literal } from '$lib/api/generated';
 export interface FrameSummary {
 	dtype: string;
 	shape?: number[];
+	/** The shape that crossed the wire: `shape` after the reduction this page's viewers asked for. */
+	wire?: number[];
 	/** Element count of the reduced wire array `numeric` covers; `shape` stays the node's TRUE original. */
 	reducedLength?: number;
 	numeric?: { min: number; max: number; mean: number };
@@ -42,6 +44,7 @@ function summarize(head: FrameHead | null): FrameSummary | null {
 		return {
 			dtype: a.dtype,
 			shape,
+			wire: [...a.wireShape],
 			numeric: a.min !== null ? { min: a.min, max: a.max as number, mean: a.mean as number } : undefined,
 			...(reduced ? { reducedLength: a.length } : {}),
 			index

@@ -41,6 +41,9 @@
 	// The box once it has held still for a frame: a resize drag renegotiates the reduction once.
 	let stillW = $state(0);
 	let stillH = $state(0);
+	// The zoom once it has held still: a pinch or a wheel run renegotiates the reduction at its end.
+	const ZOOM_STILL_MS = 150;
+	let stillZoom = $state(untrack(() => zoom));
 	// Quantized to 32-px steps so a 1-px resize does not renegotiate the reduction.
 	let capW = $state(0);
 	let capH = $state(0);
@@ -80,9 +83,8 @@
 
 	$effect(() => {
 		const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-		// Half-octave zoom steps, rounded up: a pinch crosses a few of them, not one per pointer
-		// event, and the demand overshoots the drawn size by at most 41%.
-		const scale = dpr * Math.pow(2, Math.ceil(Math.log2(zoom) * 2) / 2);
+		// The box as it is on screen, in device pixels: no viewer is sent more than it can show.
+		const scale = dpr * stillZoom;
 		const w = stillW;
 		const h = stillH;
 		if (!w || !h) return; // unmeasured: a 0 quantized to 32 would hold through the first real size
@@ -90,6 +92,12 @@
 			capW = quantize(w * scale, capW);
 			capH = quantize(h * scale, capH);
 		});
+	});
+
+	$effect(() => {
+		const z = zoom;
+		const held = setTimeout(() => (stillZoom = z), ZOOM_STILL_MS);
+		return () => clearTimeout(held);
 	});
 
 	// Subscribe only while in the viewport; the ResizeObserver tracks the pixel budget and the rect.
