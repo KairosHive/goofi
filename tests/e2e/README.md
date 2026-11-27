@@ -48,7 +48,7 @@ what a dead session's exchanges left, by the session's prefix and the lock that 
   `--hit`. Never a design value — the net catches things falling apart, not things changing.
 - `lib/harness.ts` — the agent-harness helpers `agent.spec.ts` drives.
 - `tests/*.spec.ts` — the situations: `socket` (the seam), `integrity` (structural), `touch`
-  (gestures), `agent` (the harness), and one per panel or flow the browser owns: `console`,
+  (gestures), `agent` (the harness), and one per panel or flow the browser owns: `cables`, `console`,
   `inspector`, `metadata`, `midi-learn`, `recorder`, `recover`, `save-options`,
   `variables-layout`, `viewer`. The op vocabulary itself is proved in `goofi-tests`.
 

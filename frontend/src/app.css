@@ -550,6 +550,17 @@ html[data-drag] :disabled {
 	stroke: var(--accent);
 	stroke-width: 2;
 }
+/* The cable a drag would take: lit in the accent, and in the warning ink when the release
+   places a converter. */
+.svelte-flow__edge.cable-drop .svelte-flow__edge-path {
+	stroke: var(--accent);
+	stroke-width: 2.5;
+	filter: drop-shadow(0 0 4px var(--accent));
+}
+.svelte-flow__edge.cable-drop.convert .svelte-flow__edge-path {
+	stroke: var(--warning);
+	filter: drop-shadow(0 0 4px var(--warning));
+}
 .svelte-flow__attribution {
 	display: none;
 }
