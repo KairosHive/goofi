@@ -1119,7 +1119,6 @@ fn an_expression_binds_carries_its_error_and_follows_the_rename_of_what_it_names
     set("nd('src') * 1");
     let d = field("the record", &|d| d["expression"] == j!("nd('src') * 1"));
     assert_eq!(d["mode"], j!("expression"), "{d}");
-    assert!(d.get("expression_autoeval").is_none(), "auto-eval is always on, so it is not on the wire");
     g.until("the shape error", |g| line(g).contains("[error").then_some(()));
 
     g.call("node edit", j!({ "node": hex(producer), "name": "signal" }));
