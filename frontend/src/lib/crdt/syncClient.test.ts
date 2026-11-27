@@ -65,6 +65,30 @@ describe('SyncClient', () => {
 		expect(Object.keys(client.doc.variables as object)).toEqual(['p.b', 'p.z']);
 	});
 
+	it('a key a prototype also answers is the document\'s own, and never the prototype', () => {
+		// A group is named by its user, and `__proto__` is a legal identifier: a delta that walked
+		// into what `obj['__proto__']` answers wrote the group's record onto `Object.prototype`,
+		// and with it onto every object of the page. The socket hands over what `JSON.parse` made.
+		const { ctl, client } = started();
+		const wire = (text: string): void => ctl.emit(JSON.parse(text));
+		const groups = (): Record<string, unknown> => client.doc.variable_groups as Record<string, unknown>;
+		wire('{"event":"doc_state","payload":{"v":1,"doc":{"nodes":{},"variable_groups":{"system":{"lock":{"config":true}}}}}}');
+		wire('{"event":"doc_patch","payload":{"from":1,"v":2,"ops":[{"op":"put","path":["variable_groups","__proto__"],"value":{"owner":"me","lock":{"value":true}}}]}}');
+		expect('owner' in {}, 'no other object took the group\'s fields').toBe(false);
+		expect(Object.keys(groups())).toEqual(['system', '__proto__']);
+		expect(JSON.parse(JSON.stringify(groups()))).toEqual(JSON.parse('{"system":{"lock":{"config":true}},"__proto__":{"owner":"me","lock":{"value":true}}}'));
+		// A put below it lands in the group, leaf by leaf, and a del removes the group alone.
+		wire('{"event":"doc_patch","payload":{"from":2,"v":3,"ops":[{"op":"put","path":["variable_groups","__proto__","lock","value"],"value":false}]}}');
+		expect('lock' in {}).toBe(false);
+		expect(JSON.stringify(groups())).toContain('"lock":{"value":false}');
+		wire('{"event":"doc_patch","payload":{"from":3,"v":4,"ops":[{"op":"del","path":["variable_groups","__proto__"]}]}}');
+		expect(Object.keys(groups())).toEqual(['system']);
+		// A name a prototype answers with a method is no entry either: `toString` is absent until put.
+		wire('{"event":"doc_patch","payload":{"from":4,"v":5,"ops":[{"op":"put","path":["variable_groups","toString","lock","value"],"value":true}]}}');
+		expect(Object.keys(groups())).toEqual(['system', 'toString']);
+		expect(JSON.stringify(groups().toString)).toBe('{"lock":{"value":true}}');
+	});
+
 	it('skips a stale delta in silence — the seed already carried it', () => {
 		// The manager subscribes a socket BEFORE it snapshots the document, so a peer's edit landing
 		// in that window is broadcast and then included in the snapshot too. Re-delivery is the

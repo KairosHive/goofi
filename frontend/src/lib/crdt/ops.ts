@@ -8,6 +8,16 @@ export type Obj = Record<string, unknown>;
 export const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
 export const obj = (v: unknown): Obj => (isObj(v) ? v : {});
 
+/** What `target` itself holds at `key`. A key is a name a user gave (a variable group, a plugin's
+ * entry), and `__proto__` or `toString` is one: read plainly, it answers the prototype's. */
+const own = (target: Obj, key: string): unknown => (Object.hasOwn(target, key) ? target[key] : undefined);
+
+/** Set `target[key]` as its own entry: a plain write to `__proto__` sets the prototype instead. */
+function set(target: Obj, key: string, value: unknown): void {
+	if (key === '__proto__') Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+	else target[key] = value;
+}
+
 /** Apply `ops` into `target`, in place. A `put` makes the maps on its way and lands LEAF by leaf,
  * so a reader of a leaf it did not move never re-runs; a `del` of what is absent is nothing. */
 export function applyOps(target: Obj, ops: Op[]): void {
@@ -15,14 +25,14 @@ export function applyOps(target: Obj, ops: Op[]): void {
 		const last = op.path[op.path.length - 1];
 		let cur: Obj | null = target;
 		for (const seg of op.path.slice(0, -1)) {
-			if (!isObj(cur[seg])) {
+			if (!isObj(own(cur, seg))) {
 				if (op.op === 'del') {
 					cur = null;
 					break;
 				}
-				cur[seg] = {};
+				set(cur, seg, {});
 			}
-			cur = cur[seg] as Obj;
+			cur = own(cur, seg) as Obj;
 		}
 		if (!cur) continue;
 		if (op.op === 'put') assign(cur, last, op.value);
@@ -34,15 +44,15 @@ export function applyOps(target: Obj, ops: Op[]): void {
  * lands whole: a state proxy keeps the order its keys were born in, whatever is deleted and put
  * back, so the manager's order, which a list shows, takes a new object. */
 function assign(target: Obj, key: string, value: unknown): void {
-	const held = target[key];
+	const held = own(target, key);
 	if (isObj(held) && isObj(value) && keepsOrder(held, value)) {
-		for (const k of Object.keys(held)) if (!(k in value)) delete held[k];
+		for (const k of Object.keys(held)) if (!Object.hasOwn(value, k)) delete held[k];
 		for (const [k, v] of Object.entries(value)) assign(held, k, v);
 		return;
 	}
 	// An array or a scalar lands whole, and only when it moved: an equal one left alone keeps
 	// its readers asleep.
-	if (held !== value && JSON.stringify(held) !== JSON.stringify(value)) target[key] = value;
+	if (held !== value && JSON.stringify(held) !== JSON.stringify(value)) set(target, key, value);
 }
 
 /** The ops that take `before` to `after`: an entry of a root map re-sent whole when it moved,
@@ -73,7 +83,7 @@ export function diffOps(before: Obj, after: Obj): Op[] {
 
 /** Whether per-key ops on `before` leave its keys in `after`'s order. */
 function keepsOrder(before: Obj, after: Obj): boolean {
-	const kept = Object.keys(before).filter((k) => k in after);
-	const added = Object.keys(after).filter((k) => !(k in before));
+	const kept = Object.keys(before).filter((k) => Object.hasOwn(after, k));
+	const added = Object.keys(after).filter((k) => !Object.hasOwn(before, k));
 	return [...kept, ...added].join('\0') === Object.keys(after).join('\0');
 }
