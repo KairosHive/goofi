@@ -165,6 +165,79 @@ fn qtz_snaps_volts_per_octave_onto_a_scale() {
     assert!(why.contains("F#"), "{why}");
 }
 
+/// A scale is made from a few numbers, and every plane reads it from `goofi_core::scale`: the
+/// named ones are the degrees their recipes make, and a pitch goes to the nearest of them.
+#[test]
+fn a_named_scale_is_the_degrees_its_recipe_makes_and_a_pitch_snaps_to_the_nearest() {
+    use goofi_core::scale::{Method, Recipe, MAX_DEGREES, PRESET_NAMES, SCALES};
+    let degrees = |recipe: Recipe| {
+        let mut out = [0.0; MAX_DEGREES];
+        let n = recipe.degrees(&mut out);
+        out[..n].to_vec()
+    };
+    let named = |name: &str| degrees(Recipe::preset(name));
+    let chromatic: Vec<f64> = (0..12).map(|k| f64::from(k) * 100.0).collect();
+    for (name, cents) in [
+        ("chromatic", &chromatic[..]),
+        ("major", &[0.0, 200.0, 400.0, 500.0, 700.0, 900.0, 1100.0][..]),
+        ("minor", &[0.0, 200.0, 300.0, 500.0, 700.0, 800.0, 1000.0]),
+        ("dorian", &[0.0, 200.0, 300.0, 500.0, 700.0, 900.0, 1000.0]),
+        ("phrygian", &[0.0, 100.0, 300.0, 500.0, 700.0, 800.0, 1000.0]),
+        ("lydian", &[0.0, 200.0, 400.0, 600.0, 700.0, 900.0, 1100.0]),
+        ("mixolydian", &[0.0, 200.0, 400.0, 500.0, 700.0, 900.0, 1000.0]),
+        ("locrian", &[0.0, 100.0, 300.0, 500.0, 600.0, 800.0, 1000.0]),
+        ("pentatonic_major", &[0.0, 200.0, 400.0, 700.0, 900.0]),
+        ("pentatonic_minor", &[0.0, 300.0, 500.0, 700.0, 1000.0]),
+        ("blues", &[0.0, 300.0, 500.0, 600.0, 700.0, 1000.0]),
+        ("harmonic_minor", &[0.0, 200.0, 300.0, 500.0, 700.0, 800.0, 1100.0]),
+        ("whole_tone", &[0.0, 200.0, 400.0, 600.0, 800.0, 1000.0]),
+    ] {
+        let got: Vec<f64> = named(name).iter().map(|c| (c * 1e6).round() / 1e6).collect();
+        assert_eq!(got, cents, "{name}");
+    }
+    // One octave of the harmonic series, partials 8 to 15: the just fifth is its fifth degree.
+    let harmonic = named("harmonic");
+    assert_eq!(harmonic.len(), 8);
+    assert!((harmonic[4] - 1200.0 * 1.5f64.log2()).abs() < 1e-9, "{harmonic:?}");
+    // Every option a `scale` param offers past `custom` is a preset, from its root, ascending,
+    // inside the octave; a name that is none is the major scale.
+    assert_eq!((SCALES[0], &SCALES[1..]), ("custom", &PRESET_NAMES[..]));
+    for name in PRESET_NAMES {
+        let d = named(name);
+        assert!(d.len() >= 5 && d[0] == 0.0 && d.windows(2).all(|w| w[0] < w[1]) && d[d.len() - 1] < 1200.0, "{name}: {d:?}");
+    }
+    assert_eq!(Recipe::preset("no such scale"), Recipe::preset("major"));
+    let custom = Recipe { method: Method::Division, generator: 0.0, steps: 19, mask: 0, mode: 0 };
+    assert_eq!((Recipe::chosen(0, custom), Recipe::chosen(2, custom), Recipe::chosen(99, custom)), (custom, Recipe::preset("major"), custom));
+
+    // A custom recipe: nineteen equal parts; the major scale again as a subset of twelve; a mask
+    // names no part past its bits; and params out of range are held to what they can mean.
+    let nineteen = degrees(custom);
+    assert_eq!(nineteen.len(), 19);
+    assert!((nineteen[1] - 1200.0 / 19.0).abs() < 1e-9);
+    let major_bits = [0u32, 2, 4, 5, 7, 9, 11].iter().fold(0u64, |mask, k| mask | 1 << k);
+    assert_eq!(degrees(Recipe { steps: 12, mask: major_bits, ..custom }), named("major"));
+    // Parts 2 and 6 of forty-eight are 50 and 150 cents, read from the first of them; part 40 is past the mask's bits.
+    assert_eq!(degrees(Recipe { steps: 48, mask: 1 << 2 | 1 << 6 | 1 << 40, ..custom }), vec![0.0, 100.0]);
+    assert_eq!(degrees(Recipe { steps: 12, mask: 1 << 3, mode: 0, ..custom }), vec![0.0], "one degree is read from itself");
+    let held = Recipe::from_scalars(7.9, 700.0, 999.0, -5.0, 2.0);
+    assert_eq!(held, Recipe { method: Method::Division, generator: 700.0, steps: MAX_DEGREES as u32, mask: 0, mode: 2 });
+    assert_eq!(Recipe::from_scalars(0.0, 700.0, 0.0, 0.0, 0.0).steps, 1, "a scale has a degree");
+    assert_eq!(Recipe::from_scalars(1.0, 0.0, 8.0, 0.0, 0.0).method, Method::Harmonics);
+
+    // A pitch goes to the nearest degree in its own octave: a tie goes down, one just under the
+    // next octave climbs to it, and below the root the octaves count down.
+    let major = Recipe::preset("major");
+    let d = named("major");
+    for (cents, to, degree) in [
+        (140.0, 200.0, 1), (90.0, 0.0, 0), (100.0, 0.0, 0), (1160.0, 1200.0, 0), (2500.0, 2400.0, 0),
+        (2560.0, 2600.0, 1), (-40.0, 0.0, 0), (-160.0, -100.0, 6), (-1300.0, -1300.0, 6), (700.0, 700.0, 4),
+    ] {
+        assert_eq!(major.snap(&d, cents), (to, degree), "{cents} cents");
+    }
+    assert_eq!(major.snap(&[], 123.0), (123.0, 0), "a scale of no degree leaves the pitch");
+}
+
 /// The harness's functions as the editor documents them: `goofi_core::node::expr::BUILTINS` is what the
 /// completion offers, and the Python in `goofi_runtime::python::inproc::expr` is what runs, so the two are
 /// held together here — names, keyword-only arguments, every option, and the math names.
