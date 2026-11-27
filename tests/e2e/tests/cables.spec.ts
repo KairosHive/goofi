@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { waitForApp, resetPatch } from '../lib/app';
-import { addNode, waitForNode } from '../lib/goofi';
+import { addNode, selectNode, waitForNode } from '../lib/goofi';
 
 /* The cable gestures of the node canvas: a node put into a cable, a cable put onto a cable, the
  * swap between two slots of a node, and the Ctrl-drag that unplugs a slot. Each is asked of the
@@ -94,6 +94,9 @@ test('cables are inserted into, replaced, swapped and unplugged by drags', async
 			await page.mouse.click(pane.x + pane.width - 20, pane.y + pane.height - 20);
 			await expect(picker).toHaveCount(0);
 			await expect.poll(links).toEqual(['a.out>s.mask', 's.out>m.input']);
+			// The popover is portalled out of the panel; its close must take nothing of the panel with it.
+			await selectNode(page, m);
+			await expect(page.getByTestId('auto-side-panel'), 'the inspector still opens').toHaveClass(/open/);
 		});
 
 		await test.step('the insert and its pick are one undo step', async () => {

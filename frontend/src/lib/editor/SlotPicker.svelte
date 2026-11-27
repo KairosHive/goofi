@@ -60,8 +60,6 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydowncapture={onWindowKeydown} />
 
-<Catcher />
-
 {#snippet column(side: 'input' | 'output', heading: string, choices: SlotChoice[], picked: string)}
 	<div class="column" role="radiogroup" aria-label={heading}>
 		<span class="heading">{heading}</span>
@@ -87,12 +85,20 @@
 	</div>
 {/snippet}
 
-<div bind:this={el} class="slot-picker" style="left:{pos.x}px; top:{pos.y}px" use:portal role="dialog" aria-label="Slots of the inserted node" data-testid="slot-picker">
-	{@render column('input', 'Input', inputs, input)}
-	{@render column('output', 'Output', outputs, output)}
+<!-- A root that stays in place: both layers are portalled out, and a block that ends on a moved
+     node takes the siblings after it when it closes. -->
+<div class="slot-picker-root">
+	<Catcher />
+	<div bind:this={el} class="slot-picker" style="left:{pos.x}px; top:{pos.y}px" use:portal role="dialog" aria-label="Slots of the inserted node" data-testid="slot-picker">
+		{@render column('input', 'Input', inputs, input)}
+		{@render column('output', 'Output', outputs, output)}
+	</div>
 </div>
 
 <style>
+	.slot-picker-root {
+		display: contents;
+	}
 	.slot-picker {
 		position: fixed;
 		z-index: var(--z-menu);
