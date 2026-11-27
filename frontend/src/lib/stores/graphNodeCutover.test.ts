@@ -6,18 +6,11 @@ import { nodesMap } from '$lib/crdt/graphDoc';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { typeInfo } from '$lib/test/typeInfo';
+import { snapshot } from '$lib/test/snapshot';
 
 /** A minimal hello/graph_replaced snapshot; `node_types` optionally carries the palette inline. */
 function helloSnap(node_types?: NodeTypeInfo[], runtime: GraphSnapshot['runtime'] = {}): GraphSnapshot {
-	return {
-		node_types,
-		runtime,
-		save_path: null,
-		unsaved_changes: false,
-		instance_id: 'sess1',
-		doc_version: 0,
-		viewpoint: null
-	} as unknown as GraphSnapshot;
+	return snapshot({ node_types, runtime });
 }
 
 /** The catalog (list_nodes) the manager provides — the static per-type descriptor source. */

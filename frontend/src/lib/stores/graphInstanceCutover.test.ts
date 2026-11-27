@@ -4,11 +4,12 @@ import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { SCOPE_TYPE, BOUNDARY_SLOT, boundaryType } from '$lib/api/vocab';
 import { ROOT_ID } from '$lib/editor/subpatchScene';
-import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { liveCatalogue, machineCatalogue } from '$lib/inspector/expr/catalogue';
 import { fragmentOf, stateOf } from '$lib/machine/model';
 import { typeInfo } from '$lib/test/typeInfo';
+import { snapshot } from '$lib/test/snapshot';
 
 /** Minimal catalog — its presence flips the store to doc-authoritative identity. */
 function catalog(): NodeTypeInfo[] {
@@ -156,14 +157,7 @@ describe('a collapsed scope’s inline viewer, which is a node’s inline viewer
 		// two ride separate channels in no defined order.
 		fc.emit({
 			event: 'hello',
-			payload: {
-				runtime: { i9: { stage: 'ready', error: 'a member of it was failing' } },
-				save_path: null,
-				unsaved_changes: false,
-				instance_id: 'sess1',
-				doc_version: 0,
-				viewpoint: null
-			} as unknown as GraphSnapshot
+			payload: snapshot({ runtime: { i9: { stage: 'ready', error: 'a member of it was failing' } } })
 		});
 		const d = seed(fc).patch(spec);
 		expect(g.nodeById('i9')!.error, 'the overlay reaches a node that arrives after it').toBe(

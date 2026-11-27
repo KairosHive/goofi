@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
+import { snapshot } from '$lib/test/snapshot';
 
 /**
  * `New` is a manager transaction, and the client's whole job is to *not* get in its way.
@@ -19,7 +20,7 @@ describe('GraphStore.newPatch — the reset door', () => {
 	it('sends `new` with an empty payload and records no undo step', async () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
-		fc.emit({ event: 'hello', payload: snapshot('/patches/a.gfi') });
+		fc.emit({ event: 'hello', payload: snapshot({ save_path: '/patches/a.gfi' }) });
 		expect(g.savePath).toBe('/patches/a.gfi');
 
 		await g.newPatch();
@@ -35,23 +36,12 @@ describe('GraphStore.newPatch — the reset door', () => {
 	it('takes the patch name down off the snapshot, with no `save_path_changed` to help', async () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
-		fc.emit({ event: 'hello', payload: snapshot('/patches/a.gfi') });
+		fc.emit({ event: 'hello', payload: snapshot({ save_path: '/patches/a.gfi' }) });
 
 		await g.newPatch();
-		fc.emit({ event: 'graph_replaced', payload: snapshot(null) });
+		fc.emit({ event: 'graph_replaced', payload: snapshot() });
 
 		expect(g.savePath).toBe(null);
 		expect(g.unsavedChanges).toBe(false);
 	});
 });
-
-function snapshot(savePath: string | null) {
-	return {
-		runtime: {},
-		save_path: savePath,
-		unsaved_changes: false,
-		instance_id: 'sess1',
-		doc_version: 0,
-		viewpoint: null
-	} as never;
-}

@@ -3,8 +3,9 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
-import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
+import { snapshot } from '$lib/test/snapshot';
 
 /** The catalog (list_nodes) the manager provides — its presence flips the store to
  * doc-authoritative for node identity. */
@@ -55,14 +56,7 @@ describe('node lifecycle stage', () => {
 		// order, and the one where the overlay is stashed for a node yet to materialize.
 		fc.emit({
 			event: 'hello',
-			payload: {
-				runtime: { n1: { stage: 'ready', error: null, runtime: 'subprocess' } },
-				save_path: null,
-				unsaved_changes: false,
-				instance_id: 'sess1',
-				doc_version: 0,
-				viewpoint: null
-			} as never as GraphSnapshot
+			payload: snapshot({ runtime: { n1: { stage: 'ready', error: null, runtime: 'subprocess' } } })
 		});
 		const d = seed(fc);
 		g.nodeTypes = catalog();
@@ -85,14 +79,7 @@ describe('node lifecycle stage', () => {
 		// where a demotion the client missed while offline arrives.
 		fc.emit({
 			event: 'hello',
-			payload: {
-				runtime: { n1: { stage: 'ready', error: null, runtime: 'in-process' } },
-				save_path: null,
-				unsaved_changes: false,
-				instance_id: 'sess1',
-				doc_version: 0,
-				viewpoint: null
-			} as never as GraphSnapshot
+			payload: snapshot({ runtime: { n1: { stage: 'ready', error: null, runtime: 'in-process' } } })
 		});
 		expect(g.nodeById('n1')?.runtime).toBe('in-process');
 	});

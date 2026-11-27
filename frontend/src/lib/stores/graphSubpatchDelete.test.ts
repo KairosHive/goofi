@@ -4,8 +4,9 @@ import { seed, type DocSeed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
 import { SCOPE_TYPE } from '$lib/api/vocab';
-import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
+import { snapshot } from '$lib/test/snapshot';
 
 /** Minimal catalog — its presence flips the store to doc-authoritative identity. */
 function catalog(): NodeTypeInfo[] {
@@ -17,18 +18,6 @@ function catalog(): NodeTypeInfo[] {
 			params: {}
 		})
 	];
-}
-
-/** A hello/graph_replaced snapshot — session frame + runtime overlay only (structure is the doc's). */
-function snapshot(): GraphSnapshot {
-	return {
-		runtime: {},
-		save_path: null,
-		unsaved_changes: false,
-		instance_id: 'sess1',
-		doc_version: 0,
-		viewpoint: null
-	} as never;
 }
 
 /** A store holding a collapsed sub-patch instance `sub` (one member `m1`). */
