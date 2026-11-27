@@ -144,7 +144,11 @@ impl Pool {
         let ns = waited.elapsed().as_nanos() as u64;
         shared.waited_ns.fetch_add(ns, Ordering::Relaxed);
         shared.waited_max_ns.fetch_max(ns, Ordering::Relaxed);
-        // SAFETY: every item is done, and a late helper's claim fails on the finished word.
+        // The job's word is closed before the next job's count can be read against it: a helper
+        // late out of this job must not pass its bounds check on a larger count and claim an item
+        // of the next job under this generation.
+        shared.next.store((u64::from(self.generation) << 32) | u64::from(u32::MAX), Ordering::SeqCst);
+        // SAFETY: every item is done, and a late helper's claim fails on the closed word.
         unsafe { *shared.job.get() = None };
         if shared.panicked.swap(false, Ordering::Relaxed) {
             panic!("a render helper panicked");
