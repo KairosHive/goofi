@@ -89,6 +89,29 @@ describe('one paint loop', () => {
 	});
 });
 
+describe('the display rate', () => {
+	it('is counted over frames the page painted, and starts over across a stretch it painted none', async () => {
+		// The rate is measured once and declared to every stream, and the manager serves no faster.
+		// A tab hidden a moment after it opened runs no animation frame until it is back: that gap,
+		// counted into the half second, declared a rate of nothing for the rest of the session.
+		let queued: ((t: number) => void)[] = [];
+		vi.stubGlobal('requestAnimationFrame', (f: (t: number) => void) => queued.push(f));
+		const paint = (t: number): void => {
+			const due = queued;
+			queued = [];
+			for (const f of due) f(t);
+		};
+		bind('osc', 'out');
+		await settle();
+		const declared = (): number[] => opsOf(MockWorker.instances[0], 'rate').map((m) => (m as { fps: number }).fps);
+		for (let t = 0; t <= 100; t += 1000 / 60) paint(1000 + t);
+		paint(31_100);
+		expect(declared(), 'the hidden stretch is not a measurement').toEqual([]);
+		for (let t = 1000 / 60; t <= 520; t += 1000 / 60) paint(31_100 + t);
+		expect(declared(), 'the frames after it are').toEqual([60]);
+	});
+});
+
 describe('a joining viewer', () => {
 	it('replays the slot’s current frame to a late-joining consumer, immediately and once', async () => {
 		// The bridge only sends when something changed (an emit, a joiner IT can see, a spec

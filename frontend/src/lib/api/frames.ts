@@ -42,16 +42,24 @@ const slots = new Map<string, Slot>();
 export const paints = new RateMeter();
 
 let measured = false;
+/** The longest two animation frames of a painting page stand apart; past it the page was hidden
+ * or held, and the gap is no frame of the display's. */
+const UNPAINTED_MS = 100;
 /** Count animation frames for half a second and declare the display's rate to every socket, so
- * the manager serves no faster than this page can paint. */
+ * the manager serves no faster than this page can paint. A stretch the page painted nothing in
+ * starts the count over: counted in, it would declare a rate of next to nothing, once and for all. */
 function measureDisplayRate(): void {
 	if (measured || typeof requestAnimationFrame !== 'function') return;
 	measured = true;
 	let start = -1;
+	let last = -1;
 	let frames = 0;
 	const step = (t: number): void => {
-		if (start < 0) start = t;
-		else frames++;
+		if (start < 0 || t - last > UNPAINTED_MS) {
+			start = t;
+			frames = 0;
+		} else frames++;
+		last = t;
 		if (t - start >= 500) post({ op: 'rate', fps: Math.round((frames * 1000) / (t - start)) });
 		else requestAnimationFrame(step);
 	};
