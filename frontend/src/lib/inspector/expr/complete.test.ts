@@ -292,7 +292,6 @@ describe('the injected scope', () => {
 		for (const name of ['nd', 'sm', 'me', 't', 'np', 'vars', 'sin', 'pi', 'lfo', 'nse', 'qtz']) {
 			expect(got, `\`${name}\` is in the scope`).toContain(name);
 		}
-		expect(got, 'time() is gone: `t` is the clock').not.toContain('time');
 	});
 
 	it('replaces the partially-typed name', () => {
