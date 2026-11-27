@@ -17,7 +17,6 @@ goofi-screen = { path = "../goofi-screen" }
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-bridge = { path = "../goofi-bridge" }
 goofi-client = { path = "../goofi-client" }
-goofi-record = { path = "../goofi-record" }
 # Client argv re-quoted into the ONE line /exec parses — the same word rules bash used.
 shell-words = "1"
 serde_json = "1"

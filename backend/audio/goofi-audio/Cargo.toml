@@ -13,7 +13,6 @@ asio = ["cpal/asio"]
 goofi-supervisor = { path = "../../goofi-supervisor" }
 goofi-core = { path = "../../goofi-core" }
 goofi-node = { path = "../../goofi-node" }
-goofi-codec = { path = "../../goofi-codec" }
 goofi-transport = { path = "../../goofi-transport" }
 goofi-runtime = { path = "../../goofi-runtime" }
 goofi-window = { path = "../../goofi-window" }
