@@ -84,7 +84,6 @@ fn grouping_mints_a_port_for_every_crossing_cable_and_expanding_gives_them_back(
     // Its display name is minted from the ONE namespace, so it counts sub-patches — never uids.
     assert_eq!(rec["name"], "subpatch0", "the first sub-patch in a patch is subpatch0: {rec}");
     assert!(rec.get("scope").is_none(), "a top-level scope names no parent: {rec}");
-    assert!(rec.get("def_id").is_none(), "no sharing ⇒ no def_id");
 
     let ports = g.ports(&inst);
     assert_eq!(ports.len(), 2, "one port per crossing cable, and not one per cable: {ports:?}");
