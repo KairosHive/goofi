@@ -1,25 +1,12 @@
 <!-- Node-editor panel: the SvelteFlow graph and its gestures. Each instance owns its viewport, and
      its keyboard shortcuts act only while it is the active panel; app-global ones live in AppShell. -->
 <script lang="ts">
-	import {
-		Background,
-		ControlButton,
-		Controls,
-		SvelteFlow,
-		SvelteFlowProvider,
-		ViewportPortal,
-		type Connection,
-		type Edge,
-		type FitViewOptions,
-		type Node,
-		type Viewport
-	} from '@xyflow/svelte';
+	import { ControlButton, ViewportPortal, type Connection, type Edge, type FitViewOptions, type Node, type Viewport } from '@xyflow/svelte';
 	import GoofiNode from '$lib/editor/GoofiNode.svelte';
 	import AddNodeMenu from '$lib/editor/AddNodeMenu.svelte';
 	import PlacementPreview from '$lib/editor/PlacementPreview.svelte';
 	import { GHOST_UID, ghostNode } from '$lib/editor/placementGhost';
-	import { camera } from '$lib/editor/camera';
-	import FlowApi from '$lib/editor/FlowApi.svelte';
+	import FlowCanvas, { FIT_OPTIONS, MIN_ZOOM } from '$lib/editor/FlowCanvas.svelte';
 	import FlowSurface from '$lib/editor/FlowSurface.svelte';
 	import { provideSurface } from '$lib/viewers/plotHost';
 	import type { SurfaceHandle } from '$lib/api/drawings';
@@ -52,8 +39,6 @@
 		SLOT_PROXIMITY_PX,
 		type SlotAnchor
 	} from '$lib/editor/slotProximity';
-	import { createLongPress } from 'panelty';
-	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
 	import { eventPoint } from '$lib/editor/eventPoint';
 	import { drag, type DragSource, type DragTag, type Point } from '$lib/drag';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
@@ -146,36 +131,6 @@
 	function closeMenu(): void {
 		menuOpen = false;
 		menuSeed = null;
-	}
-
-	/** The coarse-pointer door onto the add-node menu. Armed for `touch` alone: a held mouse button
-	 * is the start of a desktop pan. */
-	const canvasPress = createLongPress((at) =>
-		openAddMenu(at.clientX - 8, at.clientY + 8, 'start', null, true)
-	);
-
-	/** Empty canvas only, and not while a ghost is pending: the canvas belongs to that placement. */
-	function onCanvasPointerDown(e: PointerEvent): void {
-		if (e.pointerType !== 'touch' || pendingPlacement) return;
-		if (!onBareCanvas(e.target)) return;
-		canvasPress.start(e);
-	}
-
-	const onBareCanvas = (target: EventTarget | null): boolean =>
-		Boolean((target as HTMLElement | null)?.classList.contains('svelte-flow__pane'));
-
-	/** The double-tap-and-drag zoom, beside pinch; the seam is `zoomOnDoubleClick={false}` below.
-	 * Bound in `onMount`; a double tap held still stands the long-press door down. */
-	function bindZoom(root: HTMLElement): () => void {
-		return bindTapZoom(root, {
-			allowed: (target) => !pendingPlacement && onBareCanvas(target),
-			onStart: canvasPress.cancel,
-			getViewport: () => getViewport?.(),
-			screenToFlow: (p) => screenToFlow?.(p),
-			setViewport: (v) => setViewport?.(v),
-			min: MIN_ZOOM,
-			max: MAX_ZOOM
-		});
 	}
 
 	// Measure the mounted menu, then re-clamp: a spawn point is a degenerate anchor rect.
@@ -680,13 +635,6 @@
 
 	const nodeTypes = { goofi: GoofiNode };
 
-	/** Framing for every programmatic fit. */
-	const FIT_OPTIONS = { maxZoom: 1, padding: 0.18 } satisfies FitViewOptions;
-
-	/** How far the canvas may be zoomed; the double-tap zoom clamps itself to the same pair. */
-	const MIN_ZOOM = 0.05;
-	const MAX_ZOOM = 4;
-
 	/** True when the CANVAS owns the keyboard rather than a control. Deliberately NOT a focusable
 	 * DESCENDANT of a node: Tab is how a keyboard reaches the next slot pill inside one. */
 	function canvasHasKeys(target: HTMLElement | null): boolean {
@@ -914,27 +862,12 @@
 		}
 	});
 
-	// Bound from <FlowApi> inside <SvelteFlow>.
+	// Bound from <FlowCanvas>.
 	let screenToFlow = $state<((p: { x: number; y: number }) => { x: number; y: number }) | undefined>(
 		undefined
 	);
 	let getViewport = $state<(() => Viewport) | undefined>(undefined);
-	let setViewport = $state<((v: Viewport) => void) | undefined>(undefined);
 	let flowFit = $state<((o?: FitViewOptions) => Promise<boolean>) | undefined>(undefined);
-
-	// A layout reshape or a page switch DESTROYS this component, so the camera outliving it is what
-	// carries the framing across.
-	const cam = camera(untrack(() => panelId));
-	let viewport = $state<Viewport>(cam.viewport ?? { x: 0, y: 0, zoom: 0.85 });
-
-	// Fit the whole graph after a wholesale load, never on an interactive add.
-	$effect(() => {
-		const epoch = g.loadEpoch;
-		if (!flowFit || epoch === cam.fittedEpoch || !g.loadSettled) return;
-		cam.fittedEpoch = epoch;
-		// An empty load must not arm a fit that the first placed node would then satisfy.
-		if (g.nodes.length > 0) void flowFit(FIT_OPTIONS);
-	});
 
 	/** The Controls button's own fit, which takes Flow's default framing. */
 	function fitView(): void {
@@ -978,21 +911,15 @@
 		});
 		const root = rootEl as HTMLDivElement;
 		const offs = [
-			bindZoom(root),
 			// `document`, not `window`: the shell listens on window, so the canvas's Escape goes first.
 			on(document, 'keydown', onKeydown),
 			on(window, 'paste', onPaste),
 			on(window, 'mousemove', trackMouse),
-			on(root, 'click', onCanvasClick, { capture: true }),
-			on(root, 'pointerdown', onCanvasPointerDown),
-			on(root, 'pointermove', canvasPress.move),
-			on(root, 'pointerup', canvasPress.cancel),
-			on(root, 'pointercancel', canvasPress.cancel)
+			on(root, 'click', onCanvasClick, { capture: true })
 		];
 		return () => {
 			offs.forEach((off) => off());
 			unregisterEditor(panelId);
-			canvasPress.cancel(); // a press in flight must not fire into an unmounted editor
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.
@@ -1001,9 +928,40 @@
 	});
 </script>
 
-<SvelteFlowProvider>
-	<!-- `canvas-wrap` is the marker PlacementPreview uses to tell a commit click from a cancel. -->
-	<div class="editor-panel canvas-wrap" bind:this={rootEl}>
+<!-- The desktop inset keeps the 16px corner grips reachable. -->
+<FlowCanvas
+	class="editor-panel"
+	style="--flow-controls-inset: var(--space-8)"
+	{panelId}
+	bind:root={rootEl}
+	bind:nodes={flowNodes}
+	bind:edges={flowEdges}
+	bind:screenToFlow
+	bind:getViewport
+	bind:fit={flowFit}
+	zoom={0.85}
+	fitWhen={() => g.nodes.length > 0}
+	holdAllowed={() => !pendingPlacement}
+	onHold={(at) => openAddMenu(at.clientX - 8, at.clientY + 8, 'start', null, true)}
+	hint={!pendingPlacement && !menuOpen}
+	{nodeTypes}
+	deleteKey={null}
+	onconnect={onConnect}
+	onreconnect={onReconnect}
+	onconnectstart={onCableStart}
+	onconnectend={onCableEnd}
+	onreconnectstart={onCableStart}
+	onreconnectend={onCableEnd}
+	onnodedragstart={onNodeDragStart}
+	onnodedrag={onNodeDrag}
+	onnodedragstop={onNodeDragStop}
+	onpaneclick={onPaneClick}
+	onnodeclick={onNodeClick}
+	onselectionstart={() => (boxSelecting = true)}
+	onselectionend={onSelectionEnd}
+	onedgeclick={onEdgeClick}
+>
+	{#snippet before()}
 		{#if enteredPath.length > 0}
 			<nav class="breadcrumb" data-testid="subpatch-breadcrumb" aria-label="Sub-patch path">
 				<Button variant="ghost" size="sm" onclick={() => exitToDepth(0)} title="Back to the top-level patch"
@@ -1022,169 +980,77 @@
 				{/each}
 			</nav>
 		{/if}
-		<SvelteFlow
-			bind:nodes={flowNodes}
-			bind:edges={flowEdges}
-			{nodeTypes}
-			deleteKey={null}
-			onconnect={onConnect}
-			onreconnect={onReconnect}
-			onconnectstart={onCableStart}
-			onconnectend={onCableEnd}
-			onreconnectstart={onCableStart}
-			onreconnectend={onCableEnd}
-			onnodedragstart={onNodeDragStart}
-			onnodedrag={onNodeDrag}
-			onnodedragstop={onNodeDragStop}
-			onpaneclick={onPaneClick}
-			onnodeclick={onNodeClick}
-			onselectionstart={() => (boxSelecting = true)}
-			onselectionend={onSelectionEnd}
-			onedgeclick={onEdgeClick}
-			fitViewOptions={FIT_OPTIONS}
-			minZoom={MIN_ZOOM}
-			maxZoom={MAX_ZOOM}
-			bind:viewport={() => viewport, (v) => (viewport = cam.viewport = v)}
-			zoomOnDoubleClick={false}
-			autoPanOnNodeDrag={false}
-		>
-			<Background gap={GRID} size={1} patternColor="var(--border)" />
-			<!-- `showLock` off: goofi has no read-only mode, so Flow's lock reads as breakage. -->
-			<Controls showLock={false}>
-				<ControlButton title="Arrange the nodes by dataflow" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
-					<Icon name="workflow" />
-				</ControlButton>
-			</Controls>
-			<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
-			<FlowSurface bind:surface={plotSurface} />
-			<SubpatchZoomExit {entered} options={FIT_OPTIONS} minZoom={MIN_ZOOM} onExit={() => exitToDepth(enteredPath.length - 1)} />
-			{#if pendingPlacement && ghost}
-				<PlacementPreview
-					initialClient={pendingPlacement.initialClient}
-					size={nodeFallbackSize(ghost)}
-					onMove={(pos) => (ghostPos = pos)}
-					onCommit={(pos) => void commitPlacement(pos)}
-					onCancel={() => {
-						pendingPlacement = null;
-						ghostPos = null;
-					}}
-				/>
-			{/if}
-			<ViewportPortal target="back">
-				<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
-			</ViewportPortal>
-		</SvelteFlow>
-
-		{#if flowNodes.length === 0 && !pendingPlacement && !menuOpen}
-			<div class="empty-hint" data-testid="empty-hint">
-				<EmptyState>
-					{#snippet title()}{entered ? 'This sub-patch is empty' : 'Empty patch'}{/snippet}
-					{#snippet hint()}Double-click the canvas or press <kbd>Tab</kbd> to add a node.{/snippet}
-				</EmptyState>
-			</div>
+	{/snippet}
+	{#snippet controls()}
+		<ControlButton title="Arrange the nodes by dataflow" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
+			<Icon name="workflow" />
+		</ControlButton>
+	{/snippet}
+	{#snippet inside()}
+		<FlowSurface bind:surface={plotSurface} />
+		<SubpatchZoomExit {entered} options={FIT_OPTIONS} minZoom={MIN_ZOOM} onExit={() => exitToDepth(enteredPath.length - 1)} />
+		{#if pendingPlacement && ghost}
+			<PlacementPreview
+				initialClient={pendingPlacement.initialClient}
+				size={nodeFallbackSize(ghost)}
+				onMove={(pos) => (ghostPos = pos)}
+				onCommit={(pos) => void commitPlacement(pos)}
+				onCancel={() => {
+					pendingPlacement = null;
+					ghostPos = null;
+				}}
+			/>
 		{/if}
+		<ViewportPortal target="back">
+			<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
+		</ViewportPortal>
+	{/snippet}
+	{#snippet empty()}
+		<EmptyState>
+			{#snippet title()}{entered ? 'This sub-patch is empty' : 'Empty patch'}{/snippet}
+			{#snippet hint()}Double-click the canvas or press <kbd>Tab</kbd> to add a node.{/snippet}
+		</EmptyState>
+	{/snippet}
 
-		<!-- Fixed and positioned in VIEWPORT coordinates, so both portal to <body>: `.panel-body`
-		     is a query container and must never become their containing block. -->
-		{#if menuOpen}
-			<div class="menu-overlay" use:portal onclick={closeMenu} role="presentation"></div>
-			<div
-				class="menu-anchor"
-				bind:this={menuEl}
-				use:portal
-				data-testid="add-node-menu-anchor"
-				style="left: {menuPos.x}px; top: {menuPos.y}px"
-			>
-				<AddNodeMenu
-					seed={menuSeed}
-					boundary={entered !== null}
-					onPick={(typeInfo) => {
-						ghostPos = null;
-						pendingPlacement = { typeInfo, seed: menuSeed, initialClient: { x: mouseX, y: mouseY } };
-						closeMenu();
-					}}
-					onClose={closeMenu}
-				/>
-			</div>
-		{/if}
-
-		<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
-		<SidePane
-			subject={selectedNode}
-			enabled={inspectorOn}
-			onToggle={() => sel.setInspector(panelId, !inspectorOn)}
+	<!-- Fixed and positioned in VIEWPORT coordinates, so both portal to <body>: `.panel-body`
+	     is a query container and must never become their containing block. -->
+	{#if menuOpen}
+		<div class="menu-overlay" use:portal onclick={closeMenu} role="presentation"></div>
+		<div
+			class="menu-anchor"
+			bind:this={menuEl}
+			use:portal
+			data-testid="add-node-menu-anchor"
+			style="left: {menuPos.x}px; top: {menuPos.y}px"
 		>
-			{#snippet children(node)}
-				<Inspector {node} onClose={() => sel.dismissInspectorFor(panelId)} />
-			{/snippet}
-		</SidePane>
-	</div>
-</SvelteFlowProvider>
+			<AddNodeMenu
+				seed={menuSeed}
+				boundary={entered !== null}
+				onPick={(typeInfo) => {
+					ghostPos = null;
+					pendingPlacement = { typeInfo, seed: menuSeed, initialClient: { x: mouseX, y: mouseY } };
+					closeMenu();
+				}}
+				onClose={closeMenu}
+			/>
+		</div>
+	{/if}
+
+	<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
+	<SidePane
+		subject={selectedNode}
+		enabled={inspectorOn}
+		onToggle={() => sel.setInspector(panelId, !inspectorOn)}
+	>
+		{#snippet children(node)}
+			<Inspector {node} onClose={() => sel.dismissInspectorFor(panelId)} />
+		{/snippet}
+	</SidePane>
+</FlowCanvas>
 
 
 <style>
-	/* The canvas and the inspector pane side by side: the pane takes its width from the canvas, so
-	   the zoom cluster in the canvas's corner is never under it. */
-	.editor-panel {
-		position: relative;
-		display: flex;
-		width: 100%;
-		height: 100%;
-		min-width: 0;
-		min-height: 0;
-	}
-	.editor-panel > :global(.svelte-flow) {
-		flex: 1 1 0;
-		min-width: 0;
-		min-height: 0;
-	}
-	@media all {
-		@container (orientation: portrait) {
-			.editor-panel {
-				flex-direction: column;
-			}
-		}
-	}
-	/* The inset keeps the 16px corner grips reachable. `margin: 0` is load-bearing: Flow's own
-	   `.svelte-flow__panel` sets `margin: 15px`, which STACKS on these offsets. The cluster shows
-	   while the pointer is in the panel; a touch screen, with no pointer to wait for, shows it always. */
-	.editor-panel :global(.svelte-flow__controls) {
-		margin: 0;
-		bottom: var(--space-8);
-		left: var(--space-8);
-		opacity: 0;
-		transition: opacity var(--dur-fast) var(--ease);
-	}
-	.editor-panel:hover :global(.svelte-flow__controls),
-	.editor-panel :global(.svelte-flow__controls:focus-within) {
-		opacity: 1;
-	}
-	/* On touch each button is floored to --hit in both axes, so the cluster is a slab and needs a
-	   smaller inset — still clear of the grip, whose 16px box is clipped to a triangle. */
-	@media (hover: none) and (pointer: coarse) {
-		.editor-panel :global(.svelte-flow__controls) {
-			bottom: var(--space-6);
-			left: var(--space-6);
-			opacity: 1;
-		}
-		/* A portrait sheet's grab band leans --hit over the canvas's bottom edge; the cluster sits above it. */
-		@container (orientation: portrait) {
-			.editor-panel:has(> :global(.side-panel.open)) :global(.svelte-flow__controls) {
-				bottom: calc(var(--space-6) + var(--hit));
-			}
-		}
-	}
-	/* Non-interactive, so it never eats the double-click that opens the add-node menu under it. */
-	.empty-hint {
-		position: absolute;
-		inset: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		pointer-events: none;
-		z-index: 1;
-	}
-	.empty-hint kbd {
+	kbd {
 		font-size: var(--fs-small);
 		padding: 1px var(--space-3);
 		border: 1px solid var(--border);

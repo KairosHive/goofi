@@ -6,32 +6,16 @@
      crosses in turn. Every change is a `machine` op, so the manager owns the model and this panel
      the drawing and the gesture. -->
 <script lang="ts">
-	import {
-		Background,
-		ConnectionLineType,
-		ConnectionMode,
-		ControlButton,
-		Controls,
-		SvelteFlow,
-		SvelteFlowProvider,
-		ViewportPortal,
-		type Connection,
-		type Edge,
-		type FitViewOptions,
-		type Node,
-		type Viewport
-	} from '@xyflow/svelte';
-	import { asStateObject, createLongPress, workspace, type PanelProps } from 'panelty';
+	import { ConnectionLineType, ConnectionMode, ControlButton, ViewportPortal, type Connection, type Edge, type Node } from '@xyflow/svelte';
+	import { asStateObject, workspace, type PanelProps } from 'panelty';
 	import { tick, untrack } from 'svelte';
 	import { isValidIdentifier } from '$lib/crdt/graphDoc';
 	import { on } from 'svelte/events';
-	import { camera } from '$lib/editor/camera';
 	import { eventPoint } from '$lib/editor/eventPoint';
 	import { drag, type DragSource, type DragTag } from '$lib/drag';
 	import { formOf } from '$lib/machine/attributes';
 	import { quickPick } from '$lib/stores/quickPick.svelte';
-	import { bindTapZoom } from '$lib/editor/doubleTapZoom';
-	import FlowApi from '$lib/editor/FlowApi.svelte';
+	import FlowCanvas from '$lib/editor/FlowCanvas.svelte';
 	import MachineInspector from '$lib/machine/MachineInspector.svelte';
 	import PlayheadDots from '$lib/machine/PlayheadDots.svelte';
 	import StateCard from '$lib/machine/StateCard.svelte';
@@ -173,29 +157,11 @@
 
 	const nodeTypes = { state: StateCard };
 	const edgeTypes = { transition: TransitionEdge };
-	const FIT_OPTIONS = { maxZoom: 1, padding: 0.18 } satisfies FitViewOptions;
-	const MIN_ZOOM = 0.05;
-	const MAX_ZOOM = 4;
 
-	// ---- the camera, kept per panel so a reshape keeps the framing.
 	let rootEl = $state<HTMLDivElement | null>(null);
 	let screenToFlow = $state<((p: { x: number; y: number }) => { x: number; y: number }) | undefined>(undefined);
-	let getViewport = $state<(() => Viewport) | undefined>(undefined);
-	let setViewport = $state<((v: Viewport) => void) | undefined>(undefined);
-	let flowFit = $state<((o?: FitViewOptions) => Promise<boolean>) | undefined>(undefined);
-	const cam = camera(untrack(() => panelId));
-	let viewport = $state<Viewport>(cam.viewport ?? { x: 0, y: 0, zoom: 1 });
-	// Frame the machine once per load, never on an interactive add.
-	$effect(() => {
-		const epoch = g.loadEpoch;
-		if (!flowFit || epoch === cam.fittedEpoch || !g.loadSettled || !machine) return;
-		cam.fittedEpoch = epoch;
-		if (Object.keys(machine.states).length > 0) void flowFit(FIT_OPTIONS);
-	});
 
 	// ---- adding a state: a double-click or a held finger on the bare pane.
-	const onBarePane = (target: EventTarget | null): boolean =>
-		Boolean((target as HTMLElement | null)?.classList.contains('svelte-flow__pane'));
 	function addState(at: { x: number; y: number }): void {
 		const p = screenToFlow?.(at) ?? { x: 0, y: 0 };
 		// Its name under the gesture, so the release lands there and not on a control; then on the
@@ -220,11 +186,6 @@
 		lastTap = { at: now, x: event.clientX, y: event.clientY };
 		sel.clickPane(panelId, event.shiftKey);
 		if (sel.nodes(panelId).size || sel.edges(panelId).size) void tick().then(reassertSelection);
-	}
-	const panePress = createLongPress((at) => addState({ x: at.clientX, y: at.clientY }));
-	function onPanePointerDown(e: PointerEvent): void {
-		touching = e.pointerType === 'touch';
-		if (touching && onBarePane(e.target)) panePress.start(e);
 	}
 
 	// ---- several states at once: the + in the cluster adds a count, chained or not.
@@ -478,35 +439,20 @@
 		const root = rootEl;
 		if (!root) return;
 		const offs = [
-			bindTapZoom(root, {
-				allowed: onBarePane,
-				onStart: panePress.cancel,
-				getViewport: () => getViewport?.(),
-				screenToFlow: (p) => screenToFlow?.(p),
-				setViewport: (v) => setViewport?.(v),
-				min: MIN_ZOOM,
-				max: MAX_ZOOM
-			}),
-			on(root, 'pointerdown', onPanePointerDown),
+			on(root, 'pointerdown', (e: PointerEvent) => (touching = e.pointerType === 'touch')),
 			on(root, 'pointermove', (e: PointerEvent) => {
 				pointer = { x: e.clientX, y: e.clientY };
 				alt = e.altKey;
-				panePress.move(e);
 				if (crossed) {
 					const over = boxAt(pointer);
 					if (over && crossed[crossed.length - 1] !== over) crossed.push(over);
 				}
 			}),
-			on(root, 'pointerup', panePress.cancel),
-			on(root, 'pointercancel', panePress.cancel),
 			on(document, 'keydown', onKeydown),
 			on(document, 'keyup', (e: KeyboardEvent) => (alt = e.altKey)),
 			on(document, 'paste', onPaste)
 		];
-		return () => {
-			offs.forEach((off) => off());
-			panePress.cancel();
-		};
+		return () => offs.forEach((off) => off());
 	});
 </script>
 
@@ -526,89 +472,82 @@
 		{/snippet}
 	</InstanceBar>
 	{#if machine}
-		<SvelteFlowProvider>
-			<div class="canvas canvas-wrap" bind:this={rootEl}>
-				<SvelteFlow
-					bind:nodes={flowNodes}
-					bind:edges={flowEdges}
-					{nodeTypes}
-					{edgeTypes}
-					connectionMode={ConnectionMode.Loose}
-					connectionLineType={ConnectionLineType.Straight}
-					connectionRadius={CARD_W / 2 + 20}
-					isValidConnection={overTarget}
-					onbeforeconnect={onConnect}
-					onconnectstart={(_, p) => (crossed = p.nodeId ? [p.nodeId] : null)}
-					onconnectend={() => void tick().then(() => (crossed = null))}
-					onnodedragstart={onNodeDragStart}
-					onnodedrag={onNodeDrag}
-					onnodedragstop={onNodeDragStop}
-					onnodeclick={({ node, event }) => {
-						// A plain click is the whole selection, the transition included, as Flow itself has it.
-						if (modifier(event) || sel.multiSelect) sel.clickNode(panelId, node.id, true);
-						else sel.setSelection(panelId, [node.id], []);
-						void tick().then(reassertSelection);
-					}}
-					onedgeclick={({ edge, event }) => {
-						sel.clickEdge(panelId, edge.id, modifier(event));
-						void tick().then(reassertSelection);
-					}}
-					onselectionend={() => sel.setSelection(panelId, flowNodes.filter((n) => n.selected).map((n) => n.id), flowEdges.filter((e) => e.selected).map((e) => e.id))}
-					onpaneclick={onPaneClick}
-					fitViewOptions={FIT_OPTIONS}
-					minZoom={MIN_ZOOM}
-					maxZoom={MAX_ZOOM}
-					bind:viewport={() => viewport, (v) => (viewport = cam.viewport = v)}
-					zoomOnDoubleClick={false}
-					autoPanOnNodeDrag={false}
-				>
-					<Background gap={GRID} size={1} patternColor="var(--border)" />
-					<Controls showLock={false}>
-						<ControlButton title="Arrange the states on a ring" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
-							<Icon name="workflow" />
-						</ControlButton>
-						<ControlButton title="Chain: a connection wires every box it crosses, in turn (or hold Alt)" aria-label="Chain tool" aria-pressed={chainTool} class={chainTool ? 'on' : ''}
-							data-testid="chain-tool" onclick={() => (chainTool = !chainTool)}>
-							<Icon name="link" />
-						</ControlButton>
-						<span bind:this={addAnchor}>
-							<ControlButton title="Add several states at once" aria-label="Add states" data-testid="add-states" onclick={() => (adding = !adding)}>
-								<Icon name="plus" />
-							</ControlButton>
-						</span>
-					</Controls>
-					<FlowApi bind:screenToFlowPosition={screenToFlow} bind:getViewport bind:setViewport bind:fitView={flowFit} />
-					<ViewportPortal target="front">
-						<PlayheadDots m={machine} nodes={flowNodes} />
-					</ViewportPortal>
-				</SvelteFlow>
-				<Popover anchor={addAnchor} open={adding} onDismiss={() => (adding = false)} flip role="dialog" aria-label="Add states" data-testid="add-states-menu">
-					<FieldGrid>
-						<Field label="states" row>
-							<NumberInput value={addCount} min={1} max={64} step={1} aria-label="how many" data-testid="add-states-count" onChange={(v) => (addCount = v)} />
-						</Field>
-						<Field label="chain" doc="Each to the next; from the selected state when one is selected" row>
-							<Toggle value={addChain} aria-label="chain them" data-testid="add-states-chain" onChange={(v) => (addChain = v)} />
-						</Field>
-						<span class="add-go"><Button size="sm" data-testid="add-states-go" onclick={() => void addMany()}>add</Button></span>
-					</FieldGrid>
-				</Popover>
-				{#if flowNodes.length === 0}
-					<div class="empty-hint">
-						<EmptyState>
-							{#snippet title()}No states yet{/snippet}
-							{#snippet hint()}Double-click or hold the canvas to add one; drag from a box's edge to another box for a transition.{/snippet}
-						</EmptyState>
-					</div>
-				{/if}
-				<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
-				<SidePane {subject} enabled={inspectorOn} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
-					{#snippet children(shown)}
-						<MachineInspector {name} m={machine} subject={shown} {panelId} onClose={dismiss} />
-					{/snippet}
-				</SidePane>
-			</div>
-		</SvelteFlowProvider>
+		<FlowCanvas
+			{panelId}
+			bind:root={rootEl}
+			bind:nodes={flowNodes}
+			bind:edges={flowEdges}
+			bind:screenToFlow
+			fitWhen={() => Object.keys(machine.states).length > 0}
+			onHold={(at) => addState({ x: at.clientX, y: at.clientY })}
+			{nodeTypes}
+			{edgeTypes}
+			connectionMode={ConnectionMode.Loose}
+			connectionLineType={ConnectionLineType.Straight}
+			connectionRadius={CARD_W / 2 + 20}
+			isValidConnection={overTarget}
+			onbeforeconnect={onConnect}
+			onconnectstart={(_, p) => (crossed = p.nodeId ? [p.nodeId] : null)}
+			onconnectend={() => void tick().then(() => (crossed = null))}
+			onnodedragstart={onNodeDragStart}
+			onnodedrag={onNodeDrag}
+			onnodedragstop={onNodeDragStop}
+			onnodeclick={({ node, event }) => {
+				// A plain click is the whole selection, the transition included, as Flow itself has it.
+				if (modifier(event) || sel.multiSelect) sel.clickNode(panelId, node.id, true);
+				else sel.setSelection(panelId, [node.id], []);
+				void tick().then(reassertSelection);
+			}}
+			onedgeclick={({ edge, event }) => {
+				sel.clickEdge(panelId, edge.id, modifier(event));
+				void tick().then(reassertSelection);
+			}}
+			onselectionend={() => sel.setSelection(panelId, flowNodes.filter((n) => n.selected).map((n) => n.id), flowEdges.filter((e) => e.selected).map((e) => e.id))}
+			onpaneclick={onPaneClick}
+		>
+			{#snippet controls()}
+				<ControlButton title="Arrange the states on a ring" aria-label="Arrange" data-testid="arrange" onclick={() => void arrange()}>
+					<Icon name="workflow" />
+				</ControlButton>
+				<ControlButton title="Chain: a connection wires every box it crosses, in turn (or hold Alt)" aria-label="Chain tool" aria-pressed={chainTool} class={chainTool ? 'on' : ''}
+					data-testid="chain-tool" onclick={() => (chainTool = !chainTool)}>
+					<Icon name="link" />
+				</ControlButton>
+				<span bind:this={addAnchor}>
+					<ControlButton title="Add several states at once" aria-label="Add states" data-testid="add-states" onclick={() => (adding = !adding)}>
+						<Icon name="plus" />
+					</ControlButton>
+				</span>
+			{/snippet}
+			{#snippet inside()}
+				<ViewportPortal target="front">
+					<PlayheadDots m={machine} nodes={flowNodes} />
+				</ViewportPortal>
+			{/snippet}
+			{#snippet empty()}
+				<EmptyState>
+					{#snippet title()}No states yet{/snippet}
+					{#snippet hint()}Double-click or hold the canvas to add one; drag from a box's edge to another box for a transition.{/snippet}
+				</EmptyState>
+			{/snippet}
+			<Popover anchor={addAnchor} open={adding} onDismiss={() => (adding = false)} flip role="dialog" aria-label="Add states" data-testid="add-states-menu">
+				<FieldGrid>
+					<Field label="states" row>
+						<NumberInput value={addCount} min={1} max={64} step={1} aria-label="how many" data-testid="add-states-count" onChange={(v) => (addCount = v)} />
+					</Field>
+					<Field label="chain" doc="Each to the next; from the selected state when one is selected" row>
+						<Toggle value={addChain} aria-label="chain them" data-testid="add-states-chain" onChange={(v) => (addChain = v)} />
+					</Field>
+					<span class="add-go"><Button size="sm" data-testid="add-states-go" onclick={() => void addMany()}>add</Button></span>
+				</FieldGrid>
+			</Popover>
+			<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
+			<SidePane {subject} enabled={inspectorOn} onToggle={() => sel.setInspector(panelId, !inspectorOn)}>
+				{#snippet children(shown)}
+					<MachineInspector {name} m={machine} subject={shown} {panelId} onClose={dismiss} />
+				{/snippet}
+			</SidePane>
+		</FlowCanvas>
 	{/if}
 </div>
 
@@ -624,63 +563,13 @@
 		width: 4.5em;
 		--number-width: 100%;
 	}
-	/* The pane's host: the canvas and the pane side by side, so the pane never covers the cluster. */
-	.canvas {
-		position: relative;
-		display: flex;
-		min-width: 0;
-		min-height: 0;
-	}
-	.canvas > :global(.svelte-flow) {
-		flex: 1 1 0;
-		min-width: 0;
-		min-height: 0;
-	}
-	@media all {
-		@container (orientation: portrait) {
-			.canvas {
-				flex-direction: column;
-			}
-		}
-	}
-	/* Shown while the pointer is in the panel; a touch screen, with no pointer, shows it always. */
-	.canvas :global(.svelte-flow__controls) {
-		margin: 0;
-		bottom: var(--space-6);
-		left: var(--space-6);
-		opacity: 0;
-		transition: opacity var(--dur-fast) var(--ease);
-	}
-	.canvas:hover :global(.svelte-flow__controls),
-	.canvas :global(.svelte-flow__controls:focus-within) {
-		opacity: 1;
-	}
 	/* The chain tool, while it is on. */
-	.canvas :global(.svelte-flow__controls-button.on) {
+	.wrap :global(.svelte-flow__controls-button.on) {
 		color: var(--accent);
 		box-shadow: inset 0 0 0 1px var(--accent);
-	}
-	@media (hover: none) and (pointer: coarse) {
-		.canvas :global(.svelte-flow__controls) {
-			opacity: 1;
-		}
-		/* A portrait sheet's grab band leans --hit over the canvas's bottom edge; the cluster sits above it. */
-		@container (orientation: portrait) {
-			.canvas:has(> :global(.side-panel.open)) :global(.svelte-flow__controls) {
-				bottom: calc(var(--space-6) + var(--hit));
-			}
-		}
 	}
 	.add-go {
 		grid-column: 2;
 		justify-self: end;
-	}
-	.empty-hint {
-		position: absolute;
-		inset: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		pointer-events: none;
 	}
 </style>
