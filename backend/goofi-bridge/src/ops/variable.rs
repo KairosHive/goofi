@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+use super::machine::literal;
 use super::{op, Any, NoArgs, ReadOp, WriteOp};
 use crate::{inspect, Txn};
 use goofi_core::variables::{Control, ControlKind, Lock};
@@ -146,11 +147,6 @@ impl ReadOp for List {
     fn run(tx: &mut Txn, _: NoArgs) -> Result<Value, String> {
         Ok(inspect::variables(&tx.g))
     }
-}
-
-/// `v` as a variable's value: a number, a list, a bool or a string.
-fn literal(v: Value) -> Result<Data, String> {
-    serde_json::from_value(v.clone()).map_err(|e| format!("`{v}` is not a number, a list, a bool or a string: {e}"))
 }
 
 impl WriteOp for EntryAdd {

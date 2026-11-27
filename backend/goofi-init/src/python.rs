@@ -77,11 +77,8 @@ pub fn has_goofi(py: &Path) -> bool {
     answers(Command::new(py).args(["-c", &probe]).env_remove("PYTHONPATH").env_remove("PYTHONHOME"))
 }
 
-/// Install the goofi wheel in `wheels` into `py`, unless this goofi is there already.
+/// Install the goofi wheel in `wheels` into `py`.
 pub fn install_wheel(runtime: &Runtime, py: &Path, wheels: &Path) -> Result<(), String> {
-    if has_goofi(py) {
-        return Ok(());
-    }
     let wheel = std::fs::read_dir(wheels)
         .map_err(|e| format!("{}: {e}", wheels.display()))?
         .flatten()

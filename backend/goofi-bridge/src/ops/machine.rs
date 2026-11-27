@@ -193,8 +193,8 @@ impl ReadOp for List {
     }
 }
 
-/// `v` as an attribute's value: a number, a list, a bool or a string.
-fn literal(v: Value) -> Result<Data, String> {
+/// `v` as an attribute's or a variable's value: a number, a list, a bool or a string.
+pub(super) fn literal(v: Value) -> Result<Data, String> {
     serde_json::from_value(v.clone()).map_err(|e| format!("`{v}` is not a number, a list, a bool or a string: {e}"))
 }
 

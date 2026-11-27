@@ -604,7 +604,7 @@ pub fn table(mode: crate::Mode) -> Vec<Row> {
     let demo = goofi_init::demo::demo();
     registry()
         .iter()
-        .filter(|o| !mode.headless || !(o.name == "layout" || o.name.starts_with("layout ")))
+        .filter(|o| !mode.headless || !o.name.starts_with("layout "))
         .filter(|o| !mode.demo || !demo.op(o.name))
         .copied()
         .collect()
