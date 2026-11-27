@@ -2,7 +2,8 @@
 
 Six signal nodes and six shaders connect Biotuner's harmonic geometry to goofi.
 They use three shared harmonic nodes from the [Biotuner bundle](../biotuner/README.md).
-The [survey](SURVEY.md) records the source review and implementation plan.
+The [cookbook](https://goofi.kairos-hive.org/cookbook/harmonic-geometry/index.html) includes ten working
+patches. The [survey](SURVEY.md) records the source review and implementation plan.
 
 | Node | Role |
 | --- | --- |
