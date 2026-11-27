@@ -190,6 +190,16 @@ fn a_producer_paces_itself_to_its_rate_cap_and_follows_a_live_change() {
     g.set_param(osc, "lfo", "sfreq", 1000.0);
     g.until("the new cap to take hold", |_| probe.latest().filter(|d| d.meta().sfreq() == Some(1000.0)));
     at_most(200.0, 100);
+
+    // A cap whose period no wait can count is a node that does not run again on its own, and
+    // never the end of its thread: the next cap paces it as any other does.
+    g.set_param(osc, "common", "max_frequency", 1e-30);
+    g.until("the producer to rest under a cap of nothing", |g| {
+        let seen = probe.count();
+        g.stays(|_| probe.count() == seen).then_some(())
+    });
+    g.set_param(osc, "common", "max_frequency", 60.0);
+    until_faster_than(&g, &probe, 0.1);
 }
 
 #[test]

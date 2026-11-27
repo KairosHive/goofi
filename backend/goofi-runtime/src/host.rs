@@ -23,6 +23,9 @@ const UFREQ_EMA_ALPHA: f64 = 0.2;
 /// Python node's construction executes its module, and `Graph::add_node` holds the graph mutex.
 pub type NodeBuild = Box<dyn FnOnce(&ParamGroups) -> Box<dyn Node> + Send>;
 
+/// How far off a run under a cap of next to nothing is put: past any session, inside any clock.
+const NEVER: Duration = Duration::from_secs(365 * 86_400);
+
 fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(goofi_core::node::panic_message)
 }
@@ -101,9 +104,12 @@ impl HostExecutor {
         exec
     }
 
-    /// When the cap next admits a run: one period after the last one. `None` means now.
+    /// When the cap next admits a run: one period after the last one. `None` means now. A period
+    /// no wait can count, as a cap next to nothing gives, is a run [`NEVER`] due on its own.
     fn due(&self) -> Option<Instant> {
-        Some(self.last_run? + Duration::from_secs_f64(self.policy.period()?))
+        let (last, period) = (self.last_run?, self.policy.period()?);
+        let counted = Duration::try_from_secs_f64(period).ok().and_then(|period| last.checked_add(period));
+        Some(counted.unwrap_or(last + NEVER))
     }
 
     /// The initialization gate: a node whose `setup()` failed is UNINITIALIZED, so nothing runs
