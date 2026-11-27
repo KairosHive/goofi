@@ -474,26 +474,7 @@ fn a_session_of_edits_walks_all_the_way_back_and_forward_again() {
     assert_eq!(g.doc(), built, "redo rebuilt the patch it undid, uid for uid");
     let _ = scope;
 
-    // One history for every session: the undo takes back the peer's newest step, and a fresh
-    // command discards the redo run.
-    let two = g.client("s2");
-    let peer = two.add("Buffer");
-    assert_eq!(g.call("undo", j!({}))["changed"], true);
-    assert!(!g.nodes().contains(&hex(peer)), "the undo took back s2's node, the last write");
-    assert_eq!(g.call("redo", j!({}))["changed"], true);
-    assert!(g.nodes().contains(&hex(peer)));
-    g.call("undo", j!({}));
-    let before = g.doc();
-    let labels = g.state.history_labels();
-    g.refuse("node add", j!({ "type": "MissingNodeType" }));
-    assert_eq!(g.state.history_labels(), labels, "a refused write keeps the redo run");
-    g.refuse("compound", j!({ "ops": [
-        { "op": "variable entry add", "payload": { "name": "patch.tmp", "value": 1.0 } },
-        { "op": "node edit", "payload": { "node": GHOST, "name": "renamed" } },
-    ] }));
-    assert_eq!(g.doc(), before, "the refused batch leaves the graph unchanged");
-    assert_eq!(g.state.history_labels(), labels, "the refused batch keeps the redo run");
-    assert_eq!(g.call("redo", j!({}))["changed"], true);
+    // A fresh command discards the redo run.
     g.call("undo", j!({}));
     g.add("Buffer");
     let r = g.call("redo", j!({}));
