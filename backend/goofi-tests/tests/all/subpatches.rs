@@ -222,7 +222,7 @@ fn removing_a_grouped_member_leaves_no_dangling_entry() {
 }
 
 #[test]
-fn a_cable_onto_a_boundary_stops_at_the_port_and_the_stream_runs_through() {
+fn a_cable_onto_a_boundary_stops_at_the_port() {
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");
