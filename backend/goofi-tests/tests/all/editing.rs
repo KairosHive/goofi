@@ -1515,4 +1515,12 @@ fn a_node_without_a_place_is_packed_clear_and_arrange_lays_a_scope_out_by_datafl
         assert!(pair[1].iter().all(|y| *y > above), "each group starts below the one before: {groups:?}");
     }
     assert!(pos_of(&g, &tail)[0] > pos_of(&g, &head)[0], "a group still runs left to right");
+
+    // A node a hand put past any canvas is still one to pack beside: the add after it lands,
+    // on the grid, and an arrange lays the scope out as before.
+    g.call("node add", j!({ "type": "LFO", "pos": [1e300, 1e300] }));
+    let beyond = add("LFO")["uid"].as_str().unwrap().to_string();
+    assert!(on_grid(pos_of(&g, &beyond)), "{:?}", pos_of(&g, &beyond));
+    g.call("nodes arrange", j!({}));
+    assert!(pos_of(&g, &beyond)[0] < 1e9, "arranged back among the others: {:?}", pos_of(&g, &beyond));
 }

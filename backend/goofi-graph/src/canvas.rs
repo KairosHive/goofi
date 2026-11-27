@@ -32,8 +32,13 @@ fn cells(px: f64) -> i64 {
     (px / GRID).ceil() as i64
 }
 
+/// The furthest cell a place is read as: past any canvas a hand reaches, and far inside what
+/// the packer's sums hold. A position is whatever a caller wrote, so it is no bound of its own.
+const FAR: i64 = 1 << 40;
+
 fn rect_of(pos: [f64; 2], (w, h): (i64, i64)) -> Rect {
-    Rect { x: (pos[0] / GRID).round() as i64, y: (pos[1] / GRID).round() as i64, w, h }
+    let cell = |px: f64| ((px / GRID).round() as i64).clamp(-FAR, FAR);
+    Rect { x: cell(pos[0]), y: cell(pos[1]), w, h }
 }
 
 fn px(x: i64, y: i64) -> [f64; 2] {
