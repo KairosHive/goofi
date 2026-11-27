@@ -511,6 +511,7 @@ pub fn spawn<E: Executor + 'static>(
             let inner = thread_halt.clone();
             inner.wear();
             let posted = thread_mail.clone();
+            let (said, uid, clock) = (shared.clone(), spawn.uid, spawn.time.clone());
             let run = AssertUnwindSafe(move || {
                 let runtime = Runtime {
                     uid: spawn.uid,
@@ -543,7 +544,12 @@ pub fn spawn<E: Executor + 'static>(
                 };
                 runtime.run(&inner);
             });
-            let _ = std::panic::catch_unwind(run);
+            // The loop unwound, and the thread ends here: the fault is the last thing it says, or
+            // the node reads as a healthy one that emits nothing.
+            if let Err(payload) = std::panic::catch_unwind(run) {
+                let msg = format!("the node's runtime stopped: {}", goofi_core::node::panic_message(payload));
+                said.report(uid, born, Status::Fault { fault: Some(NodeFault::Process { msg, since: clock.now() }) });
+            }
             *posted.lock() = Mail { closed: true, ..Mail::default() };
             thread_halt.release();
         })

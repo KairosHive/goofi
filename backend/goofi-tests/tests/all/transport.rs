@@ -263,6 +263,47 @@ fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
     until("the pulse to fire", || (node.log.lock().pulses == [0]).then_some(()));
 }
 
+/// An executor whose pace is broken: the runtime's own loop unwinds on it, outside every guard a
+/// node's hooks run under.
+struct Unpaced;
+
+impl Executor for Unpaced {
+    fn arrive(&mut self, _: usize, _: usize, _: &Data) -> bool {
+        false
+    }
+    fn next_wake(&self, _: Instant) -> Option<Instant> {
+        panic!("the pace is broken")
+    }
+    fn run(&mut self, _: &Cx<'_>, _: &mut dyn FnMut(usize, Out<'_>)) -> Ticked {
+        Ticked::default()
+    }
+}
+
+#[test]
+fn a_runtime_whose_loop_unwinds_reports_the_fault_it_ends_on() {
+    // The thread is gone after it, so the report is the one thing left to say why the node
+    // stopped: a node that ends in silence reads as a healthy one that emits nothing.
+    let fleet = Fleet::new();
+    let spawn = Spawn {
+        engine: "signal",
+        uid: Uid(30),
+        instance: instance(),
+        base: base_of(Uid(30)),
+        manifest: &MANIFEST,
+        decls: MANIFEST.params.to_vec(),
+        params: Arc::new([AtomicU64::new(0)]),
+        time: Arc::new(goofi_supervisor::timing::Time::new()),
+    };
+    let _handle = goofi_runtime::spawn(&goofi_tests::hub(), spawn, fleet.shared.clone(), || Unpaced).expect("a runtime");
+    let why = until("the unwound runtime's fault", || {
+        fleet.reports().into_iter().find_map(|(u, s)| match s {
+            Status::Fault { fault: Some(goofi_core::node::NodeFault::Process { msg, .. }) } if u == Uid(30) => Some(msg),
+            _ => None,
+        })
+    });
+    assert!(why.contains("the pace is broken"), "the fault carries the panic's own words: {why}");
+}
+
 #[test]
 fn a_frame_reaches_a_wired_consumer_and_a_new_bell_rings_once() {
     // A wire is two declarations and nothing else: neither end knows the other's uid. The
