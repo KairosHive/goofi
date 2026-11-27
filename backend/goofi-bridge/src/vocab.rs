@@ -208,7 +208,6 @@ pub fn typescript() -> String {
         })
         .collect::<String>();
     let tags = goofi_node::Tag::ALL.iter().map(|t| format!("'{}'", t.as_str())).collect::<Vec<_>>().join(", ");
-    let control_ids = goofi_core::variables::ControlKind::ALL.iter().map(|k| format!("\n\t| '{}'", k.as_str())).collect::<String>();
     let controls = goofi_core::variables::ControlKind::ALL
         .iter()
         .map(|k| {
@@ -281,6 +280,7 @@ pub fn typescript() -> String {
          // and whether a particular array draws (`viewers/registry.ts`). Regenerate by running\n\
          // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.\n\
          import type {{ IconName }} from '$lib/ui';\n\
+         import type {{ ControlKind }} from './generated';\n\
          \n\
          export type PanelTypeId ={panel_ids};\n\
          \n\
@@ -321,10 +321,8 @@ pub fn typescript() -> String {
          /** The closed vocabulary a node's `tags` come from — the palette facets by it. */\n\
          export const TAGS = [{tags}] as const;\n\
          \n\
-         export type ControlKindId ={control_ids};\n\
-         \n\
          export interface ControlKindInfo {{\n\
-         \treadonly id: ControlKindId;\n\
+         \treadonly id: ControlKind;\n\
          \t/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, an envelope, or any frame's truth. */\n\
          \treadonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'envelope' | 'any';\n\
          \t/** The box it is born in, in grid units. */\n\

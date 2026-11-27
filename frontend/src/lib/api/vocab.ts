@@ -5,6 +5,7 @@
 // and whether a particular array draws (`viewers/registry.ts`). Regenerate by running
 // `cargo test -p goofi-bridge`, which rewrites this file when it drifts.
 import type { IconName } from '$lib/ui';
+import type { ControlKind } from './generated';
 
 export type PanelTypeId =
 	| 'empty'
@@ -79,20 +80,8 @@ export const VIEWER_KINDS: readonly ViewerKindInfo[] = [
 /** The closed vocabulary a node's `tags` come from — the palette facets by it. */
 export const TAGS = ['input', 'output', 'generator', 'transform', 'analysis', 'control', 'image', 'text', 'midi', 'eeg', 'cardio', 'motion', 'music', 'ml', 'connectivity', 'simulation'] as const;
 
-export type ControlKindId =
-	| 'knob'
-	| 'slider'
-	| 'number'
-	| 'text'
-	| 'toggle'
-	| 'dropdown'
-	| 'paint'
-	| 'vector'
-	| 'color'
-	| 'envelope';
-
 export interface ControlKindInfo {
-	readonly id: ControlKindId;
+	readonly id: ControlKind;
 	/** What a widget of this kind draws: one number, a text, an image, a vector, a colour, an envelope, or any frame's truth. */
 	readonly draws: 'number' | 'text' | 'image' | 'vector' | 'color' | 'envelope' | 'any';
 	/** The box it is born in, in grid units. */

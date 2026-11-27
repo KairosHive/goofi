@@ -1,12 +1,12 @@
 /** The control panel's geometry in GRID units, never pixels: the panel's width sets a unit.
  * The drag law that turns a widget lives with the widget, in `$lib/ui/knob`. */
 
-import { CONTROL_KINDS, type ControlKindId, type ControlKindInfo } from '$lib/api/vocab';
-import type { Literal } from '$lib/api/generated';
+import { CONTROL_KINDS, type ControlKindInfo } from '$lib/api/vocab';
+import type { ControlKind, Literal } from '$lib/api/generated';
 import type { Form } from '$lib/stores/variableValues.svelte';
 import { ENVELOPE_BORN } from '$lib/ui/envelope';
 
-export type Kind = ControlKindId;
+export type Kind = ControlKind;
 /** Each widget kind's value type and the box it is born in, by id. */
 export const KIND = Object.fromEntries(CONTROL_KINDS.map((k) => [k.id, k])) as Record<Kind, ControlKindInfo>;
 

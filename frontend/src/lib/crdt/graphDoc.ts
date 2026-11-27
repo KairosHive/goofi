@@ -2,9 +2,9 @@
  * The browser replica of goofi's control-plane document, as `goofi_bridge::projection` builds it.
  * Every reader is total: an absent or wrongly-typed leaf answers a default rather than throwing.
  */
-import { EMPTY_PANEL_TYPE, OWN_GROUPS, SCOPE_TYPE, boundaryType, type ControlKindId } from '$lib/api/vocab';
+import { EMPTY_PANEL_TYPE, OWN_GROUPS, SCOPE_TYPE, boundaryType } from '$lib/api/vocab';
 import { VIDEO_QUALITIES, type VideoQuality } from '$lib/api/types';
-import type { Link, Literal, Lock, Machine } from '$lib/api/generated';
+import type { ControlKind, Link, Literal, Lock, Machine } from '$lib/api/generated';
 import type { LayoutNode, Workspace } from 'panelty';
 import { obj, type Obj } from './ops';
 
@@ -88,7 +88,7 @@ export function linkViews(doc: Doc): Link[] {
 export interface ControlView {
 	/** The generated union, never a restatement of it: a kind added in `vocab.rs` reaches this
 	    view without a second list to remember. */
-	kind: ControlKindId;
+	kind: ControlKind;
 	min?: number;
 	max?: number;
 	step?: number;
