@@ -1,40 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ControlClient, PROTOCOL_VERSION, historyFeed, type ControlEvent } from './control';
-
-/** The socket a client opens: a test opens it, closes it and speaks as the manager. */
-class FakeSocket {
-	static readonly OPEN = 1;
-	static opened: FakeSocket[] = [];
-	readyState = 0;
-	/** Every frame the client sent, parsed, in order. */
-	sent: Array<Record<string, unknown>> = [];
-	private listeners = new Map<string, Array<(e: { data: string }) => void>>();
-
-	constructor(readonly url: string) {
-		FakeSocket.opened.push(this);
-	}
-	addEventListener(type: string, cb: (e: { data: string }) => void): void {
-		this.listeners.set(type, [...(this.listeners.get(type) ?? []), cb]);
-	}
-	send(text: string): void {
-		this.sent.push(JSON.parse(text));
-	}
-	private fire(type: string, data = ''): void {
-		for (const cb of this.listeners.get(type) ?? []) cb({ data });
-	}
-	open(): void {
-		this.readyState = FakeSocket.OPEN;
-		this.fire('open');
-	}
-	close(): void {
-		this.readyState = 3;
-		this.fire('close');
-	}
-	/** One frame from the manager. */
-	say(frame: unknown): void {
-		this.fire('message', typeof frame === 'string' ? frame : JSON.stringify(frame));
-	}
-}
+import { FakeSocket } from '$lib/test/fakeSocket';
 
 /** The animation frames asked for and not yet run. */
 let frames: Array<() => void> = [];
