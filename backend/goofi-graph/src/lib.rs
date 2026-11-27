@@ -157,7 +157,6 @@ pub struct Marks {
 /// What one drain of the engines' reports landed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Drained {
-    pub reports: usize,
     /// Whether a node's stage moved: what a reader waiting on a node's start re-reads for.
     pub staged: bool,
 }
@@ -567,7 +566,7 @@ pub enum Origin {
 /// a write can touch sits behind an `Arc`, a write copies the one node or root it touches, and a
 /// clone is pointers — so the settle reads what a batch changed off two snapshots, pointer by
 /// pointer, and a history entry is a snapshot.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Patch {
     nodes: IndexMap<Uid, Arc<NodeEntry>>,
     /// Keyed by [`Link::key`], in connection order — which IS a multi input's wire order.
@@ -593,6 +592,7 @@ struct Stepped {
 }
 
 /// What runs the patch: the engines, the catalog, the mint and the live instances.
+#[derive(Default)]
 struct Runtime {
     /// The registered engines, signal first, reached only through the trait. Registered at the
     /// composition root, so an empty set is a bare MODEL — it serializes, and runs nothing.
@@ -713,55 +713,17 @@ impl Graph {
     /// `instance` is the service-name scope this graph mints under: fresh per graph and never a
     /// pid, which is reused, since a recycled scope would JOIN stale services.
     pub fn new(instance: String) -> Graph {
-        let patch = Patch {
-            nodes: IndexMap::new(),
-            links: Arc::new(IndexMap::new()),
-            arrangement: Arc::new(layout::Layout::default()),
-            variables: Arc::new(goofi_supervisor::sync::Mutex::new(goofi_core::variables::VariableStore::new())),
-            stepped: Arc::default(),
-            plugins: Arc::default(),
-        };
+        let patch = Patch::default();
         Graph {
             patch: patch.clone(),
             viewpoint: serde_json::Value::Null,
             runtime: Runtime {
-                engines: Vec::new(),
-                waker: Arc::new(DrainWaker::default()),
                 instance,
-                epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-                time: Arc::new(goofi_supervisor::timing::Time::new()),
-                evaluator: None,
-                variable_binds: IndexMap::new(),
-                bindings: HashMap::new(),
                 settled: patch.clone(),
-                settled_edges: Vec::new(),
-                machine_reads: Vec::new(),
-                settled_vars: 0,
                 // Roots of its own, so the first projection carries every root, empty or not.
-                projected: Patch {
-                    nodes: IndexMap::new(),
-                    links: Arc::new(IndexMap::new()),
-                    arrangement: Arc::new(layout::Layout::default()),
-                    variables: patch.variables.clone(),
-                    stepped: Arc::default(),
-                    plugins: Arc::default(),
-                },
-                projected_vars: 0,
-                binds_moved: false,
-                marks: Marks::default(),
-                revision: 0,
-                unavailable: std::collections::BTreeMap::new(),
-                origins: std::collections::HashMap::new(),
+                projected: Patch { variables: patch.variables.clone(), ..Patch::default() },
                 next_uid: 1,
-                redeliver: false,
-                restarts: Vec::new(),
-                rewatched: Vec::new(),
-                generations: HashMap::new(),
-                arm_serial: 0,
-                refreshed: Vec::new(),
-                watched: HashSet::new(),
-                view_wants: HashMap::new(),
-                instances: HashMap::new(),
+                ..Runtime::default()
             },
         }
     }
@@ -2402,9 +2364,9 @@ impl Graph {
         }
     }
 
-    /// Move a node or scope into `scope` (`None` = ROOT), returning its prior membership — the one
-    /// validated re-parent seam. Errors on an unknown uid or a `scope` that is not a live scope.
-    pub fn reparent(&mut self, uid: Uid, scope: Option<Uid>) -> Result<Option<Uid>, String> {
+    /// Move a node or scope into `scope` (`None` = ROOT) — the one validated re-parent seam.
+    /// Errors on an unknown uid or a `scope` that is not a live scope.
+    pub fn reparent(&mut self, uid: Uid, scope: Option<Uid>) -> Result<(), String> {
         if !self.patch.nodes.contains_key(&uid) {
             return Err(format!("reparent: no such node/scope {uid}"));
         }
@@ -2413,9 +2375,8 @@ impl Graph {
                 return Err(format!("reparent: no such scope {s}"));
             }
         }
-        let old = self.scope_of(uid);
         self.set_member_scope(uid, scope);
-        Ok(old)
+        Ok(())
     }
 
     /// Re-tag a member's scope: the one place membership changes. `None` = ROOT scope.
@@ -2589,12 +2550,9 @@ impl Graph {
         Ok(scope_uid)
     }
 
-    /// Dissolve a scope, answering the cables its removal JOINED — each pair of halves that met at
-    /// a port, now one link. Uid-stable.
-    pub fn expand_instance(
-        &mut self,
-        scope: Uid,
-    ) -> Result<Vec<(Uid, &'static str, Uid, &'static str)>, String> {
+    /// Dissolve a scope, joining the cables it cut — each pair of halves that met at a port is
+    /// one link again. Uid-stable.
+    pub fn expand_instance(&mut self, scope: Uid) -> Result<(), String> {
         if !self.is_facade(scope) {
             return Err(format!("expand_instance: no such scope {scope}"));
         }
@@ -2622,13 +2580,10 @@ impl Graph {
         self.patch.nodes.shift_remove(&scope);
         // …and only now, with the members up one level and the wall gone, do the two halves of each
         // cable become one link that both ends can face.
-        let mut joined = Vec::new();
         for (a, so, b, si) in splices {
-            if self.add_link(a, so, b, si).is_ok() {
-                joined.push((a, so, b, si));
-            }
+            let _ = self.add_link(a, so, b, si);
         }
-        Ok(joined)
+        Ok(())
     }
 
     /// Delete a whole sub-patch scope: tear down every member, recursing into nested scopes, then
@@ -2656,18 +2611,6 @@ impl Graph {
                 let _ = self.remove_link(l.node_out, l.slot_out, l.node_in, l.slot_in);
             }
         }
-    }
-
-    /// Take a boundary port off a scope, answering the port it removed. Every `nd()` naming it goes
-    /// unresolvable here rather than at the next edit that happens to touch it.
-    pub fn remove_stub(&mut self, scope: Uid, port: Uid) -> Option<(subpatch::Port, String, [f64; 2])> {
-        self.stub(port).filter(|(s, _)| *s == scope)?;
-        // Its wires go with it, both halves — through the ONE door that removes a link, and BEFORE
-        // the port does, so what the port relayed to is re-planned rather than left subscribed.
-        self.cut_cables(port);
-        let e = self.patch.nodes.shift_remove(&port)?;
-        let Kind::Port(p) = e.kind else { return None };
-        Some((p, e.name.clone(), e.pos))
     }
 
     /// All links as resolved views (snapshot projection).
@@ -2705,8 +2648,12 @@ impl Graph {
         let bridges = if self.is_leaf(uid) { self.bridges_around(uid) } else { Vec::new() };
         let gone: HashSet<Uid> = self.subtree_of(&[uid]).into_iter().collect();
         let unbind = self.arrangement().unbind(&gone);
-        if let Some((scope, _)) = self.stub(uid) {
-            self.remove_stub(scope, uid);
+        if self.stub(uid).is_some() {
+            // A boundary port: its wires go with it, both halves — through the ONE door that
+            // removes a link, and BEFORE the port does, so what the port relayed to is re-planned
+            // rather than left subscribed. Every `nd()` naming it goes unresolvable here.
+            self.cut_cables(uid);
+            self.patch.nodes.shift_remove(&uid);
         } else if self.is_facade(uid) {
             self.remove_instance(uid)?;
         } else {
@@ -3671,7 +3618,7 @@ impl Graph {
                 apply_status_to(nodes, bindings, instances, refreshed, uid, status)
             };
             for e in engines.iter_mut() {
-                drained.reports += e.drain(&mut apply);
+                e.drain(&mut apply);
             }
         }
         // A direct driver has no bridge to settle for it, and the drain-side settle lands what
