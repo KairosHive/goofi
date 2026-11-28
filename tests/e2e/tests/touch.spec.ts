@@ -1,15 +1,6 @@
-// One patch, built with a finger.
-//
-// AGENTS.md makes it a hard constraint that no interaction lives solely behind hover, right-click
-// or a keyboard chord, and that touch gets its own door "gated on the one spelling a test
-// enforces". This is that test. It is a SESSION rather than a suite because a gesture only means
-// something in sequence: a tap after a long press, a drag after a tap, a second tap that is either
-// a double or a new gesture depending on what came before.
-//
-// What is NOT here: tap-target sizes, coarse font sizes, and everything else about how the app
-// MEASURES under a finger. Those are invariants now, swept over the whole scene by
-// `integrity.spec.ts` under this same Pixel 7 project — a rule that names no element beats fifty
-// tests that each name one.
+// One patch, built with a finger: no interaction lives behind hover, right-click or a keyboard
+// chord alone. It is a session, because a gesture means something only in sequence. Tap-target
+// and font sizes under a finger are invariants swept by `integrity.spec.ts`, not asserted here.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { restorePanelType, waitForApp } from '../lib/app';
@@ -52,10 +43,8 @@ test('a held parameter opens modulation without toggling its disclosure', async 
 });
 
 test('a pinch far out keeps a viewer\'s stream, however small the card draws', async ({ page }) => {
-	// `ViewerFeed.svelte` sizes its demand to the zoom and never lets the stream go for zoom alone;
-	// a pinch is how a phone gets far out. The proof is on the wire: `/data` keeps arriving for the
-	// slot past a 0.3 zoom. The fingers close ABOUT the card, so it shrinks in place and never leaves
-	// the viewport, which would let the stream go for a reason that is not the zoom.
+	// A pinch must not let the stream go for zoom alone: `/data` keeps arriving for the slot past
+	// a 0.3 zoom. The fingers close about the card, so it never leaves the viewport.
 	await page.goto('/');
 	await waitForApp(page);
 	try {
@@ -129,11 +118,8 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 			await expect(menu, 'and the release does not close what the press opened').toBeVisible();
 			const box = (await menu.boundingBox())!;
 			const view = page.viewportSize()!;
-			// Anchored to the finger, stated as a property rather than a distance: the press point
-			// lies within one touch target of the menu it opened, wherever the clamp had to put it.
-			// A pinned number here would have to move every time the menu's own height does, and
-			// containment alone was one: the menu clears the finger by design, so it holds only
-			// while the menu is tall enough for the clamp to push it back up.
+			// Anchored to the finger, stated as a property and not a distance: the press point lies
+			// within one touch target of the menu it opened, wherever the clamp put it.
 			const hit = await page.evaluate(() =>
 				parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hit'))
 			);
@@ -215,10 +201,8 @@ test('a patch authored with a finger, and every door hover owns on a desktop', a
 		});
 
 		await test.step('a long press on a control tells what it does, and does NOT do it', async () => {
-			// The other half of the hover door: a desktop learns a control's name by hovering it, and a
-			// finger has to be able to ask without also pressing. Named by test id rather than by
-			// ordinal — the header's right end is a progressive overflow, so which control is first
-			// there is a function of the panel's width.
+			// A finger can ask a control's name without pressing it. The control is named by test id:
+			// which one is first in the header depends on the panel's width.
 			const tip = page.getByTestId('title-tip');
 			const btn = page.getByTestId('panel-maximize').first();
 			const b = (await btn.boundingBox())!;

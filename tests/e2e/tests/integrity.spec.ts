@@ -1,12 +1,6 @@
-// One complex scene, built up in stages, swept for structural violations after each.
-//
-// This is the whole of the app's visual coverage, and deliberately so. It asserts NO design value:
-// every rule in `lib/invariants` compares the app against itself or against its own `--hit` token,
-// so a restyle is free and only the app falling apart is red — a page that scrolls, text clipped
-// away, a control off screen or too small to hit.
-//
-// It runs in every viewport project, which is what makes it a responsive test: the same scene at
-// 1280, at 412 portrait, at 863 landscape and on a tablet, judged by one rule set.
+// One complex scene, built up in stages, swept for structural violations after each. It asserts no
+// design value: every rule in `lib/invariants` compares the app against itself or its `--hit`
+// token. It runs in every viewport project, which makes it the responsive test.
 
 import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -307,10 +301,8 @@ test('a patch under construction holds together at every stage', async ({ page }
 });
 
 test('the primitive gallery holds together', async ({ page }) => {
-	// `/dev/ui` renders one sample of every primitive the `$lib/ui` barrel exports, so sweeping it
-	// asks the integrity question of the whole component library at once — including the primitives
-	// no screen in the app happens to be showing right now. It is served only under `--debug`, which
-	// is how the fleet spawns.
+	// `/dev/ui` renders one sample of every primitive the `$lib/ui` barrel exports. It is served
+	// only under `--debug`, which is how the fleet spawns.
 	await page.goto('/dev/ui');
 	await expect(page.getByTestId('ui-button-default-md')).toBeVisible();
 	await expectIntact(page, 'the primitive gallery');

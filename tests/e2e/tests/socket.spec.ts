@@ -1,12 +1,6 @@
-// The seam: the frontend's socket client and the backend's document, meeting in a real browser.
-//
-// Everything goofi can DO is reachable through the op vocabulary, and `goofi-tests` proves it there
-// against the manager itself. What only a browser can answer is whether the two halves of the
-// socket fit — without slack, so nothing the client issues fails to land, and without overlap, so
-// nothing lands twice or is held in two places that can disagree.
-//
-// The oracle is a RAW `/control` socket of the test's own. Asking the page's replica what the
-// backend holds would ask the accused to testify.
+// The seam: the frontend's socket client and the backend's document, in a real browser. `goofi-tests`
+// proves the ops against the manager; this proves that what the client issues lands once.
+// The oracle is a raw `/control` socket of the test's own, not the page's replica.
 
 type Link = { node_out: string; node_in: string; slot_in: string };
 import { test, expect, type Browser, type Page } from '@playwright/test';
@@ -63,13 +57,8 @@ async function expectAgreement(page: Page, what: string): Promise<string[]> {
 	return last.backend;
 }
 
-/**
- * Remove every node the manager holds.
- *
- * Run at the START of a session as well as in its `finally`: a session that depends on the previous
- * spec's teardown having landed is a session that fails for another file's reasons. Twice in
- * thirteen full runs, one of these opened against a backend that was not yet empty.
- */
+/** Remove every node the manager holds. Run at the start of a session and in its `finally`, so a
+ * session does not depend on the teardown of the spec before it. */
 async function clearGraph(page: Page): Promise<void> {
 	await page.evaluate(async () => {
 		const g = (window as any).goofi;
@@ -359,10 +348,8 @@ test.describe('the control socket', () => {
 					)
 					.toBe(true);
 
-				// A cable from OUTSIDE names the port, and the canvas must reroute it onto the facade's
-				// handle. The link and the drawing are two different questions, and only a browser
-				// answers the second: the manager holds `feeder → port`, while the top level draws
-				// `feeder → scope@port`, and nothing outside this file crosses that gap.
+				// A cable from outside names the port, and the canvas must draw it onto the facade's
+				// handle: the manager holds `feeder → port`, the top level draws `feeder → scope@port`.
 				const feeder = await addNode(page, 'LFO', [-200, 0]);
 				await waitForNode(page, feeder);
 				await page.evaluate(
@@ -429,10 +416,7 @@ test.describe('the control socket', () => {
 			});
 
 			await test.step('a sub-patch is copied whole, and a selection is CUT into one', async () => {
-				// The clipboard is the one seam neither half's suite can reach: `goofi-tests` proves
-				// copy_nodes/paste_nodes against the manager, and the editor's own tests prove what
-				// the store sends — but only a browser carries a payload OUT through the platform
-				// clipboard and back in, which is what a copy and a paste actually are.
+				// Only a browser carries a payload out through the platform clipboard and back in.
 				await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 				const a = await addNode(page, 'LFO', [0, 300]);
 				const b = await addNode(page, 'Buffer', [280, 300]);
@@ -813,10 +797,8 @@ test.describe('the control socket', () => {
 		page: Page;
 		browser: Browser;
 	}) => {
-		// The failure this exists for: a client that reconnects and MERGES its stale replica onto a
-		// document that moved under it. Nothing about that is visible without a real drop, which is
-		// why neither half's own suite can ask it — the backend never sees the tab go, and the
-		// frontend's fake socket never really closed.
+		// A client that reconnects must not merge its stale replica onto a document that moved.
+		// Only a real drop shows it: the backend never sees the tab go, and a fake socket never closed.
 		await armSocketControl(page);
 		await page.goto('/');
 		await waitForApp(page);
@@ -925,13 +907,9 @@ test.describe('the control socket', () => {
 	});
 
 	test('a client the manager cannot speak to is told, not left half-working', async ({ page }) => {
-		// The one failure mode where BOTH halves' own suites stay green: `PROTOCOL_VERSION` is declared
-		// by hand on each side, each comments that the other must be bumped with it, and a client one
-		// version behind still connects. `contracts.rs` pins that the two numbers agree; this pins what
-		// the client does when they do not.
-		//
-		// The socket is PROXIED to the real server, not faked — only the hello frame's version is
-		// rewritten on the way through, so everything else is the manager's own traffic.
+		// `contracts.rs` pins that the two `PROTOCOL_VERSION` numbers agree; this pins what the client
+		// does when they do not. The socket is proxied to the real server, and only the version of
+		// the hello frame is rewritten on the way through.
 		await page.routeWebSocket(/\/control(\?.*)?$/, (ws) => {
 			const server = ws.connectToServer();
 			server.onMessage((m) => {
@@ -988,15 +966,9 @@ test.describe('the control socket', () => {
 			const summary = await spanning();
 
 			await test.step('a SECOND viewer on the same slot is served, and closing it leaves the first', async () => {
-				// "One data stream per (node, slot), whatever the viewer count" is the architecture's
-				// load-bearing claim about viewers; `running.rs` proves the manager's half, folding six
-				// subscribers to one and then to none. What only a browser can say is that a second
-				// viewer does not disturb the first — a detach and re-attach inside one render tick is
-				// exactly the batch that used to pass through zero and tear the stream down under every
-				// other viewer of that slot.
-				//
-				// A SPLIT, not a second tab: switching tabs unmounts the first viewer, so the two would
-				// never be live at once and the question would not be asked at all.
+				// `running.rs` proves the manager folds the viewers of a slot into one stream. What a browser
+				// adds: a second viewer does not disturb the first. A split, not a second tab, because a tab
+				// switch unmounts the first viewer and the two would never be live at once.
 				await expect.poll(read, { message: 'the canvas viewer is served' }).not.toBeNull();
 
 				await splitRight(page);

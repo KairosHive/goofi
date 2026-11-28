@@ -8,17 +8,10 @@ import { closeSplit, resetPatch, splitRight, waitForApp } from '../lib/app';
 import { dismiss, spawnSh, stateOf } from '../lib/harness';
 
 /**
- * The agent panel, driven end to end against a real PTY.
- *
- * **Nothing here needs an agent harness installed.** The harness spawned is `_sh` — a config
- * entry `globalSetup` writes into the scoped `GOOFI_HOME`, a plain `sh`, the same `_`-prefixed
- * idiom the node catalog uses — so the terminal, the transcript and the whole detach/kill
- * lifecycle are driven by a binary every machine has. It is spawned over a raw `/control` socket
- * because the launcher never advertises a `_` entry, and a client attaching to an instance it
- * did not spawn is the production path a second tab takes.
- *
- * The markers are spelled `goofi''markN`, which the shell's own echo shows verbatim and only the
- * CHILD prints joined — so no assertion below can pass on the line discipline repeating the input.
+ * The agent panel, driven end to end against a real PTY. The harness is `_sh`, a plain `sh` that
+ * `globalSetup` writes into the scoped `GOOFI_HOME`, spawned over a raw `/control` socket because
+ * the launcher lists no `_` entry. The markers are spelled `goofi''markN`: only the child prints
+ * them joined, so no assertion passes on the echo of the input.
  */
 
 /** Make the last panel an agent panel and wait for it to attach. A fresh agent panel claims a
