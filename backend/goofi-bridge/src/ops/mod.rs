@@ -610,23 +610,23 @@ pub fn table(mode: crate::Mode) -> Vec<Row> {
         .collect()
 }
 
-/// The frontend's `OpName` union and each op's kind, generated from the registry and checked
-/// into the tree.
+/// The frontend's `OpName` union and the ops that are writes, generated from the registry and
+/// checked into the tree.
 pub fn typescript() -> String {
     let names: Vec<String> =
         registry().iter().map(|o| format!("\t| '{}'", o.name)).collect();
-    let kinds: Vec<String> =
-        registry().iter().map(|o| format!("\t'{}': '{}'", o.name, o.handler.name())).collect();
+    let writes: Vec<String> =
+        registry().iter().filter(|o| o.handler.is_write()).map(|o| format!("\t'{}'", o.name)).collect();
     format!(
         "// GENERATED from backend/goofi-bridge/src/ops/mod.rs — do not edit by hand.\n\
          // The manager's op registry is the only place an op name is declared: naming one that is\n\
          // not in it is a type error here and an `unknown op` refusal there. Regenerate by running\n\
          // `cargo test -p goofi-tests contracts::`, which rewrites this file when it drifts.\n\
          export type OpName =\n\t| `plugin ${{string}}`\n{};\n\n\
-         /** A write is a history step; a read touches nothing; an effect owns its consequences. */\n\
-         export const OP_KINDS: Record<string, 'read' | 'write' | 'effect'> = {{\n{}\n}};\n",
+         /** The writes: each is a history step. */\n\
+         export const WRITE_OPS: ReadonlySet<OpName> = new Set([\n{}\n]);\n",
         names.join("\n"),
-        kinds.join(",\n")
+        writes.join(",\n")
     )
 }
 

@@ -1,7 +1,7 @@
 /** Test double for `Control`: it records every `call`, a test drives events with `emit`, and it
  * keeps the manager's per-write history, so a store test sees the undo and redo the manager would. */
 import { historyFeed, type Control, type ControlEvent, type Step } from '$lib/api/control';
-import { OP_KINDS, type OpName } from '$lib/api/ops';
+import { WRITE_OPS, type OpName } from '$lib/api/ops';
 
 interface Entry {
 	label: string;
@@ -73,7 +73,7 @@ export class FakeControl implements Control {
 			historyFeed.labels(this.labels());
 			return Promise.resolve(reply as T);
 		}
-		if (OP_KINDS[op] === 'write' || op === 'compound') {
+		if (WRITE_OPS.has(op) || op === 'compound') {
 			this.step(op, step);
 			historyFeed.labels(this.labels());
 		}
