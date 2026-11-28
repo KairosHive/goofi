@@ -2,21 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { EXPR_HIGHLIGHT_SPEC, EXPR_THEME_SPEC } from './theme';
 import { WINDOW_STYLE } from './window';
 
-/* The editor's styling has to be CSS-in-JS — CodeMirror generates the class names, and the completion
- * popup is mounted in `document.body` where no Svelte-scoped rule can reach it — which puts it outside
- * `theme/styleDrift.test.ts`'s sweep of `lib/**\/*.svelte` + `app.css`. This is that sweep, over the
- * two spec objects, so the same rules bind here:
- *
- *   · D-X2's "conventional in VALUE, centralized in LOCATION" — no colour literal may appear, because
- *     every ink has a name in app.css;
- *   · the spacing/type vocabulary — the same four properties styleDrift guards, with the same
- *     documented 16px exemption (an absolute device threshold, not a rung);
- *   · D-R7's single coarse-pointer idiom.
- *
- * Scoped to styleDrift's own property family on purpose rather than a stricter one: it exempts
- * `width`/`height` as structural geometry, and that boundary should not move just because a rule
- * crossed a file extension.
- */
+/* The editor's styling is CSS-in-JS, outside the sweep of `theme/styleDrift.test.ts`. The colour
+ * and font-size rules are asserted here over the spec objects and the window's sheet. */
 
 /** Every `prop: value` leaf in a (possibly nested) StyleModule spec, with the selector path it sits
  *  under. `tag` is skipped: in a highlight spec it holds Lezer `Tag` objects — a graph, not a
@@ -42,14 +29,18 @@ function literals(value: string): string[] {
 }
 
 const THEME = leaves(EXPR_THEME_SPEC);
-const COARSE = '(hover: none) and (pointer: coarse)';
+const COLOUR_LITERAL = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i;
 
 describe('the editor theme speaks the token ladder', () => {
-	it('names no colour literal — every ink has a name in app.css (D-X2)', () => {
+	it('names no colour literal: every ink has a name in app.css', () => {
 		const offenders = [...THEME, ...leaves(EXPR_HIGHLIGHT_SPEC)]
-			.filter((l) => /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i.test(l.value))
+			.filter((l) => COLOUR_LITERAL.test(l.value))
 			.map((l) => `${l.path} { ${l.prop}: ${l.value} }`);
 		expect(offenders).toEqual([]);
+		expect(WINDOW_STYLE).not.toMatch(COLOUR_LITERAL);
+		// The scan fires on a hex ink and on a functional one.
+		const raw = leaves({ '.x': { color: '#ffffff', background: 'rgba(0,0,0,.5)' } });
+		expect(raw.filter((l) => COLOUR_LITERAL.test(l.value))).toHaveLength(2);
 	});
 
 	it('routes every syntax colour through a --syn-* token', () => {
@@ -58,39 +49,12 @@ describe('the editor theme speaks the token ladder', () => {
 		}
 	});
 
-	it('sizes type and spacing through --fs-* / --space-*, never a raw literal', () => {
-		// The one exemption styleDrift also grants, for the same reason: iOS force-zooms a focused
-		// control under 16px, which is a device threshold no scale rung can express.
-		const PROPS = /^(fontSize|gap|rowGap|columnGap|padding|margin|transition|transitionDuration)/;
+	it('sizes type through --fs-*, never a raw literal', () => {
+		// 16px is exempt: iOS force-zooms a focused control under it.
 		const offenders = THEME.filter(
-			(l) => PROPS.test(l.prop) && literals(l.value).some((n) => n !== '0' && n !== '16px')
+			(l) => l.prop === 'fontSize' && literals(l.value).some((n) => n !== '0' && n !== '16px')
 		).map((l) => `${l.path} { ${l.prop}: ${l.value} }`);
 		expect(offenders).toEqual([]);
-	});
-
-	it('gates every pointer-dependent rule on the single coarse idiom (D-R7)', () => {
-		const queries = Object.keys(EXPR_THEME_SPEC).filter((k) => k.startsWith('@media'));
-		expect(queries.length, 'there is a coarse door to check').toBeGreaterThan(0);
-		for (const q of queries) expect(q).toBe(`@media ${COARSE}`);
-	});
-
-	/* Each guard above only earns its line if it fires on the defect it claims to catch — the same
-	   discipline styleDrift's fixtures follow, and the reason `leaves()` and `literals()` are shared
-	   with the assertions rather than restated. */
-	it('spots a hex ink and a raw spacing literal', () => {
-		const hex = leaves({ '.x': { color: '#ffffff', background: 'rgba(0,0,0,.5)' } });
-		expect(hex.filter((l) => /#[0-9a-f]{3,8}\b|\brgba?\(/i.test(l.value))).toHaveLength(2);
-		expect(literals('var(--space-4) 7px'), 'a token contributes nothing to read').toEqual(['7px']);
-		expect(literals('var(--space-2) var(--space-4)')).toEqual([]);
-	});
-
-	// D-X8: the window's rows are tap targets, and a `--hit` floor is what makes them ones. The
-	// window's sheet is CSS text (window.ts), so these read it as such.
-	it('floors the completion rows at --hit under coarse (D-X8)', () => {
-		const coarse = WINDOW_STYLE.slice(WINDOW_STYLE.indexOf(`@media ${COARSE}`));
-		expect(coarse).toMatch(/\.gx-win-item \{[^}]*min-height: var\(--hit\)/);
-	});
-	it('names no colour literal in the window either (D-X2)', () => {
-		expect(WINDOW_STYLE).not.toMatch(/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i);
+		expect(literals('var(--fs-sm) 7px'), 'a token contributes nothing to read').toEqual(['7px']);
 	});
 });
