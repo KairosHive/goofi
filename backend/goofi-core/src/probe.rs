@@ -72,7 +72,7 @@ pub struct Param {
     #[serde(default)]
     pub section: u8,
     /// The rules that must all hold for the inspector to show the param; one rule may stand bare.
-    #[serde(default, deserialize_with = "one_or_many_shows", skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "one_or_many", skip_serializing_if = "Vec::is_empty")]
     pub show: Vec<Show>,
     /// The part the param plays in a declared section; `None` for a row of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,20 +119,6 @@ pub struct Show {
     pub any_of: Vec<String>,
 }
 
-/// A rule on its own or a list of them, both read as the list.
-fn one_or_many_shows<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Show>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(Show),
-        Many(Vec<Show>),
-    }
-    Ok(match OneOrMany::deserialize(d)? {
-        OneOrMany::One(s) => vec![s],
-        OneOrMany::Many(v) => v,
-    })
-}
-
 /// The kind-specific fields, tagged by `kind` — exhaustive, so neither side has an unknown kind.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -161,13 +147,13 @@ pub enum ParamSpec {
     Pulse {},
 }
 
-/// A number on its own or a list of them, both read as the list.
-fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
+/// A value on its own or a list of them, both read as the list.
+fn one_or_many<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum OneOrMany {
-        One(f64),
-        Many(Vec<f64>),
+    enum OneOrMany<T> {
+        One(T),
+        Many(Vec<T>),
     }
     Ok(match OneOrMany::deserialize(d)? {
         OneOrMany::One(v) => vec![v],
