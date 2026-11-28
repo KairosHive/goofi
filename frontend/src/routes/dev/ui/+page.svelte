@@ -21,7 +21,6 @@
 		Dialog,
 		Badge,
 		Chip,
-		Combobox,
 		Segmented,
 		StatusDot,
 		EmptyState,
@@ -77,7 +76,6 @@
 
 	let segment = $state('a');
 	let segmentSet = $state<string[]>(['x']);
-	let combo = $state('beta');
 </script>
 
 <main class="gallery">
@@ -311,19 +309,6 @@
 			{#each badgeTones as tone (tone)}
 				<Badge {tone}>{tone}</Badge>
 			{/each}
-		</div>
-	</section>
-
-	<section>
-		<h2>Combobox (a list that typing filters)</h2>
-		<div class="form">
-			<Combobox
-				value={combo}
-				options={() => ['alpha', 'beta', 'gamma', 'delta'].map((label) => ({ label, detail: label.length + ' letters' }))}
-				onCommit={(v) => (combo = v)}
-				placeholder="greek"
-				testid="ui-combobox"
-			/>
 		</div>
 	</section>
 
