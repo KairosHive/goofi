@@ -47,41 +47,47 @@ describe('node lifecycle stage', () => {
 		expect(g.nodeById('n1')?.stage).toBe('ready');
 	});
 
-	it('the runtime rides the snapshot overlay and SURVIVES a re-assemble', () => {
-		// The tier is neither in the doc nor on the event stream: it arrives once, on the snapshot,
-		// so anything that rebuilds a node from the doc has to carry it or the pill goes blank.
+	it('the snapshot overlay reaches a node before and after the doc holds it, and a doc change keeps it', () => {
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
-		// The hello lands FIRST and resets the replica, so the doc is seeded after it — the real
-		// order, and the one where the overlay is stashed for a node yet to materialize.
+		// The hello lands first and resets the replica: the overlay waits for a node yet to come.
 		fc.emit({
 			event: 'hello',
-			payload: snapshot({ runtime: { n1: { stage: 'ready', error: null, runtime: 'subprocess' } } })
+			payload: snapshot({ runtime: { n1: { stage: 'error', error: 'ImportError: no scipy', runtime: 'subprocess' } } })
 		});
 		const d = seed(fc);
 		g.nodeTypes = catalog();
 		d.node('n1', 'PSD', 'psd0', [0, 0]);
-		expect(g.nodeById('n1'), 'the node materialized at all').toBeDefined();
-		expect(g.nodeById('n1')?.runtime).toBe('subprocess');
+		const runtime = () => {
+			const n = g.nodeById('n1')!;
+			return [n.stage, n.error, n.runtime, n.stats];
+		};
+		fc.emit({ event: 'node_stats', payload: { stats: { n1: { updates_per_second: 12.4 } } } });
+		const seeded = ['error', 'ImportError: no scipy', 'subprocess', { updates_per_second: 12.4 }];
+		expect(runtime()).toEqual(seeded);
 
-		// A rename re-assembles every node from the doc. The tier is not in the doc, so this is the
-		// step that loses it.
+		// None of it is in the doc: a rename and a new node must not reset it.
 		d.patch({ nodes: { n1: { name: 'renamed' } } });
+		d.node('n2', 'PSD', 'psd1', [1, 1]);
 		expect(g.nodeById('n1')?.name).toBe('renamed');
-		expect(g.nodeById('n1')?.runtime).toBe('subprocess');
+		expect(runtime()).toEqual(seeded);
 
 		// …and a state_update, which carries no runtime at all, must not blank it either.
 		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'error', error: 'GIL' } });
 		expect(g.nodeById('n1')?.stage).toBe('error');
 		expect(g.nodeById('n1')?.runtime).toBe('subprocess');
 
-		// A reconnect re-sends the overlay for nodes ALREADY here — the other half of the seam, and
-		// where a demotion the client missed while offline arrives.
+		// A reconnect and a load re-send the overlay for a node already here.
 		fc.emit({
 			event: 'hello',
 			payload: snapshot({ runtime: { n1: { stage: 'ready', error: null, runtime: 'in-process' } } })
 		});
-		expect(g.nodeById('n1')?.runtime).toBe('in-process');
+		expect(runtime().slice(0, 3)).toEqual(['ready', null, 'in-process']);
+		fc.emit({
+			event: 'graph_replaced',
+			payload: snapshot({ runtime: { n1: { stage: 'error', error: 'boom', runtime: 'in-process' } } })
+		});
+		expect(runtime().slice(0, 3)).toEqual(['error', 'boom', 'in-process']);
 	});
 
 	it('a node ADDED after connecting gets its runtime off the transition channel', () => {

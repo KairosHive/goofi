@@ -3,16 +3,14 @@ import { FakeControl } from '$lib/test/fakeControl';
 import { seed } from '$lib/test/docSeed';
 import { GraphStore } from './graph.svelte';
 import { nodesMap } from '$lib/crdt/graphDoc';
-import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
+import type { NodeTypeInfo } from '$lib/api/control';
 import { slotView, isSlotExpanded } from '$lib/viewers/inlineView';
 import { typeInfo } from '$lib/test/typeInfo';
 import { numParam } from '$lib/test/param';
 import { snapshot } from '$lib/test/snapshot';
 
 /** A minimal hello/graph_replaced snapshot; `node_types` optionally carries the palette inline. */
-function helloSnap(node_types?: NodeTypeInfo[], runtime: GraphSnapshot['runtime'] = {}): GraphSnapshot {
-	return snapshot({ node_types, runtime });
-}
+const helloSnap = (node_types?: NodeTypeInfo[]) => snapshot({ node_types });
 
 /** The catalog (list_nodes) the manager provides — the static per-type descriptor source. */
 function catalog(): NodeTypeInfo[] {
@@ -149,30 +147,6 @@ describe('expression live value survives a doc rebuild', () => {
 	});
 });
 
-describe('node runtime survives a doc rebuild', () => {
-	it('a survivor keeps its event-sourced stage, error and stats when an unrelated node lands', () => {
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		const d = seed(fc);
-		g.nodeTypes = catalog();
-		d.node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
-
-		// The three node-level fields the doc never holds, each from its own event.
-		fc.emit({ event: 'state_update', payload: { node: 'n1', options: {}, stage: 'ready', error: 'boom' } });
-		fc.emit({ event: 'node_stats', payload: { stats: { n1: { updates_per_second: 12.4 } } } });
-		expect([g.nodeById('n1')!.stage, g.nodeById('n1')!.error]).toEqual(['ready', 'boom']);
-
-		// An unrelated doc write rebuilds every node from doc + catalog. The rebuild carries the
-		// runtime forward through `_extractRuntime` → `assembleNode`, so the survivor must not be
-		// blanked back to a healthy, statless boot state.
-		d.node('n2', 'signal:Oscillator', 'osc1', [1, 1]);
-		const n = g.nodeById('n1')!;
-		expect(n.stage, 'stage survives the rebuild').toBe('ready');
-		expect(n.error, 'error survives the rebuild').toBe('boom');
-		expect(n.stats, 'stats survive the rebuild').toEqual({ updates_per_second: 12.4 });
-	});
-});
-
 describe('catalog-in-hello — the palette rides on the snapshot, no async list_nodes', () => {
 	it('a hello carrying node_types sets the catalog synchronously (doc-authoritative from render 1)', () => {
 		const fc = new FakeControl();
@@ -183,44 +157,6 @@ describe('catalog-in-hello — the palette rides on the snapshot, no async list_
 		expect(g.nodeTypes?.length).toBe(1);
 		// …and no async round-trip was issued for it.
 		expect(fc.recordedCalls().some((c) => c.op === 'library list')).toBe(false);
-	});
-
-	it('seeds the event-sourced runtime overlay from the snapshot', () => {
-		// The runtime stream (the stats sweep) pushes only TRANSITIONS, so a client connecting to a
-		// running graph would render an errored node as healthy without this seed. Structure still
-		// comes from the doc alone — the snapshot carries no node list to fall back on.
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		fc.emit({
-			event: 'hello',
-			payload: helloSnap(catalog(), { n1: { stage: 'error', error: 'ImportError: no scipy' } })
-		});
-		// The seeder is made AFTER the hello, because that is the order the manager sends: a new
-		// session's `hello` empties the replica, and the `doc_state` that follows fills it.
-		seed(fc).node('n1', 'signal:Oscillator', 'osc0', [0, 0]);
-
-		const n = g.nodeById('n1')!;
-		expect(n.error).toBe('ImportError: no scipy');
-		expect(n.stage).toBe('error');
-	});
-
-	it('applies the runtime overlay to nodes the doc delta already materialized', () => {
-		// The delta and the `graph_replaced` frame share one socket in no fixed order, so the
-		// overlay must also apply to nodes that already exist.
-		const fc = new FakeControl();
-		const g = new GraphStore(fc);
-		fc.emit({ event: 'hello', payload: helloSnap(catalog()) });
-		seed(fc).node('n9', 'signal:Oscillator', 'osc0', [0, 0]);
-		expect(g.nodeById('n9')!.error).toBeFalsy();
-
-		fc.emit({
-			event: 'graph_replaced',
-			payload: helloSnap(catalog(), { n9: { stage: 'error', error: 'ImportError: no scipy' } })
-		});
-
-		const n = g.nodeById('n9')!;
-		expect(n.stage, 'the overlay applies in the delta-first order too').toBe('error');
-		expect(n.error).toBe('ImportError: no scipy');
 	});
 
 	it('a load is settled only once the replica reaches the version the snapshot names', () => {
