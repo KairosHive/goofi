@@ -47,7 +47,6 @@ export interface SettingDescriptor {
 export type SettingsMap = Record<string, SettingValue>;
 
 export interface ViewerModule {
-	readonly id: ViewerKind;
 	/** Its cog menu, in order. */
 	readonly settings: SettingDescriptor[];
 	/** What one viewer `w`×`h` device px wide asks of a frame it draws, under `settings`. */

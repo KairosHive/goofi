@@ -45,34 +45,8 @@ function assign(target: Obj, key: string, value: unknown): void {
 	if (held !== value && JSON.stringify(held) !== JSON.stringify(value)) target[key] = value;
 }
 
-/** The ops that take `before` to `after`: an entry of a root map re-sent whole when it moved,
- * any other root re-sent whole — as the manager computes them. */
-export function diffOps(before: Obj, after: Obj): Op[] {
-	const ops: Op[] = [];
-	const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-	for (const [root, av] of Object.entries(after)) {
-		const bv = before[root];
-		if (isObj(bv) && isObj(av) && !keepsOrder(bv, av)) {
-			ops.push({ op: 'put', path: [root], value: av as JsonValue });
-		} else if (isObj(bv) && isObj(av)) {
-			for (const [key, v] of Object.entries(av)) {
-				if (!(key in bv) || !same(bv[key], v)) ops.push({ op: 'put', path: [root, key], value: v as JsonValue });
-			}
-			for (const key of Object.keys(bv)) {
-				if (!(key in av)) ops.push({ op: 'del', path: [root, key] });
-			}
-		} else if (!(root in before) || !same(bv, av)) {
-			ops.push({ op: 'put', path: [root], value: av as JsonValue });
-		}
-	}
-	for (const root of Object.keys(before)) {
-		if (!(root in after)) ops.push({ op: 'del', path: [root] });
-	}
-	return ops;
-}
-
 /** Whether per-key ops on `before` leave its keys in `after`'s order. */
-function keepsOrder(before: Obj, after: Obj): boolean {
+export function keepsOrder(before: Obj, after: Obj): boolean {
 	const kept = Object.keys(before).filter((k) => k in after);
 	const added = Object.keys(after).filter((k) => !(k in before));
 	return [...kept, ...added].join('\0') === Object.keys(after).join('\0');

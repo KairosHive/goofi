@@ -13,8 +13,9 @@
 	import { watchVariables } from '$lib/stores/variableValues.svelte';
 	import ExprEditor from '$lib/inspector/expr/ExprEditor.svelte';
 	import { Badge, Button, ColorPicker, Field, FieldGrid, Icon, IconButton, Segmented, Select, under, ContextMenu } from '$lib/ui';
+	import { hexOf, parseHex } from '$lib/ui/color';
 	import { numberDescriptor } from './attributes';
-	import { dotColor, hexToRgba, rgbaToHex } from './layout';
+	import { dotColor } from './layout';
 	import { DECISIONS, editEach, mixed, outgoing as outgoingOf, relink, shares, stateOf, summary as transitionSummary, weightsOf } from './model';
 	import TransitionForm from './TransitionForm.svelte';
 
@@ -155,7 +156,7 @@
 			{#each here as p (p)}
 				{@const ph = m.playheads[p]}
 				<div class="row" data-testid={`playhead-${ph.name}`}>
-					<span class="swatch"><ColorPicker value={hexToRgba(dotColor(ph.color, playheads.indexOf(p)))} aria-label={`${ph.name} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: rgbaToHex(rgba) })} /></span>
+					<span class="swatch"><ColorPicker value={parseHex(dotColor(ph.color, playheads.indexOf(p))) ?? [0, 0, 0, 1]} aria-label={`${ph.name} colour`} onChange={(rgba) => call('machine playhead edit', { name: p, color: hexOf(rgba.slice(0, 3)) })} /></span>
 					<span class="mono"><RenameField value={ph.name} valid={isValidIdentifier} label="Playhead name" testid="playhead-name" onRename={(to) => call('machine playhead edit', { name: p, to })} /></span>
 					<span class="hint" title="Where it is now">in <span class="mono" data-testid="playhead-state">{m.states[stateOf(m, p)]?.name}</span></span>
 					<span class="hint" title="Where a reset and a load put it">starts</span>

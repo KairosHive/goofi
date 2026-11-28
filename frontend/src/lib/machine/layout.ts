@@ -35,17 +35,3 @@ const PALETTE = ['#f59e0b', '#38bdf8', '#a3e635', '#f472b6', '#c084fc', '#fb7185
 export function dotColor(color: string, index: number): string {
 	return color || PALETTE[index % PALETTE.length];
 }
-
-/** `#rrggbb` or `#rrggbbaa` as red, green, blue and alpha in 0..1. */
-export function hexToRgba(hex: string): number[] {
-	const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(hex);
-	if (!m) return [0, 0, 0, 1];
-	const n = parseInt(m[1], 16);
-	return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => c / 255).concat(m[2] ? parseInt(m[2], 16) / 255 : 1);
-}
-
-/** Red, green, blue in 0..1 as `#rrggbb`; the alpha is dropped, a dot is opaque. */
-export function rgbaToHex([r, g, b]: number[]): string {
-	const byte = (c: number): string => Math.round(Math.min(1, Math.max(0, c ?? 0)) * 255).toString(16).padStart(2, '0');
-	return `#${byte(r)}${byte(g)}${byte(b)}`;
-}

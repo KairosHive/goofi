@@ -2,7 +2,6 @@
 import type { ViewerModule } from '../module';
 
 export const string: ViewerModule = {
-	id: 'string',
 	settings: [
 		{ key: 'markdown', label: 'Markdown', type: 'toggle', default: false },
 		{ key: 'wrap', label: 'Word wrap', type: 'toggle', default: true }

@@ -8,7 +8,6 @@ import { COLORMAPS } from '../colormaps';
 const BRAIN_MODES = ['auto', 'topomap', 'ring', '3d'] as const;
 
 export const brain: ViewerModule = {
-	id: 'brain',
 	settings: [
 		{ key: 'mode', label: 'Mode', type: 'select', default: 'auto', options: [...BRAIN_MODES] },
 		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'magma', options: COLORMAPS },

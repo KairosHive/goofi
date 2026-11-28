@@ -39,31 +39,15 @@ export interface DrawnState {
 	drag: boolean;
 }
 
-export interface Drawing {
-	readonly plots: Plot[];
-	setBackground(hex: string): void;
-	place(x: number, y: number, w: number, h: number, z: number): void;
-	/** Draw `frame` under `settings`; what follows reads off what was drawn. */
-	push(frame: DataFrame, settings: SettingsMap, box: DrawBox): void;
-	/** Drop the picture: the background alone until the next push. */
-	clear(): void;
-	remove(): void;
-	readonly probe: Probe | null;
-	readonly drag: Drag | null;
-	/** The corner labels: top-left, bottom-left, bottom-right; '' leaves a corner empty. */
-	readonly labels: string[];
-	readonly texts: PlacedText[];
-	/** What the picture could not show, in its place. */
-	readonly message: string | null;
-}
-
 /** The shared part: rect, order and background over every plot, and empty DOM state. */
-export abstract class Base implements Drawing {
+export abstract class Drawing {
 	abstract readonly plots: Plot[];
 	probe: Probe | null = null;
 	drag: Drag | null = null;
+	/** The corner labels: top-left, bottom-left, bottom-right; '' leaves a corner empty. */
 	labels: string[] = [];
 	texts: PlacedText[] = [];
+	/** What the picture could not show, in its place. */
 	message: string | null = null;
 	setBackground(hex: string): void {
 		for (const p of this.plots) p.setBackground(hex);
@@ -75,7 +59,9 @@ export abstract class Base implements Drawing {
 			p.setOrder(z + i / this.plots.length);
 		});
 	}
+	/** Draw `frame` under `settings`; what follows reads off what was drawn. */
 	abstract push(frame: DataFrame, settings: SettingsMap, box: DrawBox): void;
+	/** Drop the picture: the background alone until the next push. */
 	clear(): void {
 		for (const p of this.plots) p.clear();
 		this.probe = null;
@@ -89,7 +75,7 @@ export abstract class Base implements Drawing {
 	}
 }
 
-export class LineDrawing extends Base {
+export class LineDrawing extends Drawing {
 	readonly plots: [LinePlot];
 	private applied: SettingsMap | null = null;
 	constructor(surface: Surface) {
@@ -135,7 +121,7 @@ const MAX_PAIRS = 64;
 /** Past this many points the dots along a path would hide it. */
 const MAX_DOTTED = 800;
 
-export class TrajectoryDrawing extends Base {
+export class TrajectoryDrawing extends Drawing {
 	readonly plots: [LinePlot];
 	private applied: SettingsMap | null = null;
 	private dotted = false;
@@ -183,7 +169,7 @@ export class TrajectoryDrawing extends Base {
 	}
 }
 
-export class ImageDrawing extends Base {
+export class ImageDrawing extends Drawing {
 	readonly plots: [ImagePlot];
 	private readonly lutFor = makeLUTCache();
 	private applied: SettingsMap | null = null;

@@ -13,7 +13,6 @@ const series = { key: 'mode', anyOf: ['series'] };
 const trajectory = { key: 'mode', anyOf: ['trajectory'] };
 
 export const line: ViewerModule = {
-	id: 'line',
 	settings: [
 		{ key: 'mode', label: 'Mode', type: 'select', default: 'series', options: [...LINE_MODES] },
 		{ key: 'logX', label: 'Log X', type: 'toggle', default: false, showWhen: series },

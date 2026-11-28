@@ -356,7 +356,6 @@
 		display: grid;
 		place-items: center;
 		height: var(--node-u);
-		pointer-events: auto;
 		cursor: pointer;
 	}
 	/* The handle is a POINT on the node border at the slot's centre, drawn as the pill (::before)

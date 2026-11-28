@@ -4,7 +4,7 @@ import type { ArrayData, DataFrame } from '$lib/codec/decode';
 import { extent, paths, seriesColor, type FieldPlot, type PathBuilder, type PathPlot, type Rgba, type Surface } from '$lib/plotluck';
 import { project, type Camera } from './brain3d';
 import { makeLUTCache } from './colormaps';
-import { Base, type DrawBox, type PlacedText } from './drawing';
+import { Drawing, type DrawBox, type PlacedText } from './drawing';
 import { electrodeAt, HEAD_RADIUS, lift } from './eegLayout';
 import { formatTick } from './format';
 import { axisNames, type Drag, type Probe } from './hover';
@@ -103,7 +103,7 @@ export function brainMode(settings: SettingsMap, ndim: number): BrainMode {
 	return ndim <= 1 ? 'topomap' : 'ring';
 }
 
-export class BrainDrawing extends Base {
+export class BrainDrawing extends Drawing {
 	readonly plots: [FieldPlot, PathPlot];
 	private readonly field: FieldPlot;
 	private readonly path: PathPlot;

@@ -4,7 +4,6 @@
 	import { dtypeColor } from './categoryColor';
 	import { ALL_TAB, byTab, openingTab, paletteTabs, rankNodeTypes, tabOf } from './nodeSearch';
 	import { bareName, familyColor } from './typeId';
-	import { nodeTypeTitle } from './nodeTypeTitle';
 	import { nodeTypeSource } from './nodeTypeSource';
 	import { getControl, type NodeTypeInfo, type ScanDiff } from '$lib/api/control';
 	import { boundaryType } from '$lib/api/vocab';
@@ -191,7 +190,7 @@
 				class:hl={idx === highlighted}
 				use:reveal={idx === highlighted}
 				class:unavailable={!t.available}
-				title={nodeTypeTitle(t)}
+				title={t.doc}
 				onpointermove={() => (highlighted = idx)}
 				onclick={() => pick(t)}
 			>

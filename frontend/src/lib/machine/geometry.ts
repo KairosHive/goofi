@@ -15,8 +15,6 @@ export interface Course {
 	length: number;
 	/** The point `s` (0..1) of the way along, by arc length, and the heading there in degrees. */
 	at(s: number): { x: number; y: number; angle: number };
-	/** The `s` of the point nearest `p`. */
-	near(p: { x: number; y: number }): number;
 }
 
 /** A loop's reach beyond its box. */
@@ -38,18 +36,6 @@ function polyline(pts: { x: number; y: number }[], d: string): Course {
 	return {
 		d,
 		length,
-		near(p) {
-			let best = { d2: Infinity, s: 0 };
-			for (let i = 1; i < pts.length; i++) {
-				const a = pts[i - 1];
-				const b = pts[i];
-				const seg = cum[i] - cum[i - 1];
-				const f = seg === 0 ? 0 : Math.min(1, Math.max(0, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (seg * seg)));
-				const d2 = (a.x + (b.x - a.x) * f - p.x) ** 2 + (a.y + (b.y - a.y) * f - p.y) ** 2;
-				if (d2 < best.d2) best = { d2, s: length === 0 ? 0 : (cum[i - 1] + seg * f) / length };
-			}
-			return best.s;
-		},
 		at(s) {
 			const want = Math.min(Math.max(s, 0), 1) * length;
 			let i = 1;

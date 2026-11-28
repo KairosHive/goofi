@@ -48,16 +48,11 @@ const APP_CSS = fileURLToPath(new URL('../../app.css', import.meta.url));
    any business bypassing a rung that is not a px at all — a `--dur-*` duration, say. */
 const ALLOW_FILE: Record<string, string> = {
 	// The node canvas is a fixed-px coordinate system (--node-w/-header/-u/-viewer in app.css),
-	// mirrored in editor/nodeMetrics.ts + snap.ts on the connector hot path. Its paddings and type
-	// sizes are measured against those px; rem-ifying them desyncs the snap grid the moment the
-	// responsive html clamp or the coarse-pointer floor moves the rem.
-	'editor/GoofiNode.svelte': 'frozen node-canvas geometry (mirrored in nodeMetrics.ts/snap.ts)',
-	'editor/BoundaryNode.svelte': 'frozen node-canvas geometry (mirrored in nodeMetrics.ts/snap.ts)',
-	'editor/PlacementPreview.svelte': 'frozen node-canvas geometry (mirrors GoofiNode exactly)',
-	'viewers/SlotViewer.svelte': 'frozen node-canvas geometry (sits inside a --node-u slot row)',
-	// A dev-only diagnostic overlay, deliberately as small and dense as it can be drawn — it is
-	// sized against the frames it reports on, not against the app's type scale.
-	'editor/PerfHud.svelte': 'dev diagnostic overlay, sized to be unobtrusive, not to the scale'
+	// mirrored in editor/nodeMetrics.ts on the connector hot path. Its paddings and type sizes are
+	// measured against those px; rem-ifying them desyncs the snap grid the moment the responsive
+	// html clamp or the coarse-pointer floor moves the rem.
+	'editor/GoofiNode.svelte': 'frozen node-canvas geometry (mirrored in nodeMetrics.ts)',
+	'viewers/SlotViewer.svelte': 'frozen node-canvas geometry (sits inside a --node-u slot row)'
 };
 
 /** Narrower exemptions: `file` omitted means the reason is not one file's, it is the value's. */

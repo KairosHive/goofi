@@ -5,7 +5,6 @@ import { ImageDrawing } from '../drawing';
 import { COLORMAPS } from '../colormaps';
 
 export const image: ViewerModule = {
-	id: 'image',
 	settings: [
 		{ key: 'colormap', label: 'Colormap', type: 'select', default: 'gray', options: COLORMAPS },
 		{ key: 'auto', label: 'Auto range', type: 'toggle', default: true },
