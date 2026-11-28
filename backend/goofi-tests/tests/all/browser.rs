@@ -48,8 +48,7 @@ async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_fr
 
     // Step: an image viewer asks for 8-bit texels and is served them — a quarter of the bytes,
     // a colour frame over the [0, 1] the viewer clamps to anyway.
-    let img = g.add("_TestImage");
-    g.ready(img);
+    let img = g.add_ready("_TestImage");
     let mut v8 = Viewer::open(&base, &hex(img), "out").await;
     v8.view(j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": [], "depth": "u8" }])).await;
     let frame = raw_until(&mut v8, |dtype, shape| dtype == "|u1" && shape == [4, 4, 3]).await;

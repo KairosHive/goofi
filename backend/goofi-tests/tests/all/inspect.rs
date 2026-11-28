@@ -3,11 +3,10 @@
 //!
 //! Goldens on purpose: the text IS the interface a model reads and acts on.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use goofi_node::{BindingId, Compiled, EvalCtx, ExprError, ExprEvaluator};
-use goofi_tests::{Goofi, ep, hex, j};
+use goofi_tests::{FirstVar, Goofi, BLEW_UP, ep, hex, j};
 use serde_json::Value;
 
 /// Ages and the workspace path are per-run, so the golden pins everything but their values.
@@ -139,29 +138,6 @@ fn inspect_patch_draws_only_the_edges_that_are_facts_at_this_level() {
     assert!(out.contains("buffer0 -- out→input --> buffer0\n"), "the self-loop is the one edge: {out}");
 }
 
-const BLEW_UP: &str = "the expression blew up";
-
-/// An evaluator that compiles anything and hands the first variable back, or refuses while `broken`.
-struct Flaky {
-    broken: Arc<AtomicBool>,
-}
-
-impl ExprEvaluator for Flaky {
-    fn compile(&self, _source: &str) -> Result<Compiled, ExprError> {
-        Ok(Compiled { id: 1, code: Arc::from(&b""[..]) })
-    }
-    fn eval(&self, _id: BindingId, ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
-        if self.broken.load(Ordering::Relaxed) {
-            return Err(BLEW_UP.into());
-        }
-        goofi_tests::first_var(ctx)
-    }
-    fn release(&self, _id: BindingId) {}
-    fn run(&self, _code: &[u8], _ctx: &EvalCtx<'_>) -> Result<goofi_core::Data, ExprError> {
-        Err(ExprError("no functional here".into()))
-    }
-}
-
 #[test]
 fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
     let g = Goofi::new();
@@ -207,8 +183,9 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
 
     // With an evaluator the error changes hands to the NODE. A node is handed one at BIRTH, so this
     // one is born after the injection.
-    let broken = Arc::new(AtomicBool::new(true));
-    g.graph().set_evaluator(Arc::new(Flaky { broken: broken.clone() }));
+    let evaluator = Arc::new(FirstVar::default());
+    evaluator.broken.store(true, Ordering::Relaxed);
+    g.graph().set_evaluator(evaluator.clone());
     let bound = g.add("LFO");
     g.call("node param edit", j!({ "node": hex(bound), "param": "lfo/amplitude",
                                    "expression": "vars.signal.default_ufreq / 30" }));
@@ -219,7 +196,7 @@ fn inspect_node_reports_params_whether_each_slot_is_emitting_and_the_error() {
             "the bound param's own field carries it too: {live}");
 
     // The finding belongs to the INSTANCE, and a restart is a new one with nothing to report.
-    broken.store(false, Ordering::Relaxed);
+    evaluator.broken.store(false, Ordering::Relaxed);
     g.call("node restart", j!({ "node": hex(bound) }));
     let reborn = text(&g, "node state", j!({ "node": hex(bound) }));
     assert!(!reborn.contains(BLEW_UP) && reborn.ends_with("error: none\n"),

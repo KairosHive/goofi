@@ -151,8 +151,7 @@ fn a_chain_runs_streams_and_follows_the_params_edited_under_it() {
     // A beat broadcasts a rate the moment it moves, and a node's first measured rate is a move:
     // a node born after the subscription is what a listener is sure to hear of.
     let mut ev = g.events();
-    let born = g.add("LFO");
-    g.ready(born);
+    let born = g.add_ready("LFO");
     let stats = g.until("a node_stats broadcast for the new node", |_| ev.next("node_stats")["stats"].get(hex(born)).cloned());
     assert!(stats["updates_per_second"].as_f64().is_some_and(|r| r > 0.0), "{stats}");
 }

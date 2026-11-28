@@ -296,14 +296,8 @@ struct Tone;
 
 goofi_audio_sdk::params! {
     LEVEL = ParamDecl {
-        group: "tone",
-        name: "level",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
         doc: Some("the block's level"),
-        expression: None,
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("tone", "level", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
 }
 
@@ -421,8 +415,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
 
     // Step: a skeleton node is born through the one op surface and reports ready through the
     // one health plane.
-    let audio = t.add("SkelAudioOsc");
-    t.ready(audio);
+    let audio = t.add_ready("SkelAudioOsc");
     let state = t.call("node state", j!({ "node": hex(audio) }))["text"].as_str().unwrap().to_string();
     assert!(state.contains("stage ready"), "the generic projection carries a foreign engine: {state}");
 
@@ -467,8 +460,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     t.call("node remove", j!({ "node": inst }));
 
     // Step: skeleton → signal. AudioIn receives the audio tap and emits signal frames.
-    let audio_in = t.add("signal:AudioIn");
-    t.ready(audio_in);
+    let audio_in = t.add_ready("signal:AudioIn");
     t.link(audio, "out", audio_in, "input");
     let echo = t.add("_TestEcho");
     let refused = t.refuse("link add", j!({ "from": ep(hex(audio), "out"), "to": ep(hex(echo), "input") }));
@@ -550,8 +542,7 @@ fn a_scheduled_engine_beside_the_signal_one() {
     assert!(t.stays(|_| stale_probe.count() == seen), "the corpse's service name went silent");
 
     // Step: the second scheduled engine ticks beside the first, with its own shape and pace.
-    let gfx = t.add("SkelGfxFrame");
-    t.ready(gfx);
+    let gfx = t.add_ready("SkelGfxFrame");
     let frame_probe = t.probe(gfx, "frame");
     let frame = t.until("the gfx frame", |_| frame_probe.latest());
     assert_eq!(shape(&frame), vec![8, 8], "the graphics skeleton's static frame");
@@ -562,11 +553,9 @@ fn a_scheduled_engine_beside_the_signal_one() {
     let row = types["types"].as_array().unwrap().iter().find(|r| r["type"] == "skelgfx:SkelGfxFrame").unwrap();
     assert_eq!(row["output_slots"]["tex"], "TEXTURE", "{row}");
     assert_eq!(row["input_slots"]["tex"], "TEXTURE", "{row}");
-    let gfx2 = t.add("SkelGfxFrame");
-    t.ready(gfx2);
+    let gfx2 = t.add_ready("SkelGfxFrame");
     t.link(gfx, "tex", gfx2, "tex");
-    let graphics_in = t.add("signal:GraphicsIn");
-    t.ready(graphics_in);
+    let graphics_in = t.add_ready("signal:GraphicsIn");
     t.link(gfx, "tex", graphics_in, "input");
     let sink = t.add("_TestEcho");
     let refused = t.refuse("link add", j!({ "from": ep(hex(gfx), "tex"), "to": ep(hex(sink), "input") }));

@@ -18,6 +18,12 @@ fn drawn(g: &Goofi, uid: Uid, what: &str, want: impl Fn(&goofi_core::Data) -> bo
     })
 }
 
+/// Set a graphics node's picture size.
+fn size(g: &Goofi, node: Uid, width: u32, height: u32) {
+    g.set_param(node, "common", "width", width);
+    g.set_param(node, "common", "height", height);
+}
+
 /// The texel at `(row, col)`: four floats, row 0 the top. Read off the bytes in place: a 1024²
 /// frame is 16 MB, and decoding all of it to reach one texel is what made this suite slow.
 fn px(d: &goofi_core::Data, row: usize, col: usize) -> [f32; 4] {
@@ -86,16 +92,14 @@ fn shaders_render_on_the_gpu() {
     assert!(status["adapter"].as_str().is_some_and(|a| !a.is_empty()), "{status}");
 
     // Step: a Constant reads back the colour it was given, at the generator's own size.
-    let c = g.add("graphics:Constant");
-    g.ready(c);
+    let c = g.add_ready("graphics:Constant");
     g.set_param(c, "constant", "colour", j!([0.25, 0.5, 1.0, 1.0]));
     let frame = drawn(&g, c, "the constant's colour", |d| close(px(d, 0, 0), [0.25, 0.5, 1.0, 1.0]));
     assert_eq!(shape(&frame), vec![1024, 1024, 4], "a node with nothing behind it is 1024 square");
     assert!(close(px(&frame, 511, 511), [0.25, 0.5, 1.0, 1.0]), "the same colour to the far corner");
 
     // Step: the universal `common` group resizes it, and what is wired behind FOLLOWS the size.
-    g.set_param(c, "common", "width", 64);
-    g.set_param(c, "common", "height", 32);
+    size(&g, c, 64, 32);
     let frame = drawn(&g, c, "the resized frame", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 31, 63), [0.25, 0.5, 1.0, 1.0]));
     // Step: a pad's sheet reaches the GPU through a VariableTexture node, a signal node whose
@@ -117,18 +121,15 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a Shape's colour is RGBA with STRAIGHT alpha: its tint is untouched inside, and the
     // coverage scales the colour's own alpha, which is nothing outside.
-    let disc = g.add("graphics:Shape");
-    g.ready(disc);
-    g.set_param(disc, "common", "width", 64);
-    g.set_param(disc, "common", "height", 64);
+    let disc = g.add_ready("graphics:Shape");
+    size(&g, disc, 64, 64);
     g.set_param(disc, "shape", "colour", j!([1.0, 0.5, 0.0, 0.5]));
     drawn(&g, disc, "a half-clear orange disc", |d| close(px(d, 32, 32), [1.0, 0.5, 0.0, 0.5]) && px(d, 0, 0)[3] < 0.01);
     g.call("node remove", j!({ "node": hex(disc) }));
 
     // Step: Threshold takes two RGBA colours, and EACH carries its alpha onto the texel: the
     // constant's luminance is 0.48, so the level picks the side.
-    let th = g.add("graphics:Threshold");
-    g.ready(th);
+    let th = g.add_ready("graphics:Threshold");
     g.link(c, "out", th, "input");
     g.set_param(th, "threshold", "below", j!([1.0, 0.0, 0.0, 0.5]));
     g.set_param(th, "threshold", "above", j!([0.0, 0.0, 1.0, 0.25]));
@@ -140,8 +141,7 @@ fn shaders_render_on_the_gpu() {
 
     // Step: ColorMap runs one channel of the texel through its colormap; alpha reads 1 here,
     // red 0.25, and the stop's alpha rides on the texel's own.
-    let map = g.add("graphics:ColorMap");
-    g.ready(map);
+    let map = g.add_ready("graphics:ColorMap");
     g.link(c, "out", map, "input");
     g.set_param(map, "map", "colour_0", j!([0.0, 1.0, 0.0, 1.0]));
     g.set_param(map, "map", "colour_1", j!([1.0, 0.0, 1.0, 0.5]));
@@ -151,8 +151,7 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, map, "red 0.25 is a quarter of the way", |d| close(px(d, 0, 0), [0.25, 0.75, 0.25, 0.875]));
     g.call("node remove", j!({ "node": hex(map) }));
 
-    let level = g.add("graphics:Level");
-    g.ready(level);
+    let level = g.add_ready("graphics:Level");
     g.link(c, "out", level, "input");
     let frame = drawn(&g, level, "the level follows its input's size", |d| shape(d) == vec![32, 64, 4]);
     assert!(close(px(&frame, 0, 0), [0.25, 0.5, 1.0, 1.0]), "gain 1 is a copy");
@@ -178,13 +177,10 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a signal frame uploads — the fixture's gradient, sampled back texel for texel and the
     // right way up. The one place the two row orders could disagree.
-    let img = g.add("_TestImage");
-    g.ready(img);
-    let up = g.add("graphics:SignalIn");
-    g.ready(up);
+    let img = g.add_ready("_TestImage");
+    let up = g.add_ready("graphics:SignalIn");
     // Its size is the patch's default, seeded below once an evaluator is present; here, by hand.
-    g.set_param(up, "common", "width", 4);
-    g.set_param(up, "common", "height", 4);
+    size(&g, up, 4, 4);
     g.link(img, "out", up, "input");
     // Waited to the upload itself: the resize can draw before the signal frame lands, and that
     // frame is the right size and empty.
@@ -197,12 +193,10 @@ fn shaders_render_on_the_gpu() {
 
     // Step: the transfer has MODES. The frame's own texels is one of them and the default; the
     // others draw the frame the way goofi's viewers draw it, at the node's own size.
-    let ramp = g.add("_TestRamp");
-    g.ready(ramp);
+    let ramp = g.add_ready("_TestRamp");
     g.set_param(ramp, "ramp", "length", 64);
     g.link(ramp, "out", up, "input");
-    g.set_param(up, "common", "width", 64);
-    g.set_param(up, "common", "height", 32);
+    size(&g, up, 64, 32);
     // Waited to the ramp's own colour: the resized stage draws the upload it still holds until the
     // ramp's frame lands, and that frame is opaque too.
     let frame = drawn(&g, up, "the raw [1, 64] frame reading through the colormap, its floor at viridis's", |d| {
@@ -230,11 +224,9 @@ fn shaders_render_on_the_gpu() {
     assert!(close(px(&frame, 0, 0), [0.0, 0.0, 0.0, 1.0]), "from the floor: {:?}", px(&frame, 0, 0));
     g.set_param(up, "signal", "autoscale", true);
     // A size left at 0 follows the frame: one row of 64, the shape of what came in.
-    g.set_param(up, "common", "width", 0);
-    g.set_param(up, "common", "height", 0);
+    size(&g, up, 0, 0);
     drawn(&g, up, "the frame at its own size", |d| shape(d) == vec![1, 64, 4]);
-    g.set_param(up, "common", "width", 64);
-    g.set_param(up, "common", "height", 32);
+    size(&g, up, 64, 32);
 
     g.set_param(up, "signal", "mode", "line");
     g.set_param(up, "signal", "colormap", "viridis");
@@ -275,8 +267,7 @@ fn shaders_render_on_the_gpu() {
     g.set_param(up, "signal", "mode", "topomap");
     g.set_param(up, "signal", "colormap", "gray");
     g.set_param(up, "signal", "electrodes", false);
-    g.set_param(up, "common", "width", 64);
-    g.set_param(up, "common", "height", 64);
+    size(&g, up, 64, 64);
     g.set_param(ramp, "ramp", "channels", 3);
     g.set_param(ramp, "ramp", "named", true);
     let head = drawn(&g, up, "the topomap", |d| shape(d) == vec![64, 64, 4] && px(d, 32, 32)[3] == 1.0 && px(d, 32, 3)[3] > 0.9);
@@ -327,8 +318,7 @@ fn shaders_render_on_the_gpu() {
     // Step: the audio plane and this one, both ways, over the ONE cross-engine transport. Each
     // crossing declares the plane it crosses FROM, so a wire from the wrong one is refused and
     // these chains are the only shape that links at all.
-    let flat = g.add("_TestConst");
-    g.ready(flat);
+    let flat = g.add_ready("_TestConst");
     g.set_param(flat, "constant", "length", 64);
     g.set_param(flat, "constant", "value", 0.5);
     let stream = g.add("audio:SignalIn");
@@ -336,10 +326,8 @@ fn shaders_render_on_the_gpu() {
     // `graphics:AudioIn` holds its own picture between renders — a HISTORY, which is what a
     // stream has and a frame has not: every render walks the picture one column left and stands
     // the newest column at the right edge.
-    let scope = g.add("graphics:AudioIn");
-    g.ready(scope);
-    g.set_param(scope, "common", "width", 64);
-    g.set_param(scope, "common", "height", 32);
+    let scope = g.add_ready("graphics:AudioIn");
+    size(&g, scope, 64, 32);
     g.set_param(scope, "audio", "autoscale", false);
     g.set_param(scope, "audio", "range", 1.0);
     // The door takes the plane it is named for and no other: a signal frame is refused here, and
@@ -384,10 +372,8 @@ fn shaders_render_on_the_gpu() {
     // …and the other way: `audio:GraphicsIn` reads a texture's texels in scan order, so the
     // PICTURE's size is the crossing's length. A gradient across the frame arrives as a sweep,
     // and its channels arrive as channels — alpha among them, since a texture is RGBA.
-    let field = g.add("graphics:Gradient");
-    g.ready(field);
-    g.set_param(field, "common", "width", 64);
-    g.set_param(field, "common", "height", 64);
+    let field = g.add_ready("graphics:Gradient");
+    size(&g, field, 64, 64);
     let into_audio = g.add("audio:GraphicsIn");
     g.set_param(into_audio, "graphics", "mode", "direct");
     g.set_param(into_audio, "graphics", "channels", "all");
@@ -418,13 +404,10 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a texture chain does not flip either. A gradient down the frame, copied by a Level,
     // still runs the same way — the half of the orientation rule an upload cannot see.
-    let vert = g.add("graphics:Gradient");
-    g.ready(vert);
+    let vert = g.add_ready("graphics:Gradient");
     g.set_param(vert, "ramp", "angle", 90.0);
-    g.set_param(vert, "common", "width", 8);
-    g.set_param(vert, "common", "height", 8);
-    let copy = g.add("graphics:Level");
-    g.ready(copy);
+    size(&g, vert, 8, 8);
+    let copy = g.add_ready("graphics:Level");
     g.link(vert, "out", copy, "input");
     let direct = drawn(&g, vert, "the vertical ramp", |d| shape(d) == vec![8, 8, 4]);
     let copied = drawn(&g, copy, "the copy of it", |d| shape(d) == vec![8, 8, 4]);
@@ -433,8 +416,7 @@ fn shaders_render_on_the_gpu() {
     assert!(close(px(&copied, 7, 0), px(&direct, 7, 0)));
 
     // Step: a bare read moves a param at control rate, the one door every modulation uses.
-    let knob = g.add("_TestScalar");
-    g.ready(knob);
+    let knob = g.add_ready("_TestScalar");
     g.set_param(knob, "control", "value", 0.5);
     let knob_name = g.name(&hex(knob));
     g.call("node param edit", j!({ "node": hex(level), "param": "level/gain",
@@ -455,14 +437,11 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, level, "and it follows its input again", |d| shape(d) == vec![32, 64, 4]);
 
     // Step: a loop closes through Feedback and accumulates a tenth a tick; one without it faults.
-    let fb = g.add("graphics:Feedback");
-    g.ready(fb);
+    let fb = g.add_ready("graphics:Feedback");
     // Sized down: what a loop does is the same at any size, and the default is read back whole on
     // every poll of it.
-    g.set_param(fb, "common", "width", 64);
-    g.set_param(fb, "common", "height", 64);
-    let acc = g.add("graphics:Level");
-    g.ready(acc);
+    size(&g, fb, 64, 64);
+    let acc = g.add_ready("graphics:Level");
     g.set_param(acc, "level", "offset", 0.1);
     g.link(fb, "out", acc, "input");
     g.link(acc, "out", fb, "input");
@@ -486,8 +465,7 @@ fn shaders_render_on_the_gpu() {
     // A node wired to ITSELF is out too, feedback node or not: a pass cannot read what it writes,
     // and one that tried took the whole tick's command buffer down with it.
     for ty in ["graphics:Level", "graphics:Feedback"] {
-        let solo = g.add(ty);
-        g.ready(solo);
+        let solo = g.add_ready(ty);
         g.link(solo, "out", solo, "input");
         g.until("a self-wired node faults", |g| {
             render(g, 1);
@@ -498,10 +476,8 @@ fn shaders_render_on_the_gpu() {
     }
 
     // Step: two shaders compose.
-    let ramp = g.add("graphics:Gradient");
-    g.ready(ramp);
-    let comp = g.add("graphics:Composite");
-    g.ready(comp);
+    let ramp = g.add_ready("graphics:Gradient");
+    let comp = g.add_ready("graphics:Composite");
     g.set_param(comp, "composite", "mode", "add");
     g.link(ramp, "out", comp, "a");
     g.link(c, "out", comp, "b");
@@ -523,8 +499,7 @@ fn shaders_render_on_the_gpu() {
     // Step: a workspace node is authored, loaded, and reloaded through the one refresh door.
     std::fs::write(dir.join("Half.wgsl"), HALF).unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Half"]));
-    let half = g.add("graphics:Half");
-    g.ready(half);
+    let half = g.add_ready("graphics:Half");
     g.link(c, "out", half, "input");
     drawn(&g, half, "half of the constant", |d| close(px(d, 0, 0), [0.125, 0.25, 0.5, 1.0]));
     std::fs::write(dir.join("Half.wgsl"), QUARTER).unwrap();
@@ -595,10 +570,8 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(ramp["at_2"]["role"], j!({ "as": "member", "section": "stops", "base": "at", "slot": 2 }));
     assert_eq!((&ramp["at_0"]["default"], &ramp["at_1"]["default"], &ramp["at_15"]["default"]), (&j!(0), &j!(1), &j!(1)));
     assert!(ramp.get("at_16").is_none(), "no slot past the list's max");
-    let stops = g.add("graphics:Gradient");
-    g.ready(stops);
-    g.set_param(stops, "common", "width", 64);
-    g.set_param(stops, "common", "height", 4);
+    let stops = g.add_ready("graphics:Gradient");
+    size(&g, stops, 64, 4);
     g.set_param(stops, "ramp", "stops", 3);
     g.set_param(stops, "ramp", "at_1", 0.5);
     g.set_param(stops, "ramp", "colour_1", j!([1.0, 0.0, 0.0, 1.0]));
@@ -618,10 +591,8 @@ fn shaders_render_on_the_gpu() {
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Inked"]));
     let ink = &g.call("library get", j!({ "type": "graphics:Inked" }))["params"]["look"]["ink"];
     assert_eq!((&ink["type"], &ink["face"], &ink["value"]), (&j!("num"), &j!("color"), &j!([1, 0, 0, 1])));
-    let inked = g.add("graphics:Inked");
-    g.ready(inked);
-    g.set_param(inked, "common", "width", 8);
-    g.set_param(inked, "common", "height", 8);
+    let inked = g.add_ready("graphics:Inked");
+    size(&g, inked, 8, 8);
     drawn(&g, inked, "the default ink", |d| close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
     g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 0.5]));
     drawn(&g, inked, "an ink set as a list", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
@@ -631,8 +602,7 @@ fn shaders_render_on_the_gpu() {
     // Step: ONE element of a vector takes a source of its own, addressed `ink[3]`: it drives that
     // dimension alone, a literal on an element lands in its dimension of the list, and a source on
     // the whole param gives the dimensions no element drives. The state and a copy both carry it.
-    let dial = g.add("_TestScalar");
-    g.ready(dial);
+    let dial = g.add_ready("_TestScalar");
     g.set_param(dial, "control", "value", 0.5);
     let dial_name = g.name(&hex(dial));
     g.set_param(inked, "look", "ink", j!([0.0, 0.0, 1.0, 1.0]));
@@ -640,8 +610,7 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, inked, "an element reference", |d| close(px(d, 0, 0), [0.0, 0.0, 1.0, 0.5]));
     g.set_param(inked, "look", "ink[1]", 0.75);
     drawn(&g, inked, "an element literal", |d| close(px(d, 0, 0), [0.0, 0.75, 1.0, 0.5]));
-    let full = g.add("_TestScalar");
-    g.ready(full);
+    let full = g.add_ready("_TestScalar");
     g.set_param(full, "control", "value", 1.0);
     g.call("node param edit", j!({ "node": hex(inked), "param": "look/ink", "expression": format!("nd('{}')", g.name(&hex(full))) }));
     drawn(&g, inked, "the element over the whole", |d| close(px(d, 0, 0), [1.0, 1.0, 1.0, 0.5]));
@@ -703,10 +672,8 @@ fn shaders_render_on_the_gpu() {
     // seeds itself on `frame == 0` and reads what the last tick wrote from then on.
     std::fs::write(dir.join("Count.wgsl"), COUNT).unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["graphics:Count"]));
-    let counter = g.add("graphics:Count");
-    g.ready(counter);
-    g.set_param(counter, "common", "width", 64);
-    g.set_param(counter, "common", "height", 64);
+    let counter = g.add_ready("graphics:Count");
+    size(&g, counter, 64, 64);
     let counted = g.probe(counter, "out");
     let read = || counted.latest().map(|d| px(&d, 0, 0));
     let opened = g.until("a frame off the node's own buffer", |g| {
@@ -730,10 +697,8 @@ fn shaders_render_on_the_gpu() {
     // Step: the shipped automaton is that buffer in use — it seeds itself on the first tick and
     // reads every generation off the last. Conway thins a random field to a few percent and stops
     // there, which no frozen grid and no runaway rule can do.
-    let life = g.add("graphics:Life");
-    g.ready(life);
-    g.set_param(life, "common", "width", 64);
-    g.set_param(life, "common", "height", 64);
+    let life = g.add_ready("graphics:Life");
+    size(&g, life, 64, 64);
     let grid = g.probe(life, "out");
     let alive = || grid.latest().filter(|d| shape(d) == vec![64, 64, 4])
         .map(|d| f32s(&d).chunks_exact(4).map(|t| t[0]).sum::<f32>() / 4096.0);
@@ -751,8 +716,7 @@ fn shaders_render_on_the_gpu() {
 
     // Step: a node nobody reads renders nothing — which is what makes an idle patch free.
     let stages = |g: &Goofi| g.call("session status", j!({}))["graphics"]["stages"].as_u64().unwrap();
-    let lonely = g.add("graphics:Constant");
-    g.ready(lonely);
+    let lonely = g.add_ready("graphics:Constant");
     render(&g, 5);
     let before = stages(&g);
     render(&g, 10);
@@ -780,48 +744,39 @@ fn shaders_render_on_the_gpu() {
     // Step: the crossing OUT. A texture output feeds a TEXTURE input only, and on the signal plane
     // `signal:GraphicsIn` is that door: it makes the picture a size the rest of the patch can
     // carry, and the readings a picture is usually wanted for.
-    let field = g.add("graphics:Gradient");
-    g.ready(field);
-    g.set_param(field, "common", "width", 128);
-    g.set_param(field, "common", "height", 64);
+    let field = g.add_ready("graphics:Gradient");
+    size(&g, field, 128, 64);
     let down = g.add("signal:GraphicsIn");
     g.link(field, "out", down, "input");
     let read = g.probe(down, "out");
-    let waited = |g: &Goofi, what: &str, want: fn(&goofi_core::Data) -> bool| {
-        let read = g.probe(down, "out");
-        g.until(what, |g| {
-            render(g, 1);
-            read.latest().filter(&want)
-        })
-    };
     // The whole frame first: `size` bounds each picture axis, and the frame says what it was
     // rendered from, so a reader can still map a value back to the texel it came from.
     g.set_param(down, "graphics", "size", 16);
-    let small = waited(&g, "the frame cut to size", |d| shape(d) == vec![16, 16, 4]);
+    let small = drawn(&g, down, "the frame cut to size", |d| shape(d) == vec![16, 16, 4]);
     let noted = small.meta().reduced().cloned().expect("a frame cut on the way over says so");
     assert!(format!("{noted:?}").contains("128"), "it names the width it came from: {noted:?}");
     g.set_param(down, "graphics", "size", 0);
-    waited(&g, "and zero is every texel of it", |d| shape(d) == vec![64, 128, 4]);
+    drawn(&g, down, "and zero is every texel of it", |d| shape(d) == vec![64, 128, 4]);
 
     // A horizontal gradient rises ACROSS the frame and is flat down it, so the two profiles are
     // the two answers — and the channel axis is spent, since brightness is what they read.
     g.set_param(down, "graphics", "mode", "columns");
-    let across = waited(&g, "the profile across", |d| shape(d) == vec![128]);
+    let across = drawn(&g, down, "the profile across", |d| shape(d) == vec![128]);
     let x = f32s(&across);
     assert!(x[0] < 0.05 && x[127] > 0.95, "it runs dark to light: {} to {}", x[0], x[127]);
     assert!(x.windows(2).all(|w| w[1] >= w[0] - 1e-4), "monotonically: {x:?}");
     g.set_param(down, "graphics", "mode", "rows");
-    let downwards = waited(&g, "the profile down", |d| shape(d) == vec![64]);
+    let downwards = drawn(&g, down, "the profile down", |d| shape(d) == vec![64]);
     let y = f32s(&downwards);
     assert!(y.iter().all(|v| (v - y[0]).abs() < 0.01), "and is flat the other way: {} .. {}", y[0], y[63]);
     g.set_param(down, "graphics", "mode", "gray");
-    waited(&g, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
+    drawn(&g, down, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
     // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
     // whole frame, in the engine's own 0..1.
     let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
     g.graph().set_view_demand(field, "out", Some(tiny));
     render(&g, 3);
-    let whole = waited(&g, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
+    let whole = drawn(&g, down, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
     assert!(f32s(&whole).iter().all(|v| (0.0..=1.0).contains(v)), "in the engine's range, not texel bytes");
     for uid in [down, field] {
         g.call("node remove", j!({ "node": hex(uid) }));
@@ -841,10 +796,8 @@ fn shaders_render_on_the_gpu() {
     // Step: a Window node opens a window on the machine's screen and feeds it. The suite's screen
     // is a headless one, so what stands here is the SEAM — a window asked for, sized, fed and
     // closed — and never a desktop.
-    let win = g.add("graphics:Window");
-    g.ready(win);
-    g.set_param(win, "common", "width", 64);
-    g.set_param(win, "common", "height", 32);
+    let win = g.add_ready("graphics:Window");
+    size(&g, win, 64, 32);
     g.link(c, "out", win, "input");
     let ui = g.ui();
     let opened = |g: &Goofi| goofi_bridge::graphics_engine(&mut g.graph()).window_of(win);
@@ -922,8 +875,7 @@ fn shaders_render_on_the_gpu() {
     // expression, so ONE variable re-sizes every producer at once. The seeding wants an evaluator
     // present; reading a bare variable does not, which is why this one needs no interpreter.
     g.graph().set_evaluator(Arc::new(goofi_tests::FirstVar::default()));
-    let gen = g.add("graphics:Noise");
-    g.ready(gen);
+    let gen = g.add_ready("graphics:Noise");
     let bound = g.doc()["nodes"][hex(gen)]["params"]["common"]["width"].clone();
     assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_width"), &j!("expression")),
                "the declared binding was seeded live, not flattened to a literal: {bound}");
@@ -932,8 +884,7 @@ fn shaders_render_on_the_gpu() {
     g.call("variable entry edit", j!({ "name": "graphics.default_height", "value": 48 }));
     drawn(&g, gen, "every producer follows the variable", |d| shape(d) == vec![48, 96, 4]);
     // A door for frames has no texture to follow, so it takes the patch's default the same way.
-    let door = g.add("graphics:SignalIn");
-    g.ready(door);
+    let door = g.add_ready("graphics:SignalIn");
     let bound = g.doc()["nodes"][hex(door)]["params"]["common"]["height"].clone();
     assert_eq!((&bound["expression"], &bound["mode"]), (&j!("vars.graphics.default_height"), &j!("expression")),
                "a door for frames is seeded live too: {bound}");
@@ -944,8 +895,7 @@ fn shaders_render_on_the_gpu() {
     let (fb, comp) = (g.add("graphics:Feedback"), g.add("graphics:Composite"));
     for node in [fb, comp] {
         g.ready(node);
-        g.set_param(node, "common", "width", 0);
-        g.set_param(node, "common", "height", 0);
+        size(&g, node, 0, 0);
     }
     g.link(fb, "out", comp, "a");
     g.link(comp, "out", fb, "input");
@@ -1060,10 +1010,8 @@ fn the_engine_draws_on_its_own_clock() {
 async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
     let g = Goofi::timed();
     let base = g.serve().await;
-    let big = g.add("graphics:Gradient");
-    g.ready(big);
-    g.set_param(big, "common", "width", 1024);
-    g.set_param(big, "common", "height", 512);
+    let big = g.add_ready("graphics:Gradient");
+    size(&g, big, 1024, 512);
 
     // Upstream of the reducer: what the ENGINE published, before anything on a CPU shrank it.
     let engine = g.probe(big, "out");
@@ -1157,8 +1105,7 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
 
     // Step: a shader behind the output is an edge of the engine's plan and reads no frame off the
     // slot, so the viewer's box stands; a consumer on another engine does read it, whole.
-    let level = g.add("graphics:Level");
-    g.ready(level);
+    let level = g.add_ready("graphics:Level");
     g.link(big, "out", level, "input");
     holds_at(vec![64, 128, 4], "a shader wired behind the output widened its viewer's readback");
 
@@ -1211,17 +1158,14 @@ async fn a_viewer_sizes_the_readback_and_the_full_frame_is_still_reachable() {
 #[test]
 fn an_oversized_readback_reports_an_error_and_recovers_after_resize() {
     let g = Goofi::new();
-    let node = g.add("graphics:Gradient");
-    g.ready(node);
-    g.set_param(node, "common", "width", 8192);
-    g.set_param(node, "common", "height", 8192);
+    let node = g.add_ready("graphics:Gradient");
+    size(&g, node, 8192, 8192);
     let probe = g.probe(node, "out");
     g.until("oversized readback is refused", |g| {
         render(g, 1);
         g.error(node).filter(|e| e.contains("readback:"))
     });
-    g.set_param(node, "common", "width", 32);
-    g.set_param(node, "common", "height", 32);
+    size(&g, node, 32, 32);
     g.until("readback resumes after resize", |g| {
         render(g, 1);
         probe.latest().filter(|d| shape(d) == vec![32, 32, 4])
@@ -1315,8 +1259,7 @@ fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
     )
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["signal:Stamp"]));
-    let field = g.add("graphics:Gradient");
-    g.ready(field);
+    let field = g.add_ready("graphics:Gradient");
     let stamp = g.add("Stamp");
     g.link(field, "out", stamp, "input");
     let read = g.probe(stamp, "out");
@@ -1353,8 +1296,7 @@ fn a_python_node_runs_on_the_graphics_tick() {
     for uid in [count, node, apart] {
         g.ready(uid);
     }
-    g.set_param(count, "common", "width", 8);
-    g.set_param(count, "common", "height", 4);
+    size(&g, count, 8, 4);
     g.link(count, "out", node, "image");
     g.link(count, "out", apart, "a");
     g.link(node, "out", apart, "b");
@@ -1423,8 +1365,7 @@ fn a_tick_node_keeps_its_pictures_on_the_device() {
     for uid in [count, node, apart] {
         g.ready(uid);
     }
-    g.set_param(count, "common", "width", 8);
-    g.set_param(count, "common", "height", 4);
+    size(&g, count, 8, 4);
     g.link(count, "out", node, "image");
     g.link(count, "out", apart, "a");
     g.link(node, "out", apart, "b");
@@ -1463,8 +1404,7 @@ fn a_tick_node_keeps_its_pictures_on_the_device() {
     std::fs::create_dir_all(&signal).unwrap();
     std::fs::write(signal.join("texture_bytes.py"), BYTES.replacen("# goofi: graphics\n", "", 1)).unwrap();
     g.call("library refresh", j!({}));
-    let source = g.add("graphics:TextureBytes");
-    g.ready(source);
+    let source = g.add_ready("graphics:TextureBytes");
     for width in [3, 5] {
         g.set_param(source, "picture", "width", width);
         drawn(&g, source, "an 8-bit RGBA picture off the tick", |d| shape(d) == vec![2, width, 4] && close(px(d, 1, width - 1), [0.2, 0.4, flag, 128.0 / 255.0]));

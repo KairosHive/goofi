@@ -333,6 +333,14 @@ impl Goofi {
         Uid::from_hex(hex).unwrap_or_else(|| panic!("add_node answered a malformed uid {hex}"))
     }
 
+    /// Add a node and wait until it reports `Ready`.
+    #[track_caller]
+    pub fn add_ready(&self, type_name: &str) -> Uid {
+        let node = self.add(type_name);
+        self.ready(node);
+        node
+    }
+
     /// The graph under its lock, for a situation's own look at the runtime.
     pub fn graph(&self) -> std::sync::MutexGuard<'_, goofi_graph::Graph> {
         self.state.graph()
@@ -386,13 +394,7 @@ impl Goofi {
 
     /// Bind a real server on a free port and answer its `ws://host:port` base.
     pub async fn serve(&self) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        // As the CLI does: `local_url` derives from the address actually bound.
-        self.state.set_bound(addr);
-        let served = self.state.clone();
-        tokio::spawn(async move { goofi_bridge::serve_app(listener, served, &[], false).await.unwrap() });
-        format!("ws://{addr}")
+        self.serve_spa_with(&[], false).await
     }
 
     /// As [`Goofi::serve`], but also serving a bundle on the fallback route.
@@ -404,6 +406,7 @@ impl Goofi {
     pub async fn serve_spa_with(&self, spa: goofi_bridge::Spa, dev_routes: bool) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        // As the CLI does: `local_url` derives from the address actually bound.
         self.state.set_bound(addr);
         let served = self.state.clone();
         tokio::spawn(async move {
@@ -786,15 +789,6 @@ impl Client {
         }
     }
 
-    /// The next BINARY frame, skipping text.
-    pub async fn binary(&mut self) -> Vec<u8> {
-        loop {
-            if let Message::Binary(b) = self.next().await {
-                return b.to_vec();
-            }
-        }
-    }
-
     async fn next(&mut self) -> Message {
         timed(WAIT, self.ws.next())
             .await
@@ -1166,11 +1160,15 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
     names
 }
 
+/// What a `broken` [`FirstVar`] refuses with.
+pub const BLEW_UP: &str = "the expression blew up";
+
 /// The one-variable evaluator a modulation step needs: its first variable's frame, whole, which
 /// the reader coerces as it does any frame — no interpreter, so a scenario runs in the default
 /// suite. It counts its compiles, so a test can tell a refreshed binding from a rebuilt one, and
 /// holds while `latch` is raised, so a test can see a stalled evaluation hold the value before it.
-/// A handle is live from its compile to its release, as the Python evaluator's is.
+/// While `broken` it refuses with [`BLEW_UP`]. A handle is live from its compile to its release,
+/// as the Python evaluator's is.
 #[derive(Default)]
 pub struct FirstVar {
     pub compiles: std::sync::atomic::AtomicUsize,
@@ -1178,6 +1176,7 @@ pub struct FirstVar {
     pub entered: std::sync::atomic::AtomicUsize,
     pub evals: std::sync::atomic::AtomicUsize,
     pub latch: std::sync::atomic::AtomicBool,
+    pub broken: std::sync::atomic::AtomicBool,
     live: std::sync::Mutex<std::collections::HashSet<goofi_node::BindingId>>,
 }
 
@@ -1195,6 +1194,9 @@ impl goofi_node::ExprEvaluator for FirstVar {
         self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !self.live.lock().unwrap().contains(&id) {
             return Err(goofi_node::ExprError("expression not compiled".into()));
+        }
+        if self.broken.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(goofi_node::ExprError(BLEW_UP.into()));
         }
         first_var(ctx)
     }

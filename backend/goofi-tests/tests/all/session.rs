@@ -218,8 +218,7 @@ fn a_patch_is_built_saved_and_opened_somewhere_else_unchanged() {
 
     // …and reopened over ITSELF, in the session that has been running it all along.
     let mut ev = g.events();
-    let late = g.add("LFO");
-    g.ready(late);
+    let late = g.add_ready("LFO");
     // A uid the status worker has never reported on, so its `ready` is the tick that also memoized
     // every node already running.
     loop {

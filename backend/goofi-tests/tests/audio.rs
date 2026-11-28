@@ -753,8 +753,7 @@ fn a_patch_sounds_under_the_external_clock() {
 
     // Step: a plan swap keeps every instance — the oscillator's phase runs on across it.
     let (a, _) = drive(&g, TENTH);
-    let spare = g.add("Gain");
-    g.ready(spare);
+    let spare = g.add_ready("Gain");
     let (b, _) = drive(&g, TENTH);
     assert!((b[0] - a[a.len() - 1]).abs() < 0.1, "no jump at the swap: {} then {}", a[a.len() - 1], b[0]);
     g.call("node remove", j!({ "node": hex(spare) }));
@@ -1279,8 +1278,7 @@ fn a_patch_sounds_under_the_external_clock() {
     )
     .unwrap();
     assert_eq!(g.call("library refresh", j!({}))["added"], j!(["audio:Ticks"]));
-    let ticks = g.add("Ticks");
-    g.ready(ticks);
+    let ticks = g.add_ready("Ticks");
     // Any frame after a tenth says it. NOT the first sample of a running count: a control tick
     // landing mid-drive splits the tenth into two frames, and the one-deep probe keeps the LAST.
     // Driven once the node is on the audio thread again: a restart or a load births it anew.

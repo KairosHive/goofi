@@ -2,7 +2,7 @@
 //! registered, added to the graph and run — on whichever tier its imports allow. The in-process
 //! tier needs `--features embed`, which LINKS libpython.
 
-use goofi_tests::{ep, f32s, hex, install, require_python, j, text, Goofi, Uid};
+use goofi_tests::{ep, f32s, hex, install, labels, require_python, j, text, Goofi, Uid};
 
 /// Set a consumer to free-run, so it produces with nothing wired upstream.
 fn free_run(g: &Goofi, uid: Uid, hz: f64) {
@@ -448,24 +448,6 @@ fn a_python_pulse_param_is_a_request_the_node_answers_with_a_hook() {
     g.call("node param request", j!({ "node": hex(node), "param": "count/reset", "request": "pulse" }));
     g.until("the count to start over", |_| under(before).then_some(()));
     assert!(g.error(node).is_none(), "a pulse leaves no error");
-}
-
-/// The coords on one dimension of a frame, as strings.
-fn labels(d: &goofi_core::Data, dim: &str) -> Vec<String> {
-    d.meta()
-        .channels()
-        .dims()
-        .find(|(k, _)| k == dim)
-        .map(|(_, coords)| {
-            coords
-                .iter()
-                .map(|c| match c {
-                    goofi_core::Coord::Str(s) => s.to_string(),
-                    goofi_core::Coord::Num(n) => n.to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[test]
