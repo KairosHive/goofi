@@ -53,13 +53,14 @@ impl std::fmt::Display for Uid {
 }
 
 /// Defines a `pub struct $name(pub String)` error newtype with its Display / Error / `From` impls.
+#[macro_export]
 macro_rules! string_error {
     ($(#[$m:meta])* $name:ident) => {
         $(#[$m])*
         #[derive(Debug, Clone)]
         pub struct $name(pub String);
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(&self.0)
             }
         }

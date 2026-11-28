@@ -2,7 +2,6 @@
 //! handed, and the C boundary a built node crosses — shared by the engine that runs one and the
 //! file that authors one, so the two halves cannot drift.
 
-use std::fmt;
 
 use goofi_core::{Data, Param};
 use goofi_node::ParamGroups;
@@ -27,27 +26,10 @@ pub struct Manifest {
     pub producer: bool,
 }
 
-/// A host node's failure, propagated to the health plane rather than panicking.
-#[derive(Debug, Clone)]
-pub struct NodeError(pub String);
-
-impl fmt::Display for NodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for NodeError {}
-impl From<String> for NodeError {
-    fn from(s: String) -> Self {
-        NodeError(s)
-    }
-}
-impl From<&str> for NodeError {
-    fn from(s: &str) -> Self {
-        NodeError(s.to_string())
-    }
-}
+goofi_node::string_error!(
+    /// A host node's failure, propagated to the health plane rather than panicking.
+    NodeError
+);
 
 pub type NodeResult = std::result::Result<(), NodeError>;
 
