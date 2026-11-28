@@ -136,6 +136,14 @@ pub struct ParamDecl {
     pub role: Option<Role>,
 }
 
+impl ParamDecl {
+    /// A param with a literal default and no doc, a row of its own in its group's first section,
+    /// always shown.
+    pub const fn new(group: &'static str, name: &'static str, spec: ParamSpec) -> Self {
+        ParamDecl { group, name, spec, expression: None, doc: None, section: 0, show: &[], role: None }
+    }
+}
+
 /// A param's place in a section of its group: the count a list section is repeated by, or a
 /// member of a section — of one `slot` of a list, where `base` is its name inside the section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

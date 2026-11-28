@@ -11,37 +11,16 @@ pub const TYPE: &str = "MidiIn";
 pub const NO_PORT: &str = "none";
 
 goofi_audio_sdk::params! {
-    PORT = ParamDecl {
-        group: "midi",
-        name: "port",
-        spec: ParamSpec::Str { default: NO_PORT, options: &[NO_PORT], refresh: true },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    PORT = ParamDecl::new("midi", "port", ParamSpec::Str { default: NO_PORT, options: &[NO_PORT], refresh: true }),
     BEND = ParamDecl {
-        group: "midi",
-        name: "bend_range",
-        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how many semitones a full pitch wheel reaches, up and down"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("midi", "bend_range", ParamSpec::Num { default: &[2.0], min: 0.0, max: 24.0, int: false, options: &[], face: Face::Plain })
     },
     VOICES = ParamDecl {
-        group: "midi",
-        name: "voices",
-        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "one channel per voice on every output; notes take voices round-robin. The bundled              `voices` output needs two channels per voice, so it carries the first 8 — past that,              wire gate, pitch and velocity separately",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("midi", "voices", ParamSpec::Num { default: &[4.0], min: 1.0, max: VOICES as f64, int: true, options: &[], face: Face::Plain })
     },
 }
 

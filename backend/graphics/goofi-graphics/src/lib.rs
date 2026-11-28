@@ -146,9 +146,6 @@ enum Ticker {
 
 fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> ParamDecl {
     ParamDecl {
-        group: "common",
-        name,
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], face: Face::Plain },
         expression: Some(ExprDecl {
             source,
             mode: if m.inputs.iter().any(|s| s.kind == SlotType::Texture) { ExprMode::Off } else { ExprMode::On },
@@ -158,9 +155,7 @@ fn size_decl(name: &'static str, source: &'static str, m: &NodeManifest) -> Para
              uploaded to the first array input. A node with neither follows the patch's \
              default instead.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", name, ParamSpec::Num { default: &[0.0], min: 0.0, max: plan::MAX_SIZE as f64, int: true, options: &[], face: Face::Plain })
     }
 }
 

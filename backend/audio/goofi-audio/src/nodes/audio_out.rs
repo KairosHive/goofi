@@ -6,16 +6,7 @@ pub const TYPE: &str = "AudioOut";
 goofi_audio_sdk::params! {
     DEVICE = crate::nodes::device("the output device the engine's clock follows; every AudioOut names the same one"),
     CHANNELS = crate::chanmap::PARAM,
-    GAIN = ParamDecl {
-        group: "audio",
-        name: "gain",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    GAIN = ParamDecl::new("audio", "gain", ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain }),
 }
 
 static INS: &[SlotDecl] =

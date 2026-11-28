@@ -21,16 +21,7 @@ static INPUTS: &[SlotDecl] = &[SlotDecl {
     required: false,
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];
-static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "control",
-    name: "gain",
-    spec: ParamSpec::Str { default: "a", options: &["a", "b"], refresh: true },
-    expression: None,
-    doc: None,
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static PARAMS: &[ParamDecl] = &[ParamDecl::new("control", "gain", ParamSpec::Str { default: "a", options: &["a", "b"], refresh: true })];
 static MANIFEST: NodeManifest = NodeManifest {
     type_name: "_TransportTest",
     tags: &[],

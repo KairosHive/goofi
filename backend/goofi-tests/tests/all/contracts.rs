@@ -165,32 +165,16 @@ static MULTI_IN: &[SlotDecl] = &[
 ];
 static TRANSFORM: NodeManifest = manifest("MultiThing", MULTI_IN, &[], false);
 static DOCUMENTED_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "welch", name: "nperseg", spec: ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], face: Face::Plain },
-    expression: None,
     doc: Some("Samples per Welch segment: longer means finer frequency resolution."),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("welch", "nperseg", ParamSpec::Num { default: &[256.0], min: 16.0, max: 4096.0, int: true, options: &[], face: Face::Plain })
 }];
 static DOCUMENTED: NodeManifest = manifest("DocumentedThing", &[], DOCUMENTED_PARAMS, true);
-static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "common", name: "autotrigger", spec: ParamSpec::Bool { default: true },
-    expression: None, doc: Some("On by default: this node is a source."),
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static OVERRIDE_PARAMS: &[ParamDecl] = &[ParamDecl { doc: Some("On by default: this node is a source."), ..ParamDecl::new("common", "autotrigger", ParamSpec::Bool { default: true }) }];
 static OVERRIDES_COMMON: NodeManifest = manifest("OverridesCommon", &[], OVERRIDE_PARAMS, false);
-static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "count", name: "reset", spec: ParamSpec::Pulse,
-    expression: None, doc: Some("Start the count over."),
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static PULSE_PARAMS: &[ParamDecl] = &[ParamDecl { doc: Some("Start the count over."), ..ParamDecl::new("count", "reset", ParamSpec::Pulse) }];
 static PULSING: NodeManifest = manifest("PulsingThing", &[], PULSE_PARAMS, true);
 const fn decl(group: &'static str, name: &'static str, spec: ParamSpec, section: u8, show: &'static [Show]) -> ParamDecl {
-    ParamDecl { group, name, spec, expression: None, doc: None, section, show, role: None }
+    ParamDecl { section, show, ..ParamDecl::new(group, name, spec) }
 }
 const MODE: ParamSpec = ParamSpec::Str { default: "fir", options: &["fir", "iir"], refresh: false };
 const LEVEL: ParamSpec = ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain };

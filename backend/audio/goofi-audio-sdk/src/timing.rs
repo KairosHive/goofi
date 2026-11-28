@@ -41,61 +41,45 @@ const NAMES: [&str; DIVISIONS.len()] = {
 /// The `unit` param named `name`: which of the three a time is counted in.
 pub const fn unit(group: &'static str, name: &'static str) -> ParamDecl {
     ParamDecl {
-        group,
-        name,
-        spec: ParamSpec::Str { default: UNITS[0], options: UNITS, refresh: false },
-        expression: None,
         doc: Some("what the time is counted in: seconds, beats of the tempo, or a note division"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(group, name, ParamSpec::Str { default: UNITS[0], options: UNITS, refresh: false })
     }
 }
 
 /// The time in seconds, shown under the unit `seconds` of the param `unit`.
 pub const fn in_seconds(group: &'static str, name: &'static str, unit: &'static Show, default: &'static [f64], max: f64, doc: &'static str) -> ParamDecl {
-    ParamDecl { group, name, spec: ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Plain }, expression: None, doc: Some(doc), section: 0, show: std::slice::from_ref(unit), role: None }
+    ParamDecl {
+        doc: Some(doc),
+        show: std::slice::from_ref(unit),
+        ..ParamDecl::new(group, name, ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Plain })
+    }
 }
 
 /// The time in beats, shown under the unit `beats`.
 pub const fn in_beats(group: &'static str, name: &'static str, unit: &'static Show, default: &'static [f64], max: f64) -> ParamDecl {
     ParamDecl {
-        group,
-        name,
-        spec: ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the time in beats of the tempo"),
-        section: 0,
         show: std::slice::from_ref(unit),
-        role: None,
+        ..ParamDecl::new(group, name, ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Plain })
     }
 }
 
 /// The time as a note division, shown under the unit `division`.
 pub const fn in_division(group: &'static str, name: &'static str, unit: &'static Show, default: &'static str) -> ParamDecl {
     ParamDecl {
-        group,
-        name,
-        spec: ParamSpec::Str { default, options: &NAMES, refresh: false },
-        expression: None,
         doc: Some("the time as a note division, in beats: a dot is half as long again, a third and a sixth are triplets"),
-        section: 0,
         show: std::slice::from_ref(unit),
-        role: None,
+        ..ParamDecl::new(group, name, ParamSpec::Str { default, options: &NAMES, refresh: false })
     }
 }
 
 /// The tempo a time in beats or as a division is read by: the patch's own, unless it is set.
 pub const fn tempo(group: &'static str, unit: &'static Show) -> ParamDecl {
     ParamDecl {
-        group,
-        name: "tempo",
-        spec: ParamSpec::Num { default: &[120.0], min: 1.0, max: 999.0, int: false, options: &[], face: Face::Plain },
         expression: Some(ExprDecl { source: "vars.clock.bpm", mode: ExprMode::On }),
         doc: Some("beats a minute: the patch's tempo, `vars.clock.bpm`, unless another is set"),
-        section: 0,
         show: std::slice::from_ref(unit),
-        role: None,
+        ..ParamDecl::new(group, "tempo", ParamSpec::Num { default: &[120.0], min: 1.0, max: 999.0, int: false, options: &[], face: Face::Plain })
     }
 }
 

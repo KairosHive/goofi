@@ -62,17 +62,11 @@ pub fn needed_width(sel: &[u16]) -> u16 {
 
 /// The `channels` param both device nodes carry, so the two spell a selection the same.
 pub const PARAM: ParamDecl = ParamDecl {
-    group: "audio",
-    name: "channels",
-    spec: ParamSpec::Str { default: ALL, options: &[], refresh: false },
-    expression: None,
     doc: Some(
         "which of the device's channels to use, counting from 1 as the device labels \
 them: `1`, `1-2`, `3-4`, `1,3-4`, or `all` for every channel. A range may count down — `4-3` is \
 channel 4 then channel 3 — and the order written is the order used. WASAPI publishes a card as \
 stereo endpoints, so a selection past `1-2` usually means naming the card's `ASIO: ` device.",
     ),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("audio", "channels", ParamSpec::Str { default: ALL, options: &[], refresh: false })
 };

@@ -70,14 +70,8 @@ pub type Born = fn(Birth) -> Box<dyn AudioNode>;
 /// The `device` param of a device node, with its own doc.
 pub const fn device(doc: &'static str) -> goofi_audio_sdk::ParamDecl {
     goofi_audio_sdk::ParamDecl {
-        group: "audio",
-        name: "device",
-        spec: goofi_audio_sdk::ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true },
-        expression: None,
         doc: Some(doc),
-        section: 0,
-        show: &[],
-        role: None,
+        ..goofi_audio_sdk::ParamDecl::new("audio", "device", goofi_audio_sdk::ParamSpec::Str { default: crate::DEFAULT_DEVICE, options: &[crate::DEFAULT_DEVICE], refresh: true })
     }
 }
 

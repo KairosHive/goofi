@@ -262,16 +262,7 @@ impl Node for Busy {
     }
 }
 
-static SINK_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "control",
-    name: "value",
-    spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-    expression: None,
-    doc: None,
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static SINK_PARAMS: &[ParamDecl] = &[ParamDecl::new("control", "value", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })];
 
 struct Sink;
 impl Node for Sink {
@@ -291,14 +282,8 @@ impl Node for Scalar {
 }
 
 static IMAGE_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "control",
-    name: "gray",
-    spec: ParamSpec::Bool { default: false },
-    expression: None,
     doc: Some("Emit one bipolar channel instead of three colour ones."),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("control", "gray", ParamSpec::Bool { default: false })
 }];
 
 /// What an image viewer is handed: a 4x4 frame whose texels span the whole range, so a
@@ -373,20 +358,11 @@ impl Node for Senders {
 }
 
 static COMMON_FIRST_PARAMS: &[ParamDecl] = &[
-    ParamDecl { group: "common", name: "max_frequency", spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
-    ParamDecl { group: "own", name: "level", spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain }, expression: None, doc: None, section: 0, show: &[], role: None },
+    ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[5.0], min: 1.0, max: 100.0, int: false, options: &[], face: Face::Plain }),
+    ParamDecl::new("own", "level", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain }),
 ];
 
-static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "count",
-    name: "reset",
-    spec: ParamSpec::Pulse,
-    expression: None,
-    doc: Some("Start the count over."),
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static RESETTABLE_PARAMS: &[ParamDecl] = &[ParamDecl { doc: Some("Start the count over."), ..ParamDecl::new("count", "reset", ParamSpec::Pulse) }];
 
 /// The same count, with a pulse behind it: the request a rising edge and the op both make.
 #[derive(Default)]
@@ -442,16 +418,7 @@ impl Node for RequiredCounter {
 /// Process-wide, because the answer must CHANGE between scans for a test to tell them apart.
 static PICKER_SCANS: AtomicU64 = AtomicU64::new(0);
 
-static PICKER_PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "io",
-    name: "device",
-    spec: ParamSpec::Str { default: "none", options: &["none"], refresh: true },
-    expression: None,
-    doc: None,
-    section: 0,
-    show: &[],
-    role: None,
-}];
+static PICKER_PARAMS: &[ParamDecl] = &[ParamDecl::new("io", "device", ParamSpec::Str { default: "none", options: &["none"], refresh: true })];
 
 struct Picker;
 impl Node for Picker {
@@ -520,35 +487,14 @@ impl Node for TestConst {
 
 static CONST_PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "constant",
-        name: "value",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The value every element of the emitted array carries."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("constant", "value", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "constant",
-        name: "length",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many elements the emitted array has."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("constant", "length", ParamSpec::Num { default: &[1.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
-    ParamDecl {
-        group: "constant",
-        name: "nan",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
-        doc: Some("Emit NaN in place of the value."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Emit NaN in place of the value."), ..ParamDecl::new("constant", "nan", ParamSpec::Bool { default: false }) },
 ];
 
 /// `_TestRamp` — one `[C, T]` frame per run, channel `c` rising from `c` to `c + 1` over
@@ -582,56 +528,11 @@ impl Node for Ramp {
 }
 
 static RAMP_PARAMS: &[ParamDecl] = &[
-    ParamDecl {
-        group: "ramp",
-        name: "named",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "ramp",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "ramp",
-        name: "length",
-        spec: ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "ramp",
-        name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "ramp",
-        name: "scale",
-        spec: ParamSpec::Num { default: &[1.0], min: 1e-12, max: 1e12, int: false, options: &[], face: Face::Plain },
-        expression: None,
-        doc: None,
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl::new("ramp", "named", ParamSpec::Bool { default: false }),
+    ParamDecl::new("ramp", "sfreq", ParamSpec::Num { default: &[256.0], min: 1.0, max: 100_000.0, int: false, options: &[], face: Face::Plain }),
+    ParamDecl::new("ramp", "length", ParamSpec::Num { default: &[512.0], min: 1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain }),
+    ParamDecl::new("ramp", "channels", ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain }),
+    ParamDecl::new("ramp", "scale", ParamSpec::Num { default: &[1.0], min: 1e-12, max: 1e12, int: false, options: &[], face: Face::Plain }),
 ];
 
 /// Copy the folder plugin used by backend and browser sessions into a test home.

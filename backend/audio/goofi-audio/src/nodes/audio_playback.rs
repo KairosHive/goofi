@@ -5,45 +5,15 @@ pub const TYPE: &str = "AudioPlayback";
 
 goofi_audio_sdk::params! {
     FILE = ParamDecl {
-        group: "play",
-        name: "file",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some("the WAV file to play; a bare name is looked for in the recordings folder"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("play", "file", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     POSITION = ParamDecl {
-        group: "play",
-        name: "position",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("where in the file to play from; playback runs on its own, and a MOVE of this skips"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("play", "position", ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
-    RESET = ParamDecl {
-        group: "play",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("play from the start again"),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    LOOPING = ParamDecl {
-        group: "play",
-        name: "loop",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
-        doc: Some("start again at the end, instead of falling silent"),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    RESET = ParamDecl { doc: Some("play from the start again"), ..ParamDecl::new("play", "reset", ParamSpec::Pulse) },
+    LOOPING = ParamDecl { doc: Some("start again at the end, instead of falling silent"), ..ParamDecl::new("play", "loop", ParamSpec::Bool { default: true }) },
 }
 
 static OUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Audio }];
