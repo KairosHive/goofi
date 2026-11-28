@@ -99,13 +99,9 @@
 		const done = paint;
 		paint = null;
 		if (!done || done.touched.size === 0) return;
-		try {
-			await history().transaction(`Paint ${m.attributes[done.attr]?.name}`, async (step) => {
-				for (const [state, v] of done.touched) await g.op('machine state edit', { machine: name, name: state, values: { [done.attr]: v } }, step);
-			});
-		} catch (e) {
-			notify().failure('Paint', e);
-		}
+		await history().attempt(`Paint ${m.attributes[done.attr]?.name}`, async (step) => {
+			for (const [state, v] of done.touched) await g.op('machine state edit', { machine: name, name: state, values: { [done.attr]: v } }, step);
+		}, 'Paint');
 	}
 
 	// ---- a column's edge: dragged, it is the state's interval; a state with no beat takes one.
@@ -207,15 +203,11 @@
 	// ---- a new state, at the score's end: after the last column, a transition from it.
 	async function appendState(): Promise<void> {
 		const last = order[order.length - 1];
-		try {
-			await history().transaction('Add state', async (step) => {
-				const r = await g.op<{ id: string }>('machine state add', { machine: name }, step);
-				if (last) await g.op('machine transition add', { machine: name, from: last, to: r.id }, step);
-				sel.setSelection(panelId, [r.id], []);
-			});
-		} catch (e) {
-			notify().failure('Add state', e);
-		}
+		await history().attempt('Add state', async (step) => {
+			const r = await g.op<{ id: string }>('machine state add', { machine: name }, step);
+			if (last) await g.op('machine transition add', { machine: name, from: last, to: r.id }, step);
+			sel.setSelection(panelId, [r.id], []);
+		});
 	}
 	function pickTransition(id: string, e: MouseEvent): void {
 		sel.clickEdge(panelId, id, modifier(e));

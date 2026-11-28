@@ -75,6 +75,15 @@ export class HistoryStore {
 		return fn(within ?? { group: `${Date.now()}-${Math.random().toString(36).slice(2)}`, label });
 	}
 
+	/** A transaction whose failure is a notice named by `verb`, and nothing the caller handles. */
+	async attempt(label: string, fn: (step: Step) => Promise<unknown>, verb = label): Promise<void> {
+		try {
+			await this.transaction(label, fn);
+		} catch (e) {
+			notify().failure(verb, e);
+		}
+	}
+
 	/** A new session or a wholesale load: the manager's history is empty, so this mirror is too. */
 	reset(): void {
 		this.adopt({ undo: null, redo: null });

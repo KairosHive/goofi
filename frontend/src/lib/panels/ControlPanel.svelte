@@ -160,14 +160,10 @@
 		const taken = new Set([...g.variables.map((v) => v.group), ...Object.keys(g.variableGroups), ...tabs.map((t) => t.id)]);
 		let n = 0;
 		while (taken.has(`control${n}`)) n++;
-		try {
-			await history().transaction('Add group', async (step) => {
-				const group = await g.addVariableGroup(`control${n}`, step);
-				await g.setPanelState(props.panelId, { group }, step);
-			});
-		} catch (e) {
-			notify().failure('Add group', e);
-		}
+		await history().attempt('Add group', async (step) => {
+			const group = await g.addVariableGroup(`control${n}`, step);
+			await g.setPanelState(props.panelId, { group }, step);
+		});
 	}
 	/** The group goes with its variables, and this panel moves to the tab beside it — or stays over
 	 * the emptied one — as ONE step, so one undo puts both back. */
@@ -175,14 +171,10 @@
 		const i = tabs.findIndex((t) => t.id === target);
 		const next = tabs[i - 1] ?? tabs[i + 1];
 		const held = g.variables.some((v) => v.group === target) || target in g.variableGroups;
-		try {
-			await history().transaction(`Remove group ${target}`, async (step) => {
-				if (target === group && next) await g.setPanelState(props.panelId, { group: next.id }, step);
-				if (held) await g.removeVariableGroup(target, step);
-			});
-		} catch (e) {
-			notify().failure('Remove group', e);
-		}
+		await history().attempt(`Remove group ${target}`, async (step) => {
+			if (target === group && next) await g.setPanelState(props.panelId, { group: next.id }, step);
+			if (held) await g.removeVariableGroup(target, step);
+		}, 'Remove group');
 	}
 
 	function setEdit(on: boolean): void {

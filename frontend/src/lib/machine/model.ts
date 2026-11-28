@@ -4,7 +4,6 @@
 import type { Decision, Machine, State } from '$lib/api/generated';
 import { graph, type MachineOp } from '$lib/stores/graph.svelte';
 import { history } from '$lib/stores/history.svelte';
-import { notify } from '$lib/stores/notify.svelte';
 import { variableValue } from '$lib/stores/variableValues.svelte';
 
 /** What the canvas hands the score: the selected states, lit as columns and edited together, and
@@ -74,13 +73,9 @@ export function summary(m: Machine, id: string): string {
 /** `patch` into each of `ids` through `op`, the id under `key`, as ONE undo step. */
 export async function editEach(machine: string, op: MachineOp, key: 'name' | 'id', ids: string[], patch: Record<string, unknown>): Promise<void> {
 	const g = graph();
-	try {
-		await history().transaction(op, async (step) => {
-			for (const id of ids) await g.op(op, { machine, [key]: id, ...patch }, step);
-		});
-	} catch (e) {
-		notify().failure(op, e);
-	}
+	await history().attempt(op, async (step) => {
+		for (const id of ids) await g.op(op, { machine, [key]: id, ...patch }, step);
+	});
 }
 
 /** The id of the state the playhead `p` is in, or is moving to: its `state` variable spells the
@@ -99,13 +94,9 @@ export async function connect(machine: string, m: Machine, pairs: [string, strin
 	const fresh = pairs.filter(([from, to]) => from !== to && !wired.has(`${from}>${to}`));
 	if (fresh.length === 0) return;
 	const g = graph();
-	try {
-		await history().transaction(label, async (step) => {
-			for (const [from, to] of fresh) await g.op('machine transition add', { machine, from, to }, step);
-		});
-	} catch (e) {
-		notify().failure(label, e);
-	}
+	await history().attempt(label, async (step) => {
+		for (const [from, to] of fresh) await g.op('machine transition add', { machine, from, to }, step);
+	});
 }
 
 /** Every ordered pair among `states`. */
@@ -129,19 +120,15 @@ export function byPosition(m: Machine, states: string[], rowHeight = 96): string
 export async function addStates(machine: string, n: number, chain: boolean, after: string | null): Promise<string[]> {
 	const g = graph();
 	const names: string[] = [];
-	try {
-		await history().transaction(n === 1 ? 'Add state' : `Add ${n} states`, async (step) => {
-			for (let i = 0; i < n; i++) {
-				const r = await g.op<{ id: string }>('machine state add', { machine }, step);
-				names.push(r.id);
-			}
-			if (chain) {
-				for (const [from, to] of chained(after ? [after, ...names] : names)) await g.op('machine transition add', { machine, from, to }, step);
-			}
-		});
-	} catch (e) {
-		notify().failure('Add states', e);
-	}
+	await history().attempt(n === 1 ? 'Add state' : `Add ${n} states`, async (step) => {
+		for (let i = 0; i < n; i++) {
+			const r = await g.op<{ id: string }>('machine state add', { machine }, step);
+			names.push(r.id);
+		}
+		if (chain) {
+			for (const [from, to] of chained(after ? [after, ...names] : names)) await g.op('machine transition add', { machine, from, to }, step);
+		}
+	}, 'Add states');
 	return names;
 }
 
@@ -177,19 +164,15 @@ export function parseFragment(text: string): Fragment | null {
 export async function pasteFragment(machine: string, f: Fragment, offset: [number, number]): Promise<string[]> {
 	const g = graph();
 	const renamed = new Map<string, string>();
-	try {
-		await history().transaction('Paste states', async (step) => {
-			for (const [old, s] of Object.entries(f.states)) {
-				const r = await g.op<{ id: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
-				renamed.set(old, r.id);
-				await g.op('machine state edit', { machine, name: r.id, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
-			}
-			for (const t of f.transitions) {
-				await g.op('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);
-			}
-		});
-	} catch (e) {
-		notify().failure('Paste', e);
-	}
+	await history().attempt('Paste states', async (step) => {
+		for (const [old, s] of Object.entries(f.states)) {
+			const r = await g.op<{ id: string }>('machine state add', { machine, pos: [s.pos[0] + offset[0], s.pos[1] + offset[1]], values: s.values ?? {}, envelopes: s.envelopes ?? {} }, step);
+			renamed.set(old, r.id);
+			await g.op('machine state edit', { machine, name: r.id, interval: s.interval, interval_expression: s.interval_expression ?? '', mode: s.mode, noop: s.noop, expression: s.expression }, step);
+		}
+		for (const t of f.transitions) {
+			await g.op('machine transition add', { machine, from: renamed.get(t.from), to: renamed.get(t.to), condition: t.condition ?? '', duration: t.duration }, step);
+		}
+	}, 'Paste');
 	return [...renamed.values()];
 }

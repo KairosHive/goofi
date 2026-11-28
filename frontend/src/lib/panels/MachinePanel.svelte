@@ -55,14 +55,10 @@
 	}
 	/** A new machine, shown here, as ONE step. */
 	async function create(): Promise<void> {
-		try {
-			await history().transaction('Add machine', async (step) => {
-				const r = await g.op<{ id: string }>('machine add', {}, step);
-				await g.setPanelState(panelId, { machine: r.id }, step);
-			});
-		} catch (e) {
-			notify().failure('Add machine', e);
-		}
+		await history().attempt('Add machine', async (step) => {
+			const r = await g.op<{ id: string }>('machine add', {}, step);
+			await g.setPanelState(panelId, { machine: r.id }, step);
+		});
 	}
 	function rename(machine: string, to: string): void {
 		if (to !== g.machines[machine]?.name && isValidIdentifier(to)) void call('machine edit', { machine, to });
@@ -70,14 +66,10 @@
 	/** ONE step: the last machine's successor is born first, so the removal re-aims this panel at it
 	 * and one undo brings the old one back whole. The manager, never a reaction here, picks the next. */
 	async function remove(machine: string): Promise<void> {
-		try {
-			await history().transaction(`Remove machine ${g.machines[machine]?.name}`, async (step) => {
-				if (tabs.length === 1) await g.op('machine add', {}, step);
-				await g.op('machine remove', { machine }, step);
-			});
-		} catch (e) {
-			notify().failure('Remove machine', e);
-		}
+		await history().attempt(`Remove machine ${g.machines[machine]?.name}`, async (step) => {
+			if (tabs.length === 1) await g.op('machine add', {}, step);
+			await g.op('machine remove', { machine }, step);
+		}, 'Remove machine');
 	}
 
 	// ---- the selection and the score: the editor's store, so a dismissed pane re-arms the same way.
