@@ -37,13 +37,8 @@ describe('text tiers on --bg', () => {
 		expect(contrastRatio(token('text-muted'), bg)).toBeGreaterThanOrEqual(3);
 		expect(contrastRatio(token('text-muted'), token('surface-2'))).toBeGreaterThanOrEqual(3);
 	});
-	// F widened the ladder to --surface-3/-4. --surface-3 is the lightest surface TEXT sits on:
-	// --text-muted clears 3:1 there (~3.08:1). --surface-4 is the ladder's top rung and the palette's
-	// worst case — no rule paints it since Chip's neutral tone became a ghost, and it is kept
-	// deliberately as the reference these assertions measure against (see app.css). It is a
-	// control-FILL surface, NOT a text background, so --text-muted (2.53:1 there) is deliberately
-	// NOT asserted on it, only the two stronger tiers a label overlapping such a control must use.
-	// This encodes the ladder contract so phase M can't silently regress it.
+	// `--surface-3` is the lightest surface text sits on. `--surface-4` is a control fill, not a
+	// text background, so only the two stronger text tiers are asserted on it.
 	it('stronger tiers stay legible on the widened surfaces', () => {
 		expect(contrastRatio(token('text'), token('surface-4'))).toBeGreaterThanOrEqual(4.5);
 		expect(contrastRatio(token('text-dim'), token('surface-4'))).toBeGreaterThanOrEqual(3);
@@ -68,10 +63,7 @@ describe('semantic + dtype colours stay legible on the lightest surface', () => 
 });
 
 describe('ink on a filled semantic surface is one answer, and AA-legible', () => {
-	// `--on-accent` / `--on-danger` are the ONLY answer to "what colour is text on a filled accent
-	// or danger surface" — the `$lib/ui` primitives read them too. `--on-danger` was #ffffff, which
-	// on --danger (#f06080) is 3.14:1: a WCAG AA failure shipping on the Toast and the proto banner,
-	// both at --fs-small, while <Button variant="danger"> on the identical fill rendered near-black.
+	// `--on-accent` and `--on-danger` are the text colours on a filled accent or danger surface.
 	for (const t of ['accent', 'danger']) {
 		it(`--on-${t} clears AA (4.5:1) on --${t}`, () =>
 			expect(contrastRatio(token(`on-${t}`), token(t))).toBeGreaterThanOrEqual(4.5));

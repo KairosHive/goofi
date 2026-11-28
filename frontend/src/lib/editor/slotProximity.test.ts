@@ -2,18 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { NODE, inputPorts } from './nodeMetrics';
 import { inputAnchors, nearSlots, sameKeys, type AnchorNode } from './slotProximity';
 
-/*
- * The arithmetic behind the input-name proximity reveal.
- *
- * An input slot's name is drawn nowhere else in the app — the `.conn-label` on its connector pill is
- * the whole rendering — and a mouse asks for it by hovering the pill. A finger cannot, so R rested
- * every one of them open under a coarse pointer, which put a name tag on every input on the canvas
- * at all times. The reveal is by PROXIMITY now, while a cable is in flight: the inputs the pointer
- * is closing on name themselves, for both modalities, and nothing names itself the rest of the time.
- *
- * All of it lives here, DOM-free, because the component that drives it cannot be mounted in this
- * repo's vitest — the same split `longPress.ts`, `eventPoint.ts` and `doubleTapZoom.ts` are built on.
- */
+/* The arithmetic of the input-name reveal: while a cable is in flight, the inputs the pointer
+ * closes on show their names. It is DOM-free because the component cannot mount in vitest. */
 
 const key = (uid: string, slot: string): string => `${uid}|${slot}`;
 

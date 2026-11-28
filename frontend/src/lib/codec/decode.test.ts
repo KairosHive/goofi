@@ -3,12 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeData, type ArrayData, type DataFrame } from './decode';
 
-/**
- * Cross-language codec parity. The fixture (tests/codec_golden.json) is written by the canonical
- * encoder (`goofi-codec`, the Rust source of truth, through `cargo test -p goofi-tests
- * codec_golden::`): hex-encoded frames and their expected decodings. Decoding it here proves the
- * hand-mirrored TS port stays in lock-step; any drift in tag, header or body fails this test.
- */
+/** Cross-language codec parity: the fixture is written by the Rust encoder
+ * (`cargo test -p goofi-tests codec_golden::`) and decoded here. */
 const GOLDEN = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../../../../tests/codec_golden.json', import.meta.url)), 'utf-8')
 ) as { entries: { name: string; hex: string; decoded: Decoded }[] };

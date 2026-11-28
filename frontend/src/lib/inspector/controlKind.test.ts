@@ -11,12 +11,8 @@ import type {
 } from '$lib/api/types';
 import { numParam } from '$lib/test/param';
 
-// The pure descriptor → control discriminant (spec §2, D-N2), over the TYPE alone: a pulse is a
-// button, numeric = float|int, a bool is a toggle, a string with options OR that is refreshable is a
-// select (an empty-but-refreshable list still gets a dropdown so its ⟳ re-scan survives), a plain
-// string is text, anything else is unknown. The MODE decides nothing here — a row wears its own
-// control in every mode, disabled where a source drives it — and the source's own editor is the
-// second row, which is ParamField's business. Kept pure so that switch is thin and this is the SSOT.
+// The descriptor's type alone decides the control: a pulse is a button, a number is numeric, a
+// bool is a toggle, a string with options or a refresh is a select, any other string is text.
 const base: ParamBase = {
 	default: null,
 	doc: null,

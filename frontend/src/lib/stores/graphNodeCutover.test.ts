@@ -205,11 +205,8 @@ describe('catalog-in-hello — the palette rides on the snapshot, no async list_
 	});
 
 	it('applies the runtime overlay to nodes the doc delta already materialized', () => {
-		// A load sends the CRDT delta and the `graph_replaced` JSON on two channels of ONE socket,
-		// and the bridge's `select!` picks between two ready branches at random — so the delta can
-		// arrive FIRST, materializing every freshly minted uid before the overlay is in hand. The
-		// snapshot is authoritative for runtime by definition, so it has to apply to nodes that
-		// already exist, not only seed ones that materialize afterwards.
+		// The delta and the `graph_replaced` frame share one socket in no fixed order, so the
+		// overlay must also apply to nodes that already exist.
 		const fc = new FakeControl();
 		const g = new GraphStore(fc);
 		fc.emit({ event: 'hello', payload: helloSnap(catalog()) });

@@ -5,11 +5,8 @@ import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
 import { workspace } from 'panelty';
 
-/**
- * Copy, paste and duplicate are ONE pair of manager ops. What the store owes them is the uids the
- * user selected, the fragment verbatim, and the rename map back — never a re-derived spec, because
- * a spec is a per-TYPE description and a sub-patch is not one type.
- */
+/** Copy, paste and duplicate are one pair of manager ops: the store sends the selected uids and
+ * the fragment verbatim, never a re-derived spec. */
 describe('copy / paste / duplicate — the store carries the manager’s fragment, and nothing else', () => {
 	beforeEach(() => history().reset());
 

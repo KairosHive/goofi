@@ -8,21 +8,9 @@ import { workspace } from 'panelty';
 import type { NodeTypeInfo, GraphSnapshot } from '$lib/api/control';
 import { typeInfo } from '$lib/test/typeInfo';
 
-/**
- * A fresh backend session is a GENERATION boundary, not merely a document swap.
- *
- * `SyncClient.reset()` correctly hands the store an empty replica — but the Svelte projections
- * assembled from the OLD document (`nodes`, `links`, `variables` — and the per-slot
- * viewer state each node record carries) are plain state that nothing clears. Reconciliation runs
- * only from the doc observer, and only when `txn.changed.size > 0`.
- *
- * That is the trap: a fresh manager whose graph is EMPTY produces a sync transaction that changes
- * no Yjs type, so the observer never fires and the browser keeps rendering the graph that went
- * away — on uids the new session is about to mint again from 1.
- *
- * So the fixture below must deliver an EMPTY transaction. A fixture that seeds the replacement
- * document with content would reconcile through the ordinary path and pass against the bug.
- */
+/** A fresh backend session must clear the projections built from the old document. An empty
+ * graph yields a sync transaction that changes no type, so the doc observer never fires: the
+ * fixture below must deliver an empty transaction to reproduce that. */
 describe('GraphStore — a new backend session clears what the old one drew', () => {
 	it('clears every document-derived projection, even when the fresh doc changes no type', () => {
 		const fc = new FakeControl();

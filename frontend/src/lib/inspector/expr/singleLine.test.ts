@@ -2,15 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { singleLineExpression } from './singleLine';
 
-/* D-X1 makes the INLINE param field a CodeMirror editor too, so there is one editor component rather
- * than two implementations. Its contract is that the document stays one line and the field never
- * grows.
- *
- * Enter is not this extension's job — the keymap binds it to COMMIT, so a typed Enter never reaches
- * the document. This is the backstop for every other way a newline gets in: a paste, a drop, a
- * programmatic set. Flattened to a space rather than deleted, because joining `nd('a')` and `+ 1`
- * with nothing would silently change the expression's meaning.
- */
+/* The inline param field stays one line. The keymap binds Enter to commit; this is the backstop
+ * for a paste, a drop or a programmatic set, and it flattens a newline to a space. */
 
 const state = (doc: string) => EditorState.create({ doc, extensions: [singleLineExpression] });
 

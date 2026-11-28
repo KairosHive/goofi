@@ -52,11 +52,8 @@ class FakeTerm implements TerminalLike {
 	}
 }
 
-/** A stand-in for the browser's `WebSocket` — and it starts CONNECTING, like a real one.
- *
- * That is not a detail: the panel's `ResizeObserver` delivers its first callback INSIDE the
- * handshake, so the first proposal of every launch is written to a socket that cannot carry it.
- * A double hard-coded to OPEN cannot express that, which is exactly how it shipped. */
+/** A stand-in for the browser's `WebSocket`. It starts CONNECTING, because the panel's first
+ * resize arrives inside the handshake. */
 class FakeSocket {
 	static all: FakeSocket[] = [];
 	static CONNECTING = 0;
@@ -151,10 +148,8 @@ describe('the terminal store', () => {
 		expect(again.term, 'a second ask mints a second terminal').toBe(term);
 		const second = el('panel-2');
 		again.attach(second);
-		// xterm's `open()` is a no-op once the terminal HAS an element (5.3 onwards it only
-		// re-points the window), so a remount has to MOVE what the first open built. Opening again
-		// leaves the new panel with an empty box — which is precisely the panel that is supposed to
-		// have lost nothing.
+		// xterm's `open()` does nothing once the terminal has an element, so a remount must move
+		// what the first open built.
 		expect((second as unknown as FakeEl).kids, 'the terminal was moved into the new panel')
 			.toEqual([term.element]);
 		expect(term.opened, 'and never opened twice').toHaveLength(1);
@@ -253,10 +248,8 @@ describe('the terminal store', () => {
 		expect(mod.liveTermSessions()).toEqual([]);
 	});
 
-	// The ORDINARY launch, measured: the panel's ResizeObserver fires ~0.6 ms before the handshake
-	// completes, so the whole arbitration — and the nudge that stands in for a server-side grid —
-	// used to be written to a CONNECTING socket and thrown away. The child then sat at 80×24 in a
-	// panel twice that size until the user happened to resize something.
+	// The panel's ResizeObserver fires before the handshake completes, so the first proposal
+	// must wait for the open socket and not be lost.
 	it('holds the first proposal until the socket is open, nudge and all', () => {
 		const s = mod.termSession('abc', () => term);
 		s.attach(el('p'));

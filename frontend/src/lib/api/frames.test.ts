@@ -91,12 +91,8 @@ describe('one paint loop', () => {
 
 describe('a joining viewer', () => {
 	it('replays the slot’s current frame to a late-joining consumer, immediately and once', async () => {
-		// The bridge only sends when something changed (an emit, a joiner IT can see, a spec
-		// change) — but a consumer joining a stream that is already open in THIS page is
-		// invisible to it: no worker traffic happens at all. The frame it needs is already
-		// cached on the slot, so the join replays it; without that, a metadata panel joining
-		// a slot viewer's stream stares at its empty state until the producer's next emit —
-		// ~10 s for a sparse producer, forever for a stopped one.
+		// A consumer that joins a stream already open in this page causes no worker traffic, so
+		// the join replays the frame the slot holds.
 		const gotA: DataFrame[] = [];
 		const offA = bind('osc', 'out', (f) => gotA.push(f));
 		await settle();
@@ -152,10 +148,8 @@ describe('a held frame’s stamps', () => {
 
 describe('per-stream drop accounting', () => {
 	it('takes a stream’s drops from the worker, which coalesces there, and a drawn stream’s head', async () => {
-		// The worker coalesces every stream, drawn there or read here, so a drop is counted once,
-		// by the stream that overwrote a frame — never summed app-wide beside the paint count.
-		// A viewer that draws in the worker asks for no frame here: the stream opens without
-		// frames, and the head is all this thread holds.
+		// The worker counts a drop once, on the stream that overwrote a frame. A viewer that draws
+		// in the worker asks for no frame here: this thread holds the head alone.
 		const off = bindViewer('osc', 'out', 'd', [line(256)], null);
 		await settle();
 		const w = MockWorker.instances[0];
@@ -191,11 +185,7 @@ describe('per-stream drop accounting', () => {
 	});
 });
 
-/**
- * The registry is the ONLY thing that decides what the backend is asked for, and it is read once
- * the tick has settled rather than per mutation. That is what makes a viewer's comings and goings
- * invisible to the backend unless they actually change what it should serve.
- */
+/** The registry alone decides what the backend is asked for, read once the tick has settled. */
 describe('what the registry tells the backend', () => {
 	it('drops a viewer removed before its stream opens', async () => {
 		const off = bind('osc', 'out');

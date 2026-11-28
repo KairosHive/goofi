@@ -5,22 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { ICONS } from './icons';
 import { CHROME_ICONS } from 'panelty';
 
-/* The vendored-geometry guard.
- *
- * `icons.ts` is DATA, not logic: Lucide's published path geometry, copied in so the app carries no
- * npm dependency for twenty-odd icons. Data drifts the same way code does — an icon pasted with a
- * baked `stroke="#fff"`, one drawn from memory on a 16-box grid, one vendored and never used —
- * and none of that shows up in a typecheck. This is what reads the bytes.
- *
- * There are TWO tables, because there are two owners: `panelty` vendors the glyphs its chrome
- * draws, this app vendors its own, and one renderer merges them at runtime. What is judged here is
- * THIS app's table — the package's own repo holds its half to the same rules — plus the two
- * questions that are about the pair: that no glyph is vendored twice, and that every name this
- * app's source renders resolves in the merge.
- *
- * `Icon.svelte` cannot mount in vitest, so the testable half deliberately lives here: the geometry
- * is a plain string table, and the component is the 12 lines that wrap it in one <svg>.
- */
+/* `icons.ts` is vendored Lucide path geometry, and data drifts as code does. This app's table is
+ * judged here, with two questions about the pair with `panelty`'s table: no glyph is vendored
+ * twice, and every name the source renders resolves in the merge. */
 
 const SRC = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -48,14 +35,8 @@ const allSource = (): string =>
 		.map((p) => readFileSync(p, 'utf8'))
 		.join('\n');
 
-/** Every icon name the source RENDERS. There are three shapes an icon is named in — the
- *  component's plain attribute (`<Icon name="x" />`), an EXPRESSION in that attribute
- *  (`name={copied ? 'check' : 'copy'}`) and a menu/panel record (`icon: 'undo-2'`, whose value is
- *  an expression just as often) — and each spells the icon as a literal, so this is answerable from
- *  the source. Read through those shapes rather than a bare substring: `'x'` and `'copy'` occur all
- *  over a codebase for reasons that have nothing to do with an icon, and a scan they satisfy proves
- *  nothing. The attribute is read off `<Icon` specifically, because `name="…"` is an attribute half
- *  the form controls in the app also carry. */
+/** Every icon name the source renders, read from the three shapes that name one: the `<Icon name>`
+ *  attribute as text or as an expression, and an `icon:` record field. */
 function rendered(): Set<string> {
 	const src = allSource();
 	const used = new Set<string>();

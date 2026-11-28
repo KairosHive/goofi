@@ -2,13 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-/**
- * Every primitive the barrel exports has a consumer in the app.
- *
- * This is what the 56-test `/dev/ui` gallery sweep used to be for: a primitive added to the barrel
- * and used nowhere escaped coverage. The stronger question is cheaper to ask — an export nothing
- * imports is dead code, which "delete before adding" says to remove rather than to sample.
- */
+/** Every primitive the barrel exports has a consumer in the app: an export nothing imports is
+ * dead code. */
 const SRC = join(__dirname, '../..');
 
 function sources(dir: string, out: string[] = []): string[] {

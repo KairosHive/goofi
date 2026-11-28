@@ -4,16 +4,8 @@ import { python } from '@codemirror/lang-python';
 import { docSite, exprContext, entriesFor, type ExprContext, type GoofiCompletion } from './complete';
 import type { ExprCatalogue } from './catalogue';
 
-/* The completion source, driven exactly the way the running editor drives it — a real Python parse
- * plus a cursor offset — against a FAKE catalogue. That is the whole testability seam: the component
- * cannot mount in vitest, but the decision "what does this cursor position mean" is pure and is
- * where every interesting case lives.
- *
- * The cases are chosen to be the ones a REGEX would get wrong, because using the Lezer tree instead
- * of a regex is the design decision under test: a nested call, a binary operand, a second argument,
- * a string that belongs to some other callee, a comment, an attribute one level past a slot, and
- * the argument a cursor sits at inside a builtin's call.
- */
+/* The completion source, driven as the editor drives it: a real Python parse and a cursor
+ * offset, against a fake catalogue. The cases are the ones a regex would get wrong. */
 
 const CAT: ExprCatalogue = {
 	nodes: [

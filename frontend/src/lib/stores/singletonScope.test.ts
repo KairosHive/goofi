@@ -3,21 +3,10 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/* The read-the-source guard for ONE mistake, because it is invisible in every other way.
- *
- * Every app-wide store here is a LAZY singleton: `notify()`/`flash()`/… construct the instance on
- * first call. Calling one for the first time from inside a `$derived` therefore creates its `$state`
- * signals inside that derived's tracking scope, and writes from outside never re-run it. The store
- * is set, the surface is dead, and nothing fails: `notify.test.ts` passes against the store while
- * the toast it feeds shows nothing (which is exactly what shipped — a failed save AND the undo/redo
- * replay failure were both silent). Whether a given site is live depends only on which component
- * happens to mount first, so it is not reviewable case by case.
- *
- * The rule is therefore positional and mechanical: reach the singleton at component-script top
- * level (`const n = notify();`), the way every other consumer already does, and read fields off
- * that in the derived. `$effect` is deliberately NOT scanned — an effect is a reaction that re-runs
- * on a write like any other, so constructing there is merely unidiomatic, not broken.
- */
+/* Every app-wide store is a lazy singleton. One first called inside a `$derived` creates its
+ * `$state` inside that derived's tracking scope, and outside writes never re-run it: the surface
+ * is dead and nothing fails. So the rule is read from the source: reach the singleton at the top
+ * level of the component script. `$effect` is not scanned, because an effect re-runs on a write. */
 
 /** This app's source — every file the rule is enforced ON. */
 const SRC = fileURLToPath(new URL('../..', import.meta.url));

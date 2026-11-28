@@ -7,10 +7,7 @@ describe('eventPoint', () => {
 	});
 
 	it('reads the first live touch of a touch event', () => {
-		// The bug this exists for: SvelteFlow types its drag callbacks `MouseEvent | TouchEvent`, and
-		// a TouchEvent has NO `clientX` — the coordinates live one level down, per finger. The old
-		// `typeof clientX !== 'number' → null` meant `linkNodeToPanel` could never fire under touch,
-		// and dragging a node in is the ONLY way to populate a Viewer/Parameters/Metadata/Console panel.
+		// A TouchEvent has no `clientX`: the coordinates are per finger, one level down.
 		expect(eventPoint({ touches: [{ clientX: 5, clientY: 6 }], changedTouches: [] })).toEqual({
 			clientX: 5,
 			clientY: 6

@@ -4,16 +4,8 @@ import { GraphStore } from './graph.svelte';
 import { history } from './history.svelte';
 import { snapshot } from '$lib/test/snapshot';
 
-/**
- * `New` is a manager transaction, and the client's whole job is to *not* get in its way.
- *
- * Two things could go wrong, and both are invisible until much later. Recording a history entry
- * would desync the two undo stacks 1:1 — the manager CLEARS its history inside the `new` arm, so a
- * client entry would pop against nothing. And writing `savePath = null` here would be a second
- * writer on manager-owned state (C38), which is the exact shape the archive work removed from
- * `save`. The null path rides the `graph_replaced` snapshot instead, because `new` — unlike `load`
- * — emits no `save_path_changed`: the manager only announces a path it HAS.
- */
+/** `New` is a manager transaction. The client records no history entry (the manager clears its
+ * history) and does not write the save path: the null path arrives on `graph_replaced`. */
 describe('GraphStore.newPatch — the reset door', () => {
 	beforeEach(() => history().reset());
 

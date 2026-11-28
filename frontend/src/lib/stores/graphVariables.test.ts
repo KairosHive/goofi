@@ -9,10 +9,8 @@ function seedSystemVariable(d: DocSeed, name: string, value: number): void {
 	d.variable(name, { value, system: true });
 }
 
-// Variables are now server COMMAND ops (EditVariable / a Compound rename), undoable and validated
-// server-side (invalid name / collision / protected-system reject the RPC — covered by the bridge +
-// engine tests). This file pins the CLIENT's job: map each mutator to the right command op/payload
-// and record an undoable step, propagating a server rejection.
+// The server validates a variable op. This file covers the client's part: each mutator sends
+// the right op and payload, records one undo step and passes a rejection on.
 describe('GraphStore variables mutators — the command surface the panel + agent drive', () => {
 	beforeEach(() => history().reset());
 	const found = (fc: FakeControl, op: string) => fc.recordedCalls().find((c) => c.op === op)?.payload;

@@ -106,12 +106,8 @@ describe('multi-select mode', () => {
 	});
 });
 
-/* The inspector's ✕ is a CLOSE, not a standing off-switch (Phil, 2026-08-08): dismissing the pane
- * holds only until the selection actually changes — deselect+reselect or a different node brings
- * it back — while the ◧ preference is the real off-switch that selection changes never flip. The
- * dismissal clears inside `write()`, the one choke-point every real selection change funnels
- * through, so the same-node re-click that drag-start suppresses (the no-op write above) leaves a
- * dismissal standing by construction. */
+/* The inspector's ✕ is a close, not an off-switch: it holds until the selection changes. A
+ * same-node re-click writes nothing, so it leaves the dismissal standing. */
 describe('dismissing the inspector holds only until the selection changes', () => {
 	beforeEach(() => selection().forgetAll());
 

@@ -2,17 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { FakeControl } from '$lib/test/fakeControl';
 import { GraphStore } from './graph.svelte';
 
-/**
- * The header speaks about the connection ONLY when it needs attention.
- *
- * "Connected" is not news — it is the case in every screenshot of a working app — so the healthy
- * state says nothing at all and takes no width. What the store has to answer is therefore not
- * `connected` but the ALARM: a connection that was established and then lost.
- *
- * The distinction is what makes the boot quiet. `connected` starts false and stays false for the
- * few hundred ms it takes the socket to open, so a bare `!connected` would alarm on every single
- * page load before settling — an alarm the user learns to ignore, which is worse than no alarm.
- */
+/** The header speaks about the connection only when one was established and then lost. A bare
+ * `!connected` would alarm on every page load while the socket opens. */
 describe('the connection alarm', () => {
 	it('stays quiet at boot, before the socket has ever opened', () => {
 		const fc = new FakeControl({ connected: false });

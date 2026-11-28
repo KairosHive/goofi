@@ -20,10 +20,8 @@ beforeEach(() => {
 
 describe('ControlClient per-tab command session', () => {
 	it('mints a non-empty session id, stable within a tab (not the shared default)', () => {
-		// The manager scopes undo/redo by this tag; a regression that dropped it (or returned a
-		// constant) would collapse every tab to the shared "default" session (bridge fallback), so
-		// Tab B's undo would revert Tab A's edit. Guard the minted-and-present invariant here.
-		// A url is passed so the constructor doesn't read `location` (absent in the node env).
+		// The manager keeps undo and redo per actor: a client with no actor would share `default`.
+		// A url is passed so the constructor does not read `location`.
 		const a = new ControlClient('ws://test/control');
 		expect(a.actor).toBeTruthy();
 		expect(a.actor).not.toBe('default');

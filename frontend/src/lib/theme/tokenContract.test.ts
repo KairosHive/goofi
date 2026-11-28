@@ -1,17 +1,6 @@
-/**
- * The panel system's styling hand-over, held to completeness.
- *
- * The package draws every rule through `var(--panelty-x, var(--panelty-x-default))`. Two tiers, two
- * owners: the `-default` is the package's own shipped look, and `--panelty-x` is the slot this app
- * fills in one block in `app.css`. Nothing enforces either side at runtime — an unmapped token
- * simply falls through to the package's default, which is the same colour today and drifts the day
- * either palette moves. The failure is silent, invisible in review, and looks exactly like a theme
- * that works.
- *
- * So it is read off the bytes: what the package READS, what its own stylesheet DEFAULTS, and what
- * the app MAPS have to be one set. The scan is deliberately whole-directory rather than a list —
- * a token added in a new component is covered the moment it is written.
- */
+/** The panel package draws through `var(--panelty-x, var(--panelty-x-default))`. What the package
+ * reads, what its stylesheet defaults and what this app maps in `app.css` must be one set: an
+ * unmapped token falls through to the default with no error. */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -26,11 +15,8 @@ const TOKENS = fileURLToPath(
 );
 const APP_CSS = fileURLToPath(new URL('../../app.css', import.meta.url));
 
-/**
- * The per-instance group: a hook a consumer sets on ONE strip or ONE button, not a theme token.
- * Each states its fallback inline against a shared-base token, so it needs no `-default` tier and
- * an app that never sets it still gets a styled control.
- */
+/** The per-instance hooks: set on one strip or one button, with an inline fallback and no
+ * `-default` tier. */
 const HOOKS = new Set([
 	'tab-surface',
 	'tab-body',

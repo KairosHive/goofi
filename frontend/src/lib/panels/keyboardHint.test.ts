@@ -2,16 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/* The empty-canvas hint is the ONLY `<kbd>` in the entire UI — the single place the app names a
- * keyboard route to the user — and it named `+`, which no handler in `frontend/src` matches (and
- * `@xyflow`'s Pane registers no keydown at all). It rendered on the first-run screen and on the
- * screen right after creating a sub-patch.
- *
- * Guarded here rather than in e2e because the hint only renders when the editor's scope is EMPTY,
- * and the suite's shared backend patch is not empty by the time any spec could assert on it. This
- * pins the two ends against each other inside the one file that holds both: the word the hint
- * prints, and the keydown branch that word promises.
- */
+/* The empty-canvas hint is the only `<kbd>` in the UI. The key it names must be the key whose
+ * keydown branch opens the add-node menu. It is read from the source because the hint renders
+ * only on an empty scope, which the e2e suite's shared patch never is. */
 
 const SRC = readFileSync(
 	fileURLToPath(new URL('./NodeEditorPanel.svelte', import.meta.url)),
@@ -30,17 +23,10 @@ describe('the empty-canvas keyboard hint', () => {
 
 	it('names a key whose keydown branch opens the add-node menu', () => {
 		const key = /<kbd>([^<]+)<\/kbd>/.exec(SRC)![1];
-		// `[^{]*\)` rather than a bare `\)`: a branch may carry further conjuncts after the key test
-		// (R-C scoped Tab to `!e.shiftKey && canvasHasKeys(t)`), and this guard is about WHICH key the
-		// hint names, not about how narrowly that key is claimed. The body capture still stops at the
-		// first `}`, so a comment inside the branch must not spell one.
+		// `[^{]*\)`: a branch may carry further conjuncts after the key test.
 		const branch = new RegExp(`e\\.key === '${esc(key)}'[^{]*\\)\\s*\\{([^}]*)`).exec(SRC);
 		expect(branch, `no keydown branch in this file matches \`${key}\``).not.toBeNull();
-		// Comments stripped from the CAPTURE before asserting — the branch body is source, and prose
-		// inside it is not the call. R-C put a six-line comment in this very branch whose first line
-		// spells `openAddMenu`, which left the assertion satisfiable by that comment alone: deleting
-		// the real call kept it green. Stripped here rather than from `SRC`, which carries `https://`
-		// and Svelte markup that a blanket strip would eat.
+		// Comments are stripped from the capture, so prose that spells `openAddMenu` does not satisfy it.
 		const body = branch![1].replace(/\/\/.*$/gm, '');
 		expect(body, `the \`${key}\` branch is not the add-node menu`).toContain('openAddMenu');
 	});

@@ -66,10 +66,8 @@ describe('SyncClient', () => {
 	});
 
 	it('skips a stale delta in silence — the seed already carried it', () => {
-		// The manager subscribes a socket BEFORE it snapshots the document, so a peer's edit landing
-		// in that window is broadcast and then included in the snapshot too. Re-delivery is the
-		// price of never losing one; a replica that treated it as a gap would stall on every
-		// connection made while someone else was editing.
+		// The manager subscribes a socket before it snapshots the document, so an edit in that
+		// window arrives twice. A replica must not read the second delivery as a gap.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { ctl, client } = started();
 		ctl.emit({ event: 'doc_state', payload: { v: 5, doc: stateWith({ '1': OSC }) } });

@@ -1,11 +1,5 @@
-/**
- * The workspace store as a REPLICA: every frozen gesture leaves as a layout command, nothing edits
- * the arrangement locally, and the viewpoint never leaves as one.
- *
- * These are the tests that pin the cutover. Before it, each gesture rewrote a client-owned tree and
- * `set_layout` pushed the whole blob back debounced; now the tree is the manager's and the gesture
- * is an op, so what a gesture SENDS is the behaviour worth pinning.
- */
+/** The workspace store as a replica: every gesture leaves as a layout command, nothing edits the
+ * arrangement locally, and the viewpoint never leaves as one. */
 import { describe, expect, it, beforeEach } from 'vitest';
 import { workspace, type Workspace } from 'panelty';
 import { FakeControl } from '$lib/test/fakeControl';
@@ -399,11 +393,8 @@ describe('viewpoint stays here', () => {
 	});
 
 	it('keeps a restored viewpoint through the boundary a fresh session resets across', () => {
-		// The boot order, as `_replaceSnapshot` runs it: the snapshot restores the viewpoint, the
-		// reset then empties the arrangement so the outgoing session's tree cannot be drawn, and the
-		// manager's real document lands only after both. Pruning the viewpoint against that empty
-		// middle threw away everything the restore had just put back — and the debounced
-		// `set_viewpoint` pushed the loss to the manager.
+		// Boot order: the snapshot restores the viewpoint, the reset empties the arrangement, and the
+		// manager's document lands after both. The viewpoint is not pruned against the empty middle.
 		const two = [...split(), tab('tab-7', 'Second', 'panel-8', 'node-editor')];
 		const ws = boot([]);
 		ws.restoreViewpoint({ tab: 'tab-7', panel: 'panel-8', paths: { 'panel-8': '/inst0' } });
