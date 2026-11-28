@@ -1616,11 +1616,8 @@ fn lane(x: &[f32], c: usize, channels: u16) -> Vec<f32> {
     x.iter().skip(c).step_by(channels as usize).copied().collect()
 }
 
-/// `channels` on `AudioIn` and `AudioOut` is what makes a multi-channel interface addressable:
-/// WASAPI publishes a card as stereo endpoints, so before it there was no way to ask for a
-/// Scarlett's inputs 3 and 4, or to put a signal on its outputs 3 and 4 while something else held
-/// 1 and 2. This is the output half, which needs no hardware — the input half is the same parser
-/// against a real device.
+/// `channels` on `AudioOut` puts a signal on the outputs it names of a multi-channel interface.
+/// This is the output half, which needs no hardware.
 #[test]
 fn an_audio_out_lands_on_the_channels_it_names() {
     let g = Goofi::new();

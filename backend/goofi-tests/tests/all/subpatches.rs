@@ -251,10 +251,8 @@ fn a_boundary_is_authored_wired_and_renamed_without_changing_its_id() {
     g.link(osc, "out", buf, "input");
     let inst = group(&g, &[hex(buf)]);
 
-    // Authoring ALONE is what gives the sub-patch its slot: the record is complete the moment the
-    // port exists — the scope it is a port of, and a type naming both the direction and the dtype.
-    // That record IS the facade's slot on the parent canvas, so gating it on an inner wire hid an
-    // authored port from the scope above until somebody wired it.
+    // Authoring alone gives the sub-patch its slot: the port's record is the facade's slot on the
+    // parent canvas, with no inner wire needed.
     let feed = boundary(&g, &inst, "in");
     let fresh = g.doc()["nodes"][&feed].clone();
     assert_eq!(fresh["scope"], inst, "a port names the sub-patch it is a port of: {fresh}");
@@ -474,20 +472,16 @@ fn an_expression_reads_a_port_and_follows_the_wire_behind_it() {
     assert!(!followed.contains("subpatch0"), "…and nothing still spells the old name: {followed}");
     assert!(!followed.contains("[error:"), "the binding stayed live across the rename: {followed}");
 
-    // Renaming the PORT moves a SLOT LABEL, because a facade's slots are called what its ports are
-    // called — so the one rename has to reach the expression in the slot position too. Nothing else
-    // writes that half: the name in `nd('chain')` is untouched and the rewrite that follows a node
-    // rename never looks past it.
+    // A facade's slots are called what its ports are called, so a port rename must reach the
+    // expression in the slot position too. The name in `nd('chain')` is untouched.
     g.call("node edit", j!({ "node": outp, "name": "drain" }));
     let slot_moved = g.call("node state", j!({ "node": hex(buf) }))["text"].as_str().unwrap().to_string();
     assert!(slot_moved.contains("nd('chain').out.drain"), "the reference followed the port: {slot_moved}");
     assert!(!slot_moved.contains(".sink"), "…and nothing still spells the old slot: {slot_moved}");
     assert!(!slot_moved.contains("[error:"), "the binding stayed live across it: {slot_moved}");
 
-    // A display name is read as an ATTRIBUTE in an expression — `nd('chain').out.drain` — so a name
-    // Python cannot parse as one breaks every reference to it, and the rewrite that follows the
-    // NEXT rename can no longer find what it broke. The name is refused instead, for every kind
-    // of node: the namespace is one, so the rule on it is one.
+    // A display name is read as an attribute in an expression (`nd('chain').out.drain`), so a name
+    // Python cannot parse as one is refused, for every kind of node.
     // Read once the node is settled: the dump carries its stage, and a boot that no longer waits on
     // a probe can reach this line while the node is still creating.
     g.ready(buf);
@@ -628,10 +622,8 @@ fn a_port_wears_a_viewer_on_the_stream_it_exposes() {
 
 #[test]
 fn a_sub_patch_is_copied_whole_and_the_copy_owes_the_original_nothing() {
-    // Copying a sub-patch is copying everything it contains, to any depth — members, nested scopes,
-    // ports and the wiring among them. The fragment `copy_nodes` reads is the `.gfi`'s own shape, so
-    // it is the same pair of ops for a leaf, for a selection, and across two goofi processes: one
-    // door rather than a clone path per node kind.
+    // Copying a sub-patch copies everything it contains, to any depth. The fragment `copy_nodes`
+    // reads is the `.gfi`'s own shape: the same pair of ops for a leaf and for a selection.
     let g = Goofi::new();
     let osc = g.add("LFO");
     let buf = g.add("Buffer");

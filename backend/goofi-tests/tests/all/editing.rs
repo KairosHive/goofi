@@ -1324,13 +1324,8 @@ fn eight_writers_all_land_and_none_deadlock() {
     }
 }
 
-/// The touched filter's zero point, which the inspector's Clear button moves.
-///
-/// A plugin's params read as touched when they differ from the plugin's FACTORY default, so
-/// loading a preset moves hundreds at once and the filter that exists to show the few in play
-/// fills with everything the preset moved. Clearing records what the node holds NOW as the new
-/// zero. It must edit no param and break no binding — an expression keeps driving, and the
-/// Expression filter still finds it — and it must be undoable like any other document edit.
+/// The touched filter's zero point, which the inspector's Clear button moves: clearing records
+/// what the node holds now as the new zero. It edits no param, breaks no binding, and is undoable.
 #[test]
 fn clearing_the_touched_baseline_moves_the_zero_point_and_breaks_no_binding() {
     let g = Goofi::new();
