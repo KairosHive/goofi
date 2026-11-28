@@ -132,35 +132,14 @@ static OUTPUTS: &[OutputDecl] = &[
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "readout",
-        name: "learning",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Keep training. Turn it off to freeze what it learned and watch the prediction run on alone."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("readout", "learning", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "readout",
-        name: "regularization",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0e-6, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How cautious the first steps are. Larger learns slower and is steadier on a state with few directions."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("readout", "regularization", ParamSpec::Num { default: &[1.0], min: 1.0e-6, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
-    ParamDecl {
-        group: "readout",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the weights and start training again."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget the weights and start training again."), ..ParamDecl::new("readout", "reset", ParamSpec::Pulse) },
 ];
 
 static MANIFEST: Manifest = Manifest {

@@ -73,69 +73,31 @@ impl Node for Clock {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "clock",
-        name: "rate",
-        spec: ParamSpec::Num { default: &[120.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How fast, read in whatever `unit` says."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("clock", "rate", ParamSpec::Num { default: &[120.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "clock",
-        name: "unit",
-        spec: ParamSpec::Str { default: "bpm", options: &["bpm", "hz", "seconds"], refresh: false },
-        expression: None,
         doc: Some("What `rate` means: beats a minute, ticks a second, or seconds between ticks."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("clock", "unit", ParamSpec::Str { default: "bpm", options: &["bpm", "hz", "seconds"], refresh: false })
     },
     ParamDecl {
-        group: "clock",
-        name: "division",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.001, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many ticks to cut each one into. At 120 bpm, 4 is sixteenth notes."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("clock", "division", ParamSpec::Num { default: &[1.0], min: 0.001, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "clock",
-        name: "running",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Off holds the place it had reached, so starting again resumes rather than restarts."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("clock", "running", ParamSpec::Bool { default: true })
     },
-    ParamDecl {
-        group: "clock",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Put the phase and the count back to zero."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Put the phase and the count back to zero."), ..ParamDecl::new("clock", "reset", ParamSpec::Pulse) },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and a clock
     // can tick no finer than the rate it is asked at.
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: Some(ExprDecl { source: "vars.signal.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[

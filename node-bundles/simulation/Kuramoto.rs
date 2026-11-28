@@ -206,107 +206,44 @@ static OUTPUTS: &[OutputDecl] = &[
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "kuramoto",
-        name: "size",
-        spec: ParamSpec::Num { default: &[8.0], min: 1.0, max: 1024.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many oscillators, when neither input says. A wired input decides instead."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("kuramoto", "size", ParamSpec::Num { default: &[8.0], min: 1.0, max: 1024.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "kuramoto",
-        name: "coupling",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How hard the oscillators pull on each other. Past a threshold set by `spread`, they lock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("kuramoto", "coupling", ParamSpec::Num { default: &[1.0], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "kuramoto",
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Mean natural frequency in Hz. The `frequencies` input replaces this and `spread`."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("kuramoto", "frequency", ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "kuramoto",
-        name: "spread",
-        spec: ParamSpec::Num { default: &[0.2], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Standard deviation of the natural frequencies. A wider set needs stronger coupling to lock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("kuramoto", "spread", ParamSpec::Num { default: &[0.2], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "kuramoto",
-        name: "noise",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Phase diffusion, which fights the coupling."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("kuramoto", "noise", ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "dt",
-        spec: ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Model seconds per step. The model runs at `output.sfreq` times this, relative to real time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "dt", ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seeds the phases and the drawn frequencies. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Draw the model again from the seed."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Draw the model again from the seed."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some(
             "`value` emits the state now, which a param reference reads as a number; \
              `block` emits every step since the last frame, which is a signal.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[200.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Integration steps per second of real time, and the sample rate of an emitted block."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[200.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

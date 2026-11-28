@@ -29,17 +29,11 @@ impl Node for Switch {
 }
 
 static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "switch",
-    name: "index",
-    spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 63.0, int: true, options: &[], face: Face::Plain },
-    expression: None,
     doc: Some(
         "Which wire passes, counted in the order they were connected. In reference mode another \
          node's output chooses the route.",
     ),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("switch", "index", ParamSpec::Num { default: &[0.0], min: 0.0, max: 63.0, int: true, options: &[], face: Face::Plain })
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

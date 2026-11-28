@@ -229,27 +229,13 @@ impl Node for Smoothing {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: G,
-        name: "mode",
-        spec: ParamSpec::Str { default: "sample", options: &["sample", "buffer"], refresh: false },
-        expression: None,
         doc: Some(
             "`sample` smooths each position of the frame across ticks, whatever the frame's shape. \
              `buffer` smooths along one axis inside each frame, and keeps nothing between frames.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "mode", ParamSpec::Str { default: "sample", options: &["sample", "buffer"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "method",
-        spec: ParamSpec::Str {
-            default: "exponential",
-            options: &["exponential", "attack/decay", "simple", "convolution"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "`exponential` lets an old value fade away, by `alpha` a step. `attack/decay` is the \
              same with one rate for a rise and another for a fall. `simple` is the mean of the \
@@ -257,120 +243,79 @@ static PARAMS: &[ParamDecl] = &[
              around each one by a `kernel`, centred, so it shifts nothing in time.",
         ),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "method", ParamSpec::Str { default: "exponential", options: &["exponential", "attack/decay", "simple", "convolution"], refresh: false, })
     },
     ParamDecl {
-        group: G,
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to smooth along. -1 is time."),
         section: 1,
         show: &[BUFFER],
-        role: None,
+        ..ParamDecl::new(G, "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "alpha",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How far each new value pulls the average towards itself: 1 follows the input exactly, \
              and a small value changes slowly.",
         ),
         section: 1,
         show: &[EXPONENTIAL],
-        role: None,
+        ..ParamDecl::new(G, "alpha", ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "attack",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far a value above the level pulls it up, a step: 1 jumps to it at once."),
         section: 1,
         show: &[FOLLOW],
-        role: None,
+        ..ParamDecl::new(G, "attack", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "decay",
-        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far a value below the level pulls it down, a step: small, and a peak lingers."),
         section: 1,
         show: &[FOLLOW],
-        role: None,
+        ..ParamDecl::new(G, "decay", ParamSpec::Num { default: &[0.05], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "size",
-        spec: ParamSpec::Num { default: &[5.0], min: 1.0, max: 1001.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How many steps the mean, or the kernel, spans: frames across ticks, samples along an \
              axis. An odd kernel sits on its sample.",
         ),
         section: 1,
         show: &[SPAN],
-        role: None,
+        ..ParamDecl::new(G, "size", ParamSpec::Num { default: &[5.0], min: 1.0, max: 1001.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "bidirectional",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some(
             "Run the average forward and then backward over its own answer, so nothing comes out \
              shifted in time. Off, it lags like a live stream would.",
         ),
         section: 1,
         show: &[BUFFER, AVERAGE],
-        role: None,
+        ..ParamDecl::new(G, "bidirectional", ParamSpec::Bool { default: false })
     },
     ParamDecl {
-        group: G,
-        name: "kernel",
-        spec: ParamSpec::Str { default: "gaussian", options: &["box", "triangle", "gaussian", "hann"], refresh: false },
-        expression: None,
         doc: Some("The shape of the weights: flat, a tent, a bell of width `sigma`, or a raised cosine."),
         section: 1,
         show: &[CONVOLUTION],
-        role: None,
+        ..ParamDecl::new(G, "kernel", ParamSpec::Str { default: "gaussian", options: &["box", "triangle", "gaussian", "hann"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "sigma",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The width of the gaussian bell, in samples."),
         section: 1,
         show: &[CONVOLUTION, GAUSSIAN],
-        role: None,
+        ..ParamDecl::new(G, "sigma", ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "edge",
-        spec: ParamSpec::Str { default: "reflect", options: &["reflect", "hold", "zero"], refresh: false },
-        expression: None,
         doc: Some(
             "What the kernel reads past either end: the lane mirrored back on itself, its end \
              sample held, or zeros.",
         ),
         section: 1,
         show: &[CONVOLUTION],
-        role: None,
+        ..ParamDecl::new(G, "edge", ParamSpec::Str { default: "reflect", options: &["reflect", "hold", "zero"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
         doc: Some("Forget the past, so the node starts again from the next frame."),
         section: 1,
         show: &[SAMPLE],
-        role: None,
+        ..ParamDecl::new(G, "reset", ParamSpec::Pulse)
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

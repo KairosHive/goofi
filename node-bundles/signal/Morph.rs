@@ -87,45 +87,21 @@ impl Node for Morph {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "morph",
-        name: "position",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 64.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Where along the wired frames to be, in frames: 1.5 is halfway from the second to the third, and the list loops."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("morph", "position", ParamSpec::Num { default: &[0.0], min: 0.0, max: 64.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "morph",
-        name: "curve",
-        spec: ParamSpec::Str { default: "linear", options: &["linear", "spline"], refresh: false },
-        expression: None,
         doc: Some("`linear` mixes the two nearest frames; `spline` runs one smooth Catmull-Rom loop through all of them."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("morph", "curve", ParamSpec::Str { default: "linear", options: &["linear", "spline"], refresh: false })
     },
     // On by default: the frames are held, and it is `position` that moves between them.
     ParamDecl {
-        group: "common",
-        name: "autotrigger",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Run on the node's own clock, so a moving `position` morphs between the held frames."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "autotrigger", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.1, max: 240.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Rate cap: frames a second at most."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[30.0], min: 0.1, max: 240.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

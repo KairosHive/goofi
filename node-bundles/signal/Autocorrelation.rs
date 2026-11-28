@@ -76,47 +76,23 @@ impl Node for Autocorrelation {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "autocorrelation",
-        name: "lags",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many lags to answer, from zero up. 0 is every lag the axis has."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("autocorrelation", "lags", ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "autocorrelation",
-        name: "estimate",
-        spec: ParamSpec::Str { default: "coefficient", options: &["coefficient", "biased", "unbiased"], refresh: false },
-        expression: None,
         doc: Some(
             "`coefficient` is one at lag zero; `biased` divides every lag by the length, \
              `unbiased` by the overlap the lag leaves.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("autocorrelation", "estimate", ParamSpec::Str { default: "coefficient", options: &["coefficient", "biased", "unbiased"], refresh: false })
     },
     ParamDecl {
-        group: "autocorrelation",
-        name: "detrend",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Take the mean out first, so an offset does not read as resemblance."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("autocorrelation", "detrend", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "autocorrelation",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to correlate along. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("autocorrelation", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -3,44 +3,20 @@ use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, Param
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
-        group: "graphics",
-        name: "mode",
-        spec: ParamSpec::Str { default: "bipolar", options: cross::RANGES, refresh: false },
-        expression: None,
         doc: Some("the texels themselves, or `min`..`max` mapped onto [-1, 1] or [0, 1]"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "mode", ParamSpec::Str { default: "bipolar", options: cross::RANGES, refresh: false })
     },
     MIN = ParamDecl {
-        group: "graphics",
-        name: "min",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the value a mapped range starts at; a texture's own window is 0 to 1"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "min", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     MAX = ParamDecl {
-        group: "graphics",
-        name: "max",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the value it ends at"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "max", ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     CHANNELS = ParamDecl {
-        group: "graphics",
-        name: "channels",
-        spec: ParamSpec::Str { default: "luma", options: &["luma", "all"], refresh: false },
-        expression: None,
         doc: Some("the picture's brightness on one channel, or its colour channels each on their own"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "channels", ParamSpec::Str { default: "luma", options: &["luma", "all"], refresh: false })
     },
 }
 
@@ -73,7 +49,6 @@ impl AudioNode for GraphicsIn {
         vec![if one { 1 } else { ins.first().copied().unwrap_or(1).max(1) }; outs]
     }
 
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let mode = b.params[P::MODE].chan(0)[0] as u8;

@@ -3,24 +3,12 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     CHANNELS = ParamDecl {
-        group: "mixdown",
-        name: "channels",
-        spec: ParamSpec::Num { default: &[2.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("mixdown", "channels", ParamSpec::Num { default: &[2.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain })
     },
     SPREAD = ParamDecl {
-        group: "mixdown",
-        name: "spread",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how far apart the voices sit; at 0 every one of them is in the middle"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("mixdown", "spread", ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
 }
 
@@ -50,7 +38,6 @@ impl AudioNode for Mixdown {
         vec![(params[P::CHANNELS] as u16).max(1); outs]
     }
 
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];

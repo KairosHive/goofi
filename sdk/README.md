@@ -267,9 +267,10 @@ PARAMS = {"filter": [
 ]}
 ```
 
-A group that is a list of dicts has one section for each dict. In Rust, a `ParamDecl` sets
-`section: 1` and `show: &[Show { param: "mode", any_of: &["iir"] }]`, or `section: 0` and
-`show: &[]`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, or a list
+A group that is a list of dicts has one section for each dict. In Rust,
+`ParamDecl::new(group, name, spec)` is in section 0 and always shown, and a `ParamDecl` names
+what differs: `ParamDecl { section: 1, show: &[Show { param: "mode", any_of: &["iir"] }],
+..ParamDecl::new(…) }`. A WGSL header param adds `"show": {"param": "mode", "any_of": ["iir"]}`, or a list
 of such rules, and sits in a section through a section entry.
 
 A plugin can provide its own playback node and configure it through `ctx.call`. Downloads and

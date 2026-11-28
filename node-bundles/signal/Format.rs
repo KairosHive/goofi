@@ -107,37 +107,19 @@ impl Node for Format {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "format",
-        name: "mode",
-        spec: ParamSpec::Str { default: "concat", options: &["concat", "template"], refresh: false },
-        expression: None,
         doc: Some("`concat` joins the wires in order; `template` places each one where it is named."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("format", "mode", ParamSpec::Str { default: "concat", options: &["concat", "template"], refresh: false })
     },
     ParamDecl {
-        group: "format",
-        name: "separator",
-        spec: ParamSpec::Str { default: " ", options: &[], refresh: false },
-        expression: None,
         doc: Some("What goes between two wires in `concat` mode."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("format", "separator", ParamSpec::Str { default: " ", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "format",
-        name: "template",
-        spec: ParamSpec::Str { default: "{}", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "Where each wire goes: `{}` takes the next one, `{2}` the third, and `{0:>8}` sets \
              it right in a field eight wide. A wire that is not there is empty.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("format", "template", ParamSpec::Str { default: "{}", options: &[], refresh: false })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -2335,16 +2335,7 @@ impl Node for Vectorize {
 }
 
 const fn number(name: &'static str, default: &'static [f64], min: f64, max: f64, int: bool, doc: &'static str) -> ParamDecl {
-    ParamDecl {
-        group: G,
-        name,
-        spec: ParamSpec::Num { default, min, max, int, options: &[], face: Face::Plain },
-        expression: None,
-        doc: Some(doc),
-        section: 0,
-        show: &[],
-        role: None,
-    }
+    ParamDecl { doc: Some(doc), ..ParamDecl::new(G, name, ParamSpec::Num { default, min, max, int, options: &[], face: Face::Plain }) }
 }
 
 /// The param in a section of the group, shown while `show` holds.
@@ -2354,18 +2345,12 @@ const fn placed(p: ParamDecl, section: u8, show: &'static [Show]) -> ParamDecl {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: G,
-        name: "mode",
-        spec: ParamSpec::Str { default: "regions", options: &["regions", "ink", "lines"], refresh: false },
-        expression: None,
         doc: Some(
             "What is traced. `regions` reduces any picture to `colors` colours and outlines every region of one \
              colour. `ink` finds the ink of a drawing on paper and outlines each ink colour. `lines` traces the same \
              ink as pen paths, one centre line per stroke, drawn at the pen width measured along it.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "mode", ParamSpec::Str { default: "regions", options: &["regions", "ink", "lines"], refresh: false })
     },
     number("size", &[512.0], 32.0, 4096.0, true, "Longest side of the working copy, in pixels. A smaller copy traces faster and coarser."),
     number("colors", &[8.0], 1.0, 32.0, true, "Palette size. In `regions` it is the count of colours. In `ink` and `lines` it is the most ink colours kept after near colours merge."),

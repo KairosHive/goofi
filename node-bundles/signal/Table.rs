@@ -45,17 +45,11 @@ impl Node for Table {
 }
 
 static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "table",
-    name: "keys",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-    expression: None,
     doc: Some(
         "The key for each wire, comma-separated, over the arrays and then the strings. A wire \
          with no key here takes the name of the node it comes from.",
     ),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("table", "keys", ParamSpec::Str { default: "", options: &[], refresh: false })
 }];
 static INPUTS: &[SlotDecl] = &[
     SlotDecl { name: "arrays", kind: SlotType::Array, trigger_process: true, multi: true, required: false },

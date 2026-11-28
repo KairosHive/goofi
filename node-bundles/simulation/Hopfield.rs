@@ -199,98 +199,41 @@ static OUTPUTS: &[OutputDecl] = &[
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "hopfield",
-        name: "mode",
-        spec: ParamSpec::Str { default: "classic", options: &["classic", "modern"], refresh: false },
-        expression: None,
         doc: Some(
             "`classic` is the 1982 network, which holds about 0.14 memories per unit before they \
              blur; `modern` is the dense associative form, which holds far more and whose update \
              is a softmax over the memories.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "mode", ParamSpec::Str { default: "classic", options: &["classic", "modern"], refresh: false })
     },
     ParamDecl {
-        group: "hopfield",
-        name: "size",
-        spec: ParamSpec::Num { default: &[64.0], min: 2.0, max: 4096.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How wide a memory is, when none is wired. A wired `patterns` matrix decides instead."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "size", ParamSpec::Num { default: &[64.0], min: 2.0, max: 4096.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "hopfield",
-        name: "patterns",
-        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many memories to draw, when none is wired."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "patterns", ParamSpec::Num { default: &[4.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "hopfield",
-        name: "beta",
-        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How sharply the network commits. High makes it snap to one memory; low leaves it between them."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "beta", ParamSpec::Num { default: &[4.0], min: 0.0, max: 50.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "hopfield",
-        name: "clamp",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How hard the `cue` holds the state. 1 pins it to the cue; 0 lets the network run free."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "clamp", ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "hopfield",
-        name: "noise",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Jitter on the state, which shakes it out of a shallow memory."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hopfield", "noise", ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seeds the drawn memories and the starting state. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Draw the memories again and start over."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Draw the memories again and start over."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[30.0], min: 1.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Updates per second of real time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[30.0], min: 1.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

@@ -22,14 +22,8 @@ impl Node for Text {
 }
 
 static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "text",
-    name: "value",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-    expression: None,
     doc: Some("The text to emit; in expression mode it is an f-string over the rest of the patch."),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("text", "value", ParamSpec::Str { default: "", options: &[], refresh: false })
 }];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::String }];
 

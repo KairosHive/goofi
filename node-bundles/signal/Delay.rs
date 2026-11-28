@@ -59,45 +59,18 @@ impl Node for Delay {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "delay",
-        name: "size",
-        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e7, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far back to read, in the unit below. Never a sleep: the node answers at once."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("delay", "size", ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e7, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "delay",
-        name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)", "updates"], refresh: false },
-        expression: None,
         doc: Some("Samples counts along the axis. Seconds uses sfreq, or delays whole frames at ufreq if no sample rate is set. Updates and seconds (ufreq) delay whole frames."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("delay", "unit", ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)", "updates"], refresh: false })
     },
     ParamDecl {
-        group: "delay",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis the delay runs along when it counts samples. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("delay", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
-    ParamDecl {
-        group: "delay",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the past, so the node starts again from the next frame."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget the past, so the node starts again from the next frame."), ..ParamDecl::new("delay", "reset", ParamSpec::Pulse) },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

@@ -185,97 +185,40 @@ static OUTPUTS: &[OutputDecl] = &[
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "branching",
-        name: "branching",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 3.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How many units one active unit wakes on average. Below 1 every avalanche dies out, \
              above 1 it takes the network, and at 1 the sizes follow a power law.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("branching", "branching", ParamSpec::Num { default: &[1.0], min: 0.0, max: 3.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "branching",
-        name: "size",
-        spec: ParamSpec::Num { default: &[1024.0], min: 2.0, max: 100_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many units. A larger network shows the power law over more decades."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("branching", "size", ParamSpec::Num { default: &[1024.0], min: 2.0, max: 100_000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "branching",
-        name: "connections",
-        spec: ParamSpec::Num { default: &[8.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many units one can wake. `branching` is shared out between them."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("branching", "connections", ParamSpec::Num { default: &[8.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "branching",
-        name: "drive",
-        spec: ParamSpec::Num { default: &[0.0005], min: 0.0, max: 0.1, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Chance a silent unit wakes on its own, which is what starts each avalanche. The `drive` input adds to it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("branching", "drive", ParamSpec::Num { default: &[0.0005], min: 0.0, max: 0.1, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "branching",
-        name: "refractory",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Steps a unit stays silent after it fires. Zero lets one unit sustain itself for ever."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("branching", "refractory", ParamSpec::Num { default: &[1.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seeds the wiring and the draws. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Wire the network again and silence it."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Wire the network again and silence it."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some("`value` emits the step now; `block` emits every step since the last frame, which is a signal."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[60.0], min: 1.0, max: 2000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[60.0], min: 1.0, max: 2000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

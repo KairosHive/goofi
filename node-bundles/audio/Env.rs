@@ -3,54 +3,24 @@ use goofi_audio_sdk::{Face, high, AudioNode, Block, Edge, Manifest, OutputDecl, 
 
 goofi_audio_sdk::params! {
     GATE = ParamDecl {
-        group: "env",
-        name: "gate",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some("HIGH above zero; an audio reference is one voice per channel"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("env", "gate", ParamSpec::Bool { default: false })
     },
     ATTACK = ParamDecl {
-        group: "env",
-        name: "attack",
-        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds to full"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("env", "attack", ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     DECAY = ParamDecl {
-        group: "env",
-        name: "decay",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds from full to `sustain`"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("env", "decay", ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     SUSTAIN = ParamDecl {
-        group: "env",
-        name: "sustain",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the level held while the gate stays HIGH"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("env", "sustain", ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     RELEASE = ParamDecl {
-        group: "env",
-        name: "release",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds from full to silence once the gate drops"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("env", "release", ParamSpec::Num { default: &[0.1], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

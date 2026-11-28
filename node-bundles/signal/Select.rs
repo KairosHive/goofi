@@ -236,10 +236,6 @@ impl Node for Select {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "select",
-        name: "keep",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "What to keep, separated by commas, in the order given: positions and numpy slices \
              like `-1` or `5:7`, labels with `*` for anything, `\"3\"` for the label rather than \
@@ -247,52 +243,26 @@ static PARAMS: &[ParamDecl] = &[
              `<eeg-occipital>`, `<eeg-left>` or `<eeg-right>` for the channels of an EEG group. \
              Empty keeps everything.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("select", "keep", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "select",
-        name: "drop",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some("What to drop from what was kept, written the same way. Empty drops nothing."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("select", "drop", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "select",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to cut, negative from the end. 0 is channels on a `[channels, time]` frame."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("select", "axis", ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
     ParamDecl {
-        group: "select",
-        name: "interpolate",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some(
             "Read a position with a fraction, `2.37`, as a point between two entries and blend \
              them, so an expression that sweeps `keep` glides along the axis instead of stepping.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("select", "interpolate", ParamSpec::Bool { default: false })
     },
     ParamDecl {
-        group: "select",
-        name: "squeeze",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("When one entry is left, remove the axis instead of leaving it one long."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("select", "squeeze", ParamSpec::Bool { default: true })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

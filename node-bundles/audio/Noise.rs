@@ -3,24 +3,12 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
-        group: "noise",
-        name: "mode",
-        spec: ParamSpec::Str { default: "white", options: &["white", "pink"], refresh: false },
-        expression: None,
         doc: Some("`white` is level across the spectrum; `pink` falls with frequency, as most natural sound does"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "mode", ParamSpec::Str { default: "white", options: &["white", "pink"], refresh: false })
     },
     CHANNELS = ParamDecl {
-        group: "noise",
-        name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how many channels to make; no two of them are alike"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "channels", ParamSpec::Num { default: &[1.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain })
     },
 }
 

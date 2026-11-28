@@ -3,34 +3,16 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     CEILING = ParamDecl {
-        group: "limiter",
-        name: "ceiling",
-        spec: ParamSpec::Num { default: &[0.9], min: 0.05, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the level nothing leaving this node may pass"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("limiter", "ceiling", ParamSpec::Num { default: &[0.9], min: 0.05, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ATTACK = ParamDecl {
-        group: "limiter",
-        name: "attack",
-        spec: ParamSpec::Num { default: &[0.004], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds to take hold of a peak; shorter is tighter and harder"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("limiter", "attack", ParamSpec::Num { default: &[0.004], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     RELEASE = ParamDecl {
-        group: "limiter",
-        name: "release",
-        spec: ParamSpec::Num { default: &[0.4], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds to let go once the peak has passed"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("limiter", "release", ParamSpec::Num { default: &[0.4], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

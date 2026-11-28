@@ -41,54 +41,24 @@ impl Node for ArrayPlayback {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "playback",
-        name: "file",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some("The recorded `.npy` file. Its `.jsonl` sidecar beside it gives each frame's instant, shape and meta."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("playback", "file", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "playback",
-        name: "loop",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Start over at the end, instead of falling silent."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("playback", "loop", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "fallback",
-        name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 4096.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Without a sidecar or a manifest frame shape: the values per frame, one sample per channel."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("fallback", "channels", ParamSpec::Num { default: &[1.0], min: 1.0, max: 4096.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "fallback",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[250.0], min: 0.001, max: 100_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Without a sidecar or a manifest rate: the samples per second that space the frames."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("fallback", "sfreq", ParamSpec::Num { default: &[250.0], min: 0.001, max: 100_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[500.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How often to look for a due frame. One frame leaves per run, so this bounds the replayed rate."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[500.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

@@ -293,44 +293,19 @@ fn correlation_meta(
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "operation",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "add",
-            options: &[
-                "add", "subtract", "multiply", "divide", "min", "max", "mean", "matmul",
-                "correlation", "crosscorrelation", "autocorrelation",
-            ],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "What to do with the wires. The arithmetic folds them left in wire order and stretches \
              a length of one to fit; the correlations measure the first wire against each other one.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("operation", "mode", ParamSpec::Str { default: "add", options: &[ "add", "subtract", "multiply", "divide", "min", "max", "mean", "matmul", "correlation", "crosscorrelation", "autocorrelation", ], refresh: false, })
     },
     ParamDecl {
-        group: "operation",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis the correlations run along; the other modes ignore it. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("operation", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
     ParamDecl {
-        group: "operation",
-        name: "lags",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far either way a lagged correlation reaches, in samples; 0 reaches as far as it can."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("operation", "lags", ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: true, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

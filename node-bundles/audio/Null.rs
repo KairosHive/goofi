@@ -21,7 +21,6 @@ static MANIFEST: Manifest = Manifest {
 struct Null;
 
 impl AudioNode for Null {
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];

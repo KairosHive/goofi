@@ -822,74 +822,36 @@ impl Node for Specparam {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "specparam",
-        name: "mode",
-        spec: ParamSpec::Str { default: "fixed", options: &["fixed", "knee"], refresh: false },
-        expression: None,
         doc: Some("`knee` adds a bend where the 1/f slope flattens at low frequency; the `aperiodic` component carries it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "mode", ParamSpec::Str { default: "fixed", options: &["fixed", "knee"], refresh: false })
     },
     ParamDecl {
-        group: "specparam",
-        name: "freq_min",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Lowest frequency fitted, in Hz."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "freq_min", ParamSpec::Num { default: &[1.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "specparam",
-        name: "freq_max",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Highest frequency fitted, in Hz."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "freq_max", ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "specparam",
-        name: "max_peaks",
-        spec: ParamSpec::Num { default: &[6.0], min: 1.0, max: 20.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Peaks to fit at most."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "max_peaks", ParamSpec::Num { default: &[6.0], min: 1.0, max: 20.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "specparam",
-        name: "peak_threshold",
-        spec: ParamSpec::Num { default: &[2.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far a peak must rise over the flattened spectrum to count, in standard deviations of it."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "peak_threshold", ParamSpec::Num { default: &[2.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "specparam",
-        name: "peak_width_min",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Narrowest peak fitted, in Hz."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "peak_width_min", ParamSpec::Num { default: &[0.5], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "specparam",
-        name: "peak_width_max",
-        spec: ParamSpec::Num { default: &[12.0], min: 0.0, max: 512.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Widest peak fitted, in Hz."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("specparam", "peak_width_max", ParamSpec::Num { default: &[12.0], min: 0.0, max: 512.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl { name: "psd", kind: SlotType::Array, trigger_process: true, multi: false, required: true }];

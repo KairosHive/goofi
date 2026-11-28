@@ -59,24 +59,11 @@ impl Node for Function {
 }
 
 static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "function",
-    name: "function",
-    spec: ParamSpec::Str {
-        default: "abs",
-        options: &[
-            "abs", "negate", "square", "sqrt", "log", "log2", "log10", "exp", "sin", "cos", "tan",
-            "asin", "acos", "atan", "tanh", "sign", "round", "floor", "ceil",
-        ],
-        refresh: false,
-    },
-    expression: None,
     doc: Some(
         "Which function to apply to every value. A value outside a function's domain, such as a \
          negative under `sqrt`, comes out as not-a-number rather than as an error.",
     ),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("function", "function", ParamSpec::Str { default: "abs", options: &[ "abs", "negate", "square", "sqrt", "log", "log2", "log10", "exp", "sin", "cos", "tan", "asin", "acos", "atan", "tanh", "sign", "round", "floor", "ceil", ], refresh: false, })
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

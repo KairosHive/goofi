@@ -40,14 +40,8 @@ impl Node for TableSelect {
 }
 
 static PARAMS: &[ParamDecl] = &[ParamDecl {
-    group: "table",
-    name: "key",
-    spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-    expression: None,
     doc: Some("Which field to take. `a.b.c` reaches through a table inside a table."),
-    section: 0,
-    show: &[],
-    role: None,
+    ..ParamDecl::new("table", "key", ParamSpec::Str { default: "", options: &[], refresh: false })
 }];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

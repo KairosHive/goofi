@@ -6,104 +6,58 @@ const OSCILLATOR: &[Show] = &[Show { param: "mode", any_of: &["oscillator"] }];
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
-        group: "signal",
-        name: "mode",
-        spec: ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false },
-        expression: None,
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("signal", "mode", ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false })
     },
     PITCH = ParamDecl {
-        group: "signal",
-        name: "pitch",
-        spec: ParamSpec::Str { default: "hz", options: &["hz", "v/oct"], refresh: false },
-        expression: None,
         doc: Some("what a column's pitch is: cycles a second, or volts per octave with 0 V at C4"),
-        section: 0,
         show: OSCILLATOR,
-        role: None,
+        ..ParamDecl::new("signal", "pitch", ParamSpec::Str { default: "hz", options: &["hz", "v/oct"], refresh: false })
     },
     MIX = ParamDecl {
-        group: "signal",
-        name: "mix",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some("the rows of a [C, T] frame played together as one channel, their mean, rather than one channel each"),
-        section: 0,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "mix", ParamSpec::Bool { default: false })
     },
     LOW = ParamDecl {
-        group: "signal",
-        name: "low",
-        spec: ParamSpec::Num { default: &[-1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the input value that is full scale low, -1 on the audio plane"),
-        section: 0,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "low", ParamSpec::Num { default: &[-1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     HIGH = ParamDecl {
-        group: "signal",
-        name: "high",
-        spec: ParamSpec::Num { default: &[1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the input value that is full scale high, 1 on the audio plane"),
-        section: 0,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "high", ParamSpec::Num { default: &[1.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     SPEED = ParamDecl {
-        group: "signal",
-        name: "speed",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("frame samples played per audio sample: 1 is one for one, 2 twice as fast"),
         section: 1,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "speed", ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     RESAMPLE = ParamDecl {
-        group: "signal",
-        name: "resample",
-        spec: ParamSpec::Str { default: "linear", options: cross::RESAMPLE, refresh: false },
-        expression: None,
         doc: Some("how samples between a frame's own are made: a line, the nearest, or a cubic through four"),
         section: 1,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "resample", ParamSpec::Str { default: "linear", options: cross::RESAMPLE, refresh: false })
     },
     MORPH = ParamDecl {
-        group: "signal",
-        name: "morph",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("glide from the previous frame to a new one over the time between their arrivals"),
         section: 2,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "morph", ParamSpec::Bool { default: true })
     },
     SMOOTHING = ParamDecl {
-        group: "signal",
-        name: "smoothing",
-        spec: ParamSpec::Num { default: &[50.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("audio samples on each side of the loop point that blend across it, 0 for none"),
         section: 3,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "smoothing", ParamSpec::Num { default: &[50.0], min: 0.0, max: 100.0, int: true, options: &[], face: Face::Plain })
     },
     SIGMA = ParamDecl {
-        group: "signal",
-        name: "sigma",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 3.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the width of the smoothing's gaussian falloff, as a share of `smoothing`"),
         section: 3,
         show: WAVEFORM,
-        role: None,
+        ..ParamDecl::new("signal", "sigma", ParamSpec::Num { default: &[1.0], min: 0.1, max: 3.0, int: false, options: &[], face: Face::Plain })
     },
 }
 
@@ -131,7 +85,6 @@ static MANIFEST: Manifest = Manifest {
 struct SignalIn;
 
 impl AudioNode for SignalIn {
-    fn prepare(&mut self, _rate: f64) {}
 
     /// The engine plays the frames by the `signal` params; what reaches here is already sound.
     fn process(&mut self, b: &mut Block<'_>) {

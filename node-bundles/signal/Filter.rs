@@ -238,90 +238,37 @@ impl Node for Filter {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "filter",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "bandpass",
-            options: &["lowpass", "highpass", "bandpass", "notch"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "Which part of the spectrum survives: below `high`, above `low`, between the two, or \
              everything except between the two.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "mode", ParamSpec::Str { default: "bandpass", options: &["lowpass", "highpass", "bandpass", "notch"], refresh: false, })
     },
     ParamDecl {
-        group: "filter",
-        name: "phase",
-        spec: ParamSpec::Str {
-            default: "zero-phase",
-            options: &["zero-phase", "causal"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "`zero-phase` shifts nothing in time, but it reads the future, so a live stream is \
              answered late. `causal` answers each sample as it arrives, at the cost of a lag that \
              grows towards the band edges.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "phase", ParamSpec::Str { default: "zero-phase", options: &["zero-phase", "causal"], refresh: false, })
     },
     ParamDecl {
-        group: "filter",
-        name: "low",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The bottom edge of the band, in Hz. `lowpass` ignores it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "low", ParamSpec::Num { default: &[1.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "filter",
-        name: "high",
-        spec: ParamSpec::Num { default: &[40.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The top edge of the band, in Hz. `highpass` ignores it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "high", ParamSpec::Num { default: &[40.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "filter",
-        name: "order",
-        spec: ParamSpec::Num { default: &[4.0], min: 2.0, max: 16.0, int: true, options: &[2, 4, 6, 8], face: Face::Plain },
-        expression: None,
         doc: Some("How sharply the edge cuts. A higher order is steeper and rings for longer."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "order", ParamSpec::Num { default: &[4.0], min: 2.0, max: 16.0, int: true, options: &[2, 4, 6, 8], face: Face::Plain })
     },
     ParamDecl {
-        group: "filter",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to filter along. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
-    ParamDecl {
-        group: "filter",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the past, so the node starts again from the next frame."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget the past, so the node starts again from the next frame."), ..ParamDecl::new("filter", "reset", ParamSpec::Pulse) },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

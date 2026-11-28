@@ -72,61 +72,28 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Tabl
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "window",
-        name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false },
-        expression: None,
         doc: Some("What size counts for each member. Seconds uses the member's sfreq or ufreq; seconds (ufreq) uses the table's update rate."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("window", "unit", ParamSpec::Str { default: "samples", options: &["samples", "seconds", "seconds (ufreq)"], refresh: false })
     },
     ParamDecl {
-        group: "normalize",
-        name: "mode",
-        spec: ParamSpec::Str { default: "zscore", options: &["zscore", "minmax", "robust"], refresh: false },
-        expression: None,
         doc: Some(
             "`zscore` measures in standard deviations from the mean, `minmax` maps the past onto \
              0 to 1, and `robust` uses the median and the middle half, which an outlier cannot move.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("normalize", "mode", ParamSpec::Str { default: "zscore", options: &["zscore", "minmax", "robust"], refresh: false })
     },
     ParamDecl {
-        group: "window",
-        name: "size",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How many past values each member is measured against. 0 keeps running statistics \
              instead. Robust mode needs a positive size.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("window", "size", ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "window",
-        name: "hold",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some("Stop taking in new values and keep scaling by what is already known."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("window", "hold", ParamSpec::Bool { default: false })
     },
-    ParamDecl {
-        group: "window",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget every member's statistics and start again."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget every member's statistics and start again."), ..ParamDecl::new("window", "reset", ParamSpec::Pulse) },
 ];
 
 static MANIFEST: Manifest = Manifest {

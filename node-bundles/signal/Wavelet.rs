@@ -109,80 +109,38 @@ impl Node for Wavelet {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "wavelet",
-        name: "wavelet",
-        spec: ParamSpec::Str { default: "morlet", options: &["morlet", "mexican_hat"], refresh: false },
-        expression: None,
         doc: Some(
             "The shape looked for at each frequency. `morlet` reads a steady oscillation well; \
              `mexican_hat` reads a sudden one.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("wavelet", "wavelet", ParamSpec::Str { default: "morlet", options: &["morlet", "mexican_hat"], refresh: false })
     },
     ParamDecl {
-        group: "wavelet",
-        name: "cycles",
-        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 50.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How many cycles the Morlet shape spans. More cycles tell frequencies apart better and \
              tell moments apart worse.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("wavelet", "cycles", ParamSpec::Num { default: &[7.0], min: 1.0, max: 50.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "wavelet",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("wavelet", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "low",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The lowest frequency to look for, in Hz."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "low", ParamSpec::Num { default: &[1.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "high",
-        spec: ParamSpec::Num { default: &[40.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The highest frequency to look for, in Hz."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "high", ParamSpec::Num { default: &[40.0], min: 0.01, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "count",
-        spec: ParamSpec::Num { default: &[40.0], min: 2.0, max: 512.0, int: true, options: &[16, 32, 64, 128], face: Face::Plain },
-        expression: None,
         doc: Some("How many frequencies to look at, spaced evenly by ratio between the two above."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "count", ParamSpec::Num { default: &[40.0], min: 2.0, max: 512.0, int: true, options: &[16, 32, 64, 128], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "scale",
-        spec: ParamSpec::Str { default: "linear", options: &["linear", "log"], refresh: false },
-        expression: None,
         doc: Some("Whether the strength comes out as it is, or as its logarithm."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "scale", ParamSpec::Str { default: "linear", options: &["linear", "log"], refresh: false })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

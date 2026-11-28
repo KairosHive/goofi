@@ -3,24 +3,12 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     FREQUENCY = ParamDecl {
-        group: "freq_shift",
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("hertz to move every partial by, up or down; it is an addition, so harmony does not survive it"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("freq_shift", "frequency", ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain })
     },
     MODE = ParamDecl {
-        group: "freq_shift",
-        name: "mode",
-        spec: ParamSpec::Str { default: "single", options: &["single", "ring"], refresh: false },
-        expression: None,
         doc: Some("`single` moves the spectrum one way; `ring` keeps both sides and is the harsher of the two"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("freq_shift", "mode", ParamSpec::Str { default: "single", options: &["single", "ring"], refresh: false })
     },
 }
 

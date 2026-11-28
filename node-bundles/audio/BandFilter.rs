@@ -5,84 +5,36 @@ use goofi_audio_sdk::{Face, band_partial, band_volts, hz_of, AudioNode, Block, L
 
 goofi_audio_sdk::params! {
     GAINS = ParamDecl {
-        group: "band",
-        name: "gains",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 4.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("what each band is worth; an audio reference is one band per channel, and one number opens them all"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "gains", ParamSpec::Num { default: &[1.0], min: 0.0, max: 4.0, int: false, options: &[], face: Face::Plain })
     },
     PITCH = ParamDecl {
-        group: "band",
-        name: "pitch",
-        spec: ParamSpec::Num { default: &[0.0], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("in `harmonic`, what the bands stand on, in volts per octave; an audio reference is one voice per channel"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "pitch", ParamSpec::Num { default: &[0.0], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain })
     },
     GATE = ParamDecl {
-        group: "band",
-        name: "gate",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("in `harmonic`, what one voice's partials are worth — a released note keeps its pitch, so this is what lets it go; `MidiIn.gate` drops it at once and an `Env` fades it"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "gate", ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     BANDS = ParamDecl {
-        group: "band",
-        name: "bands",
-        spec: ParamSpec::Num { default: &[16.0], min: 2.0, max: 128.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how many bands the input is split into, while nothing drives `gains`; a shape that does is as wide as it is"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "bands", ParamSpec::Num { default: &[16.0], min: 2.0, max: 128.0, int: true, options: &[], face: Face::Plain })
     },
     LOW = ParamDecl {
-        group: "band",
-        name: "low",
-        spec: ParamSpec::Num { default: &[-1.5], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("in `spread`, the lowest band's centre in volts per octave, 0 at C4 — the same units as `Osc.pitch`"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "low", ParamSpec::Num { default: &[-1.5], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain })
     },
     HIGH = ParamDecl {
-        group: "band",
-        name: "high",
-        spec: ParamSpec::Num { default: &[4.25], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("in `spread`, the highest band's centre; the rest sit evenly between, so a band is a fixed interval"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "high", ParamSpec::Num { default: &[4.25], min: -6.0, max: 6.5, int: false, options: &[], face: Face::Plain })
     },
     Q = ParamDecl {
-        group: "band",
-        name: "q",
-        spec: ParamSpec::Num { default: &[4.0], min: 0.5, max: 20.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how narrow one band is; near 4 the default sixteen meet without a gap"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "q", ParamSpec::Num { default: &[4.0], min: 0.5, max: 20.0, int: false, options: &[], face: Face::Plain })
     },
     LAYOUT = ParamDecl {
-        group: "band",
-        name: "layout",
-        spec: ParamSpec::Str { default: "spread", options: &["spread", "harmonic"], refresh: false },
-        expression: None,
         doc: Some("where the bands sit: `spread` evenly from `low` to `high`, or `harmonic` on the partials of `pitch`"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("band", "layout", ParamSpec::Str { default: "spread", options: &["spread", "harmonic"], refresh: false })
     },
 }
 

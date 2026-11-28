@@ -13,24 +13,12 @@ goofi_audio_sdk::params! {
     DIVISION = timing::in_division("delay", "division", &DIVISION, "1/4"),
     TEMPO = timing::tempo("delay", &TEMPO),
     FEEDBACK = ParamDecl {
-        group: "delay",
-        name: "feedback",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how much of each echo goes back in; at 1 it repeats without fading"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("delay", "feedback", ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     MIX = ParamDecl {
-        group: "delay",
-        name: "mix",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how much of what leaves is the echo rather than the input"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("delay", "mix", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

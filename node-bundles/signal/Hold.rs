@@ -76,27 +76,15 @@ impl Node for Hold {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "hold",
-        name: "take",
-        spec: ParamSpec::Pulse,
-        expression: None,
         doc: Some(
             "Catch the input as it is now and hold it. A reference here fires on a rising edge, \
              so a Clock's pulse or a Threshold's decision drives the latch.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hold", "take", ParamSpec::Pulse)
     },
     ParamDecl {
-        group: "hold",
-        name: "ramp",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 600.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How long in seconds to glide to a newly caught value. Zero steps to it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("hold", "ramp", ParamSpec::Num { default: &[0.0], min: 0.0, max: 600.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

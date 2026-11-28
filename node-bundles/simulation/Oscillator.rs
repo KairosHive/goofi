@@ -175,135 +175,56 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "oscillator",
-        name: "model",
-        spec: ParamSpec::Str {
-            default: "vanderpol",
-            options: &["vanderpol", "duffing", "fitzhugh", "stuartlandau", "pendulum"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "`vanderpol` is a relaxation cycle, `fitzhugh` an excitable neuron, `stuartlandau` the \
              Hopf normal form, `duffing` a double well, `pendulum` the driven damped pendulum.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "model", ParamSpec::Str { default: "vanderpol", options: &["vanderpol", "duffing", "fitzhugh", "stuartlandau", "pendulum"], refresh: false, })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Roughly how many cycles a second. It scales the whole model's time, not one term."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "frequency", ParamSpec::Num { default: &[1.0], min: 0.0, max: 200.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "nonlinearity",
-        spec: ParamSpec::Num { default: &[1.0], min: -2.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "The model's own shape knob: `vanderpol` reads it as mu, `duffing` as the cubic term, \
              `fitzhugh` as how slow the recovery is, `stuartlandau` as lambda — negative for a \
              fixed point, positive for a cycle, and the bifurcation at zero.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "nonlinearity", ParamSpec::Num { default: &[1.0], min: -2.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "damping",
-        spec: ParamSpec::Num { default: &[0.2], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Friction. `duffing` and `pendulum` read it; the others set their own."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "damping", ParamSpec::Num { default: &[0.2], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "drive",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Amplitude of a periodic forcing, added to whatever the `drive` input carries."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "drive", ParamSpec::Num { default: &[0.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "drive_frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Frequency of that forcing, relative to the oscillator's own."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "drive_frequency", ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "oscillator",
-        name: "noise",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Jitter on both state variables, which is what makes an excitable model fire on its own."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("oscillator", "noise", ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "dt",
-        spec: ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Model seconds per step. Too large and the integration leaves the cycle."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "dt", ParamSpec::Num { default: &[0.005], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Nudges the start and seeds the noise. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Start over from the seed."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Start over from the seed."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

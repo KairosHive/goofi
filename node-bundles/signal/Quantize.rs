@@ -66,44 +66,20 @@ impl Node for Quantize {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "quantize",
-        name: "scale",
-        spec: ParamSpec::Str { default: "major", options: &PRESET_NAMES, refresh: false },
-        expression: None,
         doc: Some("The scale whose notes a pitch may land on."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("quantize", "scale", ParamSpec::Str { default: "major", options: &PRESET_NAMES, refresh: false })
     },
     ParamDecl {
-        group: "quantize",
-        name: "root",
-        spec: ParamSpec::Str { default: "C", options: NOTES, refresh: false },
-        expression: None,
         doc: Some("The note the scale starts on."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("quantize", "root", ParamSpec::Str { default: "C", options: NOTES, refresh: false })
     },
     ParamDecl {
-        group: "quantize",
-        name: "mode",
-        spec: ParamSpec::Str { default: "hz", options: &["hz", "v/oct"], refresh: false },
-        expression: None,
         doc: Some("What a value is: a frequency in Hz, or volts per octave with C4 at 0 V."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("quantize", "mode", ParamSpec::Str { default: "hz", options: &["hz", "v/oct"], refresh: false })
     },
     ParamDecl {
-        group: "quantize",
-        name: "strength",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far towards the note each pitch is pulled. Zero passes the signal through."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("quantize", "strength", ParamSpec::Num { default: &[1.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] =

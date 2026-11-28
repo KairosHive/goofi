@@ -84,57 +84,30 @@ impl Node for Cycle {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: G,
-        name: "unit",
-        spec: ParamSpec::Str { default: "Hz", options: &["Hz", "samples"], refresh: false },
-        expression: None,
         doc: Some(
             "How the cycle is given: `Hz` as the signal's frequency, which uses sfreq, or ufreq if no \
              sample rate is set; `samples` as its length.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "unit", ParamSpec::Str { default: "Hz", options: &["Hz", "samples"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[10.0], min: 0.01, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The frequency of the cycle, in Hz. One cycle is the rate divided by it, rounded to whole samples."),
-        section: 0,
         show: &[HZ],
-        role: None,
+        ..ParamDecl::new(G, "frequency", ParamSpec::Num { default: &[10.0], min: 0.01, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "length",
-        spec: ParamSpec::Num { default: &[100.0], min: 1.0, max: 100_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The length of one cycle, in samples."),
-        section: 0,
         show: &[SAMPLES],
-        role: None,
+        ..ParamDecl::new(G, "length", ParamSpec::Num { default: &[100.0], min: 1.0, max: 100_000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "count",
-        spec: ParamSpec::Num { default: &[10.0], min: 1.0, max: 1000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many of the latest complete cycles to average. Nothing comes out until that many have arrived."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "count", ParamSpec::Num { default: &[10.0], min: 1.0, max: 1000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to cut into cycles, negative from the end. -1 is time."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

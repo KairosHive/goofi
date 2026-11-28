@@ -41,37 +41,19 @@ impl Node for Meta {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "meta",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The sample rate to write onto the frame, in Hz. 0 keeps whatever it arrived with."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("meta", "sfreq", ParamSpec::Num { default: &[0.0], min: 0.0, max: 100_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "meta",
-        name: "labels",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "Names for the entries along the chosen axis, separated by commas, one per entry. \
              Empty keeps the labels the frame arrived with.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("meta", "labels", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "meta",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis the labels name, negative from the end."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("meta", "axis", ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

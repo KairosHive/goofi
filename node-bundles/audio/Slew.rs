@@ -3,24 +3,12 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     RISE = ParamDecl {
-        group: "slew",
-        name: "rise",
-        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds to climb one unit"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("slew", "rise", ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     FALL = ParamDecl {
-        group: "slew",
-        name: "fall",
-        spec: ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds to fall one unit"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("slew", "fall", ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

@@ -130,24 +130,12 @@ impl Node for ToJson {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "json",
-        name: "indent",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], face: Face::Plain },
-        expression: None,
         doc: Some("Spaces of indent per level. 0 writes the whole table on one line."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("json", "indent", ParamSpec::Num { default: &[0.0], min: 0.0, max: 8.0, int: true, options: &[0, 2, 4], face: Face::Plain })
     },
     ParamDecl {
-        group: "json",
-        name: "decimals",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Digits after the point on every number. -1 writes each one in full."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("json", "decimals", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 17.0, int: true, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

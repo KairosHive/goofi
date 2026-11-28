@@ -25,24 +25,13 @@ impl Node for VariableTexture {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "variable",
-        name: "group",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-        expression: None,
         doc: Some("the variable's group; the list is the patch's groups"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("variable", "group", ParamSpec::Str { default: "", options: &[], refresh: true })
     },
     ParamDecl {
-        group: "variable",
-        name: "element",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-        expression: None,
         doc: Some("the variable in that group; the list follows the group chosen"),
-        section: 0,
-        show: &[],
         role: Some(Role::Feed { slot: "value", group: "group" }),
+        ..ParamDecl::new("variable", "element", ParamSpec::Str { default: "", options: &[], refresh: true })
     },
 ];
 

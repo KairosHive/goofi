@@ -83,37 +83,19 @@ impl Node for AudioIn {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "audio",
-        name: "unit",
-        spec: ParamSpec::Str { default: "samples", options: &["samples", "seconds"], refresh: false },
-        expression: None,
         doc: Some("Seconds uses the incoming audio sample rate."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("audio", "unit", ParamSpec::Str { default: "samples", options: &["samples", "seconds"], refresh: false })
     },
     ParamDecl {
-        group: "audio",
-        name: "mode",
-        spec: ParamSpec::Str { default: "stream", options: &["stream", "window", "envelope"], refresh: false },
-        expression: None,
         doc: Some(
             "The samples as the tap hands them over, cut into windows of `size`, or the level of \
              every `size` of them.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("audio", "mode", ParamSpec::Str { default: "stream", options: &["stream", "window", "envelope"], refresh: false })
     },
     ParamDecl {
-        group: "audio",
-        name: "size",
-        spec: ParamSpec::Num { default: &[1024.0], min: 0.001, max: 1_000_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Window length, or length behind each level, in the selected unit."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("audio", "size", ParamSpec::Num { default: &[1024.0], min: 0.001, max: 1_000_000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] =

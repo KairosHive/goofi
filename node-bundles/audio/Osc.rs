@@ -3,28 +3,12 @@ use goofi_audio_sdk::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, Param
 
 goofi_audio_sdk::params! {
     PITCH = ParamDecl {
-        group: "osc",
-        name: "pitch",
-        spec: ParamSpec::Num { default: &[0.75], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("volts per octave, 0 at C4 (0.75 is A4); an audio reference is one voice per channel"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("osc", "pitch", ParamSpec::Num { default: &[0.75], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     WAVEFORM = ParamDecl {
-        group: "osc",
-        name: "waveform",
-        spec: ParamSpec::Str {
-            default: "sine",
-            options: &["sine", "triangle", "sawtooth", "square"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some("the shape one cycle traces, from the roundest to the brightest"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("osc", "waveform", ParamSpec::Str { default: "sine", options: &["sine", "triangle", "sawtooth", "square"], refresh: false, })
     },
 }
 

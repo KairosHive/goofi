@@ -317,171 +317,68 @@ static OUTPUTS: &[OutputDecl] = &[
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "swarm",
-        name: "model",
-        spec: ParamSpec::Str {
-            default: "boids",
-            options: &["boids", "vicsek", "gravity", "swarmalators", "particlelife"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "`boids` flocks, `vicsek` aligns and nothing else, `gravity` pulls, `swarmalators` \
              couples position to phase, `particlelife` reads a matrix of attractions between colours.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "model", ParamSpec::Str { default: "boids", options: &["boids", "vicsek", "gravity", "swarmalators", "particlelife"], refresh: false, })
     },
     ParamDecl {
-        group: "swarm",
-        name: "count",
-        spec: ParamSpec::Num { default: &[300.0], min: 2.0, max: 2000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many particles. Every pair is considered, so the cost grows with the square."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "count", ParamSpec::Num { default: &[300.0], min: 2.0, max: 2000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "dims",
-        spec: ParamSpec::Num { default: &[2.0], min: 2.0, max: 3.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Two dimensions or three. Positions always live in the unit box."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "dims", ParamSpec::Num { default: &[2.0], min: 2.0, max: 3.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "radius",
-        spec: ParamSpec::Num { default: &[0.08], min: 0.001, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How far a particle sees, as a fraction of the box. `gravity` reads it as its softening length."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "radius", ParamSpec::Num { default: &[0.08], min: 0.001, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "separation",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How hard a particle pushes off its neighbours. `particlelife` reads it as the size of the repelling core."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "separation", ParamSpec::Num { default: &[0.3], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "alignment",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much a particle matches its neighbours' heading. `boids` and `vicsek` read it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "alignment", ParamSpec::Num { default: &[1.0], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "cohesion",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Pull towards the neighbours' centre. `swarmalators` reads it as how much phase decides attraction."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "cohesion", ParamSpec::Num { default: &[1.0], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "coupling",
-        spec: ParamSpec::Num { default: &[1.0], min: -5.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Phase coupling for `swarmalators` — negative splits them by phase — and the gravitational constant for `gravity`."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "coupling", ParamSpec::Num { default: &[1.0], min: -5.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "species",
-        spec: ParamSpec::Num { default: &[4.0], min: 1.0, max: 16.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many colours `particlelife` deals out. A wired `attraction` matrix decides instead."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "species", ParamSpec::Num { default: &[4.0], min: 1.0, max: 16.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "speed",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Speed limit, and the fixed speed `vicsek` moves at."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "speed", ParamSpec::Num { default: &[0.3], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "friction",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much of the velocity is lost each step. `particlelife` needs some to settle."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "friction", ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "swarm",
-        name: "noise",
-        spec: ParamSpec::Num { default: &[0.05], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Jitter on the motion. In `vicsek` this is the knob the order-disorder transition sits on."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("swarm", "noise", ParamSpec::Num { default: &[0.05], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "dt",
-        spec: ParamSpec::Num { default: &[0.02], min: 1.0e-4, max: 0.5, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Model seconds per step."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "dt", ParamSpec::Num { default: &[0.02], min: 1.0e-4, max: 0.5, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seeds the layout, the colours and the drawn attraction matrix. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Scatter the particles again from the seed."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Scatter the particles again from the seed."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[60.0], min: 1.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Steps per second of real time. Particle state is a snapshot, so there is no block mode."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[60.0], min: 1.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

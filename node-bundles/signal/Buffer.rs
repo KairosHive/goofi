@@ -81,38 +81,20 @@ impl Node for Buffer {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "buffer",
-        name: "unit",
-        spec: ParamSpec::Str { default: "seconds", options: &["seconds", "samples", "seconds (ufreq)", "updates"], refresh: false },
-        expression: None,
         doc: Some("Seconds uses sfreq, or ufreq if no sample rate is set, along the selected axis. Updates and seconds (ufreq) stack whole frames on a new trailing axis."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("buffer", "unit", ParamSpec::Str { default: "seconds", options: &["seconds", "samples", "seconds (ufreq)", "updates"], refresh: false })
     },
     ParamDecl {
-        group: "buffer",
-        name: "size",
-        spec: ParamSpec::Num { default: &[2.0], min: 0.001, max: 60.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much recent data to keep, in the selected unit."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("buffer", "size", ParamSpec::Num { default: &[2.0], min: 0.001, max: 60.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "buffer",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some(
             "Which axis to roll along, negative from the end. -1 is time, the default and the \
              one a signal is usually buffered over; -2 is channels. An axis past the rank is a \
              new one, so a 1-D frame buffered along axis 1 becomes channels by time.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("buffer", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

@@ -69,89 +69,41 @@ impl Node for Math {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "math",
-        name: "pre_add",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Added to every value before the multiply, which is how you centre a signal."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("math", "pre_add", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "math",
-        name: "multiply",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scales every value; a negative number turns the signal upside down."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("math", "multiply", ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "math",
-        name: "post_add",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Added to every value after the multiply, which is how you set a baseline."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("math", "post_add", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "from_low",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The bottom of the range the values are expected to arrive in."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "from_low", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "from_high",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The top of the range the values are expected to arrive in."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "from_high", ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "to_low",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The bottom of the range they are mapped onto."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "to_low", ParamSpec::Num { default: &[0.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "to_high",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The top of the range they are mapped onto."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "to_high", ParamSpec::Num { default: &[1.0], min: -1.0e9, max: 1.0e9, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "range",
-        name: "bound",
-        spec: ParamSpec::Str { default: "none", options: &["none", "clamp", "wrap", "fold"], refresh: false },
-        expression: None,
         doc: Some(
             "What happens to a value outside the target range. `clamp` holds it at the edge; \
              `wrap` carries it round to the other end; `fold` halves or doubles it until it lands \
              inside, which is how a spectral peak becomes an audible pitch or an LFO rate. `fold` \
              needs a positive range, and one narrower than an octave cannot hold every value.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("range", "bound", ParamSpec::Str { default: "none", options: &["none", "clamp", "wrap", "fold"], refresh: false })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

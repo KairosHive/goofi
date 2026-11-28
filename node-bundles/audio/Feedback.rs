@@ -18,7 +18,6 @@ static MANIFEST: Manifest = Manifest {
 struct Feedback;
 
 impl AudioNode for Feedback {
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];

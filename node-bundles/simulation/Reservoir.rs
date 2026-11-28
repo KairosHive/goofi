@@ -236,124 +236,49 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "state", kind: SlotType::Ar
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "reservoir",
-        name: "size",
-        spec: ParamSpec::Num { default: &[100.0], min: 2.0, max: 1000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many units. A wired `connectivity` matrix decides instead. Cost grows with the square."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "size", ParamSpec::Num { default: &[100.0], min: 2.0, max: 1000.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "spectral_radius",
-        spec: ParamSpec::Num { default: &[0.95], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How long the pool remembers. Below 1 it forgets; near 1 is the edge of chaos; above 1 it runs away."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "spectral_radius", ParamSpec::Num { default: &[0.95], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "leak",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much of each update is new. Lower makes the pool slower than its input."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "leak", ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "density",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Fraction of the drawn connections that are not zero."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "density", ParamSpec::Num { default: &[0.1], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "input_scale",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How hard the wired input drives the pool."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "input_scale", ParamSpec::Num { default: &[1.0], min: 0.0, max: 20.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "bias",
-        spec: ParamSpec::Num { default: &[0.1], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scale of the per-unit constant offset, which keeps an undriven pool from settling flat."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "bias", ParamSpec::Num { default: &[0.1], min: 0.0, max: 5.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "activation",
-        spec: ParamSpec::Str { default: "tanh", options: &["tanh", "sigmoid", "relu"], refresh: false },
-        expression: None,
         doc: Some("The unit's nonlinearity."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "activation", ParamSpec::Str { default: "tanh", options: &["tanh", "sigmoid", "relu"], refresh: false })
     },
     ParamDecl {
-        group: "reservoir",
-        name: "noise",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Noise added to every unit before the nonlinearity."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reservoir", "noise", ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seeds the weights and the biases. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Draw the pool again from the seed."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Draw the pool again from the seed."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some("`value` emits the state now; `block` emits every step since the last frame, which is a signal."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[60.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Updates per second of real time, and the sample rate of an emitted block."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[60.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 

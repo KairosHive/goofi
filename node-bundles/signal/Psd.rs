@@ -126,101 +126,50 @@ impl Node for Psd {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "psd",
-        name: "mode",
-        spec: ParamSpec::Str { default: "welch", options: &["fft", "welch"], refresh: false },
-        expression: None,
         doc: Some(
             "`welch` averages the spectra of overlapping segments, which is steadier; `fft` takes \
              the whole run as one segment, which is sharper and noisier.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("psd", "mode", ParamSpec::Str { default: "welch", options: &["fft", "welch"], refresh: false })
     },
     ParamDecl {
-        group: "psd",
-        name: "window",
-        spec: ParamSpec::Str {
-            default: "hann",
-            options: &["hann", "hamming", "blackman", "rectangular"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "Taper applied to each segment. It stops a peak from smearing across the spectrum; \
              `rectangular` keeps the samples as they are.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("psd", "window", ParamSpec::Str { default: "hann", options: &["hann", "hamming", "blackman", "rectangular"], refresh: false, })
     },
     ParamDecl {
-        group: "psd",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis holds the samples. -1 is time."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("psd", "axis", ParamSpec::Num { default: &[-1.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
     ParamDecl {
-        group: "psd",
-        name: "unit",
-        spec: ParamSpec::Str {
-            default: "fraction",
-            options: &["fraction", "seconds", "samples", "seconds (ufreq)"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some("What `segment` and `overlap` count in. `fraction` is a share of the frame."),
-        section: 0,
         show: WELCH,
-        role: None,
+        ..ParamDecl::new("psd", "unit", ParamSpec::Str { default: "fraction", options: &["fraction", "seconds", "samples", "seconds (ufreq)"], refresh: false, })
     },
     ParamDecl {
-        group: "psd",
-        name: "segment",
-        spec: ParamSpec::Num { default: &[0.4], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How long one segment is. A longer segment tells frequencies apart better."),
-        section: 0,
         show: WELCH,
-        role: None,
+        ..ParamDecl::new("psd", "segment", ParamSpec::Num { default: &[0.4], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "psd",
-        name: "overlap",
-        spec: ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How much of a segment the next one repeats, in `unit`. More overlap is steadier and \
              slower; at a full segment the hop is one sample.",
         ),
-        section: 0,
         show: WELCH,
-        role: None,
+        ..ParamDecl::new("psd", "overlap", ParamSpec::Num { default: &[0.3], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "psd",
-        name: "low",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The lowest frequency to keep, in Hz."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("psd", "low", ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "psd",
-        name: "high",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The highest frequency to keep, in Hz. 0 keeps every bin above `low`."),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("psd", "high", ParamSpec::Num { default: &[0.0], min: 0.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

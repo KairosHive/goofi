@@ -230,108 +230,41 @@ static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Arra
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "attractor",
-        name: "system",
-        spec: ParamSpec::Str {
-            default: "lorenz",
-            options: &["lorenz", "rossler", "chua", "thomas", "aizawa", "halvorsen", "henon", "ikeda", "logistic", "standard"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some("Which system. The first six are flows integrated at `dt`; the last four are maps, which ignore it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("attractor", "system", ParamSpec::Str { default: "lorenz", options: &["lorenz", "rossler", "chua", "thomas", "aizawa", "halvorsen", "henon", "ikeda", "logistic", "standard"], refresh: false, })
     },
     ParamDecl {
-        group: "attractor",
-        name: "a",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scales the system's first canonical constant. 1 is the textbook figure."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("attractor", "a", ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "attractor",
-        name: "b",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scales the second canonical constant; a system with only one ignores it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("attractor", "b", ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "attractor",
-        name: "c",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scales the third canonical constant; a system with fewer ignores it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("attractor", "c", ParamSpec::Num { default: &[1.0], min: 0.0, max: 2.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "dt",
-        spec: ParamSpec::Num { default: &[0.01], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Model seconds per step, for the flows. Too large and the integration leaves the attractor."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "dt", ParamSpec::Num { default: &[0.01], min: 1.0e-6, max: 0.1, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "sim",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Nudges the starting point. Negative takes a fresh one from the clock."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("sim", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: 1_000_000.0, int: true, options: &[], face: Face::Plain })
     },
+    ParamDecl { doc: Some("Start over from the seed."), ..ParamDecl::new("sim", "reset", ParamSpec::Pulse) },
     ParamDecl {
-        group: "sim",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Start over from the seed."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
-    ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some("`value` emits the point now; `block` emits every step since the last frame, which is a signal."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Steps per second of real time, and the sample rate of an emitted block."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[500.0], min: 1.0, max: 20_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "output",
-        name: "normalize",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Divide by the system's own size, so every system reads roughly within -1 to 1 and modulates a param directly."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "normalize", ParamSpec::Bool { default: true })
     },
 ];
 

@@ -412,66 +412,34 @@ fn lab_to_rgb(c: Rgb) -> Rgb {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: G,
-        name: "method",
-        spec: ParamSpec::Str { default: "mkl", options: &["reinhard", "mkl", "idt", "histogram", "file"], refresh: false },
-        expression: None,
         doc: Some("How colours move: `reinhard` matches each channel's mean and spread, `mkl` the whole \
                    covariance with the least movement, `idt` the full distribution, `histogram` each \
                    channel's quantiles; `file` reads a `.cube` table, such as a baked ModFlows transfer."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "method", ParamSpec::Str { default: "mkl", options: &["reinhard", "mkl", "idt", "histogram", "file"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "size",
-        spec: ParamSpec::Num { default: &[33.0], min: 2.0, max: 65.0, int: true, options: &[17, 33, 65], face: Face::Plain },
-        expression: None,
         doc: Some("Entries along each side of the table: 33 is the usual grade, 65 finer and slower to fit."),
-        section: 0,
         show: &[FROM_IMAGES],
-        role: None,
+        ..ParamDecl::new(G, "size", ParamSpec::Num { default: &[33.0], min: 2.0, max: 65.0, int: true, options: &[17, 33, 65], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "space",
-        spec: ParamSpec::Str { default: "lab", options: &["lab", "rgb"], refresh: false },
-        expression: None,
         doc: Some("Where the matching happens: `lab` separates lightness from colour, `rgb` keeps the camera's channels."),
-        section: 0,
         show: &[FROM_IMAGES],
-        role: None,
+        ..ParamDecl::new(G, "space", ParamSpec::Str { default: "lab", options: &["lab", "rgb"], refresh: false })
     },
     ParamDecl {
-        group: G,
-        name: "iterations",
-        spec: ParamSpec::Num { default: &[12.0], min: 1.0, max: 50.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Rotations `idt` matches along; more come closer to the reference's colours."),
-        section: 0,
         show: &[IDT],
-        role: None,
+        ..ParamDecl::new(G, "iterations", ParamSpec::Num { default: &[12.0], min: 1.0, max: 50.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "path",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some("A `.cube` file with a 3D table over the 0..1 domain; it is read again when it changes."),
-        section: 0,
         show: &[FILE],
-        role: None,
+        ..ParamDecl::new(G, "path", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "follow",
-        name: "smooth",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 0.99, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How slowly the table follows a moving source: 0 takes each new frame at once, 0.9 drifts."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("follow", "smooth", ParamSpec::Num { default: &[0.0], min: 0.0, max: 0.99, int: false, options: &[], face: Face::Plain })
     },
 ];
 

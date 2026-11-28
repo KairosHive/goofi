@@ -89,34 +89,18 @@ impl Node for GraphicsIn {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "graphics",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "pixels",
-            options: &["pixels", "gray", "rows", "columns"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "The texels as they came, their brightness, or the profile that brightness draws \
              down the frame or across it.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "mode", ParamSpec::Str { default: "pixels", options: &["pixels", "gray", "rows", "columns"], refresh: false, })
     },
     ParamDecl {
-        group: "graphics",
-        name: "size",
-        spec: ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "The most texels either picture axis keeps, averaged into blocks. Zero takes the \
              frame as it was rendered, which is every texel of it.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("graphics", "size", ParamSpec::Num { default: &[256.0], min: 0.0, max: 16384.0, int: true, options: &[], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] =

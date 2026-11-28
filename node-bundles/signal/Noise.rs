@@ -222,140 +222,73 @@ impl Node for Noise {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "noise",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "uniform",
-            options: &["uniform", "normal", "pink", "value", "perlin", "simplex", "ridged"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "`uniform` fills the range evenly, `normal` clusters around the offset and `pink` \
              weights the low frequencies, each a fresh sample every time. `value`, `perlin` and \
              `simplex` drift smoothly over the patch clock; `ridged` folds Perlin into sharp crests.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "mode", ParamSpec::Str { default: "uniform", options: &["uniform", "normal", "pink", "value", "perlin", "simplex", "ridged"], refresh: false, })
     },
     ParamDecl {
-        group: "noise",
-        name: "amplitude",
-        spec: ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Scales every sample, so the noise spans minus this to plus this."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "amplitude", ParamSpec::Num { default: &[1.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "offset",
-        spec: ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Added to every sample, so the noise sits around a value other than zero."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "offset", ParamSpec::Num { default: &[0.0], min: -1.0e6, max: 1.0e6, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "seed",
-        spec: ParamSpec::Num { default: &[-1.0], min: -1.0, max: i32::MAX as f64, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Fixes the stream so a patch replays the same noise; -1 takes a fresh one."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("noise", "seed", ParamSpec::Num { default: &[-1.0], min: -1.0, max: i32::MAX as f64, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "period",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.01, max: 600.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Seconds between the turns of the first octave: longer drifts slower."),
         section: 1,
         show: &[COHERENT],
-        role: None,
+        ..ParamDecl::new("noise", "period", ParamSpec::Num { default: &[1.0], min: 0.01, max: 600.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "octaves",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 8.0, int: true, options: &[1, 2, 3, 4, 5, 6, 7, 8], face: Face::Plain },
-        expression: None,
         doc: Some("Layers of finer detail summed over the first."),
         section: 1,
         show: &[COHERENT],
-        role: None,
+        ..ParamDecl::new("noise", "octaves", ParamSpec::Num { default: &[1.0], min: 1.0, max: 8.0, int: true, options: &[1, 2, 3, 4, 5, 6, 7, 8], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "lacunarity",
-        spec: ParamSpec::Num { default: &[2.0], min: 1.0, max: 4.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many times faster each octave turns than the one before."),
         section: 1,
         show: &[COHERENT, LAYERED],
-        role: None,
+        ..ParamDecl::new("noise", "lacunarity", ParamSpec::Num { default: &[2.0], min: 1.0, max: 4.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "noise",
-        name: "persistence",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much of the one before each octave keeps: lower is smoother."),
         section: 1,
         show: &[COHERENT, LAYERED],
-        role: None,
+        ..ParamDecl::new("noise", "persistence", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "output",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some(
             "`value` emits one sample per channel per update, which a param reference reads as a \
              number; `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "output",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Sample rate within an emitted block, in Hz. `value` mode ignores it."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "sfreq", ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "output",
-        name: "channels",
-        spec: ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many independent noise streams to emit, one per channel."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("output", "channels", ParamSpec::Num { default: &[1.0], min: 1.0, max: 64.0, int: true, options: &[], face: Face::Plain })
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: Some(ExprDecl { source: "vars.signal.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

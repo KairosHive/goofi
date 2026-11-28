@@ -88,27 +88,15 @@ impl Node for Join {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "join",
-        name: "mode",
-        spec: ParamSpec::Str { default: "concatenate", options: &["concatenate", "stack"], refresh: false },
-        expression: None,
         doc: Some(
             "`concatenate` lays the frames end to end along an axis they already share; `stack` \
              puts them side by side on a new axis, named after the nodes they came from.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("join", "mode", ParamSpec::Str { default: "concatenate", options: &["concatenate", "stack"], refresh: false })
     },
     ParamDecl {
-        group: "join",
-        name: "axis",
-        spec: ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain },
-        expression: None,
         doc: Some("Which axis to join along, or where the new axis goes when stacking."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("join", "axis", ParamSpec::Num { default: &[0.0], min: -8.0, max: 7.0, int: true, options: &[-2, -1, 0, 1, 2], face: Face::Plain })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

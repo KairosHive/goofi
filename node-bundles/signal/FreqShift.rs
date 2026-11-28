@@ -95,41 +95,20 @@ impl Node for FreqShift {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "freq_shift",
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "How far to move the signal, in Hz, up for a positive number and down for a negative \
              one. Unlike a pitch change, the speed of the signal does not change with it.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("freq_shift", "frequency", ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "freq_shift",
-        name: "mode",
-        spec: ParamSpec::Str { default: "single", options: &["single", "ring"], refresh: false },
-        expression: None,
         doc: Some(
             "`single` moves the signal one way only; `ring` keeps both the sum and the difference, \
              which is the harsher, older sound.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("freq_shift", "mode", ParamSpec::Str { default: "single", options: &["single", "ring"], refresh: false })
     },
-    ParamDecl {
-        group: "freq_shift",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the past and start the shift's own phase again."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget the past and start the shift's own phase again."), ..ParamDecl::new("freq_shift", "reset", ParamSpec::Pulse) },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

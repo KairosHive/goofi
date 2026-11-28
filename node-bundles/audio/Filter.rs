@@ -3,38 +3,16 @@ use goofi_audio_sdk::{Face, hz_of, AudioNode, Block, Manifest, OutputDecl, Param
 
 goofi_audio_sdk::params! {
     MODE = ParamDecl {
-        group: "filter",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "lowpass",
-            options: &["lowpass", "bandpass", "highpass"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some("which part of the spectrum survives: below the cutoff, around it, or above it"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "mode", ParamSpec::Str { default: "lowpass", options: &["lowpass", "bandpass", "highpass"], refresh: false, })
     },
     CUTOFF = ParamDecl {
-        group: "filter",
-        name: "cutoff",
-        spec: ParamSpec::Num { default: &[2.0], min: -5.0, max: 6.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("volts per octave, 0 at C4 — the same units as `Osc.pitch`, so a reference tracks"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "cutoff", ParamSpec::Num { default: &[2.0], min: -5.0, max: 6.0, int: false, options: &[], face: Face::Plain })
     },
     Q = ParamDecl {
-        group: "filter",
-        name: "q",
-        spec: ParamSpec::Num { default: &[0.7], min: 0.5, max: 20.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("resonance: it rings longer as it climbs, and peaks at `q` times full scale"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("filter", "q", ParamSpec::Num { default: &[0.7], min: 0.5, max: 20.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

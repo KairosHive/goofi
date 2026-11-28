@@ -6,24 +6,13 @@ use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSp
 
 goofi_audio_sdk::params! {
     GROUP = ParamDecl {
-        group: "variable",
-        name: "group",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-        expression: None,
         doc: Some("the variable's group; the list is the patch's groups"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("variable", "group", ParamSpec::Str { default: "", options: &[], refresh: true })
     },
     ELEMENT = ParamDecl {
-        group: "variable",
-        name: "element",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: true },
-        expression: None,
         doc: Some("the variable in that group; the list follows the group chosen"),
-        section: 0,
-        show: &[],
         role: Some(Role::Feed { slot: "value", group: "group" }),
+        ..ParamDecl::new("variable", "element", ParamSpec::Str { default: "", options: &[], refresh: true })
     },
 }
 
@@ -46,7 +35,6 @@ static MANIFEST: Manifest = Manifest {
 struct Variable;
 
 impl AudioNode for Variable {
-    fn prepare(&mut self, _rate: f64) {}
 
     /// The engine plays the frames; what reaches here is already sound.
     fn process(&mut self, b: &mut Block<'_>) {

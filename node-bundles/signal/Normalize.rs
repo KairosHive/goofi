@@ -154,134 +154,72 @@ impl Node for Normalize {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "normalization",
-        name: "strategy",
-        spec: ParamSpec::Str { default: "zscore", options: &["zscore", "robust", "minmax"], refresh: false },
-        expression: None,
         doc: Some(
             "`zscore` measures in standard deviations from the mean, `robust` in quantile spreads \
              from the median, which an outlier cannot move, and `minmax` in the distance between \
              the extremes.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("normalization", "strategy", ParamSpec::Str { default: "zscore", options: &["zscore", "robust", "minmax"], refresh: false })
     },
     ParamDecl {
-        group: "normalization",
-        name: "clip",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Limit the result to this many standard deviations either side of zero. 0 is no limit."),
-        section: 0,
         show: ZSCORE,
-        role: None,
+        ..ParamDecl::new("normalization", "clip", ParamSpec::Num { default: &[0.0], min: 0.0, max: 100.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "normalization",
-        name: "quantile",
-        spec: ParamSpec::Num { default: &[0.25], min: 0.0, max: 0.5, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "The spread is the distance between this quantile and its mirror above the median: 0.25 \
              is the middle half, 0 the full range.",
         ),
-        section: 0,
         show: ROBUST,
-        role: None,
+        ..ParamDecl::new("normalization", "quantile", ParamSpec::Num { default: &[0.25], min: 0.0, max: 0.5, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "normalization",
-        name: "range",
-        spec: ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some(
             "Where 0 and 1 of the measure land: for `minmax` the minimum and the maximum, for \
              `robust` the median and one spread above it.",
         ),
-        section: 0,
         show: RANGED,
-        role: None,
+        ..ParamDecl::new("normalization", "range", ParamSpec::Num { default: &[0.0, 1.0], min: -1000.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "window",
-        name: "mode",
-        spec: ParamSpec::Str { default: BUFFERED, options: &[BUFFERED, INSTANT, BUFFER], refresh: false },
-        expression: None,
         doc: Some(
             "Where the statistics come from. `sample (buffered)` keeps the last `size` of input and \
              measures each frame against that buffer, time as its axis 0. `sample (instant)` \
              measures each frame against itself. `buffer` takes a frame that is a buffer already \
              and measures it along its own time.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("window", "mode", ParamSpec::Str { default: BUFFERED, options: &[BUFFERED, INSTANT, BUFFER], refresh: false })
     },
     ParamDecl {
-        group: "window",
-        name: "elementwise",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Give every element its own statistics, over time alone."),
-        section: 0,
         show: TIMED,
-        role: None,
+        ..ParamDecl::new("window", "elementwise", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "window",
-        name: "axes",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "The axes the statistics are taken over, as numbers separated by commas; every other \
              axis gets statistics of its own. Empty is the whole array, or in `buffer` mode its \
              last axis. `-1` is the last axis; `0,1` the first two.",
         ),
-        section: 0,
         show: BY_AXES,
-        role: None,
+        ..ParamDecl::new("window", "axes", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "window",
-        name: "size",
-        spec: ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How much of the past the buffer keeps, in `unit`."),
-        section: 0,
         show: KEPT,
-        role: None,
+        ..ParamDecl::new("window", "size", ParamSpec::Num { default: &[10.0], min: 0.0, max: 1.0e6, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "window",
-        name: "unit",
-        spec: ParamSpec::Str { default: "seconds", options: &["seconds", "samples"], refresh: false },
-        expression: None,
         doc: Some("What `size` counts: seconds at the input's update rate, or whole frames."),
-        section: 0,
         show: KEPT,
-        role: None,
+        ..ParamDecl::new("window", "unit", ParamSpec::Str { default: "seconds", options: &["seconds", "samples"], refresh: false })
     },
     ParamDecl {
-        group: "window",
-        name: "hold",
-        spec: ParamSpec::Bool { default: false },
-        expression: None,
         doc: Some("Freeze the statistics where they are, so later data is measured against them."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("window", "hold", ParamSpec::Bool { default: false })
     },
-    ParamDecl {
-        group: "window",
-        name: "reset",
-        spec: ParamSpec::Pulse,
-        expression: None,
-        doc: Some("Forget the buffer and any frozen statistics."),
-        section: 0,
-        show: &[],
-        role: None,
-    },
+    ParamDecl { doc: Some("Forget the buffer and any frozen statistics."), ..ParamDecl::new("window", "reset", ParamSpec::Pulse) },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {
     name: "input",

@@ -113,35 +113,19 @@ impl Node for Reduce {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "reduce",
-        name: "mode",
-        spec: ParamSpec::Str {
-            default: "mean",
-            options: &["mean", "median", "min", "max", "argmin", "argmax", "std", "sum", "norm"],
-            refresh: false,
-        },
-        expression: None,
         doc: Some(
             "How the values along the axis become one: an average, a spread, an extreme, where an \
              extreme lies or a total. `argmin` and `argmax` count over the collapsed axes flattened \
              in order, the first one on a tie.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reduce", "mode", ParamSpec::Str { default: "mean", options: &["mean", "median", "min", "max", "argmin", "argmax", "std", "sum", "norm"], refresh: false, })
     },
     ParamDecl {
-        group: "reduce",
-        name: "axes",
-        spec: ParamSpec::Str { default: "-1", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "The axes to collapse, as numbers separated by commas, negative from the end. `-1` is \
              time, `-2` channels, `0,1` the first two. Empty collapses the whole array to one value.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reduce", "axes", ParamSpec::Str { default: "-1", options: &[], refresh: false })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

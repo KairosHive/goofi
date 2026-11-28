@@ -121,30 +121,18 @@ impl Node for Reshape {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "reshape",
-        name: "axes",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "The new order of the axes, as their old numbers separated by commas: `1,0` swaps the \
              two axes of a grid. Empty keeps the order.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reshape", "axes", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
     ParamDecl {
-        group: "reshape",
-        name: "shape",
-        spec: ParamSpec::Str { default: "", options: &[], refresh: false },
-        expression: None,
         doc: Some(
             "The shape to re-cut the entries into, separated by commas, with one -1 for the length \
              to work out. Empty keeps the shape.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reshape", "shape", ParamSpec::Str { default: "", options: &[], refresh: false })
     },
 ];
 static INPUTS: &[SlotDecl] = &[SlotDecl {

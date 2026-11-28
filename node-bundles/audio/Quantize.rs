@@ -4,74 +4,32 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     SCALE = ParamDecl {
-        group: "scale",
-        name: "scale",
-        spec: ParamSpec::Str { default: "major", options: &SCALES, refresh: false },
-        expression: None,
         doc: Some("a named scale, or `custom` to build one from the params below"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "scale", ParamSpec::Str { default: "major", options: &SCALES, refresh: false })
     },
     ROOT = ParamDecl {
-        group: "scale",
-        name: "root",
-        spec: ParamSpec::Str { default: "C", options: NOTES, refresh: false },
-        expression: None,
         doc: Some("the note the scale starts on"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "root", ParamSpec::Str { default: "C", options: NOTES, refresh: false })
     },
     METHOD = ParamDecl {
-        group: "scale",
-        name: "method",
-        spec: ParamSpec::Str { default: "generator", options: METHODS, refresh: false },
-        expression: None,
         doc: Some("a custom scale stacked from a generator, read off the harmonic series, or picked from an equal division"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "method", ParamSpec::Str { default: "generator", options: METHODS, refresh: false })
     },
     GENERATOR = ParamDecl {
-        group: "scale",
-        name: "generator",
-        spec: ParamSpec::Num { default: &[700.0], min: 0.0, max: 4800.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the interval stacked, in cents: 700 is a tempered fifth, 701.955 a pure one"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "generator", ParamSpec::Num { default: &[700.0], min: 0.0, max: 4800.0, int: false, options: &[], face: Face::Plain })
     },
     STEPS = ParamDecl {
-        group: "scale",
-        name: "steps",
-        spec: ParamSpec::Num { default: &[7.0], min: 1.0, max: 53.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("notes in the octave: generators stacked, harmonics read (partials steps to 2 steps - 1), or equal parts"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "steps", ParamSpec::Num { default: &[7.0], min: 1.0, max: 53.0, int: true, options: &[], face: Face::Plain })
     },
     MASK = ParamDecl {
-        group: "scale",
-        name: "mask",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: ((1 << MASK_BITS) - 1) as f64, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("which of a division's first 24 parts are admitted, bit k for part k; zero admits every part"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "mask", ParamSpec::Num { default: &[0.0], min: 0.0, max: ((1 << MASK_BITS) - 1) as f64, int: true, options: &[], face: Face::Plain })
     },
     MODE = ParamDecl {
-        group: "scale",
-        name: "mode",
-        spec: ParamSpec::Num { default: &[4.0], min: 0.0, max: 52.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("the degree the scale is read from: seven fifths read from 4 are major, from 0 lydian, from 2 minor"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("scale", "mode", ParamSpec::Num { default: &[4.0], min: 0.0, max: 52.0, int: true, options: &[], face: Face::Plain })
     },
 }
 
@@ -93,7 +51,6 @@ static MANIFEST: Manifest = Manifest {
 struct Quantize;
 
 impl AudioNode for Quantize {
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let at = |k: usize| f64::from(b.params[k].chan(0)[0]);

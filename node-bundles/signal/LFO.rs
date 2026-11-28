@@ -113,102 +113,53 @@ const BLOCK: &[Show] = &[Show { param: "mode", any_of: &["block"] }];
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: "lfo",
-        name: "waveform",
-        spec: ParamSpec::Str { default: "sine", options: &["sine", "triangle", "sawtooth", "square"], refresh: false },
-        expression: None,
         doc: Some("Shape of one cycle."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "waveform", ParamSpec::Str { default: "sine", options: &["sine", "triangle", "sawtooth", "square"], refresh: false })
     },
     ParamDecl {
-        group: "lfo",
-        name: "frequency",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Cycles per second. A change bends the wave from where it sits; it does not restart."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "frequency", ParamSpec::Num { default: &[1.0], min: 0.1, max: 100.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "lfo",
-        name: "amplitude",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Peak value: the wave swings between minus this and plus this, before `offset`."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "amplitude", ParamSpec::Num { default: &[1.0], min: 0.1, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "lfo",
-        name: "offset",
-        spec: ParamSpec::Num { default: &[0.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Added to every sample, so the wave can swing around a value other than zero."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "offset", ParamSpec::Num { default: &[0.0], min: -10.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "lfo",
-        name: "phase",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Shift of the read point, in cycles; 0.25 reads a quarter turn ahead of the oscillator."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "phase", ParamSpec::Num { default: &[0.0], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "lfo",
-        name: "duty",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Fraction of the cycle the square wave spends high."),
-        section: 0,
         show: SQUARE,
-        role: None,
+        ..ParamDecl::new("lfo", "duty", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: "lfo",
-        name: "mode",
-        spec: ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false },
-        expression: None,
         doc: Some(
             "`value` emits one sample per update, which a param reference reads as a number; \
              `block` emits the samples elapsed at `sfreq`, which is a signal.",
         ),
         section: 1,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("lfo", "mode", ParamSpec::Str { default: "value", options: &["value", "block"], refresh: false })
     },
     ParamDecl {
-        group: "lfo",
-        name: "sfreq",
-        spec: ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Sample rate within an emitted block, in Hz."),
         section: 1,
         show: BLOCK,
-        role: None,
+        ..ParamDecl::new("lfo", "sfreq", ParamSpec::Num { default: &[250.0], min: 1.0, max: 10_000.0, int: false, options: &[], face: Face::Plain })
     },
     // A manifest's own `common.*` is never overwritten by the universal declaration, and the
     // universal default is uncapped — which makes a block one sample long.
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain },
         expression: Some(ExprDecl { source: "vars.signal.default_ufreq", mode: ExprMode::On }),
         doc: Some(
             "How many frames a second to emit. Bound to the patch's `default_ufreq` variable, so \
              editing that variable re-rates every generator at once.",
         ),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[30.0], min: 0.0, max: 1000.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 static OUTPUTS: &[OutputDecl] = &[OutputDecl { name: "out", kind: SlotType::Array }];

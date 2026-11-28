@@ -8,44 +8,20 @@ const TEMPO: Show = Show { param: "predelay_unit", any_of: &["beats", "division"
 
 goofi_audio_sdk::params! {
     MIX = ParamDecl {
-        group: "reverb",
-        name: "mix",
-        spec: ParamSpec::Num { default: &[0.45], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how much of what leaves is the room rather than the sound that entered it"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reverb", "mix", ParamSpec::Num { default: &[0.45], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     DECAY = ParamDecl {
-        group: "reverb",
-        name: "decay",
-        spec: ParamSpec::Num { default: &[6.0], min: 0.2, max: 60.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("seconds for the tail to fall away"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reverb", "decay", ParamSpec::Num { default: &[6.0], min: 0.2, max: 60.0, int: false, options: &[], face: Face::Plain })
     },
     SIZE = ParamDecl {
-        group: "reverb",
-        name: "size",
-        spec: ParamSpec::Num { default: &[0.8], min: 0.1, max: 1.8, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how far apart the walls are; small rooms ring, large ones wash"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reverb", "size", ParamSpec::Num { default: &[0.8], min: 0.1, max: 1.8, int: false, options: &[], face: Face::Plain })
     },
     DAMPING = ParamDecl {
-        group: "reverb",
-        name: "damping",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how fast the top of the tail is lost, as it is in a room with soft walls"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reverb", "damping", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     PREDELAY_UNIT = timing::unit("reverb", "predelay_unit"),
     PREDELAY = timing::in_seconds("reverb", "predelay", &SECONDS, &[0.02], 1.0, "seconds of silence before the room answers, which is what sets the listener back from the source"),
@@ -53,14 +29,8 @@ goofi_audio_sdk::params! {
     PREDELAY_DIVISION = timing::in_division("reverb", "predelay_division", &DIVISION, "1/16"),
     TEMPO = timing::tempo("reverb", &TEMPO),
     MODULATION = ParamDecl {
-        group: "reverb",
-        name: "modulation",
-        spec: ParamSpec::Num { default: &[0.35], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("how much the walls move; a little of it stops the tail from ringing on one note"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("reverb", "modulation", ParamSpec::Num { default: &[0.35], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
 }
 

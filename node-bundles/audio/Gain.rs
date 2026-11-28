@@ -3,14 +3,8 @@ use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, P
 
 goofi_audio_sdk::params! {
     GAIN = ParamDecl {
-        group: "gain",
-        name: "gain",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("what every sample is multiplied by; 1 leaves the signal as it is"),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("gain", "gain", ParamSpec::Num { default: &[1.0], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
     },
 }
 
@@ -30,7 +24,6 @@ static MANIFEST: Manifest = Manifest {
 struct Gain;
 
 impl AudioNode for Gain {
-    fn prepare(&mut self, _rate: f64) {}
 
     fn process(&mut self, b: &mut Block<'_>) {
         let input = &b.ins[0];

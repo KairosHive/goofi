@@ -180,75 +180,33 @@ impl Node for Splice {
 
 static PARAMS: &[ParamDecl] = &[
     ParamDecl {
-        group: G,
-        name: "scale",
-        spec: ParamSpec::Num { default: &[6.0], min: 1.0, max: 64.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The size of the pieces, in cells of the grid: 2 cuts a collage of fragments, 9 lets each frame keep its forms."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "scale", ParamSpec::Num { default: &[6.0], min: 1.0, max: 64.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "share",
-        spec: ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("The part of the cells taken from `a`; the rest come from `b`."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "share", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "edge",
-        spec: ParamSpec::Num { default: &[1.0], min: 0.0, max: 16.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("How many cells a boundary takes to pass from one frame to the other; 0 cuts hard."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "edge", ParamSpec::Num { default: &[1.0], min: 0.0, max: 16.0, int: false, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "seed",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 9999.0, int: true, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Which cut: another seed grows another map."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "seed", ParamSpec::Num { default: &[0.0], min: 0.0, max: 9999.0, int: true, options: &[], face: Face::Plain })
     },
     ParamDecl {
-        group: G,
-        name: "drift",
-        spec: ParamSpec::Num { default: &[0.0], min: 0.0, max: 16.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Where the map is along its third axis: one unit grows a new map, and about 0.05 a second makes the pieces glide."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new(G, "drift", ParamSpec::Num { default: &[0.0], min: 0.0, max: 16.0, int: false, options: &[], face: Face::Plain })
     },
     // On by default: the frames are held, and a moving `drift` cuts them again between their updates.
     ParamDecl {
-        group: "common",
-        name: "autotrigger",
-        spec: ParamSpec::Bool { default: true },
-        expression: None,
         doc: Some("Run on the node's own clock, so a moving `drift` recuts the held frames."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "autotrigger", ParamSpec::Bool { default: true })
     },
     ParamDecl {
-        group: "common",
-        name: "max_frequency",
-        spec: ParamSpec::Num { default: &[30.0], min: 0.1, max: 240.0, int: false, options: &[], face: Face::Plain },
-        expression: None,
         doc: Some("Rate cap: frames a second at most."),
-        section: 0,
-        show: &[],
-        role: None,
+        ..ParamDecl::new("common", "max_frequency", ParamSpec::Num { default: &[30.0], min: 0.1, max: 240.0, int: false, options: &[], face: Face::Plain })
     },
 ];
 
