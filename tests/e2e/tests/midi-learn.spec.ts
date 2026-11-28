@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { waitForApp } from '../lib/app';
+import { waitForApp, setPanelType } from '../lib/app';
 import { rawCall, backendDoc } from '../lib/raw';
 import { addNode, frameSummary, selectNode, nodeParams } from '../lib/goofi';
 import { REPO_ROOT, WAIT } from '../playwright.config';
@@ -78,19 +78,13 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await expect(field.getByTestId('param-number')).toHaveValue('1');
 		await expect(learn.locator('svg')).toBeVisible();
 		// In the variables panel the device's group is locked whole: tagged, no rename, no add.
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'variables');
-		});
+		await setPanelType(page, 'variables');
 		const grp = page.locator('[data-testid="variable-group"][data-group="midikeys_test_keys"]');
 		await expect(grp).toHaveAttribute('data-lock-config', 'true');
 		await expect(grp).toHaveAttribute('data-lock-value', 'true');
 		await expect(grp.getByRole('img', { name: 'MIDI device' })).toBeVisible();
 		await expect(grp.getByTestId('variable-group-edit')).toHaveCount(0);
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');
-		});
+		await setPanelType(page, 'node-editor');
 
 		// A second device: the next learn listens to both, and the one no longer read is let go.
 		expect(await pads.ready()).toBe(true);
@@ -137,10 +131,7 @@ test('MIDI learn opens every device, maps the first moved element, and keeps onl
 		await expect.poll(async () => (await backendDoc(page)).variables?.['desk.level']?.expression)
 			.toBe(`vars.midikeys_test_keys.notes[${128 + 61}]`);
 		await rawCall(page, 'node param edit', { node: consumer, param: 'common/max_frequency', expression: 'vars.desk.level' });
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'node-editor');
-		});
+		await setPanelType(page, 'node-editor');
 		await selectNode(page, consumer);
 		await page.getByTestId('param-search').fill('max_frequency');
 		await expect.poll(async () => (await nodeParams(page, consumer)).common.max_frequency.value).toBeCloseTo(100 / 127, 5);

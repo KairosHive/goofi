@@ -113,6 +113,14 @@ export async function releasePointer(page: Page): Promise<void> {
 	await page.mouse.up();
 }
 
+/** Make the first panel one of `type`. */
+export async function setPanelType(page: Page, type: string): Promise<void> {
+	await page.evaluate((type) => {
+		const g = (window as any).goofi;
+		return g.commands.setPanelType(g.query.panels()[0].panelId, type);
+	}, type);
+}
+
 /**
  * Put the sole panel back on the node editor. A panel's type is a field in the RUNNING PATCH like
  * a split or a tab, so a spec that switches it and leaves early hands every later spec on that
@@ -120,10 +128,7 @@ export async function releasePointer(page: Page): Promise<void> {
  * next. The `finally` half of the contract `waitForApp` hands back at the other end.
  */
 export async function restorePanelType(page: Page): Promise<void> {
-	await page.evaluate((type) => {
-		const g = (window as any).goofi;
-		g.commands.setPanelType(g.query.panels()[0].panelId, type);
-	}, DEFAULT_PANEL_TYPE);
+	await setPanelType(page, DEFAULT_PANEL_TYPE);
 	await expect
 		.poll(() => page.evaluate(() => (window as any).goofi.query.panels()[0]?.type))
 		.toBe(DEFAULT_PANEL_TYPE);

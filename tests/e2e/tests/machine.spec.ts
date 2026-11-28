@@ -10,7 +10,7 @@
 // Tab in a param's editor and in a condition's, and sends the Delete key to the active panel alone.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { closeSplit, restorePanelType, splitRight, waitForApp, setPanelType } from '../lib/app';
 import { addNode, nodeParams, nodes, selectNode, waitForNoNode, waitForNode } from '../lib/goofi';
 import { expectIntact } from '../lib/invariants';
 import { backendDoc, rawCall } from '../lib/raw';
@@ -93,10 +93,7 @@ test('a machine is built by gesture, scored as columns and rows, and its playhea
 
 		// A machine panel on a patch without a machine starts one, and shows it: the canvas, and
 		// the score beside it (under it on a phone), empty but for its own + for a first state.
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'machine');
-		});
+		await setPanelType(page, 'machine');
 		const panel = page.getByTestId('machine-panel');
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		const score = page.getByTestId('machine-inspector');
@@ -494,10 +491,7 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 	await page.goto('/');
 	await waitForApp(page);
 	try {
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'machine');
-		});
+		await setPanelType(page, 'machine');
 		const panel = page.getByTestId('machine-panel');
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		const score = page.getByTestId('machine-inspector');
@@ -539,10 +533,7 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 		await expect(ask).toHaveCount(0);
 		// The group's menu wires a pattern too: a ring by position closes the pair the other way.
 		await rawCall(page, 'session new');
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'machine');
-		});
+		await setPanelType(page, 'machine');
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		for (const [s, x] of [['a', 0], ['b', 360], ['c', 720]] as const) await rawCall(page, 'machine state add', { machine: 'machine0', name: s, pos: [x, 0] });
 		await fit();
@@ -582,10 +573,7 @@ test('a selection is wired as a group, chained across boxes, added by the handfu
 
 		// The chain tool: a line dragged across boxes wires each to the next it crosses.
 		await rawCall(page, 'session new');
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'machine');
-		});
+		await setPanelType(page, 'machine');
 		await expect(panel).toHaveAttribute('data-machine', 'machine0');
 		for (const [s, x] of [['a', 0], ['b', 360], ['c', 720]] as const) await rawCall(page, 'machine state add', { machine: 'machine0', name: s, pos: [x, 0] });
 		await fit();

@@ -10,7 +10,7 @@
 // where it would land, until a press places it. A track records its input.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { closeSplit, restorePanelType, splitRight, waitForApp } from '../lib/app';
+import { closeSplit, restorePanelType, splitRight, waitForApp, setPanelType } from '../lib/app';
 import { addNode, waitForNode } from '../lib/goofi';
 import { expectIntact } from '../lib/invariants';
 import { backendDoc, rawCall } from '../lib/raw';
@@ -55,10 +55,7 @@ test('tracks are stacked, hidden per panel, edited by gesture, and play on the c
 		// the timeline counts beats, and a beat is then a second.
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
 		await rawCall(page, 'variable entry edit', { name: 'clock.bpm', value: 60 });
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
-		});
+		await setPanelType(page, 'timeline');
 		const panel = page.getByTestId('timeline-panel').first();
 		await expect(panel).toContainText('No tracks');
 
@@ -748,10 +745,7 @@ test('what is picked is copied, and a paste holds the copy over the lanes until 
 		await rawCall(page, 'timeline track edit', { track: 'keys', notes: [{ at: 0, length: 1, pitch: 60, velocity: 0.8 }, { at: 1, length: 0.5, pitch: 64, velocity: 0.5 }] });
 		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'fade' });
 		await rawCall(page, 'timeline track edit', { track: 'fade', keys: [{ at: 0.5, value: 0.2, curve: 'linear' }, { at: 1.5, value: 0.8, curve: 'step' }, { at: 4.5, value: 0.5, curve: 'linear' }] });
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
-		});
+		await setPanelType(page, 'timeline');
 		const panel = page.getByTestId('timeline-panel').first();
 		const [keys, fade] = ['keys', 'fade'].map((n) => panel.getByTestId(`track-${n}`).getByTestId('track-lane'));
 		await expect(keys.locator('.note')).toHaveCount(2);
@@ -848,10 +842,7 @@ test('a held finger opens a track\'s menu or a note\'s, and a tap makes a note a
 	await page.goto('/');
 	await waitForApp(page);
 	try {
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
-		});
+		await setPanelType(page, 'timeline');
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
 		await rawCall(page, 'timeline track add', { kind: 'note', name: 'keys' });
 		const track = page.getByTestId('track-keys');
@@ -940,10 +931,7 @@ test('a track records its input into itself: a curve an expression, notes a MIDI
 	await waitForApp(page);
 	try {
 		await rawCall(page, 'clock set', { playing: false, time: 0 });
-		await page.evaluate(() => {
-			const g = (window as any).goofi;
-			g.commands.setPanelType(g.query.panels()[0].panelId, 'timeline');
-		});
+		await setPanelType(page, 'timeline');
 		await rawCall(page, 'variable entry add', { name: 'desk.level', value: 0 });
 		await rawCall(page, 'timeline track add', { kind: 'curve', name: 'take' });
 		const take = page.getByTestId('track-take');

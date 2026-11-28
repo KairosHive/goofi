@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { rawCall } from '../lib/raw';
-import { appReady, waitForApp, restorePanelType } from '../lib/app';
+import { appReady, waitForApp, restorePanelType, setPanelType } from '../lib/app';
 
 test.use({ hasTouch: true });
 
@@ -8,10 +8,7 @@ test('console groups repeats, filters history and runs the shared op vocabulary'
 	await page.goto('/');
 	await waitForApp(page);
 	try {
-		await page.evaluate(async () => {
-			const g = (window as any).goofi;
-			await g.commands.setPanelType(g.query.panels()[0].panelId, 'console');
-		});
+		await setPanelType(page, 'console');
 		for (const text of ['first message', 'middle message', 'first message']) {
 			expect((await rawCall(page, 'log write', { text, component: 'fixture', level: 'warning' })).error).toBeUndefined();
 		}

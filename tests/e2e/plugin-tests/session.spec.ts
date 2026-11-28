@@ -59,5 +59,5 @@ test('a folder plugin registers a panel and updates its header entry', async ({ 
 	await page.getByRole('button', { name: 'Remove header entry' }).click();
 	await expect(header).toHaveCount(0);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-	await restorePanelType(page, 'node-editor');
+	await restorePanelType(page);
 });

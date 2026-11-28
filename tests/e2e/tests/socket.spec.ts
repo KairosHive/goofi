@@ -925,10 +925,9 @@ test.describe('the control socket', () => {
 	});
 
 	test('a client the manager cannot speak to is told, not left half-working', async ({ page }) => {
-		// The one failure mode where BOTH halves' own suites stay green: `PROTOCOL_VERSION` is declared
-		// by hand on each side, each comments that the other must be bumped with it, and a client one
-		// version behind still connects. `contracts.rs` pins that the two numbers agree; this pins what
-		// the client does when they do not.
+		// A client built from an older tree still connects: the frontend's `PROTOCOL_VERSION` is
+		// generated from the manager's, so only a stale bundle can differ. This pins what the client
+		// does when it does.
 		//
 		// The socket is PROXIED to the real server, not faked — only the hello frame's version is
 		// rewritten on the way through, so everything else is the manager's own traffic.

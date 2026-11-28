@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from '@playwright/test';
-import { appReady, waitForApp, splitRight, closeSplit, restorePanelType } from '../lib/app';
+import { appReady, waitForApp, splitRight, closeSplit, restorePanelType, setPanelType } from '../lib/app';
 import { addNode, waitForNode } from '../lib/goofi';
 import { armSocketControl, dropSocket, restoreSocket, backendDoc, rawCall } from '../lib/raw';
 
@@ -101,10 +101,7 @@ test('recorder refreshes after patch load and reconnect', async ({ page }, testI
 	await waitForApp(page);
 	const node = await addNode(page, 'signal:Quantize', [30, 60]);
 	await rawCall(page, 'record arm', { output: `${node}/out` });
-	await page.evaluate(() => {
-		const g = (window as any).goofi;
-		g.commands.setPanelType(g.query.panels()[0].panelId, 'recorder');
-	});
+	await setPanelType(page, 'recorder');
 	const toggle = page.getByTestId('recorder-toggle');
 	const root = testInfo.outputPath('recordings');
 	const path = testInfo.outputPath('recording.gfi');
