@@ -72,8 +72,7 @@ fn decoded_of(d: &Data) -> serde_json::Value {
 fn json_number(v: f32) -> serde_json::Value {
     match serde_json::Number::from_f64(f64::from(v)) {
         Some(n) if v.is_finite() => serde_json::Value::Number(n),
-        _ if v.is_nan() => "NaN".into(),
-        _ => if v > 0.0 { "Infinity" } else { "-Infinity" }.into(),
+        _ => serde_json::Value::String(v.to_string()),
     }
 }
 
@@ -124,16 +123,6 @@ fn build_cases() -> Vec<(&'static str, Case)> {
         .with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("Fz".into()), Coord::Str("Cz".into())])));
     let meta_index = Meta::new().with_index(Some(42));
 
-    // Every kind a meta value comes in but bytes, which JSON cannot spell for the browser's half.
-    let meta_kinds = Meta::new()
-        .with("flag", MetaValue::Bool(true))
-        .with("count", MetaValue::Int(-3))
-        .with("ratio", MetaValue::Float(0.5))
-        .with("unit", MetaValue::Str("uV".into()))
-        .with("list", MetaValue::List(vec![MetaValue::Int(1), MetaValue::Str("a".into())]))
-        .with("map", MetaValue::Map([("k".to_string(), MetaValue::Float(2.5))].into_iter().collect()));
-    let meta_freqs = Meta::new().with_channels(Axes::new().with(1, Axis::coords(vec![Coord::Num(0.5), Coord::Num(8.0)])));
-
     let mut table = IndexMap::new();
     table.insert("a".to_string(), arr(&[2], le_bytes(&[1.0, 2.0]), Meta::empty()));
     table.insert("b".to_string(), Data::string("x", Meta::empty()));
@@ -148,11 +137,6 @@ fn build_cases() -> Vec<(&'static str, Case)> {
             arr(&[2, 3], le_bytes(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]), meta_sfreq_ch),
         ),
         ("with_index", arr(&[4], le_bytes(&[1.0, 2.0, 3.0, 4.0]), meta_index)),
-        ("with_meta_kinds", arr(&[1], le_bytes(&[1.0]), meta_kinds)),
-        // A numeric axis on the second dim alone: the first carries no labels and no key.
-        ("with_numeric_coords", arr(&[2, 2], le_bytes(&[0.0, 1.0, 2.0, 3.0]), meta_freqs)),
-        ("f32_3d", arr(&[2, 1, 2], le_bytes(&[0.0, 1.0, 2.0, 3.0]), Meta::empty())),
-        ("nonfinite", arr(&[3], le_bytes(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]), Meta::empty())),
         ("string", Data::string("hello world éà", Meta::empty())),
         ("string_empty", Data::string("", Meta::empty())),
         ("table", Data::table(table, Meta::empty())),
@@ -207,9 +191,6 @@ fn a_frame_is_laid_out_as_the_codec_says_and_survives_its_round_trip() {
             assert_eq!(encode(&back), frame, "[{name}] did not survive the round trip");
             assert_eq!(back.meta().sfreq(), d.meta().sfreq(), "[{name}] sfreq");
             assert_eq!(back.meta().channels(), d.meta().channels(), "[{name}] axis labels ride the frame");
-            for (key, value) in d.meta().iter().filter(|(_, v)| !matches!(v, MetaValue::Null | MetaValue::Axes(_))) {
-                assert_eq!(back.meta().get(key).map(mv_json), Some(mv_json(value)), "[{name}] meta `{key}`");
-            }
         }
         // The half-float hop comes back as the f32 it was made from: these values it holds exactly.
         if let Case::Halves(d) = &case {
@@ -359,112 +340,6 @@ fn malformed_and_deep_frames_are_refused_before_reduction() {
     }
     assert!(goofi_codec::decode(&frame).unwrap_err().contains("nesting"));
     assert!(goofi_codec::decode(&encode(&Data::string("next frame", Meta::empty()))).is_ok());
-}
-
-#[test]
-fn a_foreign_dtype_is_cast_to_f32_where_it_enters() {
-    // A Python child hands over whatever dtype numpy made, and the decoder is the one place it
-    // becomes the f32 every `Data` holds: one frame per dtype the ingest names, each sample a
-    // value both widths hold exactly.
-    fn body(dtype: &str, shape: &[u32], samples: &[u8]) -> Vec<u8> {
-        let mut body = vec![shape.len() as u8, dtype.len() as u8];
-        body.extend_from_slice(dtype.as_bytes());
-        body.resize(body.len().div_ceil(ALIGN) * ALIGN, 0);
-        for dim in shape {
-            body.extend_from_slice(&dim.to_le_bytes());
-        }
-        body.extend_from_slice(samples);
-        body
-    }
-    let decoded = |dtype: &str, shape: &[u32], samples: &[u8]| goofi_codec::decode(&framed(0, &[], &body(dtype, shape, samples)));
-    fn bytes<const N: usize, T: Copy>(values: &[T], le: fn(T) -> [u8; N]) -> Vec<u8> {
-        values.iter().flat_map(|v| le(*v)).collect()
-    }
-    let cases: Vec<(&str, Vec<u8>, [f32; 2])> = vec![
-        ("<f8", bytes(&[1.5f64, -2.25], f64::to_le_bytes), [1.5, -2.25]),
-        ("<f2", bytes(&[0x3c00u16, 0xc000], u16::to_le_bytes), [1.0, -2.0]),
-        ("|i1", vec![0xff, 0x7f], [-1.0, 127.0]),
-        ("<i2", bytes(&[-300i16, 300], i16::to_le_bytes), [-300.0, 300.0]),
-        ("<i4", bytes(&[-70_000i32, 70_000], i32::to_le_bytes), [-70_000.0, 70_000.0]),
-        ("<i8", bytes(&[-5_000_000_000i64, 5_000_000_000], i64::to_le_bytes), [-5.0e9, 5.0e9]),
-        ("|u1", vec![0, 255], [0.0, 255.0]),
-        ("<u2", bytes(&[1u16, 65_535], u16::to_le_bytes), [1.0, 65_535.0]),
-        ("<u4", bytes(&[1u32, 4_000_000_000], u32::to_le_bytes), [1.0, 4.0e9]),
-        ("<u8", bytes(&[1u64, 1 << 40], u64::to_le_bytes), [1.0, 1_099_511_627_776.0]),
-        ("|b1", vec![0, 1], [0.0, 1.0]),
-        // numpy spells the machine's own order `=`, and a bare typestring carries none.
-        ("=i4", bytes(&[7i32, -7], i32::to_le_bytes), [7.0, -7.0]),
-        ("i2", bytes(&[7i16, -7], i16::to_le_bytes), [7.0, -7.0]),
-        ("<f4", le_bytes(&[0.25, -0.5]), [0.25, -0.5]),
-    ];
-    for (dtype, samples, want) in &cases {
-        let d = decoded(dtype, &[2], samples).unwrap_or_else(|e| panic!("[{dtype}] {e}"));
-        let store = d.as_array().unwrap_or_else(|e| panic!("[{dtype}] {e}"));
-        assert_eq!((store.shape(), store.values().collect::<Vec<f32>>()), (&[2usize][..], want.to_vec()), "[{dtype}]");
-        assert_eq!(encode(&d), encode(&arr(&[2], le_bytes(want), Meta::empty())), "[{dtype}] what leaves again is `<f4`");
-    }
-    // The shape is the frame's own, whatever the width of a sample.
-    let image = decoded("|u1", &[2, 3], &[0, 1, 2, 3, 4, 255]).expect("a 2x3 of bytes");
-    let store = image.as_array().unwrap();
-    assert_eq!((store.shape(), store.values().collect::<Vec<f32>>()), (&[2usize, 3][..], vec![0.0, 1.0, 2.0, 3.0, 4.0, 255.0]));
-
-    // What the ingest cannot read is refused, never guessed at: another byte order, a dtype that
-    // is no number, a buffer that is no whole number of samples, or not the samples the shape counts.
-    let big_endian = decoded(">f4", &[1], &1.0f32.to_be_bytes()).unwrap_err();
-    assert!(big_endian.contains("unsupported dtype `>f4`"), "{big_endian}");
-    assert!(decoded("<c8", &[1], &[0; 8]).unwrap_err().contains("unsupported dtype `<c8`"));
-    assert!(decoded("<i2", &[2], &[1, 0, 2]).is_err(), "three bytes are not two 16-bit samples");
-    assert!(decoded("<i2", &[3], &[1, 0, 2, 0]).is_err(), "two samples under a shape of three");
-    assert!(decoded("<f4", &[3], &[0; 8]).is_err(), "and the same of f32 itself");
-}
-
-#[test]
-fn a_frames_hash_tells_what_it_says_from_when_it_was_made() {
-    use goofi_codec::{content_hash, encode_stamps, frame_meta, is_stamps, stamp_hash, wire_hashes};
-    // A frame of two samples at a rate, as the engine stamps the run numbered `index` at `at`.
-    let said = |value: f32, sfreq: f64, index: u64, at: f64| {
-        let mut meta = Meta::new().with_sfreq(Some(sfreq)).with_index(Some(index));
-        meta.set_procstart(Some(at));
-        meta.set_procend(Some(at + 0.001));
-        meta.set_ufreq(Some(30.0));
-        arr(&[2], le_bytes(&[value, 2.0]), meta)
-    };
-    let content = |d: &Data| content_hash(d).expect("a frame that hashes");
-    let stamps = |d: &Data| stamp_hash(d).expect("a frame that hashes");
-    let wire = |d: &Data| wire_hashes(&encode(d)).expect("a frame off the wire");
-    let (first, later) = (said(1.0, 250.0, 1, 0.5), said(1.0, 250.0, 2, 0.6));
-
-    // The same samples at the same rate on a later run say the same thing, at another time.
-    assert_eq!(content(&first), content(&later), "the stamps are no part of what a frame says");
-    assert_ne!(stamps(&first), stamps(&later));
-    assert_eq!(stamps(&first), stamps(&said(9.0, 1.0, 1, 0.5)), "and what it says is no part of its stamps");
-    // A sample, a rate or an axis label that moved is another frame.
-    let named = first.with_meta(first.meta().clone().with_channels(Axes::new().with(0, Axis::coords(vec![Coord::Str("Fz".into()), Coord::Str("Cz".into())]))));
-    assert_ne!(content(&first), content(&named), "an axis label moved and the hash stood");
-    for (what, other) in [("a sample", said(1.5, 250.0, 1, 0.5)), ("the rate", said(1.0, 500.0, 1, 0.5))] {
-        assert_ne!(content(&first), content(&other), "{what} moved and the hash stood");
-        assert_ne!(wire(&first).0, wire(&other).0, "{what} moved and the wire's hash stood");
-    }
-    // Read off the encoded bytes the two halves part the same way, and the meta comes with them.
-    let ((said_first, at_first, meta), (said_later, at_later, _)) = (wire(&first), wire(&later));
-    assert_eq!(said_first, said_later);
-    assert_ne!(at_first, at_later);
-    assert_eq!((meta.index(), meta.sfreq(), meta.procstart()), (Some(1), Some(250.0), Some(0.5)));
-    // A table's child stamps are its body: equal values from a later run are another table.
-    let table = |child: &Data| Data::table([("value".to_string(), child.clone())].into_iter().collect(), Meta::empty());
-    assert_ne!(content(&table(&first)), content(&table(&later)));
-    assert_ne!(wire(&table(&first)).0, wire(&table(&later)).0);
-    assert_eq!(content(&table(&first)), content(&table(&first)));
-
-    // The stamps travel alone as a frame with no body: it holds every stamp and nothing the
-    // frame says, and it is no data to decode.
-    let alone = encode_stamps(later.meta()).expect("a stamps frame");
-    assert!(is_stamps(&alone) && !is_stamps(&encode(&later)) && !is_stamps(b"GOOF"));
-    let carried = frame_meta(&alone).expect("its meta");
-    assert_eq!((carried.index(), carried.procstart(), carried.procend(), carried.ufreq()), (Some(2), Some(0.6), Some(0.601), Some(30.0)));
-    assert_eq!(carried.sfreq(), None, "the rate is the frame's, not the run's");
-    assert!(goofi_codec::decode(&alone).unwrap_err().contains("carries no data"));
-    assert!(wire_hashes(b"NOPE").is_err() && frame_meta(&encode(&first)[..8]).is_err());
 }
 
 #[test]

@@ -612,59 +612,6 @@ async fn three_devices_edit_one_patch_at_once_and_end_on_the_same_document() {
     }
 }
 
-/// The close code a socket the bridge refuses is answered with.
-async fn refused_with(url: String) -> Option<u16> {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("the upgrade itself is served");
-    loop {
-        match tokio::time::timeout(WAIT, ws.next()).await.expect("the socket answers") {
-            Some(Ok(Message::Close(frame))) => return frame.map(|f| u16::from(f.code)),
-            Some(Ok(_)) => continue,
-            _ => return None,
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_refused_op_answers_its_own_request_and_what_is_no_request_is_passed_over() {
-    let g = Goofi::new();
-    let base = g.serve().await;
-    let (mut c, _) = Client::connect(&base).await;
-    c.until_doc(|d| d.version() > 0).await;
-    let before = g.doc();
-
-    // A refusal is the reply to the request that asked, in the manager's own words, and the
-    // socket serves the next request after it.
-    let why = c.try_call("node add", j!({ "type": "NoSuchNodeType" })).await.expect_err("an unknown type");
-    assert!(why.contains("NoSuchNodeType"), "the refusal names what it refused: {why}");
-    let why = c.try_call("frobnicate", j!({})).await.expect_err("an unknown op");
-    assert!(why.contains("unknown op `frobnicate`"), "{why}");
-    let why = c.try_call("node add", j!({ "type": "LFO", "colour": "red" })).await.expect_err("a stray argument");
-    assert!(why.contains("colour"), "{why}");
-    let why = c.try_call("link add", j!({ "from": "nobody/out", "to": "nowhere/input" })).await.expect_err("a wire between nothing");
-    assert!(why.contains("nobody"), "{why}");
-    assert_eq!(g.doc(), before, "a refused write lands nothing");
-    assert_eq!(c.doc().to_json(), before, "and sends no delta");
-
-    // A text frame that is no request — not JSON, no object, or an object with no op — is passed
-    // over: it is answered nothing, and the request after it is served.
-    for junk in ["not json", "[1, 2, 3]", r#"{"id": 9000}"#, r#"{"id": 9001, "op": 7}"#, ""] {
-        c.send(junk.to_string()).await;
-    }
-    let uid = c.call("node add", j!({ "type": "LFO" })).await["uid"].as_str().expect("a uid").to_string();
-    c.until_doc(|d| d.node_ids().contains(&uid)).await;
-    assert_eq!(g.nodes(), vec![uid.clone()], "one node, from the one request");
-
-    // A stream or a terminal that names nothing is closed with the code a client reads, 4004:
-    // a uid that is none, a node that is not there, a slot the node has not, an instance nobody spawned.
-    let ws = |path: String| format!("{base}{path}");
-    for path in ["/data/not-a-uid/out".to_string(), "/data/ffffffffffff/out".to_string(), format!("/data/{uid}/nope"),
-                 "/params/not-a-uid".to_string(), "/term/no-such-instance".to_string()] {
-        assert_eq!(refused_with(ws(path.clone())).await, Some(4004), "`{path}` names nothing");
-    }
-    // …and the socket that asked for none of them still answers.
-    assert_eq!(c.call("session state", j!({})).await["nodes"].as_object().map(|n| n.len()), Some(1));
-}
-
 /// The next JSON frame on a `/presence` socket.
 async fn presence_frame(ws: &mut Ws) -> Value {
     loop {

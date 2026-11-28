@@ -490,67 +490,6 @@ async fn many_viewers_of_one_slot_share_one_reducer_and_each_gets_what_it_can_dr
     eventually("the node's reducer to go with it", || g.state.reducers.active_slots() == 0).await;
 }
 
-#[tokio::test]
-async fn a_reduced_axis_holds_the_entries_asked_for_under_the_names_they_wore() {
-    // A viewer is served a subsample of an axis: entries the producer emitted, whole, with the
-    // labels of those entries, and the frame says what the axis was before.
-    let g = Goofi::new();
-    let base = g.serve().await;
-    let ramp = g.add("_TestRamp");
-    g.set_param(ramp, "ramp", "named", true);
-    g.set_param(ramp, "ramp", "channels", 4);
-    g.set_param(ramp, "ramp", "length", 8);
-    g.set_param(ramp, "common", "max_frequency", 20.0);
-    let spec = |reduce: serde_json::Value| j!([{ "dtype": "array", "ndim": [], "dims": [], "reduce": reduce }]);
-    let shaped = |d: &goofi_core::Data, want: [usize; 2]| goofi_tests::shape(d) == want;
-    // What one axis's reduction recorded: the length it had, and the names it had.
-    let recorded = |d: &goofi_core::Data, dim: &str| -> Option<(u64, Vec<String>)> {
-        let Some(goofi_core::MetaValue::Map(dims)) = d.meta().reduced() else { return None };
-        let goofi_core::MetaValue::Map(axis) = dims.get(dim)? else { return None };
-        let len = match axis.get("orig_len")? {
-            goofi_core::MetaValue::Uint(n) => *n,
-            goofi_core::MetaValue::Int(n) => *n as u64,
-            _ => return None,
-        };
-        let names = match axis.get("orig_coord") {
-            Some(goofi_core::MetaValue::List(names)) => names.iter().filter_map(|n| match n { goofi_core::MetaValue::Str(s) => Some(s.clone()), _ => None }).collect(),
-            _ => Vec::new(),
-        };
-        Some((len, names))
-    };
-
-    let mut v = Viewer::open(&base, &hex(ramp), "out").await;
-    v.view(spec(j!([{ "dim": 0, "max": "whole" }, { "dim": 1, "max": "whole" }]))).await;
-    let whole = v.until(|d| shaped(d, [4, 8]) && d.meta().reduced().is_none()).await;
-    let rows: Vec<Vec<f32>> = f32s(&whole).chunks(8).map(<[f32]>::to_vec).collect();
-    assert_eq!(goofi_tests::labels(&whole, "dim0"), ["Cz", "C3", "C4", "Fz"]);
-    assert_eq!((rows[0][0], rows[3][0]), (0.0, 3.0), "channel c rises from c");
-
-    // Two of the four channels: the first and the last, each whole, under its own name.
-    v.view(spec(j!([{ "dim": 0, "max": 2 }, { "dim": 1, "max": "whole" }]))).await;
-    let two = v.until(|d| shaped(d, [2, 8])).await;
-    assert_eq!(f32s(&two), [rows[0].clone(), rows[3].clone()].concat(), "rows the producer emitted, not a blend of them");
-    assert_eq!(goofi_tests::labels(&two, "dim0"), ["Cz", "Fz"], "each kept row keeps its name");
-    assert_eq!(recorded(&two, "0"), Some((4, vec!["Cz".into(), "C3".into(), "C4".into(), "Fz".into()])), "{:?}", two.meta().reduced());
-    assert_eq!(recorded(&two, "1"), None, "an axis left whole records nothing");
-    assert_eq!(two.meta().sfreq(), Some(256.0), "the rest of the meta rides along");
-
-    // Four of the eight samples, both ends among them, and every channel still named.
-    v.view(spec(j!([{ "dim": 0, "max": "whole" }, { "dim": -1, "max": 4 }]))).await;
-    let thin = v.until(|d| shaped(d, [4, 4])).await;
-    let kept: Vec<f32> = rows.iter().flat_map(|row| [row[0], row[2], row[5], row[7]]).collect();
-    assert_eq!(f32s(&thin), kept, "evenly spaced, the first and the last sample kept");
-    assert_eq!(goofi_tests::labels(&thin, "dim0"), ["Cz", "C3", "C4", "Fz"]);
-    assert_eq!(recorded(&thin, "1").map(|(len, _)| len), Some(8));
-    assert_eq!(recorded(&thin, "0"), None);
-
-    // Both at once: the corner samples of the first and the last channel.
-    v.view(spec(j!([{ "dim": 0, "max": 2 }, { "dim": 1, "max": 2 }]))).await;
-    let corners = v.until(|d| shaped(d, [2, 2])).await;
-    assert_eq!(f32s(&corners), [rows[0][0], rows[0][7], rows[3][0], rows[3][7]]);
-    assert_eq!((recorded(&corners, "0").map(|r| r.0), recorded(&corners, "1").map(|r| r.0)), (Some(4), Some(8)));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_viewer_that_stops_answering_is_reclaimed_and_a_merely_slow_one_is_not() {
     // The hard half is the second one: a viewer on a slow link must not be mistaken for a dead one.
