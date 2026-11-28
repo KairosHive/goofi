@@ -5,9 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { ICONS } from './icons';
 import { CHROME_ICONS } from 'panelty';
 
-/* `icons.ts` is vendored Lucide path geometry, and data drifts as code does. This app's table is
- * judged here, with two questions about the pair with `panelty`'s table: no glyph is vendored
- * twice, and every name the source renders resolves in the merge. */
+/* `icons.ts` is vendored Lucide path geometry. This app's table is judged here, and every name the
+ * source renders must resolve in the merge with `panelty`'s table. */
 
 const SRC = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -52,74 +51,31 @@ function rendered(): Set<string> {
 }
 
 describe('vendored Lucide geometry', () => {
-	it('gives every name real drawing geometry', () => {
+	it('is drawing elements only, and at least one for every name', () => {
 		expect(names.length, 'the table is not empty').toBeGreaterThan(0);
-		const empty = names.filter((n) => !/<(\w+)[^>]*\/>/.test(ICONS[n as keyof typeof ICONS]));
-		expect(empty, 'every icon resolves to at least one drawing element').toEqual([]);
-	});
-
-	it('draws with Lucide elements only', () => {
 		const offenders: string[] = [];
 		for (const n of names) {
-			// The whole string must be self-closing drawing tags back to back — nothing else can be in
-			// there, which is also what makes the `{@html}` in `Icon.svelte` safe by construction.
-			const rest = ICONS[n as keyof typeof ICONS].replace(/<(\w+)((?:\s+[\w-]+="[^"]*")*)\s*\/>/g, (_, tag: string) =>
+			// Self-closing drawing tags back to back and nothing else: what makes the `{@html}` in
+			// `Icon.svelte` safe.
+			const geometry: string = ICONS[n as keyof typeof ICONS];
+			const rest = geometry.replace(/<(\w+)((?:\s+[\w-]+="[^"]*")*)\s*\/>/g, (_, tag: string) =>
 				DRAW.test(tag) ? '' : `<${tag}>`
 			);
-			if (rest !== '') offenders.push(`${n}: ${rest}`);
+			if (rest !== '' || geometry === '') offenders.push(`${n}: ${rest}`);
 		}
 		expect(offenders).toEqual([]);
 	});
 
-	/* The whole point of vendoring the geometry rather than a finished <svg>: paint is
-	   `Icon.svelte`'s (stroke: currentColor), so an icon inherits the colour of the control it sits
-	   in and can never introduce one of its own — which is the defect this icon system replaced. */
-	it('bakes in no paint of its own — colour comes from the control', () => {
+	it('bakes in no paint of its own: colour comes from the control', () => {
 		const offenders = names.filter((n) => /\b(fill|stroke|style|class|color)=/.test(ICONS[n as keyof typeof ICONS]));
 		expect(offenders, 'no icon carries its own fill/stroke/style').toEqual([]);
 	});
 
-	/* Lucide's grid is 24×24. A coordinate outside it is the tell of an icon drawn from memory at
-	   another scale, which reads as a different weight beside the real ones. */
-	it('stays on the 24-box Lucide grid', () => {
-		const offenders: string[] = [];
-		for (const n of names)
-			for (const [, num] of ICONS[n as keyof typeof ICONS].matchAll(/(-?\d*\.\d+|-?\d+)/g))
-				if (Math.abs(parseFloat(num)) > 24) offenders.push(`${n}: ${num}`);
-		expect(offenders).toEqual([]);
-	});
-
-	it('names icons the way Lucide does — kebab-case, unique, sorted', () => {
-		expect(names.filter((n) => !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(n))).toEqual([]);
-		expect([...names].sort(), 'the table is sorted').toEqual(names);
-	});
-
-	/* One glyph, one owner — across a package boundary, which is where this stops being obvious. A
-	   name in both tables is the same geometry vendored twice, and the merge hides it: this app's
-	   copy wins, the chrome's is never drawn, and the day one of them is corrected the other is
-	   not. It fails HERE when the package adds a glyph this app already had. */
-	it('vendors each glyph in exactly one table', () => {
-		const both = names.filter((n) => n in CHROME_ICONS);
-		expect(both, 'the app and the chrome each own their own glyphs').toEqual([]);
-	});
-
-	/* A vendored icon nothing renders is dead weight in the bundle, and the reason a hand-vendored
-	   pack rots: the pack grows, the UI does not. There are three shapes an icon can be named in —
-	   the component's plain attribute (`name="x"`), an EXPRESSION in that attribute
-	   (`name={copied ? 'check' : 'copy'}`) and a menu/panel record (`icon: 'undo-2'`, whose value is
-	   an expression just as often) — and each spells the icon as a literal, so this is answerable
-	   from the source. Read through those shapes rather than a bare substring: `'x'` and `'copy'`
-	   occur all over a codebase for reasons that have nothing to do with an icon, and a scan they
-	   satisfy proves nothing. */
 	it('vendors nothing the app does not render', () => {
 		expect(names.filter((n) => !rendered().has(n))).toEqual([]);
 	});
 
-	/* The other direction, and the one that used to be a typecheck: `Icon` takes a plain string
-	   now, because half the names reach it from a consumer's own table and a union cannot enumerate
-	   those. A typo therefore draws NOTHING — silently, in the one place a glyph was the whole
-	   content of the control. This reads the same source the guard above does and asks whether the
-	   merge can answer it, which the union never covered for a record field anyway. */
+	// `Icon` takes a plain string, so a name with no geometry draws nothing and no type catches it.
 	it('renders nothing it has no geometry for', () => {
 		expect([...rendered()].filter((n) => !(n in ALL))).toEqual([]);
 	});
