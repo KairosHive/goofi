@@ -168,7 +168,7 @@ pub fn walled_home() {
         #[cfg(unix)]
         std::env::set_var("SHELL", "/bin/sh");
         #[cfg(feature = "embed")]
-        goofi_python::inproc::configure_embedded();
+        goofi_runtime::python::inproc::configure_embedded();
         // Under THIS binary's target dir.
         let target = std::env::current_exe().ok().and_then(|e| e.ancestors().nth(3).map(Path::to_path_buf));
         let nested = target.unwrap_or_else(std::env::temp_dir).join("goofi-test-cargo-target");
@@ -418,9 +418,9 @@ impl Goofi {
     /// Register a node type with a per-instance factory, as the CLI does for a Python node.
     pub fn register_dyn(
         &self,
-        manifest: &'static goofi_node::NodeManifest,
-        factory: goofi_signal_sdk::NodeFactory,
-        tier: &'static goofi_node::IsolationCell,
+        manifest: &'static goofi_core::node::NodeManifest,
+        factory: goofi_sdk::node::NodeFactory,
+        tier: &'static goofi_core::node::IsolationCell,
     ) {
         goofi_bridge::register_dyn_type(&mut self.state.graph(), manifest, factory, tier);
     }
@@ -1147,13 +1147,13 @@ pub fn install_all(g: &Goofi, files: &[(&str, &str)]) -> Vec<String> {
         .map(|(file, source)| {
             let path = dir.join(file);
             std::fs::write(&path, source).unwrap();
-            goofi_node::type_name_of(&path).unwrap_or_else(|| panic!("{file} is not a node file"))
+            goofi_core::node::type_name_of(&path).unwrap_or_else(|| panic!("{file} is not a node file"))
         })
         .collect();
     g.call("library refresh", j!({}));
     let graph = g.graph();
     for ((file, _), name) in files.iter().zip(&names) {
-        if let Some((_, reason)) = graph.unavailable_types().find(|(n, _)| goofi_node::bare(n) == name) {
+        if let Some((_, reason)) = graph.unavailable_types().find(|(n, _)| goofi_core::node::bare(n) == name) {
             panic!("{file} scanned as unavailable: {reason}");
         }
     }
@@ -1177,44 +1177,44 @@ pub struct FirstVar {
     pub evals: std::sync::atomic::AtomicUsize,
     pub latch: std::sync::atomic::AtomicBool,
     pub broken: std::sync::atomic::AtomicBool,
-    live: std::sync::Mutex<std::collections::HashSet<goofi_node::BindingId>>,
+    live: std::sync::Mutex<std::collections::HashSet<goofi_core::node::BindingId>>,
 }
 
-impl goofi_node::ExprEvaluator for FirstVar {
-    fn compile(&self, _source: &str) -> Result<goofi_node::Compiled, goofi_node::ExprError> {
+impl goofi_core::node::ExprEvaluator for FirstVar {
+    fn compile(&self, _source: &str) -> Result<goofi_core::node::Compiled, goofi_core::node::ExprError> {
         let id = self.compiles.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64 + 1;
         self.live.lock().unwrap().insert(id);
-        Ok(goofi_node::Compiled { id, code: std::sync::Arc::from(&b""[..]) })
+        Ok(goofi_core::node::Compiled { id, code: std::sync::Arc::from(&b""[..]) })
     }
-    fn eval(&self, id: goofi_node::BindingId, ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
+    fn eval(&self, id: goofi_core::node::BindingId, ctx: &goofi_core::node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_core::node::ExprError> {
         self.entered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         while self.latch.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         self.evals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !self.live.lock().unwrap().contains(&id) {
-            return Err(goofi_node::ExprError("expression not compiled".into()));
+            return Err(goofi_core::node::ExprError("expression not compiled".into()));
         }
         if self.broken.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(goofi_node::ExprError(BLEW_UP.into()));
+            return Err(goofi_core::node::ExprError(BLEW_UP.into()));
         }
         first_var(ctx)
     }
-    fn release(&self, id: goofi_node::BindingId) {
+    fn release(&self, id: goofi_core::node::BindingId) {
         self.live.lock().unwrap().remove(&id);
     }
-    fn run(&self, _code: &[u8], _ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
-        Err(goofi_node::ExprError("the test evaluator runs no functional".into()))
+    fn run(&self, _code: &[u8], _ctx: &goofi_core::node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_core::node::ExprError> {
+        Err(goofi_core::node::ExprError("the test evaluator runs no functional".into()))
     }
 }
 
 /// The first variable's frame, whole — what every test evaluator answers with. A text with no
 /// number in it is an error, as a Python arithmetic over it would be.
-pub fn first_var(ctx: &goofi_node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_node::ExprError> {
-    let (_, local) = ctx.locals.first().ok_or_else(|| goofi_node::ExprError("no local arrived".into()))?;
-    let frame = goofi_node::mailbox::pick(local, None).map_err(goofi_node::ExprError)?;
+pub fn first_var(ctx: &goofi_core::node::EvalCtx<'_>) -> Result<goofi_core::Data, goofi_core::node::ExprError> {
+    let (_, local) = ctx.locals.first().ok_or_else(|| goofi_core::node::ExprError("no local arrived".into()))?;
+    let frame = goofi_core::node::mailbox::pick(local, None).map_err(goofi_core::node::ExprError)?;
     if goofi_core::control::numbers(&frame).next().is_none() {
-        return Err(goofi_node::ExprError(format!("no number in {:?}", frame.value())));
+        return Err(goofi_core::node::ExprError(format!("no number in {:?}", frame.value())));
     }
     Ok(frame)
 }

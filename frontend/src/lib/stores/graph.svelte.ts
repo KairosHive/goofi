@@ -722,17 +722,17 @@ export class GraphStore {
 		});
 	}
 
-	async setNodePos(uid: string, pos: [number, number]): Promise<void> {
+	async setNodePos(uid: string, pos: [number, number], step?: Step): Promise<void> {
 		// Committed on drag-stop only; a live drag stays local to Svelte Flow.
-		await this.ctl.call('node edit', { node: uid, pos });
+		await this.ctl.call('node edit', { node: uid, pos }, step);
 	}
 
 	/** Move several nodes as ONE command — one op, one resync, one undo step. */
-	async setNodePositions(moves: [string, [number, number]][]): Promise<void> {
+	async setNodePositions(moves: [string, [number, number]][], step?: Step): Promise<void> {
 		if (moves.length === 0) return; // an empty compound records nothing, so no undo entry either
-		if (moves.length === 1) return this.setNodePos(...moves[0]);
+		if (moves.length === 1) return this.setNodePos(...moves[0], step);
 		const ops = moves.map(([node, pos]) => ({ op: 'node edit', payload: { node, pos } }));
-		await this.ctl.call('compound', { ops });
+		await this.ctl.call('compound', { ops }, step);
 	}
 
 	async renameNode(uid: string, name: string): Promise<void> {

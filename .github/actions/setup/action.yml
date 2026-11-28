@@ -90,10 +90,10 @@ runs:
     - uses: actions/cache@v4
       with:
         path: target/wheels
-        key: goofi-wheels-${{ runner.os }}-${{ hashFiles('backend/signal/goofi-pymod/**', 'backend/goofi-supervisor/**', 'backend/goofi-core/**', 'backend/goofi-codec/**', 'backend/goofi-transport/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+        key: goofi-wheels-${{ runner.os }}-${{ hashFiles('backend/goofi-pymod/**', 'backend/goofi-supervisor/**', 'backend/goofi-core/**', 'backend/goofi-codec/**', 'backend/goofi-transport/**', 'Cargo.lock', 'rust-toolchain.toml') }}
 
     # goofi-init's own build is the one package-scoped cargo command: the Python it provisions is
-    # what goofi-python links, so nothing of the workspace builds before it.
+    # what goofi-runtime links, so nothing of the workspace builds before it.
     - name: Provision (cargo run -p goofi-init)
       shell: bash
       run: cargo run -p goofi-init

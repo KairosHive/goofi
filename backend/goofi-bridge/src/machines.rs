@@ -16,7 +16,7 @@ use goofi_graph::expr_rewrite::Target;
 use goofi_graph::machine::{Machine, Machines};
 use goofi_graph::timeline::{Lanes, Take, Track};
 use goofi_graph::Graph;
-use goofi_node::{ExprEvaluator, Local};
+use goofi_core::node::{ExprEvaluator, Local};
 use goofi_transport::{machines_door, output_service, service_base, Door, Hub, Payload, Subscriber, MACHINES_FRAME_ID, MACHINES_INBOX_ID};
 
 use crate::AppState;

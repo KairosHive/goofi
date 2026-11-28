@@ -106,8 +106,12 @@ Several sessions work in one checkout of `main`. A change you did not make is so
 - Rust nodes are `.rs` files built against an engine SDK. `goofi_build` opens every dynamic library
   and reads its entry symbols. A signal node built after the boot scan runs hosted in
   `goofi host`, over the exchange the Python subprocess tier uses; audio loads its library
-  in-process. The graphics engine runs `.wgsl` shaders, and Python files marked
-  `# goofi: graphics`: the render thread calls such a node at its place in the tick and waits.
+  in-process. The graphics engine runs `.wgsl` shaders, and Python or Rust nodes: the render
+  thread calls such a node at its place in the tick and waits.
+- A node declares its engine in its own language: a Python class by its base (`goofi.SignalNode`,
+  `goofi.GraphicsNode`), a Rust file by the SDK whose `export!` it spells, and a `.wgsl` file is
+  a graphics node. `goofi_runtime::Library` is the one reader of node files: it answers each file's
+  declaration in one schema, and an engine registers from that through `Engine::register`.
 - A node's engine is its clock, not its kinds. A `TEXTURE` slot carries a texture frame on every
   wire, and a node of any engine makes or reads one; between two shaders it is a GPU texture the
   plan carries, and a Python node the tick calls maps it with CUDA where the device shares

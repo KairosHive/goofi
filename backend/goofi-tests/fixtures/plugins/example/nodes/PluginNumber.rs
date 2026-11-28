@@ -1,6 +1,6 @@
 //! A bundled native source used by the plugin session.
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{
+use goofi_sdk::signal::{
     Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, Tag,
 };
 
@@ -33,4 +33,4 @@ static MANIFEST: Manifest = Manifest {
     params: &[],
     producer: true,
 };
-goofi_signal_sdk::export!(PluginNumber, MANIFEST);
+goofi_sdk::signal::export!(PluginNumber, MANIFEST);

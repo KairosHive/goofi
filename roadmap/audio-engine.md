@@ -20,7 +20,7 @@ The audio node contract is `sdk/README.md` and the code.
 - **A machine with no output device** faults every `AudioOut` and renders nothing. A real-time
   self-clock for a device-less machine is open; the graphics ticker thread under `Clock::Internal`
   (`goofi-graphics/src/lib.rs`) is the precedent.
-- **The `codes` mutex** (`goofi-python/src/inproc/expr.rs`, `Mutex<HashMap>`) is taken on every
+- **The `codes` mutex** (`goofi-runtime/src/python/inproc/expr.rs`, `Mutex<HashMap>`) is taken on every
   evaluation from every node thread. It wants to be read-mostly (written only on compile and
   release). Settle it with a threaded measurement before promising a high expression rate; a
   reference bypasses it.

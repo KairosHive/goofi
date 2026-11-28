@@ -146,19 +146,19 @@ pub fn catalog() -> Value {
         })).collect::<Vec<_>>(),
         "boundary_slot": BOUNDARY_SLOT,
         "scope_type": SCOPE_TYPE,
-        "tags": goofi_node::Tag::ALL.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "tags": goofi_core::node::Tag::ALL.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
         "control_kinds": goofi_core::variables::ControlKind::ALL.iter().map(|k| json!({
             "id": k.as_str(), "draws": k.draws(),
         })).collect::<Vec<_>>(),
         "expression": {
-            "builtins": goofi_node::expr::BUILTINS.iter().map(|b| json!({
+            "builtins": goofi_core::node::expr::BUILTINS.iter().map(|b| json!({
                 "name": b.name, "kind": b.kind, "scope": b.scope, "signature": b.signature, "doc": b.doc,
                 "args": b.args.iter().map(|a| json!({
                     "name": a.name, "kind": a.kind, "default": a.default, "options": a.options, "keyword": a.keyword, "doc": a.doc,
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
-            "math": goofi_node::expr::MATH,
-            "math_constants": goofi_node::expr::MATH_CONSTANTS,
+            "math": goofi_core::node::expr::MATH,
+            "math_constants": goofi_core::node::expr::MATH_CONSTANTS,
         },
     })
 }
@@ -207,7 +207,7 @@ pub fn typescript() -> String {
             )
         })
         .collect::<String>();
-    let tags = goofi_node::Tag::ALL.iter().map(|t| format!("'{}'", t.as_str())).collect::<Vec<_>>().join(", ");
+    let tags = goofi_core::node::Tag::ALL.iter().map(|t| format!("'{}'", t.as_str())).collect::<Vec<_>>().join(", ");
     let controls = goofi_core::variables::ControlKind::ALL
         .iter()
         .map(|k| {
@@ -234,7 +234,7 @@ pub fn typescript() -> String {
             format!("\t{name}: [{}],\n", semitones.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
         })
         .collect();
-    let expr_args = |args: &[goofi_node::expr::Arg]| {
+    let expr_args = |args: &[goofi_core::node::expr::Arg]| {
         args.iter()
             .map(|a| {
                 format!(
@@ -249,7 +249,7 @@ pub fn typescript() -> String {
             })
             .collect::<String>()
     };
-    let builtins = goofi_node::expr::BUILTINS
+    let builtins = goofi_core::node::expr::BUILTINS
         .iter()
         .map(|b| {
             format!(
@@ -264,8 +264,8 @@ pub fn typescript() -> String {
             )
         })
         .collect::<String>();
-    let math = quoted(goofi_node::expr::MATH);
-    let math_constants = quoted(goofi_node::expr::MATH_CONSTANTS);
+    let math = quoted(goofi_core::node::expr::MATH);
+    let math_constants = quoted(goofi_core::node::expr::MATH_CONSTANTS);
     let boundaries = BOUNDARY_TYPES
         .iter()
         .map(|(name, dir, dtype)| {

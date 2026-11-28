@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     CEILING = ParamDecl {
         doc: Some("the level nothing leaving this node may pass"),
         ..ParamDecl::new("limiter", "ceiling", ParamSpec::Num { default: &[0.9], min: 0.05, max: 1.0, int: false, options: &[], face: Face::Plain })
@@ -78,4 +78,4 @@ impl AudioNode for Limiter {
     }
 }
 
-goofi_audio_sdk::export!(Limiter, MANIFEST);
+goofi_sdk::audio::export!(Limiter, MANIFEST);

@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 use goofi_core::Param;
 use goofi_tests::OutputProbe;
 use goofi_graph::Graph;
-use goofi_node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, SlotDecl};
-use goofi_signal_sdk::Node;
-use goofi_python::inproc::PyNode;
+use goofi_core::node::{Isolation, IsolationCell, NodeManifest, OutputDecl, ParamDecl, ParamGroups, SlotDecl};
+use goofi_sdk::node::Node;
+use goofi_runtime::python::inproc::PyNode;
 
 static PY_IN: &[SlotDecl] = &[SlotDecl {
     name: "data",
@@ -113,7 +113,7 @@ fn main() {
     let work = concat!(
         "import goofi\n",
         "import numpy as np\n",
-        "class Work(goofi.Node):\n",
+        "class Work(goofi.SignalNode):\n",
         "    INPUTS = {'data': goofi.DataType.ARRAY}\n",
         "    OUTPUTS = {'out': goofi.DataType.ARRAY}\n",
         "    def process(self, data):\n",
@@ -167,8 +167,8 @@ fn main() {
 /// One process() call driving `bytes` through the node's `data` input.
 fn run_once(node: &mut PyNode, bytes: &[u8]) {
     use goofi_core::{Data, Meta};
-    use goofi_node::Params;
-use goofi_signal_sdk::{Inputs, NodeCtx, Outputs};
+    use goofi_core::node::Params;
+use goofi_sdk::node::{Inputs, NodeCtx, Outputs};
     use indexmap::IndexMap;
     let frame =
         Data::array_f32(vec![bytes.len() / 4], bytes.to_vec(), Meta::empty()).unwrap();

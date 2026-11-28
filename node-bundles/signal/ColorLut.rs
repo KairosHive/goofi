@@ -7,7 +7,7 @@
 //! a pixel's own colour: Arcana bakes it offline to a `.cube` file, which `file` reads.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show,
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 use std::time::SystemTime;
@@ -461,4 +461,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(ColorLut, MANIFEST);
+goofi_sdk::signal::export!(ColorLut, MANIFEST);

@@ -1,0 +1,550 @@
+//! The ONE node abstraction and its runtime plumbing.
+
+use std::fmt;
+use std::sync::Arc;
+
+use crate::{Data, Param, SlotType};
+pub use crate::Face;
+use indexmap::IndexMap;
+
+pub mod abi;
+pub mod describe;
+pub mod expr;
+pub mod mailbox;
+pub mod seam;
+pub mod sections;
+pub mod tags;
+pub mod type_id;
+pub use describe::{describe, digest_of, engine_of_folder, folder_of, illegal_param, interned, leak_manifest, manifest_of, node_files, parse_introspection, type_name_of};
+pub use mailbox::{Expression, Mailbox, Var};
+pub use seam::{
+    Edit, Origin, EditorAction,
+    BindingView, Body, BoundVar, DrainWaker, Edge, Engine, EventId, GraphView, LibraryEntry, NodeFile,
+    NodeView, Read, Request, RequestKind, Ringer, Scanned, ScannedType, Stamp, Via,
+};
+pub use tags::Tag;
+pub use type_id::{bare, qualify, split as split_type_id};
+
+/// A `u64` internally, a 12-hex string in the `.gfi` and on the wire.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Uid(pub u64);
+
+impl Uid {
+    /// The patch's own producer, whose output slots are its variables. Nodes are minted from 1.
+    pub const VARIABLES: Uid = Uid(0);
+
+    pub fn to_hex(self) -> String {
+        format!("{:012x}", self.0)
+    }
+    /// Exactly 12 hex, nothing wider: bounding the domain is what makes `next_uid`'s `+ 1` total
+    /// at every site rather than checked at each one.
+    pub fn from_hex(s: &str) -> Option<Uid> {
+        if s.len() != 12 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        u64::from_str_radix(s, 16).ok().map(Uid)
+    }
+}
+
+impl std::fmt::Display for Uid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
+
+/// Defines a `pub struct $name(pub String)` error newtype with its Display / Error / `From` impls.
+#[macro_export]
+macro_rules! string_error {
+    ($(#[$m:meta])* $name:ident) => {
+        $(#[$m])*
+        #[derive(Debug, Clone)]
+        pub struct $name(pub String);
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+        impl std::error::Error for $name {}
+        impl From<String> for $name {
+            fn from(s: String) -> Self {
+                $name(s)
+            }
+        }
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self {
+                $name(s.to_string())
+            }
+        }
+    };
+}
+
+/// Grouped params: `group -> (name -> Param)`, insertion-ordered.
+pub type ParamGroups = IndexMap<String, IndexMap<String, Param>>;
+
+/// A `(group, name)` address into a node's params.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub struct ParamKey {
+    pub group: String,
+    pub name: String,
+}
+
+impl ParamKey {
+    pub fn new(group: impl Into<String>, name: impl Into<String>) -> ParamKey {
+        ParamKey {
+            group: group.into(),
+            name: name.into(),
+        }
+    }
+}
+
+/// A param name split from the ELEMENT it may address: `colour[2]` is dimension 2 of `colour`,
+/// and a name with no such suffix is the whole param.
+pub fn element(name: &str) -> (&str, Option<usize>) {
+    match mailbox::split_index(name) {
+        Ok((base, index)) => (base, index),
+        Err(_) => (name, None),
+    }
+}
+
+/// The param `name` addresses, as a value of its own: the whole param, or ONE dimension of a
+/// vector as a scalar of the same kind and bounds. `None` for a name or an element out of range.
+pub fn param_dim(p: &ParamGroups, group: &str, name: &str) -> Option<Param> {
+    let (base, index) = element(name);
+    let whole = param(p, group, base)?;
+    let Some(k) = index else { return Some(whole.clone()) };
+    (k < whole.dims() && whole.dims() > 1).then(|| whole.dim(k))
+}
+
+pub fn param<'a>(p: &'a ParamGroups, group: &str, name: &str) -> Option<&'a Param> {
+    p.get(group)?.get(name)
+}
+
+/// A static param descriptor, so a node declares its params as a `static &[ParamDecl]`.
+#[derive(Clone, Copy)]
+pub struct ParamDecl {
+    pub group: &'static str,
+    pub name: &'static str,
+    pub spec: ParamSpec,
+    /// An optional default expression the engine seeds as a binding; `None` ⇒ a literal default.
+    pub expression: Option<ExprDecl>,
+    /// Help text for the UI's tooltip.
+    pub doc: Option<&'static str>,
+    /// The index of the param's section inside its group; the inspector draws a line between two.
+    pub section: u8,
+    /// Presentation only: the inspector hides the param unless every rule holds.
+    pub show: &'static [Show],
+    /// The part the param plays in a declared section; `None` for a row of its own.
+    pub role: Option<Role>,
+}
+
+impl ParamDecl {
+    /// A param with a literal default and no doc, a row of its own in its group's first section,
+    /// always shown.
+    pub const fn new(group: &'static str, name: &'static str, spec: ParamSpec) -> Self {
+        ParamDecl { group, name, spec, expression: None, doc: None, section: 0, show: &[], role: None }
+    }
+}
+
+/// A param's place in a section of its group: the count a list section is repeated by, or a
+/// member of a section — of one `slot` of a list, where `base` is its name inside the section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Count { section: &'static str, widget: Option<crate::probe::Widget> },
+    Member { section: &'static str, base: &'static str, slot: Option<u32> },
+    /// A `Str` param naming a variable's element, beside the `Str` param `group` of the same
+    /// param group naming its group: that variable's wire feeds input `slot`, as a cable would.
+    Feed { slot: &'static str, group: &'static str },
+    /// A value the node's own saved state holds — a plugin's — so the document shows what the
+    /// node reports and a saved patch leaves it out.
+    Held,
+}
+
+/// Every feed of a manifest: the input slot, the group param's name, and the element param.
+pub fn feed_decls(manifest: &NodeManifest) -> impl Iterator<Item = (&'static str, &'static str, &'static ParamDecl)> {
+    manifest.params.iter().filter_map(|d| match d.role {
+        Some(Role::Feed { slot, group }) => Some((slot, group, d)),
+        _ => None,
+    })
+}
+
+/// The variable a feed names, `group.element`, or none while either param is empty.
+pub fn feed_name(params: &ParamGroups, group_param: &str, element: &ParamDecl) -> Option<String> {
+    let text = |name: &str| match param(params, element.group, name) {
+        Some(crate::Param::Str { value, .. }) if !value.is_empty() => Some(value.clone()),
+        _ => None,
+    };
+    Some(format!("{}.{}", text(group_param)?, text(element.name)?))
+}
+
+/// One rule of a param's `show`: it holds while `param` (`name` in the same group, or `group.name`)
+/// holds one of `any_of` — an option's text, an int option in decimal, or `true`/`false` — or is
+/// itself hidden, as a hidden param is absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Show {
+    pub param: &'static str,
+    pub any_of: &'static [&'static str],
+}
+
+impl Show {
+    /// The `(group, name)` of the controlling param, for a param in `group`.
+    pub fn controller<'a>(&'a self, group: &'a str) -> (&'a str, &'a str) {
+        self.param.split_once('.').unwrap_or((group, self.param))
+    }
+}
+
+/// A declared param expression: its source, and whether it starts live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExprDecl {
+    pub source: &'static str,
+    /// Whether this expression starts live; `Off` merely retains it as the param's expression text.
+    pub mode: ExprMode,
+}
+
+/// Whether a declared [`ExprDecl`] is live or merely carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExprMode {
+    Off,
+    On,
+}
+
+/// The kind + defaults of a declared param.
+#[derive(Clone, Copy)]
+pub enum ParamSpec {
+    /// A number, or a vector of them: `default` holds one value per dimension.
+    Num { default: &'static [f64], min: f64, max: f64, int: bool, options: &'static [i64], face: Face },
+    Bool { default: bool },
+    Str { default: &'static str, options: &'static [&'static str], refresh: bool },
+    Pulse,
+}
+
+impl ParamSpec {
+    /// An RGBA colour.
+    pub const fn color(default: &'static [f64; 4]) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max: 1.0, int: false, options: &[], face: Face::Color }
+    }
+    /// An ADSR envelope: three times in seconds up to `max`, and a sustain in 0..1.
+    pub const fn envelope(default: &'static [f64; 4], max: f64) -> ParamSpec {
+        ParamSpec::Num { default, min: 0.0, max, int: false, options: &[], face: Face::Envelope }
+    }
+
+    pub fn to_param(self) -> Param {
+        match self {
+            ParamSpec::Num { default, min, max, int, options, face } => {
+                Param::Num { value: default.to_vec(), vmin: min, vmax: max, int, options: options.to_vec(), face }
+            }
+            ParamSpec::Bool { default } => Param::boolean(default),
+            ParamSpec::Str { default, options, refresh } => Param::Str {
+                value: default.to_string(),
+                options: (!options.is_empty())
+                    .then(|| options.iter().map(|s| s.to_string()).collect()),
+                refresh,
+            },
+            ParamSpec::Pulse => Param::Pulse,
+        }
+    }
+}
+
+/// Build a grouped [`ParamGroups`] from a flat, group-tagged declaration list.
+pub fn params_from_decls(decls: &[ParamDecl]) -> ParamGroups {
+    let mut groups = ParamGroups::new();
+    for d in decls {
+        groups
+            .entry(d.group.to_string())
+            .or_default()
+            .insert(d.name.to_string(), d.spec.to_param());
+    }
+    groups
+}
+
+/// A typed read-only view of a node's params, for a cold param that is mirrored to no field.
+pub struct Params<'a>(&'a ParamGroups);
+
+impl<'a> Params<'a> {
+    pub fn new(groups: &'a ParamGroups) -> Params<'a> {
+        Params(groups)
+    }
+    pub fn f64(&self, group: &str, name: &str) -> Option<f64> {
+        param(self.0, group, name).and_then(Param::as_f64)
+    }
+    pub fn i64(&self, group: &str, name: &str) -> Option<i64> {
+        param(self.0, group, name).and_then(Param::as_i64)
+    }
+    pub fn bool(&self, group: &str, name: &str) -> Option<bool> {
+        param(self.0, group, name).and_then(Param::as_bool)
+    }
+    /// Every dimension of a number.
+    pub fn vec(&self, group: &str, name: &str) -> Option<&[f64]> {
+        param(self.0, group, name).and_then(Param::as_vec)
+    }
+    pub fn str(&self, group: &str, name: &str) -> Option<&str> {
+        param(self.0, group, name).and_then(Param::as_str)
+    }
+    pub fn groups(&self) -> &ParamGroups {
+        self.0
+    }
+}
+
+/// An opaque handle to a compiled expression, owned by the evaluator.
+pub type BindingId = u64;
+
+string_error!(
+    /// A param-expression failure: a compile error, an exception, or an incompatible result.
+    ExprError
+);
+
+/// The result of compiling an expression: the evaluator's opaque handle.
+pub struct Compiled {
+    pub id: BindingId,
+    /// The function's code, marshaled: what a functional frame carries.
+    pub code: Arc<[u8]>,
+}
+
+/// One expression variable's value, as the graph resolved it.
+#[derive(Clone, Debug)]
+pub enum Local {
+    Frame(Data),
+    Value(Param),
+    /// A record read by attribute, as a machine's `me` and `st()` answer: `me.gain`, `st('A').residents`.
+    Record(Vec<(String, Field)>),
+}
+
+/// One field of a [`Local::Record`]: a frame, or a list of names.
+#[derive(Clone, Debug)]
+pub enum Field {
+    Frame(Data),
+    Names(Vec<String>),
+}
+
+/// What a binding's stateful functions (`gte()`) keep from one evaluation to the next: the
+/// evaluator's own object, which the binding holds and hands back on every call. Fresh with a
+/// binding whose text changed; none for an evaluation outside a binding, which keeps nothing.
+#[derive(Default)]
+pub struct ExprState(pub goofi_supervisor::sync::Mutex<Option<Box<dyn std::any::Any + Send + Sync>>>);
+
+impl fmt::Debug for ExprState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ExprState")
+    }
+}
+
+/// Per-evaluation context handed to [`ExprEvaluator::eval`]: every variable has arrived.
+pub struct EvalCtx<'a> {
+    /// The expression's variables by the generated name the rewrite minted, in its order.
+    pub locals: &'a [(String, Local)],
+    /// Patch seconds, the position of the one patch time — for time-based expressions.
+    pub t: f64,
+    /// The driven param's declared range, which `lfo()` and `nse()` span by default.
+    pub range: (f64, f64),
+    /// The binding's state cell, for the functions that keep one; none keeps nothing.
+    pub state: Option<&'a ExprState>,
+}
+
+/// Evaluates expressions; implemented in `goofi_runtime::python` and injected, so the engine core carries
+/// no pyo3 dependency. A result is a frame, read into its target through `control::read`.
+pub trait ExprEvaluator: Send + Sync {
+    /// Compile `source`, a Python expression over `t` and the rewritten variables; one text
+    /// compiles once however many bindings hold it, and `release` lets go of one hold.
+    fn compile(&self, source: &str) -> Result<Compiled, ExprError>;
+    fn eval(&self, id: BindingId, ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
+    fn release(&self, id: BindingId);
+    /// Run a functional's marshaled code at `ctx.t`: what a reader of a functional frame calls.
+    fn run(&self, code: &[u8], ctx: &EvalCtx<'_>) -> Result<Data, ExprError>;
+}
+
+/// A functional frame's value at `t`, and any other frame as it is.
+pub fn at(ev: &dyn ExprEvaluator, frame: &Data, t: f64, range: (f64, f64)) -> Result<Data, ExprError> {
+    match frame.as_functional() {
+        Some(code) => ev.run(code, &EvalCtx { locals: &[], t, range, state: None }),
+        None => Ok(frame.clone()),
+    }
+}
+
+/// Where a node type's code actually runs. This is the ONE owner of that fact: the palette shows
+/// it, the per-node runtime overlay reports it, and a Python type's factory BUILDS from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Isolation {
+    /// Compiled into the binary, on the engine's own threads.
+    Native,
+    /// Python, in the embedded free-threaded interpreter.
+    InProcess,
+    /// Python, in a subprocess with its own GIL.
+    Subprocess,
+    /// A `.wgsl` file, run on the GPU by the graphics engine.
+    Shader,
+    /// Rust, built after boot and run in a child of goofi's own binary.
+    Hosted,
+}
+
+impl Isolation {
+    pub const ALL: [Isolation; 5] =
+        [Isolation::Native, Isolation::InProcess, Isolation::Subprocess, Isolation::Shader, Isolation::Hosted];
+
+    /// The wire name, shared by `inspect_type`'s `tier` and the per-node runtime overlay.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Isolation::Native => "native",
+            Isolation::InProcess => "in-process",
+            Isolation::Subprocess => "subprocess",
+            Isolation::Shader => "shader",
+            Isolation::Hosted => "hosted",
+        }
+    }
+    /// Which language the node is written in — a reading of the tier, never a second field.
+    pub fn language(self) -> &'static str {
+        match self {
+            Isolation::Native | Isolation::Hosted => "rust",
+            Isolation::InProcess | Isolation::Subprocess => "python",
+            Isolation::Shader => "wgsl",
+        }
+    }
+    /// Back from the byte an [`IsolationCell`] holds. Searched, so a tier added to `ALL` needs no
+    /// arm here.
+    fn from_u8(v: u8) -> Isolation {
+        Isolation::ALL.into_iter().find(|i| *i as u8 == v).unwrap_or(Isolation::Native)
+    }
+}
+
+/// A type's [`Isolation`], shared by its `NodeClass`/`DynType` registration and captured by
+/// each running node at birth.
+/// It is interior-mutable for one reason: a Python node that re-enables the GIL at RUNTIME is only
+/// discovered to be subprocess-bound after its import already passed the probe, and demoting the
+/// type is what the next `restart_node` reads.
+#[derive(Debug)]
+pub struct IsolationCell(std::sync::atomic::AtomicU8);
+
+impl IsolationCell {
+    pub const fn new(i: Isolation) -> IsolationCell {
+        IsolationCell(std::sync::atomic::AtomicU8::new(i as u8))
+    }
+    /// A cell of its own, for a manifest built at runtime rather than declared in a `static`.
+    pub fn leak(i: Isolation) -> &'static IsolationCell {
+        Box::leak(Box::new(IsolationCell::new(i)))
+    }
+    pub fn get(&self) -> Isolation {
+        Isolation::from_u8(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+    /// Returns whether this changed anything, so a caller can report a demotion exactly once.
+    pub fn set(&self, i: Isolation) -> bool {
+        self.0.swap(i as u8, std::sync::atomic::Ordering::Relaxed) != i as u8
+    }
+}
+
+/// The cell every native node points at. Shared because a native tier is fixed — only a Python
+/// type, whose cell is leaked per type at discovery, is ever written.
+pub static NATIVE: IsolationCell = IsolationCell::new(Isolation::Native);
+/// A Rust node registered after boot runs hosted, since a library once loaded is never unloaded.
+pub static HOSTED: IsolationCell = IsolationCell::new(Isolation::Hosted);
+/// Every graphics node is one, so the engine advertises this rather than minting a cell per class.
+pub static SHADER: IsolationCell = IsolationCell::new(Isolation::Shader);
+
+pub struct SlotDecl {
+    pub name: &'static str,
+    pub kind: SlotType,
+    /// Whether fresh data on this slot wakes `process()` (vs. a held reference input).
+    pub trigger_process: bool,
+    /// A `multi` slot takes any number of wires and delivers them as an ordered `&[Data]`.
+    pub multi: bool,
+    /// A required slot must hold data when the node runs, so the node may read it unconditionally.
+    pub required: bool,
+}
+
+pub struct OutputDecl {
+    pub name: &'static str,
+    pub kind: SlotType,
+}
+
+/// Static, declarative node metadata — plain data, shared by every engine.
+pub struct NodeManifest {
+    pub type_name: &'static str,
+    pub tags: &'static [Tag],
+    /// What the type IS. The FIRST LINE is the nutshell a catalog shows and all most readers
+    /// see; whatever follows it is the detail `library get` answers.
+    pub doc: &'static str,
+    pub inputs: &'static [SlotDecl],
+    pub outputs: &'static [OutputDecl],
+    /// Declared params; the runtime `ParamGroups` is built on demand by [`Self::default_params`].
+    pub params: &'static [ParamDecl],
+    /// This type is a SOURCE: it makes frames on its own schedule, so `common.autotrigger` and the
+    /// carried `vars.signal.default_ufreq` expression both default on.
+    pub producer: bool,
+}
+
+impl NodeManifest {
+    pub fn output_buffer(&self) -> IndexMap<&'static str, Option<Data>> {
+        self.outputs.iter().map(|o| (o.name, None)).collect()
+    }
+    pub fn default_params(&self) -> ParamGroups {
+        params_from_decls(self.params)
+    }
+}
+
+/// Where a node is in its own lifecycle. Two variants rather than the projection's four:
+/// `creating` is the GRAPH's and `error` is derived from the fault.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NodeStage {
+    Setup,
+    Ready,
+}
+
+impl NodeStage {
+    /// The projection the editor draws.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeStage::Setup => "setup",
+            NodeStage::Ready => "ready",
+        }
+    }
+}
+
+/// What is wrong with a node. Wall-clock `f64` rather than an `Instant`, because a fault is
+/// reported over the wire.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum NodeFault {
+    Setup { msg: String, since: f64 },
+    Process { msg: String, since: f64 },
+}
+
+impl NodeFault {
+    pub fn msg(&self) -> &str {
+        match self {
+            NodeFault::Setup { msg, .. } | NodeFault::Process { msg, .. } => msg,
+        }
+    }
+}
+
+/// What a node reports about its own health — the vocabulary every engine shares, and the only
+/// thing a status drain hands the graph. Every variant is a TRANSITION, so nothing diffs.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Status {
+    /// Where the node is in its own lifecycle. The graph's `error` stage is DERIVED from a fault
+    /// and is never reported here.
+    Stage { stage: NodeStage },
+    Fault { fault: Option<NodeFault> },
+    /// The node's measured update rate (`meta["ufreq"]`) — a measurement, so it alone is paced.
+    Ufreq { hz: f64 },
+    /// How much of its engine's frame period the node's run took, as a fraction: what a node
+    /// the graphics tick runs measures in place of a rate. Paced like one.
+    FrameShare { share: f64 },
+    /// The answer to a refresh request; `None` when the node implements no hook for it.
+    RefreshOptions { key: ParamKey, options: Option<Vec<String>> },
+    /// Per-binding errors, `None` where one cleared.
+    BindingErrors { errors: Vec<(ParamKey, Option<String>)> },
+    /// The evaluated values of the node's bound params — the sparse projection, never the record.
+    ParamValues { evaluated: Vec<(ParamKey, Param)> },
+}
+
+/// What a caught panic said, as the node's own words: the `&str` or `String` it carried.
+pub fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "in node".to_string()
+    }
+}
+
+/// A caught panic as the fault text every engine reports it with.
+pub fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
+    format!("panic: {}", panic_text(p))
+}

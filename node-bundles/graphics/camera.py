@@ -1,4 +1,3 @@
-# goofi: graphics
 """Camera — what a lens or a video file is looking at, as a texture on the graphics tick.
 
 The one door in from a camera. Everything that reads a picture takes it from here, so a device is
@@ -71,7 +70,7 @@ class Reader(threading.Thread):
             cap.release()
 
 
-class Camera(goofi.Node):
+class Camera(goofi.GraphicsNode):
     """Frames from a capture device or a video file."""
 
     TAGS = ["input", "image"]

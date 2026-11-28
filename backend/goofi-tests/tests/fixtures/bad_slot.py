@@ -1,7 +1,7 @@
 import goofi
 
 
-class BadSlot(goofi.Node):
+class BadSlot(goofi.SignalNode):
     """Declares a slot named by a Python keyword."""
 
     INPUTS = {"in": goofi.DataType.ARRAY}

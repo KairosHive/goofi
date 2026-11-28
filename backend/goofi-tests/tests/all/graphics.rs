@@ -773,7 +773,7 @@ fn shaders_render_on_the_gpu() {
     drawn(&g, down, "brightness keeps the picture's shape", |d| shape(d) == vec![64, 128]);
     // A viewer's 8-bit box on the producer never reaches the wire: the consumer still takes the
     // whole frame, in the engine's own 0..1.
-    let tiny = goofi_view::ViewWant { size: (8, 8), depth: goofi_view::Depth::U8 };
+    let tiny = goofi_core::view::ViewWant { size: (8, 8), depth: goofi_core::view::Depth::U8 };
     g.graph().set_view_demand(field, "out", Some(tiny));
     render(&g, 3);
     let whole = drawn(&g, down, "the whole frame beside a viewer's box", |d| shape(d) == vec![64, 128]);
@@ -1202,6 +1202,24 @@ fn a_rust_node_makes_a_texture_a_shader_reads() {
     assert!(close(px(&frame, 1, 1), [1.0; 4]));
 }
 
+/// The same file against `goofi_sdk::graphics` is a graphics node: the tick calls it at its place,
+/// as it calls a Python one, and a shader reads its picture as a stage of the plan.
+#[test]
+fn a_rust_node_runs_on_the_graphics_tick() {
+    let g = Goofi::new();
+    let dir = g.state.mount().join("nodes_graphics");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("TextureHost.rs"), include_str!("../fixtures/texture_host.rs").replace("goofi_sdk::signal", "goofi_sdk::graphics")).unwrap();
+    g.call("library refresh", j!({}));
+    let r = g.call("library get", j!({ "type": "graphics:TextureHost" }));
+    assert_eq!((&r["provenance"], &r["language"], &r["tier"]), (&j!("patch"), &j!("rust"), &j!("hosted")), "{r}");
+    let (node, math) = (g.add("graphics:TextureHost"), g.add("graphics:Math"));
+    g.ready(node);
+    g.ready(math);
+    g.link(node, "out", math, "input");
+    drawn(&g, math, "the node's picture through a shader", |d| shape(d) == vec![2, 2, 4] && close(px(d, 0, 0), [1.0, 0.0, 0.0, 1.0]));
+}
+
 /// A Python signal node makes a texture: the shader behind it follows the frame's size, keeps the
 /// last frame while the node fails, and sizes itself when it is told to.
 #[test]
@@ -1213,7 +1231,7 @@ fn a_python_node_makes_a_texture_a_shader_follows() {
     std::fs::write(dir.join("texture_python.py"), include_str!("../fixtures/texture_python.py")).unwrap();
     g.call("library refresh", j!({}));
     let row = g.call("library get", j!({"type": "signal:TexturePython"}));
-    assert_eq!(row["tier"], if goofi_signal::Python::new(_python.py.clone()).free_threaded.is_some() { "in-process" } else { "subprocess" }, "{row}");
+    assert_eq!(row["tier"], if goofi_signal::free_threaded().is_some() { "in-process" } else { "subprocess" }, "{row}");
     let source = g.add("signal:TexturePython");
     let math = g.add("graphics:Math");
     g.ready(source);
@@ -1250,7 +1268,7 @@ fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("Stamp.py"),
-        "import goofi\nimport numpy as np\n\nclass Stamp(goofi.Node):\n    \
+        "import goofi\nimport numpy as np\n\nclass Stamp(goofi.SignalNode):\n    \
          INPUTS = {\"input\": goofi.InputSlot(goofi.DataType.TEXTURE)}\n    \
          OUTPUTS = {\"out\": goofi.DataType.ARRAY}\n\n    \
          def process(self, input):\n        self.clear_input(\"input\")\n        \
@@ -1273,7 +1291,7 @@ fn a_texture_read_by_a_python_node_carries_the_tick_that_drew_it() {
     });
 }
 
-/// A Python file marked `# goofi: graphics` is a stage of the plan. The tick calls it at its
+/// A Python node that derives `goofi.GraphicsNode` is a stage of the plan. The tick calls it at its
 /// place and waits, so the picture it makes is of the same tick as the stages around it.
 #[test]
 fn a_python_node_runs_on_the_graphics_tick() {
@@ -1402,7 +1420,7 @@ fn a_tick_node_keeps_its_pictures_on_the_device() {
     std::fs::write(dir.join("texture_bytes.py"), BYTES).unwrap();
     let signal = g.state.mount().join("nodes_signal");
     std::fs::create_dir_all(&signal).unwrap();
-    std::fs::write(signal.join("texture_bytes.py"), BYTES.replacen("# goofi: graphics\n", "", 1)).unwrap();
+    std::fs::write(signal.join("texture_bytes.py"), BYTES.replacen("goofi.GraphicsNode", "goofi.SignalNode", 1)).unwrap();
     g.call("library refresh", j!({}));
     let source = g.add_ready("graphics:TextureBytes");
     for width in [3, 5] {

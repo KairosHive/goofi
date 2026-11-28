@@ -3,7 +3,7 @@
 //! Shape and meta are untouched.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// Bring `v` inside `[lo, hi]` the way `bound` says, or leave it where it is.
 fn bind(v: f32, lo: f32, hi: f32, bound: &str) -> f32 {
@@ -125,4 +125,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Math, MANIFEST);
+goofi_sdk::signal::export!(Math, MANIFEST);

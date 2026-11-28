@@ -1,12 +1,12 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag, BLOCK};
 
 const SECONDS: Show = Show { param: "predelay_unit", any_of: &["seconds"] };
 const BEATS: Show = Show { param: "predelay_unit", any_of: &["beats"] };
 const DIVISION: Show = Show { param: "predelay_unit", any_of: &["division"] };
 const TEMPO: Show = Show { param: "predelay_unit", any_of: &["beats", "division"] };
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     MIX = ParamDecl {
         doc: Some("how much of what leaves is the room rather than the sound that entered it"),
         ..ParamDecl::new("reverb", "mix", ParamSpec::Num { default: &[0.45], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })
@@ -170,4 +170,4 @@ impl AudioNode for Reverb {
     }
 }
 
-goofi_audio_sdk::export!(Reverb, MANIFEST);
+goofi_sdk::audio::export!(Reverb, MANIFEST);

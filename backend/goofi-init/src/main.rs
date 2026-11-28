@@ -1,7 +1,7 @@
 //! `cargo run -p goofi-init` — the one setup step a fresh clone needs. Idempotent.
 //! It draws on the screen goofi starts on, and ends on the banner and the outcome.
 
-use goofi_screen::{banner, say, Color, Screen};
+use goofi_init::screen::{banner, say, Color, Screen};
 
 fn main() {
     let screen = Screen::begin();

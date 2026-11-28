@@ -19,7 +19,7 @@ import goofi
 RATE = 16000
 
 
-class SpeechToText(goofi.Node):
+class SpeechToText(goofi.SignalNode):
     """Audio transcribed in segments, by OpenAI, ElevenLabs or an OpenAI-compatible server."""
 
     TAGS = ["text", "analysis"]

@@ -6,7 +6,7 @@ use goofi_core::{control, Data, Face, Param};
 use goofi_graph::{Graph, Mode, Origin, Uid};
 use serde::Serialize;
 use ts_rs::TS;
-use goofi_node::{NodeManifest, ParamGroups};
+use goofi_core::node::{NodeManifest, ParamGroups};
 use serde_json::{json, Map, Value};
 
 pub const PROTOCOL_VERSION: i64 = 5;
@@ -114,7 +114,7 @@ pub struct ParamDescriptor {
     pub kind: ParamKind,
 }
 
-pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDescriptor {
+pub fn describe_param(p: &Param, decl: Option<goofi_core::node::ParamDecl>) -> ParamDescriptor {
     let base = ParamBase {
         doc: decl.and_then(|d| d.doc).map(str::to_string),
         default: decl.and_then(|d| control::data_of(&d.spec.to_param())),
@@ -130,10 +130,10 @@ pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDe
         }),
         // A held value is the save's concern alone: the inspector shows it as any other.
         role: decl.and_then(|d| d.role).and_then(|r| match r {
-            goofi_node::Role::Count { section, widget } => Some(ParamRole::Count { section: section.into(), widget }),
-            goofi_node::Role::Member { section, base, slot } => Some(ParamRole::Member { section: section.into(), base: base.into(), slot }),
-            goofi_node::Role::Feed { slot, group } => Some(ParamRole::Feed { slot: slot.into(), group: group.into() }),
-            goofi_node::Role::Held => None,
+            goofi_core::node::Role::Count { section, widget } => Some(ParamRole::Count { section: section.into(), widget }),
+            goofi_core::node::Role::Member { section, base, slot } => Some(ParamRole::Member { section: section.into(), base: base.into(), slot }),
+            goofi_core::node::Role::Feed { slot, group } => Some(ParamRole::Feed { slot: slot.into(), group: group.into() }),
+            goofi_core::node::Role::Held => None,
         }),
         refreshable: matches!(p, Param::Str { refresh: true, .. }),
         mode: Mode::default(),
@@ -160,10 +160,10 @@ pub fn describe_param(p: &Param, decl: Option<goofi_node::ParamDecl>) -> ParamDe
 /// text and the default both come off it, so the two cannot name different params.
 fn param_decl(
     m: &NodeManifest,
-    universal: &[goofi_node::ParamDecl],
+    universal: &[goofi_core::node::ParamDecl],
     group: &str,
     name: &str,
-) -> Option<goofi_node::ParamDecl> {
+) -> Option<goofi_core::node::ParamDecl> {
     m.params
         .iter()
         .copied()
@@ -228,7 +228,7 @@ fn insert_at(groups: &mut Map<String, Value>, group: &str, name: &str, v: Value)
 }
 
 /// A node instance's param VALUES, `{group: {name: value}}`, without descriptor metadata.
-pub fn param_value_map(params: &goofi_node::ParamGroups) -> Value {
+pub fn param_value_map(params: &goofi_core::node::ParamGroups) -> Value {
     Value::Object(
         params
             .iter()
@@ -317,14 +317,14 @@ pub fn catalog_types(g: &Graph, d: Detail) -> Value {
         .into_iter()
         .filter(|(_, l)| !l.manifest.type_name.starts_with('_'))
         .map(|(engine, l)| {
-            let ty = goofi_node::qualify(engine, l.manifest.type_name);
+            let ty = goofi_core::node::qualify(engine, l.manifest.type_name);
             (engine.to_string(), l.manifest.type_name.to_string(), palette_row(g, engine, &ty, Some(l.manifest), None, d))
         })
         .collect();
     // Node files that cannot load are listed too, greyed and with the reason, in the shape they
     // last had: the instances born from it still run and are wired.
     items.extend(g.unavailable_types().map(|(name, reason)| {
-        let (engine, bare) = goofi_node::split_type_id(name);
+        let (engine, bare) = goofi_core::node::split_type_id(name);
         let engine = engine.unwrap_or_default();
         (engine.to_string(), bare.to_string(), palette_row(g, engine, name, g.last_manifest(name), Some(reason), d))
     }));
@@ -353,7 +353,7 @@ pub(crate) fn runtime_json(g: &Graph, uid: Uid) -> Value {
     json!({
         "stage": g.node_stage(uid),
         "error": g.last_error(uid),
-        "runtime": g.node_tier(uid).map(goofi_node::Isolation::wire),
+        "runtime": g.node_tier(uid).map(goofi_core::node::Isolation::wire),
     })
 }
 
@@ -441,7 +441,7 @@ pub fn typescript() -> String {
         ParamKind::decl(&cfg),
     ];
     let body = decls.iter().map(|d| format!("export {d}\n")).collect::<String>();
-    let tiers = goofi_node::Isolation::ALL.iter().map(|i| format!("'{}'", i.wire())).collect::<Vec<_>>().join(" | ");
+    let tiers = goofi_core::node::Isolation::ALL.iter().map(|i| format!("'{}'", i.wire())).collect::<Vec<_>>().join(" | ");
     format!(
         "// GENERATED from the Rust types in goofi-core, goofi-graph and goofi-bridge — do not edit by\n\
          // hand. The document, its deltas, a variable and a param descriptor are each declared once,\n\

@@ -22,7 +22,7 @@ STORE = "https://storage.googleapis.com/mediapipe-models/"
 MODEL = "object_detector/efficientdet_lite0/float16/latest/efficientdet_lite0.tflite"
 
 
-class Objects(goofi.Node):
+class Objects(goofi.SignalNode):
     """Find named things in a picture, and say where each one is."""
 
     TAGS = ["analysis", "motion", "image", "ml"]

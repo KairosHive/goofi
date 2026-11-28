@@ -1,0 +1,18 @@
+[package]
+name = "goofi-signal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The in-process Python tier, which LINKS libpython; the scan routes a file there only with it.
+embed = ["goofi-runtime/embed"]
+
+[dependencies]
+goofi-supervisor = { path = "../../goofi-supervisor" }
+goofi-core = { path = "../../goofi-core" }
+# The scan's Python door: both tiers' probes and node types.
+goofi-sdk = { path = "../../goofi-sdk" }
+# The scan's Rust door: build a node file, load the artifact.
+goofi-transport = { path = "../../goofi-transport" }
+goofi-runtime = { path = "../../goofi-runtime" }

@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class LempelZiv(goofi.Node):
+class LempelZiv(goofi.SignalNode):
     """LZ76 complexity: how much a signal repeats itself."""
 
     TAGS = ["analysis"]

@@ -50,7 +50,7 @@ def electrode_at(name):
     return BY_NAME.get(name.lower())
 
 
-class EEGReference(goofi.Node):
+class EEGReference(goofi.SignalNode):
     """Re-reference an EEG frame.
 
     Average, median, one electrode, a neighbour-difference Laplacian, or a bipolar chain.

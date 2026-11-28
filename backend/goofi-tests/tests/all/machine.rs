@@ -8,8 +8,8 @@ use goofi_core::indexmap::IndexMap;
 use goofi_core::Data;
 use goofi_graph::expr_rewrite::Target;
 use goofi_graph::machine::Machines;
-use goofi_node::Local;
-use goofi_python::inproc::PyExprEvaluator;
+use goofi_core::node::Local;
+use goofi_runtime::python::inproc::PyExprEvaluator;
 use goofi_tests::{f32s, hex, j, number, Goofi, Viewer};
 use serde_json::Value;
 
@@ -565,7 +565,7 @@ fn written<'a>(writes: &'a [(String, Data)], name: &str) -> &'a Data {
 
 /// The number a write holds at `t`: a functional run, a plain frame as it is.
 fn value_at(ev: &PyExprEvaluator, d: &Data, t: f64) -> f64 {
-    goofi_core::control::number_of(&goofi_node::at(ev, d, t, (0.0, 1.0)).unwrap())
+    goofi_core::control::number_of(&goofi_core::node::at(ev, d, t, (0.0, 1.0)).unwrap())
 }
 
 #[test]

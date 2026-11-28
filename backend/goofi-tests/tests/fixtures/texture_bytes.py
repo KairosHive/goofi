@@ -1,9 +1,8 @@
-# goofi: graphics
 import goofi
 import numpy as np
 
 
-class TextureBytes(goofi.Node):
+class TextureBytes(goofi.GraphicsNode):
     """An 8-bit picture with no input: RGBA, or RGB where `alpha` is off.
 
     Blue says that the picture before this one left in device memory.

@@ -102,7 +102,7 @@ TASKS = {
 MODES = list(TASKS)
 
 
-class PoseEstimation(goofi.Node):
+class PoseEstimation(goofi.SignalNode):
     """Track a body, hands or a face in a picture, and how fast each point moves."""
 
     TAGS = ["analysis", "motion", "ml"]

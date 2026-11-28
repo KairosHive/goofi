@@ -1,0 +1,12 @@
+[package]
+name = "goofi-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# What a node file compiles against, and nothing an engine alone needs: every node build pays
+# for what is here.
+[dependencies]
+goofi-core = { path = "../goofi-core" }
+goofi-codec = { path = "../goofi-codec" }
+indexmap = "2"

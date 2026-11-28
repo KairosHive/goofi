@@ -96,7 +96,7 @@ test('save dialogs and axis presets keep the user in control', async ({ page }) 
 		const status = (await rawCall(page, 'session status')).result;
 		const source = path.join(status.workspace, 'nodes_signal', 'save_choice.py');
 		fs.mkdirSync(path.dirname(source), { recursive: true });
-		fs.writeFileSync(source, 'import goofi\nclass SaveChoice(goofi.Node):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n');
+		fs.writeFileSync(source, 'import goofi\nclass SaveChoice(goofi.SignalNode):\n    OUTPUTS = {"out": goofi.DataType.ARRAY}\n');
 		expect((await rawCall(page, 'library refresh')).error).toBeUndefined();
 		const custom = await addNode(page, 'SaveChoice', [300, 0]);
 		await selectNode(page, custom);

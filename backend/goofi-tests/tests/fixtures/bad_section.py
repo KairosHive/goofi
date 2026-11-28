@@ -1,7 +1,7 @@
 import goofi
 
 
-class BadSection(goofi.Node):
+class BadSection(goofi.SignalNode):
     """Declares one param name in two sections of a group."""
 
     OUTPUTS = {"out": goofi.DataType.ARRAY}

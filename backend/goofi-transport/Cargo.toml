@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
-goofi-node = { path = "../goofi-node" }
 
 # A `Wire` payload: one buffer, shared by every reader and forwarded to a socket uncopied.
 bytes = "1"

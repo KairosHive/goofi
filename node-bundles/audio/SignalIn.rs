@@ -1,10 +1,10 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Tag};
 
 const WAVEFORM: &[Show] = &[Show { param: "mode", any_of: &["waveform"] }];
 const OSCILLATOR: &[Show] = &[Show { param: "mode", any_of: &["oscillator"] }];
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     MODE = ParamDecl {
         doc: Some("the frame's samples looped until the next frame, or each column a sine: [n] Hz, or [2, n] Hz over phase"),
         ..ParamDecl::new("signal", "mode", ParamSpec::Str { default: "waveform", options: cross::PLAYBACK, refresh: false })
@@ -96,4 +96,4 @@ impl AudioNode for SignalIn {
     }
 }
 
-goofi_audio_sdk::export!(SignalIn, MANIFEST);
+goofi_sdk::audio::export!(SignalIn, MANIFEST);

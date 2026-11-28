@@ -210,7 +210,7 @@ def clamp(v, lo, hi):
     return min(max(float(v), lo), hi)
 
 
-class TextureTransfer(goofi.Node):
+class TextureTransfer(goofi.SignalNode):
     """Rebuild the picture from the material's pixels, where the mask says, by a whole-frame method."""
 
     TAGS = ["image", "transform"]

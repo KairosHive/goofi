@@ -2,23 +2,23 @@
 //! for the whole interpreter. Runs with `embed` and a free-threaded interpreter.
 
 use goofi_core::Data;
-use goofi_node::{Isolation, IsolationCell, ParamGroups, Params};
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, Outputs};
-use goofi_python::inproc::PyNode;
+use goofi_core::node::{Isolation, IsolationCell, ParamGroups, Params};
+use goofi_sdk::node::{Inputs, Node, NodeCtx, Outputs};
+use goofi_runtime::python::inproc::PyNode;
 use indexmap::IndexMap;
 
 /// A source node whose first `process` re-enables the GIL — and once on, it STAYS on.
 const SRC: &str = r#"
 import goofi, sys
 import numpy as np
-class Tripper(goofi.Node):
+class Tripper(goofi.SignalNode):
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     def process(self):
         sys._is_gil_enabled = lambda: True
         return {"out": (np.zeros(1, dtype=np.float32), {})}
 "#;
 
-fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_signal_sdk::NodeResult {
+fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_sdk::node::NodeResult {
     let inmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();
     let inp = Inputs::new(&inmap);
     let mut outmap: IndexMap<&'static str, Option<Data>> = IndexMap::new();
@@ -31,7 +31,7 @@ fn tick(node: &mut PyNode, params: &ParamGroups) -> goofi_signal_sdk::NodeResult
 #[test]
 fn a_serialized_interpreter_is_reported_every_tick_and_demotes_its_type() {
     // This binary hosts the interpreter itself, so it hands it its venv as the product does.
-    goofi_python::inproc::configure_embedded();
+    goofi_runtime::python::inproc::configure_embedded();
     let p = ParamGroups::new();
     // The tier a registry would hold for this type: routed nodes read it at every build, so writing
     // it is the whole re-route.

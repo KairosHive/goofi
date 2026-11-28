@@ -2,7 +2,7 @@
 //! labels with it; a re-cut cannot, because the entries it makes are not the entries it was given.
 
 use goofi_core::{Axes, Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Reshape;
@@ -153,4 +153,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Reshape, MANIFEST);
+goofi_sdk::signal::export!(Reshape, MANIFEST);

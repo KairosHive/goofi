@@ -5,7 +5,7 @@
 use std::sync::OnceLock;
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show, SlotDecl, Tag};
 
 const G: &str = "vectorize";
 const REGIONS: Show = Show { param: "mode", any_of: &["regions"] };
@@ -2391,4 +2391,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Vectorize, MANIFEST);
+goofi_sdk::signal::export!(Vectorize, MANIFEST);

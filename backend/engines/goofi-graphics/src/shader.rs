@@ -1,0 +1,239 @@
+//! A `.wgsl` node file: the header block that IS its manifest, the prelude the engine appends,
+//! and naga's verdict on the two together.
+
+use std::sync::atomic::AtomicU64;
+
+use goofi_core::probe::Introspection;
+use goofi_core::SlotType;
+use goofi_core::node::{NodeManifest, ParamDecl, ParamSpec, Role};
+
+/// The names the prelude declares. A header that takes one is refused, rather than shadowing it.
+const RESERVED: &[&str] =
+    &["time", "frame", "resolution", "samp", "p", "Params", "Vs", "vs", "fs", "shade", "Frag",
+      "goofi_geo_texel", "goofi_geo_uint", "goofi_geo_header", "goofi_geo_valid", "goofi_geo_field"];
+
+/// The one output every graphics node has.
+const OUT: &str = "out";
+
+/// Every input that arrives as a FRAME rather than as a stage of this engine's own plan, in the
+/// order their uploads are numbered. What a frame's own range is carried against.
+pub fn array_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_ {
+    m.inputs.iter().filter(|s| s.kind != SlotType::Texture).map(|s| s.name)
+}
+
+/// Every TEXTURE input. A wire from another engine feeds one as a frame, and its upload is
+/// numbered after the ARRAY inputs'.
+pub fn texture_inputs(m: &NodeManifest) -> impl Iterator<Item = &'static str> + '_ {
+    m.inputs.iter().filter(|s| s.kind == SlotType::Texture).map(|s| s.name)
+}
+
+/// The fields the engine adds to `Params` for one ARRAY input: the range its last frame spanned,
+/// which a body cannot reduce for itself, how many channels the frame had, and the power of two
+/// the texels and the range are both over, so a frame past the half floats still fits.
+fn range_fields(input: &str) -> [String; 4] {
+    [format!("{input}_lo"), format!("{input}_hi"), format!("{input}_channels"), format!("{input}_scale")]
+}
+
+/// The texture bound beside one ARRAY input: where each channel of the frame's first axis sits
+/// on the 10-20 head, `(x, y, known, 0)` per channel, or the blank texel for unnamed channels.
+fn layout_name(input: &str) -> String {
+    format!("{input}_layout")
+}
+
+/// A shader's header as its whole declaration: the one output added, and every name checked
+/// against the prelude's.
+pub fn complete(header: &Introspection) -> Result<Introspection, String> {
+    let mut intro = header.clone();
+    if !intro.outputs.is_empty() {
+        return Err("the header lists outputs; a graphics node has the one output `out`".into());
+    }
+    intro.outputs.push(goofi_core::probe::OutSlot { name: OUT.to_string(), kind: SlotType::Texture.name().to_string() });
+    for s in &intro.inputs {
+        // A TEXTURE is a stage of this engine's own plan; everything else arrives as a frame and
+        // is uploaded, which is what makes a crossing declare the plane it crosses FROM.
+        match SlotType::from_name(&s.kind) {
+            Some(SlotType::Texture | SlotType::Array | SlotType::Audio) => {}
+            _ => return Err(format!(
+                "input `{}` is `{}`; a graphics input is TEXTURE, ARRAY or AUDIO", s.name, s.kind
+            )),
+        }
+    }
+    let mut taken: Vec<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
+    for buffer in &intro.state {
+        if !goofi_core::variables::is_valid_name(buffer) {
+            return Err(format!("state buffer `{buffer}`: a letter, then letters or digits"));
+        }
+        if taken.contains(buffer) {
+            return Err(format!("state buffer `{buffer}` is already a name in this file"));
+        }
+        taken.push(buffer.clone());
+        taken.push(writer(buffer));
+    }
+    for input in &intro.inputs {
+        if SlotType::from_name(&input.kind) != Some(SlotType::Texture) {
+            taken.extend(range_fields(&input.name));
+            taken.push(layout_name(&input.name));
+        }
+    }
+    let clash = intro
+        .inputs
+        .iter()
+        .map(|s| &s.name)
+        .chain(intro.params.iter().map(|p| &p.name))
+        .find(|n| taken.contains(n));
+    if let Some(name) = clash {
+        return Err(format!("`{name}` is the prelude's; choose another name"));
+    }
+    // A graphics node with neither a texture nor a frame behind it makes its own frames, so it
+    // takes the patch's default size rather than following anything.
+    intro.producer = !intro.inputs.iter().any(|s| {
+        matches!(SlotType::from_name(&s.kind), Some(SlotType::Texture | SlotType::Array))
+    });
+    Ok(intro)
+}
+
+/// The function a body writes to fill one state buffer; the buffer's own name reads what the last
+/// tick left there.
+pub fn writer(buffer: &str) -> String {
+    format!("next_{buffer}")
+}
+
+fn wgsl_type(spec: &ParamSpec) -> String {
+    match spec {
+        ParamSpec::Num { default, int, .. } => match (default.len(), int) {
+            (0 | 1, false) => "f32".into(),
+            (0 | 1, true) => "i32".into(),
+            (n, false) => format!("vec{n}f"),
+            (n, true) => format!("vec{n}i"),
+        },
+        ParamSpec::Bool { .. } | ParamSpec::Str { .. } | ParamSpec::Pulse => "u32".into(),
+    }
+}
+
+/// A param's size and alignment in the storage layout: a scalar 4, a vec2 8, a vec3 or vec4 16.
+fn layout(spec: &ParamSpec) -> (usize, usize) {
+    let n = match spec {
+        ParamSpec::Num { default, .. } => default.len().max(1),
+        _ => 1,
+    };
+    (n * 4, match n { 1 => 4, 2 => 8, _ => 16 })
+}
+
+/// What the engine appends after the file: the bindings a body reads, and the stages that call it.
+/// `uv` is (0, 0) at the TOP-left, WGSL's own texture space.
+pub fn prelude(manifest: &NodeManifest, state: &[String]) -> String {
+    let mut s = String::from(
+        "\n@group(0) @binding(0) var<uniform> time: f32;\n\
+         @group(0) @binding(1) var<uniform> resolution: vec2f;\n\
+         @group(0) @binding(2) var samp: sampler;\n",
+    );
+    s.push_str(include_str!("geometry.wgsl"));
+    let ranges: Vec<String> = array_inputs(manifest).flat_map(range_fields).collect();
+    if !manifest.params.is_empty() || !ranges.is_empty() {
+        s.push_str("struct Params {\n");
+        for d in manifest.params {
+            // A list is one array field, declared where its first slot stands.
+            match d.role {
+                Some(Role::Member { section, base, slot: Some(0) }) => {
+                    s.push_str(&format!("    {base}: array<{}, {}>,\n", wgsl_type(&d.spec), slots(manifest.params, section, base)));
+                }
+                Some(Role::Member { slot: Some(_), .. }) => {}
+                _ => s.push_str(&format!("    {}: {},\n", d.name, wgsl_type(&d.spec))),
+            }
+        }
+        for field in &ranges {
+            s.push_str(&format!("    {field}: f32,\n"));
+        }
+        s.push_str("}\n@group(0) @binding(3) var<storage, read> p: Params;\n");
+    }
+    s.push_str("@group(0) @binding(4) var<uniform> frame: u32;\n");
+    for (i, input) in manifest.inputs.iter().enumerate() {
+        s.push_str(&format!("@group(1) @binding({i}) var {}: texture_2d<f32>;\n", input.name));
+    }
+    for (k, input) in array_inputs(manifest).enumerate() {
+        s.push_str(&format!("@group(1) @binding({}) var {}: texture_2d<f32>;\n", manifest.inputs.len() + k, layout_name(input)));
+    }
+    // A state buffer reads as the LAST tick left it and is written through its own function, so
+    // the two never name one thing.
+    for (i, buffer) in state.iter().enumerate() {
+        s.push_str(&format!("@group(2) @binding({i}) var {buffer}: texture_2d<f32>;\n"));
+    }
+    s.push_str("struct Frag {\n    @location(0) colour: vec4f,\n");
+    for (i, buffer) in state.iter().enumerate() {
+        s.push_str(&format!("    @location({}) {buffer}: vec4f,\n", i + 1));
+    }
+    s.push_str(
+        "}\n\
+         struct Vs { @builtin(position) pos: vec4f, @location(0) uv: vec2f }\n\
+         @vertex fn vs(@builtin(vertex_index) i: u32) -> Vs {\n\
+         \x20   let x = f32(i32(i & 1u) * 4 - 1);\n\
+         \x20   let y = f32(i32(i & 2u) * 2 - 1);\n\
+         \x20   var o: Vs;\n\
+         \x20   o.pos = vec4f(x, y, 0.0, 1.0);\n\
+         \x20   o.uv = vec2f((x + 1.0) * 0.5, (1.0 - y) * 0.5);\n\
+         \x20   return o;\n\
+         }\n\
+         @fragment fn fs(v: Vs) -> Frag {\n\
+         \x20   var o: Frag;\n\
+         \x20   o.colour = shade(v.uv);\n",
+    );
+    for buffer in state {
+        s.push_str(&format!("    o.{buffer} = {}(v.uv);\n", writer(buffer)));
+    }
+    s.push_str("    return o;\n}\n");
+    s
+}
+
+/// naga's verdict on the file plus its prelude, with the line and column in it.
+pub fn validate(full: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(full).map_err(|e| e.emit_to_string(full))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
+        .validate(&module)
+        .map(|_| ())
+        .map_err(|e| e.emit_to_string(full))
+}
+
+/// How many slots the list `section.base` keeps: the length of its array field.
+fn slots(decls: &[ParamDecl], section: &str, base: &str) -> usize {
+    decls.iter().filter(|d| matches!(d.role, Some(Role::Member { section: s, base: b, slot: Some(_) }) if s == section && b == base)).count()
+}
+
+/// One stage's `Params` buffer in WGSL's storage layout: each declared param at its alignment,
+/// a vector's dimensions in a row, a list as an array of them where its first slot stands, then
+/// the range, channel count and scale of each ARRAY input's last frame, padded to 16.
+pub fn uniform_bytes(decls: &[ParamDecl], atomics: &[AtomicU64], ranges: &[[f32; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity((decls.len() + ranges.len() * 4) * 4 + 16);
+    let mut arrays: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
+    for (i, d) in decls.iter().enumerate() {
+        let (size, align) = layout(&d.spec);
+        let stride = size.next_multiple_of(align);
+        let at = match d.role {
+            Some(Role::Member { section, base, slot: Some(slot) }) => {
+                let start = *arrays.entry((section, base)).or_insert_with(|| {
+                    let start = out.len().next_multiple_of(align);
+                    out.resize(start + stride * slots(decls, section, base), 0);
+                    start
+                });
+                start + stride * slot as usize
+            }
+            _ => {
+                let start = out.len().next_multiple_of(align);
+                out.resize(start + size, 0);
+                start
+            }
+        };
+        for (k, v) in goofi_runtime::dims(atomics, decls, i).into_iter().enumerate() {
+            let bytes = match d.spec {
+                ParamSpec::Num { int: false, .. } => (v as f32).to_le_bytes(),
+                ParamSpec::Num { int: true, .. } => (v.round() as i32).to_le_bytes(),
+                _ => (v.round().max(0.0) as u32).to_le_bytes(),
+            };
+            out[at + 4 * k..at + 4 * k + 4].copy_from_slice(&bytes);
+        }
+    }
+    for field in ranges.iter().flatten() {
+        out.extend_from_slice(&field.to_le_bytes());
+    }
+    out.resize(out.len().next_multiple_of(16), 0);
+    out
+}

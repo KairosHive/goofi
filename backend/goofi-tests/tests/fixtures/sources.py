@@ -1,7 +1,7 @@
 import goofi
 
 
-class Sources(goofi.Node):
+class Sources(goofi.SignalNode):
     """Names the senders on its multi slot."""
 
     INPUTS = {"input": goofi.InputSlot(goofi.DataType.ARRAY, multi=True)}

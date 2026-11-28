@@ -3,7 +3,7 @@
 //! batch as one undo step per actor, and the raw read round-tripped through NPY. The spawned
 //! binary's argv-to-process path is e2e's.
 
-use goofi_client as client;
+use goofi_cli::client;
 use goofi_supervisor::session;
 use goofi_tests::Goofi;
 

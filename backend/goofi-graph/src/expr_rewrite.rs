@@ -5,8 +5,8 @@
 //! instead: there `me` is the playhead and `sm('A')` a state or a playhead, each a record Python
 //! reads by attribute.
 
-use goofi_node::expr::is_ident;
-use goofi_node::ExprError;
+use goofi_core::node::expr::is_ident;
+use goofi_core::node::ExprError;
 
 /// One variable of a rewritten expression, before the graph resolves it to a service or a value.
 #[derive(Clone, Debug, PartialEq)]
@@ -79,7 +79,7 @@ fn path_after(source: &str, end: usize, head: &str) -> Result<Path, ExprError> {
 
 /// Every `nd(..)` term of `source` as a node reference: the single output, a slot or a param.
 fn node_terms(source: &str, terms: &mut Vec<Term>) -> Result<(), ExprError> {
-    for call in goofi_node::expr::scan_calls(source, "nd") {
+    for call in goofi_core::node::expr::scan_calls(source, "nd") {
         // `nd('')` names nothing however it is spelled, so this precedes the unclosed-call check.
         if call.name.is_empty() {
             return Err(ExprError("nd() needs a node name".to_string()));
@@ -103,12 +103,12 @@ fn node_terms(source: &str, terms: &mut Vec<Term>) -> Result<(), ExprError> {
 }
 
 /// One `sm(..)` call and, where one follows, the element after it with where it ends.
-type MachineCall<'a> = (goofi_node::expr::Call<'a>, Option<(&'a str, usize)>);
+type MachineCall<'a> = (goofi_core::node::expr::Call<'a>, Option<(&'a str, usize)>);
 
 /// Every `sm(..)` call of `source` with its name and, where one follows, the element after it.
 fn machine_calls(source: &str) -> Result<Vec<MachineCall<'_>>, ExprError> {
     let mut out = Vec::new();
-    for call in goofi_node::expr::scan_calls(source, "sm") {
+    for call in goofi_core::node::expr::scan_calls(source, "sm") {
         if call.name.is_empty() {
             return Err(ExprError("sm() needs a state's or a playhead's name".to_string()));
         }
@@ -135,7 +135,7 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start: call.start, end: at, target: Target::PlayheadField { playhead: call.name.to_string(), field: field.to_string() } });
     }
-    for (start, end) in goofi_node::expr::scan_me(source) {
+    for (start, end) in goofi_core::node::expr::scan_me(source) {
         let target = match path_after(source, end, "me")? {
             Path::Bare { end: at } => (at, Target::MeOut { slot: None }),
             Path::Out { slot, end: at } => (at, Target::MeOut { slot: Some(slot) }),
@@ -143,7 +143,7 @@ pub fn rewrite(source: &str) -> Result<(String, Vec<VarRef>), ExprError> {
         };
         terms.push(Term { start, end: target.0, target: target.1 });
     }
-    for read in goofi_node::expr::scan_variables(source) {
+    for read in goofi_core::node::expr::scan_variables(source) {
         terms.push(Term {
             start: read.start,
             end: read.end,
@@ -162,10 +162,10 @@ pub fn rewrite_machine(source: &str) -> Result<(String, Vec<VarRef>), ExprError>
         let Some(end) = call.end else { continue };
         terms.push(Term { start: call.start, end, target: Target::State { name: call.name.to_string() } });
     }
-    for (start, end) in goofi_node::expr::scan_me(source) {
+    for (start, end) in goofi_core::node::expr::scan_me(source) {
         terms.push(Term { start, end, target: Target::Playhead });
     }
-    for read in goofi_node::expr::scan_variables(source) {
+    for read in goofi_core::node::expr::scan_variables(source) {
         terms.push(Term { start: read.start, end: read.end, target: Target::Variable { key: read.name.to_string() } });
     }
     Ok(generate(source, terms))
@@ -217,7 +217,7 @@ pub fn rename_refs(
     rename: impl Fn(&str, Option<&str>) -> (Option<String>, Option<String>),
 ) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for call in goofi_node::expr::scan_calls(source, "nd") {
+    for call in goofi_core::node::expr::scan_calls(source, "nd") {
         let slot = call
             .end
             .and_then(|end| path_after(source, end, "").ok())
@@ -240,7 +240,7 @@ pub fn rename_refs(
 /// `vars.<group>.<element>`, or `sm('<playhead>').<element>` where the playhead's group is the one.
 pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for read in goofi_node::expr::scan_variables(source) {
+    for read in goofi_core::node::expr::scan_variables(source) {
         if let Some(to) = rename(read.name) {
             edits.push((read.end - read.name.len(), read.end, to));
         }
@@ -257,7 +257,7 @@ pub fn rename_variables(source: &str, rename: impl Fn(&str) -> Option<String>) -
 
 /// Rewrite the `sm('name')` terms `rename` answers for, leaving every other byte alone.
 pub fn rename_states(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let edits = goofi_node::expr::scan_calls(source, "sm")
+    let edits = goofi_core::node::expr::scan_calls(source, "sm")
         .into_iter()
         .filter_map(|call| Some((call.name_start, call.name_end, rename(call.name)?)))
         .collect();
@@ -267,7 +267,7 @@ pub fn rename_states(source: &str, rename: impl Fn(&str) -> Option<String>) -> O
 /// Rewrite the `me.<field>` terms `rename` answers for, leaving every other byte alone: a
 /// playhead's attribute reads under its name.
 pub fn rename_me_fields(source: &str, rename: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let edits = goofi_node::expr::scan_me(source)
+    let edits = goofi_core::node::expr::scan_me(source)
         .into_iter()
         .filter_map(|(_, end)| {
             let (field, at) = ident_after(source, end)?;
@@ -293,7 +293,7 @@ fn splice(source: &str, mut edits: Vec<(usize, usize, String)>) -> Option<String
 /// Whether a rewritten expression is BARE: exactly one target with an optional flat index, which
 /// an engine reads in Rust and never hands the interpreter. The one owner of that predicate.
 pub fn is_bare(rewritten: &str) -> bool {
-    let Ok((var, _)) = goofi_node::mailbox::split_index(rewritten.trim()) else { return false };
+    let Ok((var, _)) = goofi_core::node::mailbox::split_index(rewritten.trim()) else { return false };
     var.strip_prefix("__v").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 

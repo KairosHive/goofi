@@ -23,7 +23,7 @@ Declare a `TEXTURE` output and return `goofi.Texture(pixels)` from `process`:
 import goofi
 import numpy as np
 
-class Image(goofi.Node):
+class Image(goofi.SignalNode):
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
     PRODUCER = True
 
@@ -39,7 +39,7 @@ contiguous. Dimensions must be within 1 through 8192.
 Return `(goofi.Texture(pixels), {"sfreq": fps})` to state the frame rate. The recorder files an
 armed texture output as video at that rate, and refuses a texture that states none.
 
-In Rust, use `goofi_signal_sdk` and declare a `SlotType::Texture` output:
+In Rust, use `goofi_sdk::signal` and declare a `SlotType::Texture` output:
 
 ```rust
 let pixels = Pixels {
@@ -107,14 +107,13 @@ In Python, a picture has three forms, and each one converts to each other one:
 
 ## A Python node the graphics tick calls
 
-Put `# goofi: graphics` on the first line of a Python file in `nodes_graphics/`. The node is a
-stage of the render plan, as a shader is:
+Derive `goofi.GraphicsNode` in a Python file, or end a Rust file with
+`goofi_sdk::graphics::export!`. The node is a stage of the render plan, as a shader is:
 
 ```python
-# goofi: graphics
 import goofi
 
-class Invert(goofi.Node):
+class Invert(goofi.GraphicsNode):
     INPUTS = {'image': goofi.InputSlot(goofi.DataType.TEXTURE)}
     OUTPUTS = {'out': goofi.DataType.TEXTURE}
 
@@ -163,6 +162,3 @@ works on the CPU where it does not:
   last picture stays.
 - The node runs in a child process of the subprocess interpreter. Load a model in `setup`: the
   tick passes the stage by until `setup` is done.
-
-A Rust file against `goofi_graphics_sdk` is refused: that name is kept for a Rust node the tick
-calls (`roadmap/texture-plane.md`).

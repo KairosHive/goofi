@@ -10,22 +10,23 @@ license.workspace = true
 goofi-init = { path = "../goofi-init" }
 # The node pipeline, run here over the shipped folders so the artifacts ship inside the binary.
 goofi-build = { path = "../goofi-build" }
-goofi-node = { path = "../goofi-node" }
 # Where the pipeline's output goes: the same runtime a goofi from this build reads.
 goofi-supervisor = { path = "../goofi-supervisor" }
 
 [dependencies]
+goofi-runtime = { path = "../goofi-runtime" }
+# The paint pad's raster.
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 goofi-supervisor = { path = "../goofi-supervisor" }
-goofi-audio = { path = "../audio/goofi-audio" }
+goofi-audio = { path = "../engines/goofi-audio" }
 goofi-window = { path = "../goofi-window" }
-goofi-graphics = { path = "../graphics/goofi-graphics" }
+goofi-graphics = { path = "../engines/goofi-graphics" }
 goofi-core = { path = "../goofi-core" }
 goofi-codec = { path = "../goofi-codec" }
-goofi-node = { path = "../goofi-node" }
 goofi-graph = { path = "../goofi-graph" }
 goofi-record = { path = "../goofi-record" }
-goofi-signal = { path = "../signal/goofi-signal" }
-goofi-signal-sdk = { path = "../signal/goofi-signal-sdk" }
+goofi-signal = { path = "../engines/goofi-signal" }
+goofi-sdk = { path = "../goofi-sdk" }
 goofi-transport = { path = "../goofi-transport" }
 # The harness plane the agent ops and `/term` are doors onto.
 goofi-agent = { path = "../goofi-agent" }
@@ -33,7 +34,6 @@ goofi-agent = { path = "../goofi-agent" }
 goofi-build = { path = "../goofi-build" }
 # The uv a plugin's backend environment is synced with.
 goofi-init = { path = "../goofi-init" }
-goofi-view = { path = "../goofi-view" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 futures-util = "0.3"

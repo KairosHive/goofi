@@ -1,12 +1,12 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{timing, Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Show, SlotDecl, Lanes, Tag, BLOCK};
 
 const SECONDS: Show = Show { param: "unit", any_of: &["seconds"] };
 const BEATS: Show = Show { param: "unit", any_of: &["beats"] };
 const DIVISION: Show = Show { param: "unit", any_of: &["division"] };
 const TEMPO: Show = Show { param: "unit", any_of: &["beats", "division"] };
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     UNIT = timing::unit("delay", "unit"),
     TIME = timing::in_seconds("delay", "time", &SECONDS, &[0.25], 5.0, "seconds behind the input; move it while it sounds and the echoes bend with it"),
     BEATS = timing::in_beats("delay", "beats", &BEATS, &[1.0], 16.0),
@@ -95,4 +95,4 @@ impl AudioNode for Delay {
     }
 }
 
-goofi_audio_sdk::export!(Delay, MANIFEST);
+goofi_sdk::audio::export!(Delay, MANIFEST);

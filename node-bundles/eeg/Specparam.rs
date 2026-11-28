@@ -3,7 +3,7 @@
 //! `Psd` frame it takes: `[.., F]` with the frequencies on its last axis.
 
 use goofi_core::{stream, Axes, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// specparam's private settings, at their defaults.
 const AP_PERCENTILE_THRESH: f64 = 0.025;
@@ -871,4 +871,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Specparam, MANIFEST);
+goofi_sdk::signal::export!(Specparam, MANIFEST);

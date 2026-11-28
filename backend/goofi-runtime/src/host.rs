@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use goofi_core::{Data, MetaValue, Param};
-use goofi_host_sdk::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
-use goofi_node::{NodeManifest, NodeStage, ParamDecl, ParamGroups, ParamKey, Params};
+use goofi_sdk::node::{Inputs, Node, NodeCtx, NodeError, NodeResult, Outputs};
+use goofi_core::node::{NodeManifest, NodeStage, ParamDecl, ParamGroups, ParamKey, Params};
 use indexmap::IndexMap;
 
 use crate::{Cx, Executor, Fault, Out, RunPolicy, Ticked, COMMON};
@@ -24,7 +24,7 @@ const UFREQ_EMA_ALPHA: f64 = 0.2;
 pub type NodeBuild = Box<dyn FnOnce(&ParamGroups) -> Box<dyn Node> + Send>;
 
 fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(goofi_node::panic_message)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(goofi_core::node::panic_message)
 }
 
 fn fold_panic(panicked: String) -> NodeResult {
@@ -184,7 +184,7 @@ impl HostExecutor {
 
     /// The present frames on each `multi` slot, in wire order — absent wires dropped, so a node
     /// sees only the frames that actually arrived.
-    fn materialize_multis(&self) -> goofi_host_sdk::MultiFrames {
+    fn materialize_multis(&self) -> goofi_sdk::node::MultiFrames {
         self.multi_wires
             .iter()
             .map(|(slot, cells)| {

@@ -22,7 +22,7 @@ import numpy as np
 import goofi
 
 
-class RhythmPlayer(goofi.Node):
+class RhythmPlayer(goofi.SignalNode):
     """Walk a rhythm pattern at a tempo and emit its gates.
 
     Inputs:

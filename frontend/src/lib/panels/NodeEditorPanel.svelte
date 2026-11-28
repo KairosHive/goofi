@@ -1,7 +1,7 @@
 <!-- Node-editor panel: the SvelteFlow graph and its gestures. Each instance owns its viewport, and
      its keyboard shortcuts act only while it is the active panel; app-global ones live in AppShell. -->
 <script lang="ts">
-	import { ControlButton, ViewportPortal, type Connection, type Edge, type FitViewOptions, type Node, type Viewport } from '@xyflow/svelte';
+	import { ControlButton, Position, ViewportPortal, getBezierPath, type Connection, type Edge, type FitViewOptions, type Node, type Viewport } from '@xyflow/svelte';
 	import GoofiNode from '$lib/editor/GoofiNode.svelte';
 	import AddNodeMenu from '$lib/editor/AddNodeMenu.svelte';
 	import PlacementPreview from '$lib/editor/PlacementPreview.svelte';
@@ -17,6 +17,9 @@
 	import { notify } from '$lib/stores/notify.svelte';
 	import { ui, slotKey, type SlotClickSeed } from '$lib/stores/ui.svelte';
 	import { seedSlot } from '$lib/editor/seedSlot';
+	import * as rewire from '$lib/editor/rewire';
+	import type { Cable, Edit, End } from '$lib/editor/rewire';
+	import SlotPicker from '$lib/editor/SlotPicker.svelte';
 	import { bareName } from '$lib/editor/typeId';
 	import { selection } from '$lib/stores/selection.svelte';
 	import { workspace } from 'panelty';
@@ -321,6 +324,9 @@
 				sourceHandle: src.handle,
 				target: dst.node,
 				targetHandle: dst.handle,
+				class: glow?.id === id ? (glow.convert ? 'cable-drop convert' : 'cable-drop') : undefined,
+				// An unplugged cable is drawn by its preview, from its fixed end to the pointer.
+				hidden: unplug?.ids.has(id),
 				selected: boxSelecting ? (previous.get(id)?.selected ?? false) : sel.edges(panelId).has(id),
 				animated: false
 			});
@@ -389,25 +395,141 @@
 		sel.clickEdge(panelId, args.edge.id, e.shiftKey || e.ctrlKey || e.metaKey);
 	}
 
+	/** The end a drawn handle names: a slot of the record its card draws, with its kind. */
+	function endAt(node: string, slot: string | null | undefined, side: 'source' | 'target'): End | null {
+		const n = g.nodeById(node);
+		const dtype = slot ? (side === 'source' ? n?.output_slots : n?.input_slots)?.[slot] : undefined;
+		return slot && dtype ? { node, slot, dtype } : null;
+	}
+
+	function cableOf(e: Edge): Cable | null {
+		const from = endAt(e.source, e.sourceHandle, 'source');
+		const to = endAt(e.target, e.targetHandle, 'target');
+		return from && to ? { from, to } : null;
+	}
+
+	/** Every cable this canvas draws. */
+	const cables = (): Cable[] => flowEdges.map(cableOf).filter((c): c is Cable => c !== null);
+	const types = (): NodeTypeInfo[] => g.nodeTypes ?? [];
+
+	type Side = 'source' | 'target';
+
+	/** The slot under a viewport point, by the handle that takes the pointer there. */
+	function handleAt(p: Point): { node: string; slot: string; side: Side } | null {
+		const h = document.elementFromPoint(p.x, p.y)?.closest('.svelte-flow__handle');
+		const node = h?.getAttribute('data-nodeid');
+		const slot = h?.getAttribute('data-handleid');
+		if (!h || !node || !slot || !rootEl?.contains(h)) return null;
+		return { node, slot, side: h.classList.contains('source') ? 'source' : 'target' };
+	}
+
+	/** The topmost cable under a viewport point that `skip` does not rule out. */
+	function cableAt(p: Point, skip: (c: Cable) => boolean): { id: string; cable: Cable } | null {
+		for (const el of document.elementsFromPoint(p.x, p.y)) {
+			const id = rootEl?.contains(el) ? el.closest('.svelte-flow__edge')?.getAttribute('data-id') : null;
+			const edge = id ? flowEdges.find((e) => e.id === id) : undefined;
+			const cable = edge ? cableOf(edge) : null;
+			if (edge && cable && !skip(cable)) return { id: edge.id, cable };
+		}
+		return null;
+	}
+
+	/** Where a handle sits, in flow space. */
+	function handlePoint(end: End, side: Side): Point | null {
+		const h = rootEl?.querySelector(`.svelte-flow__handle.${side}[data-nodeid="${CSS.escape(end.node)}"][data-handleid="${CSS.escape(end.slot)}"]`);
+		const r = h?.getBoundingClientRect();
+		return r && screenToFlow ? screenToFlow({ x: r.left, y: r.top }) : null;
+	}
+
+	/** What a release over the lit cable does: the plan, and the node an insert puts into it. */
+	interface CableDrop {
+		id: string;
+		label: string;
+		edits: Edit[];
+		insert?: { cable: Cable; input: End; output: End; many: boolean };
+	}
+	let drop: CableDrop | null = null;
+	// The cable a drag is over, and whether a release there places a converter: the glow's colour.
+	let glow = $state.raw<{ id: string; convert: boolean } | null>(null);
+
+	function setDrop(next: CableDrop | null): void {
+		drop = next;
+		const convert = next ? rewire.converts(next.edits) : false;
+		if (next?.id !== glow?.id || convert !== (glow?.convert ?? false)) glow = next ? { id: next.id, convert } : null;
+	}
+
+	/** Run a plan in `step`, and answer the converter each added wire was given, null for a bare one. */
+	async function applyEdits(edits: Edit[], step: Step): Promise<(string | null)[]> {
+		const made: (string | null)[] = [];
+		for (const e of edits) {
+			if (e.op === 'remove') {
+				await g.removeLink(e.link, step);
+				continue;
+			}
+			if (!e.via) {
+				await g.addLink(e.link, step);
+				made.push(null);
+				continue;
+			}
+			const uid = await g.addNode(e.via.type, between(e.link.node_out, e.link.node_in), entered ?? undefined, step);
+			await g.addLink({ node_out: e.link.node_out, slot_out: e.link.slot_out, node_in: uid, slot_in: e.via.input }, step);
+			await g.addLink({ node_out: uid, slot_out: e.via.output, node_in: e.link.node_in, slot_in: e.link.slot_in }, step);
+			made.push(uid);
+		}
+		return made;
+	}
+
+	/** The grid point halfway between two cards: where a converter between them is born. */
+	function between(a: string, b: string): [number, number] | undefined {
+		const at = (uid: string) => flowNodes.find((n) => n.id === uid)?.position;
+		const p = at(a);
+		const q = at(b);
+		if (!p || !q) return undefined;
+		return [Math.round((p.x + q.x) / 2 / GRID) * GRID, Math.round((p.y + q.y) / 2 / GRID) * GRID];
+	}
+
+	/** Run a plan as one undo step; a refusal says so, and the rebuild redraws what the patch holds. */
+	function rewireNow(label: string, edits: Edit[]): void {
+		void history()
+			.transaction(label, (step) => applyEdits(edits, step))
+			.catch((e) => {
+				notify().failure(label, e);
+				reconcileTick++;
+			});
+	}
+
 	// Input names, revealed by proximity while a cable is in flight. The anchors are snapshotted
 	// ONCE per drag in FLOW space, so a canvas that pans or zooms mid-drag needs no invalidation.
 	let cableAnchors: SlotAnchor[] = [];
+	// The slot a cable in flight was pulled from.
+	let cableFrom: { end: End; side: Side } | null = null;
 
 	function publishCableNear(next: ReadonlySet<string>): void {
 		if (!sameKeys(next, uiStore.cableNear)) uiStore.cableNear = next; // an equal set invalidates no node
 	}
 
-	function onCableMove(e: PointerEvent): void {
+	function nameNear(p: Point): void {
 		const toFlow = screenToFlow;
 		if (!toFlow || cableAnchors.length === 0) return;
 		const zoom = getViewport?.().zoom ?? 1;
 		// The radius is a SCREEN distance, so it is converted into flow space, not the anchors out.
-		publishCableNear(
-			nearSlots(cableAnchors, toFlow({ x: e.clientX, y: e.clientY }), SLOT_PROXIMITY_PX / zoom)
-		);
+		publishCableNear(nearSlots(cableAnchors, toFlow(p), SLOT_PROXIMITY_PX / zoom));
 	}
 
-	function onCableStart(): void {
+	const sameSlot = (a: { node: string; slot: string }, b: { node: string; slot: string }): boolean => a.node === b.node && a.slot === b.slot;
+
+	function onCableMove(e: PointerEvent): void {
+		const p = { x: e.clientX, y: e.clientY };
+		nameNear(p);
+		const from = cableFrom;
+		if (!from) return;
+		// Over a slot the release is that slot's; a cable the dragged slot already holds is no target.
+		const hit = handleAt(p) ? null : cableAt(p, (c) => sameSlot(from.side === 'source' ? c.from : c.to, from.end));
+		const edits = hit && rewire.replaceEdits(types(), hit.cable, from.end, from.side);
+		setDrop(hit && edits ? { id: hit.id, label: 'Replace cable', edits } : null);
+	}
+
+	function armNames(): void {
 		cableAnchors = inputAnchors(
 			flowNodes.map((f) => {
 				const n = f.data.node as NodeInstanceInfo;
@@ -416,6 +538,12 @@
 			slotKey
 		);
 		publishCableNear(new Set());
+	}
+
+	function onCableStart(from: { nodeId: string | null; handleId: string | null; handleType: Side | null } | null): void {
+		armNames();
+		const end = from?.nodeId && from.handleType ? endAt(from.nodeId, from.handleId, from.handleType) : null;
+		cableFrom = end && from?.handleType ? { end, side: from.handleType } : null;
 		// On `window`, not the panel: a cable dragged past the panel's edge is still in flight.
 		window.addEventListener('pointermove', onCableMove);
 	}
@@ -423,7 +551,216 @@
 	function onCableEnd(): void {
 		window.removeEventListener('pointermove', onCableMove);
 		cableAnchors = [];
+		cableFrom = null;
+		setDrop(null);
 		publishCableNear(new Set());
+	}
+
+	/** A cable let go where Flow made no connection: on a sibling slot it swaps the two slots'
+	 * cables, and on a lit cable it replaces that cable. */
+	function onConnectEnd(event: MouseEvent | TouchEvent, state: { isValid: boolean | null; toHandle: unknown }): void {
+		const from = cableFrom;
+		const plan = drop;
+		onCableEnd();
+		if (!from || (state.isValid && state.toHandle)) return;
+		const at = eventPoint(event);
+		const h = at ? handleAt({ x: at.clientX, y: at.clientY }) : null;
+		const sibling = h && h.node === from.end.node && h.side === from.side && h.slot !== from.end.slot ? endAt(h.node, h.slot, h.side) : null;
+		if (sibling) swapSlots(from.side, from.end, sibling);
+		else if (plan && !h) rewireNow(plan.label, plan.edits);
+	}
+
+	function swapSlots(side: Side, a: End, b: End): void {
+		const all = cables();
+		if (rewire.cablesAt(all, side, a).length + rewire.cablesAt(all, side, b).length === 0) return;
+		const edits = rewire.swapEdits(all, side, a, b);
+		if (edits) rewireNow('Swap cables', edits);
+		else notify().failure('Swap cables', 'the slots carry different data types');
+	}
+
+	// Ctrl-drag on a slot: its cables come off it and follow the pointer by their loose ends.
+	let unplug = $state.raw<{ side: Side; at: End; moved: Cable[]; ids: Set<string>; anchors: Point[] } | null>(null);
+	let unplugTo = $state.raw<Point>({ x: 0, y: 0 });
+
+	/** The preview of each unplugged cable: from its fixed end to the pointer. */
+	const unplugPaths = $derived(
+		(unplug?.anchors ?? []).map((a) => {
+			const [from, to] = unplug?.side === 'target' ? [a, unplugTo] : [unplugTo, a];
+			return getBezierPath({ sourceX: from.x, sourceY: from.y, sourcePosition: Position.Right, targetX: to.x, targetY: to.y, targetPosition: Position.Left })[0];
+		})
+	);
+
+	/** In CAPTURE, so the press never reaches the handle, which would start a new cable from it. */
+	function onUnplugDown(e: MouseEvent): void {
+		if (e.button !== 0 || !(e.ctrlKey || e.metaKey) || unplug || !screenToFlow) return;
+		const h = (e.target as HTMLElement | null)?.closest('.svelte-flow__handle') ? handleAt({ x: e.clientX, y: e.clientY }) : null;
+		const at = h ? endAt(h.node, h.slot, h.side) : null;
+		if (!h || !at) return;
+		const held = flowEdges.flatMap((edge) => {
+			const cable = cableOf(edge);
+			return cable && sameSlot(h.side === 'source' ? cable.from : cable.to, at) ? [{ id: edge.id, cable }] : [];
+		});
+		if (held.length === 0) return;
+		e.stopPropagation();
+		e.preventDefault();
+		const fixed: Side = h.side === 'source' ? 'target' : 'source';
+		unplugTo = screenToFlow({ x: e.clientX, y: e.clientY });
+		unplug = {
+			side: h.side,
+			at,
+			moved: held.map((c) => c.cable),
+			ids: new Set(held.map((c) => c.id)),
+			anchors: held.flatMap((c) => handlePoint(fixed === 'source' ? c.cable.from : c.cable.to, fixed) ?? [])
+		};
+		// The loose end of an input's cable looks for an input, so the inputs name themselves.
+		if (h.side === 'target') armNames();
+		window.addEventListener('mousemove', onUnplugMove);
+		window.addEventListener('mouseup', onUnplugUp);
+		window.addEventListener('keydown', onUnplugKey, true);
+	}
+
+	function onUnplugMove(e: MouseEvent): void {
+		const u = unplug;
+		if (!u || !screenToFlow) return;
+		const p = { x: e.clientX, y: e.clientY };
+		unplugTo = screenToFlow(p);
+		nameNear(p);
+		const hit = handleAt(p) ? null : cableAt(p, () => false);
+		const edits = hit && rewire.redirectEdits(types(), u.moved, u.side, hit.cable);
+		setDrop(hit && edits ? { id: hit.id, label: 'Replace cable', edits } : null);
+	}
+
+	/** End the unplug drag: its cables are drawn again, and what the gesture held is answered. */
+	function endUnplug(): { u: NonNullable<typeof unplug>; plan: CableDrop | null } | null {
+		const u = unplug;
+		if (!u) return null;
+		const plan = drop;
+		window.removeEventListener('mousemove', onUnplugMove);
+		window.removeEventListener('mouseup', onUnplugUp);
+		window.removeEventListener('keydown', onUnplugKey, true);
+		unplug = null;
+		cableAnchors = [];
+		setDrop(null);
+		publishCableNear(new Set());
+		return { u, plan };
+	}
+
+	function onUnplugKey(e: KeyboardEvent): void {
+		if (e.key !== 'Escape') return;
+		e.stopPropagation();
+		e.preventDefault();
+		endUnplug();
+	}
+
+	/** The release: on a slot of the same side the cables move there, on a lit cable they replace
+	 * it, and anywhere else they are removed. */
+	function onUnplugUp(e: MouseEvent): void {
+		const held = endUnplug();
+		if (!held) return;
+		const { u, plan } = held;
+		const h = handleAt({ x: e.clientX, y: e.clientY });
+		if (h) {
+			const to = h.side === u.side && !sameSlot(h, u.at) ? endAt(h.node, h.slot, h.side) : null;
+			if (!to) return;
+			const edits = rewire.moveEdits(u.moved, u.side, to);
+			if (edits) rewireNow('Move cable', edits);
+			else notify().failure('Move cable', 'the slots carry different data types');
+		} else if (plan) rewireNow(plan.label, plan.edits);
+		else rewireNow('Unplug cable', u.moved.map((c) => ({ op: 'remove', link: rewire.linkOf(c) })));
+	}
+
+	/** The plan a node held over a cable would run: the cable through its default slots. The
+	 * node is a live one or a placement's ghost. */
+	function insertPlan(n: NodeInstanceInfo | null | undefined, p: Point): CableDrop | null {
+		const hit = n ? cableAt(p, (c) => c.from.node === n.uid || c.to.node === n.uid) : null;
+		if (!n || !hit) return null;
+		const all = cables();
+		const input = rewire.defaultInput(rewire.slotChoices(types(), n, 'input', hit.cable.from, all));
+		const output = rewire.defaultOutput(rewire.slotChoices(types(), n, 'output', hit.cable.to, all));
+		const edits = input && output ? rewire.insertEdits(types(), hit.cable, input, output) : null;
+		if (!input || !output || !edits) return null;
+		const many = Object.keys(n.input_slots).length > 1 || Object.keys(n.output_slots).length > 1;
+		return { id: hit.id, label: 'Insert node into cable', edits, insert: { cable: hit.cable, input, output, many } };
+	}
+
+	// The slots of the node last put into a cable, open to a second choice. `convIn` and `convOut`
+	// are the converters its two wires pass through; `base` is what the node held before.
+	let picker = $state.raw<{
+		at: Point;
+		node: string;
+		cable: Cable;
+		input: string;
+		output: string;
+		convIn: string | null;
+		convOut: string | null;
+		base: Cable[];
+		step: Step;
+	} | null>(null);
+	let picking = false;
+
+	/** Land the node (`land` moves it or gives it birth, and answers its uid) and put it into the
+	 * cable, as one undo step; then offer its other slots. */
+	async function insertNode(plan: CableDrop, at: Point, land: (step: Step) => Promise<string>): Promise<void> {
+		const insert = plan.insert;
+		if (!insert) return;
+		try {
+			await history().transaction(plan.label, async (step) => {
+				const node = await land(step);
+				const edits = node ? rewire.insertEdits(types(), insert.cable, { ...insert.input, node }, { ...insert.output, node }) : null;
+				if (!edits) return;
+				const base = cables().filter((c) => c.to.node === node);
+				const [convIn, convOut] = await applyEdits(edits, step);
+				if (insert.many) picker = { at, node, cable: insert.cable, input: insert.input.slot, output: insert.output.slot, convIn, convOut, base, step };
+			});
+		} catch (e) {
+			notify().failure(plan.label, e);
+			reconcileTick++;
+		}
+	}
+
+	/** The popover's two columns: every slot of the node, read without the wire the insert made. */
+	const pickerView = $derived.by(() => {
+		const p = picker;
+		const n = p ? g.nodeById(p.node) : undefined;
+		if (!p || !n) return null;
+		const ours = (c: Cable): boolean =>
+			(c.to.node === p.node && c.to.slot === p.input && c.from.node === (p.convIn ?? p.cable.from.node)) ||
+			(c.from.node === p.node && c.from.slot === p.output && c.to.node === (p.convOut ?? p.cable.to.node));
+		const others = [...cables().filter((c) => !ours(c)), ...p.base];
+		return {
+			inputs: rewire.slotChoices(types(), n, 'input', p.cable.from, others),
+			outputs: rewire.slotChoices(types(), n, 'output', p.cable.to, others),
+			labels: n.slot_labels
+		};
+	});
+
+	/** Move one end of the inserted wire to `slot`, in the insert's own undo step. The slot it
+	 * leaves takes back the cable it held before. */
+	async function pickSlot(side: 'input' | 'output', slot: string): Promise<void> {
+		const p = picker;
+		if (!p || picking || slot === p[side]) return;
+		const flowSide: Side = side === 'input' ? 'target' : 'source';
+		const old = endAt(p.node, p[side], flowSide);
+		const next = endAt(p.node, slot, flowSide);
+		const conv = side === 'input' ? p.convIn : p.convOut;
+		const wire = old && next ? (side === 'input' ? rewire.wireEdit(types(), p.cable.from, next) : rewire.wireEdit(types(), next, p.cable.to)) : null;
+		if (!old || !wire) return;
+		picking = true;
+		try {
+			await history().transaction(p.step.label, async (step) => {
+				// A converter takes both of its cables with it.
+				if (conv) await g.removeNode(conv, step);
+				else await g.removeLink(side === 'input' ? rewire.linkOf({ from: p.cable.from, to: old }) : rewire.linkOf({ from: old, to: p.cable.to }), step);
+				if (side === 'input') for (const c of rewire.cablesAt(p.base, 'target', old)) await g.addLink(rewire.linkOf(c), step);
+				const [made] = await applyEdits([wire], step);
+				if (picker === p) picker = side === 'input' ? { ...p, input: slot, convIn: made } : { ...p, output: slot, convOut: made };
+			}, p.step);
+		} catch (e) {
+			notify().failure(p.step.label, e);
+			reconcileTick++;
+		} finally {
+			picking = false;
+		}
 	}
 
 	/** The ghost's footprint before Svelte Flow has measured it: what a touch holds by the centre. */
@@ -525,12 +862,19 @@
 
 	function onNodeDrag(args: { nodes: Node[]; event: MouseEvent | TouchEvent }): void {
 		// Beyond the canvas it is a reference, not a move: the node snaps back and the ghost follows.
-		if (moving(eventPoint(args.event), 'move')) snapDragged(args.nodes);
+		const at = eventPoint(args.event);
+		const moved = moving(at, 'move');
+		if (moved) snapDragged(args.nodes);
 		else revertDragged(args.nodes);
+		// One node held over a cable lights it: a release there puts the node into the cable.
+		setDrop(moved && at && args.nodes.length === 1 ? insertPlan(g.nodeById(args.nodes[0].id), { x: at.clientX, y: at.clientY }) : null);
 	}
 
 	function onNodeDragStop(args: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }): void {
-		const moved = moving(eventPoint(args.event), 'drop');
+		const point = eventPoint(args.event);
+		const moved = moving(point, 'drop');
+		const plan = drop;
+		setDrop(null);
 		carried = null;
 		if (moved) {
 			const at = snapDragged(args.nodes);
@@ -538,7 +882,14 @@
 				const p = at.get(n.id) ?? n.position;
 				return [n.id, [Math.round(p.x), Math.round(p.y)]] as [string, [number, number]];
 			});
-			void g.setNodePositions(moves).finally(() => {
+			const landed =
+				plan?.insert && point
+					? insertNode(plan, { x: point.clientX, y: point.clientY }, async (step) => {
+							await g.setNodePositions(moves, step);
+							return moves[0][0];
+						})
+					: g.setNodePositions(moves);
+			void landed.finally(() => {
 				for (const [id] of moves) pinned.delete(id);
 			});
 		} else {
@@ -650,6 +1001,7 @@
 	 * when none of them was there to take it. */
 	function escapeLadder(): boolean {
 		if (menuOpen) closeMenu();
+		else if (picker) picker = null;
 		else if (sel.nodes(panelId).size || sel.edges(panelId).size) sel.clear(panelId);
 		else if (enteredPath.length) exitToDepth(enteredPath.length - 1); // step one level up
 		else return false;
@@ -825,11 +1177,23 @@
 		}
 	}
 
-	async function commitPlacement(pos: [number, number]): Promise<void> {
+	/** Give the placed node birth in `step`, selected. */
+	async function bearNode(type: string, pos: [number, number], step: Step): Promise<string> {
+		const uid = await g.addNode(type, pos, entered ?? undefined, step);
+		// Safe before `node_added` lands: flowNodes derives `selected` from this set.
+		if (uid) sel.selectNodes(panelId, [uid]);
+		return uid;
+	}
+
+	async function commitPlacement(pos: [number, number], at: Point): Promise<void> {
 		const placement = pendingPlacement;
 		if (!placement) return;
+		const plan = drop;
+		setDrop(null);
 		pendingPlacement = null;
 		ghostPos = null;
+		// A ghost let go over a lit cable is born into it.
+		if (plan?.insert) return insertNode(plan, at, (step) => bearNode(placement.typeInfo.type, pos, step));
 		// A boundary type takes this same path: `add_node` with `inst_id` is what makes a PORT of the
 		// entered sub-patch, and the catalog gives it the slots `autoLink` matches against.
 		const label = placement.seed
@@ -837,9 +1201,7 @@
 			: `Add ${bareName(placement.typeInfo.type)}`;
 		await history().transaction(label, async (step) => {
 			try {
-				const newName = await g.addNode(placement.typeInfo.type, pos, entered ?? undefined, step);
-				// Safe before `node_added` lands: flowNodes derives `selected` from this set.
-				if (newName) sel.selectNodes(panelId, [newName]);
+				const newName = await bearNode(placement.typeInfo.type, pos, step);
 				if (placement.seed && newName) await autoLink(placement.seed, placement.typeInfo, newName, step);
 			} catch (e) {
 				console.warn('node add failed', e);
@@ -915,12 +1277,14 @@
 			on(document, 'keydown', onKeydown),
 			on(window, 'paste', onPaste),
 			on(window, 'mousemove', trackMouse),
-			on(root, 'click', onCanvasClick, { capture: true })
+			on(root, 'click', onCanvasClick, { capture: true }),
+			on(root, 'mousedown', onUnplugDown, { capture: true })
 		];
 		return () => {
 			offs.forEach((off) => off());
 			unregisterEditor(panelId);
 			onCableEnd(); // …nor may a cable in flight leave name tags lit on a torn-down canvas
+			endUnplug();
 			// Do NOT forget this panel's selection here: unmount also fires on a tab switch, and the
 			// selection must survive switching away and back.
 			endNodeDrag();
@@ -948,9 +1312,9 @@
 	deleteKey={null}
 	onconnect={onConnect}
 	onreconnect={onReconnect}
-	onconnectstart={onCableStart}
-	onconnectend={onCableEnd}
-	onreconnectstart={onCableStart}
+	onconnectstart={(_, from) => onCableStart(from)}
+	onconnectend={onConnectEnd}
+	onreconnectstart={() => onCableStart(null)}
 	onreconnectend={onCableEnd}
 	onnodedragstart={onNodeDragStart}
 	onnodedrag={onNodeDrag}
@@ -993,17 +1357,29 @@
 			<PlacementPreview
 				initialClient={pendingPlacement.initialClient}
 				size={nodeFallbackSize(ghost)}
-				onMove={(pos) => (ghostPos = pos)}
-				onCommit={(pos) => void commitPlacement(pos)}
+				onMove={(pos, at) => {
+					ghostPos = pos;
+					// A placement seeded from a slot is wired to that slot, not into a cable.
+					setDrop(pendingPlacement?.seed ? null : insertPlan(ghost, at));
+				}}
+				onCommit={(pos, at) => void commitPlacement(pos, at)}
 				onCancel={() => {
 					pendingPlacement = null;
 					ghostPos = null;
+					setDrop(null);
 				}}
 			/>
 		{/if}
 		<ViewportPortal target="back">
 			<ReferenceEdges nodes={flowNodes} selected={selectedNode?.uid ?? null} />
 		</ViewportPortal>
+		{#if unplug}
+			<ViewportPortal target="front">
+				<svg class="unplug-preview" data-testid="unplug-preview">
+					{#each unplugPaths as d, i (i)}<path class="svelte-flow__edge-path" {d} fill="none" />{/each}
+				</svg>
+			</ViewportPortal>
+		{/if}
 	{/snippet}
 	{#snippet empty()}
 		<EmptyState>
@@ -1034,6 +1410,20 @@
 				onClose={closeMenu}
 			/>
 		</div>
+	{/if}
+
+	{#if picker && pickerView}
+		<SlotPicker
+			x={picker.at.x}
+			y={picker.at.y}
+			inputs={pickerView.inputs}
+			outputs={pickerView.outputs}
+			input={picker.input}
+			output={picker.output}
+			labels={pickerView.labels}
+			onPick={(side, slot) => void pickSlot(side, slot)}
+			onClose={() => (picker = null)}
+		/>
 	{/if}
 
 	<!-- Its ✕ DISMISSES, holding only until the selection changes; its ◧ is the switch. -->
@@ -1092,6 +1482,11 @@
 	}
 	.breadcrumb .sep {
 		color: var(--text-muted);
+	}
+	.unplug-preview {
+		position: absolute;
+		overflow: visible;
+		pointer-events: none;
 	}
 	/* The placement ghost is drawn, never touched: the pointer under it is the placement's. */
 	:global(.svelte-flow__node.ghost) {

@@ -2,7 +2,7 @@
 //! Cycles are cut on one grid from the first frame on, so the mean keeps its phase from run to run.
 
 use goofi_core::{resolve_axis, stream, Axis, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show,
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show,
     SlotDecl, Tag,
 };
 
@@ -129,4 +129,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Cycle, MANIFEST);
+goofi_sdk::signal::export!(Cycle, MANIFEST);

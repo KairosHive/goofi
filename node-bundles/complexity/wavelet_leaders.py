@@ -74,7 +74,7 @@ def cumulants(leaders, first, last):
     )
 
 
-class WaveletLeaders(goofi.Node):
+class WaveletLeaders(goofi.SignalNode):
     """c1 and c2: how rough a thing is, and how much its roughness varies.
 
     c2 near 0 is monofractal; more negative is more multifractal.

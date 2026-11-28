@@ -2,7 +2,7 @@
 //! Its output is what a `reset` or a `trigger` pulse elsewhere in the patch references.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// One element's decision, when it last changed, and how long the comparison has disagreed.
 #[derive(Clone, Copy, Default)]
@@ -119,4 +119,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Threshold, MANIFEST);
+goofi_sdk::signal::export!(Threshold, MANIFEST);

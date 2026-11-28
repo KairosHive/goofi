@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use goofi_core::{Data, Param, SlotType};
 use goofi_graph::Uid;
-use goofi_node::{DrainWaker, NodeManifest, OutputDecl, ParamDecl, ParamKey, ParamSpec, SlotDecl, Status};
+use goofi_core::node::{DrainWaker, NodeManifest, OutputDecl, ParamDecl, ParamKey, ParamSpec, SlotDecl, Status};
 use goofi_runtime::{Cx, Desired, Executor, Handle, Out, Shared, Spawn, Sub, Ticked};
 use goofi_supervisor::sync::Mutex;
 use goofi_tests::{f32s, frame, WAIT};
@@ -238,10 +238,10 @@ fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
     });
     assert!(!node.handle.send_if_changed(desired), "what was last sent is not sent again");
     until("the node to report itself ready", || {
-        fleet.reports().iter().any(|(u, s)| *u == Uid(4) && *s == Status::Stage { stage: goofi_node::NodeStage::Ready }).then_some(())
+        fleet.reports().iter().any(|(u, s)| *u == Uid(4) && *s == Status::Stage { stage: goofi_core::node::NodeStage::Ready }).then_some(())
     });
 
-    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Refresh, key: key.clone() });
+    node.handle.request(goofi_core::node::Request { kind: goofi_core::node::RequestKind::Refresh, key: key.clone() });
     let options = until("the refresh to answer", || {
         fleet.reports().into_iter().find_map(|(_, s)| match s {
             Status::RefreshOptions { options, .. } => Some(options),
@@ -249,7 +249,7 @@ fn a_desired_state_reaches_the_executor_and_a_request_is_answered() {
         })
     });
     assert_eq!(options, Some(vec!["a".to_string(), "b".to_string()]));
-    node.handle.request(goofi_node::Request { kind: goofi_node::RequestKind::Pulse, key });
+    node.handle.request(goofi_core::node::Request { kind: goofi_core::node::RequestKind::Pulse, key });
     until("the pulse to fire", || (node.log.lock().pulses == [0]).then_some(()));
 }
 
@@ -286,7 +286,7 @@ fn a_frame_reaches_a_wired_consumer_and_a_new_bell_rings_once() {
     bell.ring(1);
     let why = until("the bad wire to be worn as a fault", || {
         fleet.reports().into_iter().find_map(|(u, s)| match s {
-            Status::Fault { fault: Some(goofi_node::NodeFault::Process { msg, .. }) } if u == Uid(6) => Some(msg),
+            Status::Fault { fault: Some(goofi_core::node::NodeFault::Process { msg, .. }) } if u == Uid(6) => Some(msg),
             _ => None,
         })
     });

@@ -10,7 +10,7 @@ import numpy as np
 import goofi
 
 
-class Hjorth(goofi.Node):
+class Hjorth(goofi.SignalNode):
     """Hjorth mobility and complexity: mean frequency, and distance from a sine."""
 
     TAGS = ["analysis"]

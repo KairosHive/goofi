@@ -1,0 +1,192 @@
+//! `goofi.introspect(path)` — the discovery probe: import a node module in THIS interpreter,
+//! and return its declaration constants and GIL state as [`goofi_core::probe`] JSON.
+
+use goofi_core::probe::{Introspection, OutSlot, Param, ParamSpec, Show, Slot};
+use goofi_core::Face;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList, PyModule};
+
+use crate::loader::{find_node_class, module_from_path};
+use crate::params::{BoolParam, ColorParam, DataType, EnvelopeParam, InputSlot, NumParam, PulseParam, StringParam};
+
+#[pyfunction]
+pub fn introspect(py: Python<'_>, path: &str) -> PyResult<String> {
+    // The import must precede the GIL sample: a node's declaration-time imports can re-enable
+    // the GIL process-wide, and the routing gate has to see that.
+    let module = module_from_path(py, path)?;
+    let (cls, engine) = find_node_class(py, &module)?;
+
+    let intro = Introspection {
+        engine: engine.to_string(),
+        gil_safe: !py
+            .import("sys")?
+            .getattr("_is_gil_enabled")
+            .and_then(|f| f.call0())
+            .and_then(|v| v.extract::<bool>())
+            .unwrap_or(true),
+        // `cleandoc`, not `trim`: a docstring's body carries the class's own indentation, and a
+        // node doc is read as text — its first line is the nutshell, the rest the detail.
+        doc: py
+            .import("inspect")?
+            .call_method1("cleandoc", (cls.getattr("__doc__")?,))
+            .and_then(|d| d.extract::<String>())
+            .unwrap_or_default(),
+        producer: cls.getattr("PRODUCER")?.extract()?,
+        // No node a tick or a frame calls closes a loop.
+        feedback: false,
+        window: false,
+        state: Vec::new(),
+        tags: cls.getattr("TAGS")?.extract()?,
+        inputs: slots(&cls.getattr("INPUTS")?)?,
+        outputs: out_slots(&cls.getattr("OUTPUTS")?)?,
+        params: params(&cls.getattr("PARAMS")?)?,
+    };
+    serde_json::to_string(&intro)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+/// The engine a node file declares, read from its text alone: the engine base its class names.
+/// For a file whose import failed, so the palette still files the type under its engine.
+#[pyfunction]
+pub fn declared_engine(py: Python<'_>, path: &str) -> PyResult<Option<String>> {
+    const READ: &std::ffi::CStr = cr#"
+import ast
+def declared(path, bases):
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+                if name in bases:
+                    return bases[name]
+    return None
+"#;
+    let module = PyModule::from_code(py, READ, c"goofi_declared.py", c"goofi_declared")?;
+    let bases = PyDict::new(py);
+    for (engine, base) in crate::node::engines(py) {
+        bases.set_item(base.name()?, engine)?;
+    }
+    module.getattr("declared")?.call1((path, bases))?.extract()
+}
+
+/// An input slot is declared as a bare `goofi.DataType` or as a `goofi.InputSlot`.
+#[derive(FromPyObject)]
+enum SlotDescr<'py> {
+    Bare(Bound<'py, DataType>),
+    Full(Bound<'py, InputSlot>),
+}
+
+/// `{name: DataType | InputSlot}` → the input slots.
+pub(crate) fn slots(d: &Bound<'_, PyAny>) -> PyResult<Vec<Slot>> {
+    d.cast::<PyDict>()?
+        .iter()
+        .map(|(k, v)| {
+            let (kind, required, trigger, multi) = match v.extract::<SlotDescr>()? {
+                SlotDescr::Bare(t) => (slot_kind(t.as_any())?, false, true, false),
+                SlotDescr::Full(s) => {
+                    let s = s.borrow();
+                    (slot_kind(s.dtype.bind(v.py()).as_any())?, s.required, s.trigger, s.multi)
+                }
+            };
+            Ok(Slot { name: k.extract()?, kind, trigger, multi, required })
+        })
+        .collect()
+}
+
+/// `{name: DataType}` → the output slots.
+fn out_slots(d: &Bound<'_, PyAny>) -> PyResult<Vec<OutSlot>> {
+    d.cast::<PyDict>()?
+        .iter()
+        .map(|(k, v)| Ok(OutSlot { name: k.extract()?, kind: slot_kind(&v)? }))
+        .collect()
+}
+
+/// A slot value is a `goofi.DataType`; its `.value` is the wire kind (`"ARRAY"`/…).
+fn slot_kind(v: &Bound<'_, PyAny>) -> PyResult<String> {
+    v.getattr("value")?.extract()
+}
+
+/// `{group: {name: <Param descriptor>}}` → a flat list of typed `Param`. A group may instead be a
+/// list of such dicts, one per section.
+fn params(d: &Bound<'_, PyAny>) -> PyResult<Vec<Param>> {
+    let mut out = Vec::new();
+    for (group, sections) in d.cast::<PyDict>()?.iter() {
+        let group: String = group.extract()?;
+        let sections = match sections.cast::<PyList>() {
+            Ok(list) => list.iter().collect(),
+            Err(_) => vec![sections.clone()],
+        };
+        for (section, names) in sections.iter().enumerate() {
+            let section = u8::try_from(section)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err(format!("group `{group}` has more than 256 sections")))?;
+            for (name, descr) in names.cast::<PyDict>()?.iter() {
+                let (spec, doc, expression, show) = param_spec(&descr)?;
+                let show = show.into_iter().map(|(param, any_of)| Show { param, any_of }).collect();
+                out.push(Param { group: group.clone(), name: name.extract()?, doc, expression, section, show, role: None, spec });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A param descriptor is exactly one of our pyclasses, extracted typed.
+#[derive(FromPyObject)]
+enum ParamDescr<'py> {
+    Num(Bound<'py, NumParam>),
+    Color(Bound<'py, ColorParam>),
+    Envelope(Bound<'py, EnvelopeParam>),
+    Bool(Bound<'py, BoolParam>),
+    Str(Bound<'py, StringParam>),
+    Pulse(Bound<'py, PulseParam>),
+}
+
+/// The kind-specific spec plus the kind-independent `doc=`, `expression=` and `show=`.
+fn param_spec(descr: &Bound<'_, PyAny>) -> PyResult<(ParamSpec, Option<String>, Option<String>, crate::params::Show)> {
+    Ok(match descr.extract::<ParamDescr>()? {
+        ParamDescr::Num(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Num { default: p.default.clone(), min: p.min, max: p.max, int: p.int, options: p.options.clone(), face: Face::Plain },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Color(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: 1.0, int: false, options: Vec::new(), face: Face::Color },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Envelope(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Num { default: p.default.clone(), min: 0.0, max: p.max, int: false, options: Vec::new(), face: Face::Envelope },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Bool(p) => {
+            let p = p.borrow();
+            (ParamSpec::Bool { default: p.default }, p.doc.clone(), p.expression.clone(), p.show.clone())
+        }
+        ParamDescr::Str(p) => {
+            let p = p.borrow();
+            (
+                ParamSpec::Str { default: p.default.clone(), options: p.options.clone(), refresh: p.refresh },
+                p.doc.clone(),
+                p.expression.clone(),
+                p.show.clone(),
+            )
+        }
+        ParamDescr::Pulse(p) => {
+            let p = p.borrow();
+            (ParamSpec::Pulse {}, p.doc.clone(), None, p.show.clone())
+        }
+    })
+}

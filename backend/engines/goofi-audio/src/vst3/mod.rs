@@ -1,0 +1,624 @@
+//! A `.vst3` bundle as a source of audio node types: a child `goofi` scans it, so a crash takes
+//! the scanner down and never the server, and each class is hosted behind [`AudioNode`] by `node`.
+// The bindings mirror the C++ headers, so a host object's trait methods carry their names.
+#![allow(non_snake_case)]
+
+pub(crate) mod editor;
+mod host;
+mod module;
+mod node;
+
+pub use module::exit_all;
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+
+use goofi_sdk::audio::{AudioNode, MAX_PORTS};
+use goofi_core::probe;
+use goofi_core::node::{Isolation, Scanned, ScannedType, Stamp, Tag};
+use serde::{Deserialize, Serialize};
+use vst3::Steinberg::Vst::*;
+use vst3::Steinberg::*;
+use vst3::{ComPtr, ComWrapper};
+
+use crate::nodes::{self, Class};
+use crate::AudioEngine;
+pub(crate) use node::Derived;
+use node::{Knob, Plugin};
+
+/// A stepped parameter with this many steps or fewer is a `Str` of the plugin's own strings.
+const STR_STEPS: i32 = 64;
+
+/// The most parameters a plugin node declares. This is NOT the port ceiling — a plugin parameter
+/// is control rate and costs no port — but a row the document carries and the inspector draws.
+const MAX_PARAMS: usize = 4096;
+
+/// A CEILING on the child, as `OPEN_WAIT` is on a device: the scan runs under the graph lock, and
+/// a plugin that blocks at load must not wedge every op.
+const SCAN_WAIT: Duration = Duration::from_secs(20);
+
+/// The host's half of a cache key: a digest of the sources that decide what goofi reads out of a
+/// plugin, not the binary's mtime, which every relink moves.
+static SCANNER: LazyLock<String> = LazyLock::new(|| {
+    goofi_build::digest(
+        [include_str!("mod.rs"), include_str!("host.rs"), include_str!("module.rs"), include_str!("node.rs")]
+            .map(str::as_bytes),
+    )
+});
+
+/// What the scanner writes: the factory's vendor and every "Audio Module Class".
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Bundle {
+    vendor: String,
+    classes: Vec<ClassInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ClassInfo {
+    cid: [u8; 16],
+    name: String,
+    /// Channel counts per audio bus, main first.
+    inputs: Vec<u16>,
+    outputs: Vec<u16>,
+    events: bool,
+    params: Vec<ParamInfo>,
+    /// The VST3 subcategory string, which holds `Instrument` for a synth.
+    sub_categories: String,
+    /// The plugin's own parameter families, a tree by `parent`; empty where it declares none.
+    units: Vec<UnitRow>,
+}
+
+/// One VST3 "unit": the plugin's own name for a family of parameters.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct UnitRow {
+    id: i32,
+    parent: i32,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ParamInfo {
+    id: u32,
+    title: String,
+    units: String,
+    steps: i32,
+    default: f64,
+    flags: i32,
+    /// The plugin's own rendering of its default, for a continuous param's doc.
+    shown: String,
+    /// One display string per step, empty for a param that is not stepped within `STR_STEPS`.
+    steps_shown: Vec<String>,
+    /// The unit this parameter belongs to; 0 is the root every plugin has.
+    unit: i32,
+}
+
+/// Where this platform keeps its plugins.
+pub fn platform_dirs() -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    let dirs = [std::env::home_dir().map(|h| h.join(".vst3")), Some("/usr/lib/vst3".into()), Some("/usr/local/lib/vst3".into())];
+    #[cfg(target_os = "macos")]
+    let dirs = [std::env::home_dir().map(|h| h.join("Library/Audio/Plug-Ins/VST3")), Some("/Library/Audio/Plug-Ins/VST3".into())];
+    #[cfg(windows)]
+    let dirs = [
+        std::env::var_os("COMMONPROGRAMFILES").map(|p| PathBuf::from(p).join("VST3")),
+        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("Programs").join("Common").join("VST3")),
+    ];
+    dirs.into_iter().flatten().collect()
+}
+
+/// `goofi vst3-scan <bundle> <answer>`: the child half, which writes the bundle's classes to
+/// `answer` as JSON — never to stdout, which the plugin it just loaded also owns.
+pub fn scan_main(args: &[String]) -> i32 {
+    goofi_supervisor::process::no_error_dialogs();
+    goofi_window::open_com_apartment();
+    let (Some(bundle), Some(answer)) = (args.first(), args.get(1)) else {
+        eprintln!("usage: goofi vst3-scan <bundle> <answer>");
+        return 2;
+    };
+    let described = describe(Path::new(bundle));
+    module::exit_all();
+    match described.and_then(|found| {
+        serde_json::to_vec(&found).map_err(|e| e.to_string()).and_then(|b| std::fs::write(answer, b).map_err(|e| e.to_string()))
+    }) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+/// The binary inside a bundle, laid out as the platform lays it — or the bundle itself where it
+/// is one file.
+fn binary_of(bundle: &Path) -> Result<PathBuf, String> {
+    if bundle.is_file() {
+        return Ok(bundle.to_path_buf());
+    }
+    let stem = bundle.file_stem().and_then(|s| s.to_str()).ok_or("a bundle has a name")?;
+    let arch = std::env::consts::ARCH;
+    let (folder, file) = if cfg!(target_os = "macos") {
+        ("MacOS".to_string(), stem.to_string())
+    } else if cfg!(windows) {
+        // The bundle layout spells this one `arm64`, where Rust spells it `aarch64`.
+        let arch = if arch == "aarch64" { "arm64" } else { arch };
+        (format!("{arch}-win"), format!("{stem}.vst3"))
+    } else {
+        (format!("{arch}-linux"), format!("{stem}.so"))
+    };
+    let path = bundle.join("Contents").join(folder).join(file);
+    path.is_file().then_some(path).ok_or_else(|| format!("no binary at {}", bundle.display()))
+}
+
+fn stamp_of(binary: &Path) -> Result<Stamp, String> {
+    let meta = std::fs::metadata(binary).map_err(|e| format!("{}: {e}", binary.display()))?;
+    Ok((meta.len(), meta.modified().map_err(|e| e.to_string())?))
+}
+
+fn describe(bundle: &Path) -> Result<Bundle, String> {
+    let factory = module::factory(&binary_of(bundle)?)?;
+    // One class the host cannot describe never costs the bundle its others.
+    let classes = factory
+        .audio_classes()
+        .into_iter()
+        .filter_map(|(cid, name, sub)| describe_class(&factory, cid, name, sub).ok())
+        .collect();
+    Ok(Bundle { vendor: factory.vendor(), classes })
+}
+
+fn describe_class(factory: &module::Factory, cid: TUID, name: String, sub_categories: String) -> Result<ClassInfo, String> {
+    let context = ComWrapper::new(host::Host).to_com_ptr::<FUnknown>().expect("a host is an FUnknown");
+    let component: ComPtr<IComponent> = factory.create(&cid)?;
+    unsafe {
+        ok(component.initialize(context.as_ptr()), "initialize")?;
+        // One object or two: a separate controller is paired as a live instance pairs it.
+        let own: Option<ComPtr<IEditController>> = component.cast();
+        let (separate, wired) = node::pair(factory, &component, &context);
+        let buses = |dir: BusDirection| -> Vec<u16> {
+            let n = component.getBusCount(MediaTypes_::kAudio as MediaType, dir);
+            node::channel_counts(&component, dir, n).map(|c| c.clamp(0, u16::MAX as i32) as u16).collect()
+        };
+        let inputs = buses(BusDirections_::kInput as BusDirection);
+        let outputs = buses(BusDirections_::kOutput as BusDirection);
+        let events = component.getBusCount(MediaTypes_::kEvent as MediaType, BusDirections_::kInput as BusDirection) > 0;
+        let controller = own.as_ref().or(separate.as_ref());
+        let params = controller.map(|c| params_of(c)).unwrap_or_default();
+        let units = controller.map(|c| units_of(c)).unwrap_or_default();
+        node::unpair(separate.as_ref(), wired.as_ref());
+        component.terminate();
+        Ok(ClassInfo { cid: cid.map(|b| b as u8), name, inputs, outputs, events, params, sub_categories, units })
+    }
+}
+
+/// The plugin's own parameter families. A plugin that implements no `IUnitInfo` has none, which is
+/// the flat list every parameter already forms under the root.
+unsafe fn units_of(c: &ComPtr<IEditController>) -> Vec<UnitRow> {
+    let Some(u) = c.cast::<IUnitInfo>() else { return Vec::new() };
+    (0..u.getUnitCount())
+        .filter_map(|i| {
+            let mut info: UnitInfo = std::mem::zeroed();
+            (u.getUnitInfo(i, &mut info) == kResultOk)
+                .then(|| UnitRow { id: info.id, parent: info.parentUnitId, name: host::utf16(&info.name) })
+        })
+        .collect()
+}
+
+unsafe fn params_of(c: &ComPtr<IEditController>) -> Vec<ParamInfo> {
+    (0..c.getParameterCount())
+        .filter_map(|i| {
+            let mut info: ParameterInfo = std::mem::zeroed();
+            (c.getParameterInfo(i, &mut info) == kResultOk).then(|| {
+                let string_at = |v: f64| {
+                    let mut s: String128 = [0; 128];
+                    c.getParamStringByValue(info.id, v, &mut s);
+                    host::utf16(&s)
+                };
+                let steps_shown = match (1..=STR_STEPS).contains(&info.stepCount) {
+                    true => (0..=info.stepCount).map(|k| string_at(k as f64 / info.stepCount as f64)).collect(),
+                    false => Vec::new(),
+                };
+                ParamInfo {
+                    id: info.id,
+                    title: host::utf16(&info.title),
+                    units: host::utf16(&info.units),
+                    steps: info.stepCount,
+                    default: info.defaultNormalizedValue,
+                    flags: info.flags,
+                    unit: info.unitId,
+                    shown: string_at(info.defaultNormalizedValue),
+                    steps_shown,
+                }
+            })
+        })
+        .collect()
+}
+
+pub(super) fn ok(result: tresult, what: &str) -> Result<(), String> {
+    (result == kResultOk).then_some(()).ok_or_else(|| format!("{what} answered {result}"))
+}
+
+/// Every bundle under `dir`, at any depth — an installer may group them by vendor — as a row per
+/// class, or one greyed row naming the bundle.
+pub(crate) fn scan_dir(engine: &mut AudioEngine, dir: &Path) -> Vec<ScannedType> {
+    bundles_under(dir).iter().flat_map(|b| scan_bundle(engine, b)).collect()
+}
+
+fn bundles_under(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    let (mut bundles, folders): (Vec<PathBuf>, Vec<PathBuf>) =
+        paths.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vst3")));
+    for folder in folders.iter().filter(|p| p.is_dir()) {
+        bundles.extend(bundles_under(folder));
+    }
+    bundles
+}
+
+fn scan_bundle(engine: &mut AudioEngine, bundle: &Path) -> Vec<ScannedType> {
+    let stem = bundle.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let greyed = |reason: String| match camel(stem) {
+        Some(type_name) => vec![ScannedType { type_name, stamp: None, outcome: Scanned::Unavailable(reason) }],
+        None => Vec::new(),
+    };
+    let Some((scanner, _)) = &engine.vst3 else {
+        return greyed("no VST3 scanner was handed to the engine".into());
+    };
+    let found = binary_of(bundle).and_then(|binary| {
+        let stamp = stamp_of(&binary)?;
+        described(scanner, bundle, &binary, stamp).map(|b| (binary, stamp, b))
+    });
+    match found {
+        Err(reason) => greyed(reason),
+        Ok((_, _, found)) if found.classes.is_empty() => greyed("no audio class in the bundle".into()),
+        Ok((binary, stamp, found)) => {
+            let vendor = found.vendor;
+            found.classes.into_iter().map(|class| engine.register_plugin(&vendor, &binary, stamp, class)).collect()
+        }
+    }
+}
+
+/// The scanner's verdict for this binary, from the cache keyed by its stamp and the scanner's, or
+/// from a child. A refusal is cached too, so a plugin that crashes the scanner costs one child.
+fn described(scanner: &Path, bundle: &Path, binary: &Path, stamp: Stamp) -> Result<Bundle, String> {
+    let dir = goofi_supervisor::layout::runtime().build().join("vst3");
+    let key = key_of(binary, stamp);
+    let file = dir.join(format!("{key}.json"));
+    let read = std::fs::read(&file).ok();
+    if let Some(verdict) = read.and_then(|b| serde_json::from_slice::<Result<Bundle, String>>(&b).ok()) {
+        return verdict;
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let part = dir.join(format!("{key}.{}.part", goofi_supervisor::session::tag()));
+    let errors = part.with_extension("err");
+    goofi_supervisor::progress::report(format!("Indexing VST3 plugin {}", bundle.file_name().unwrap_or_default().to_string_lossy()));
+    let mut child = spawn_scanner(scanner, bundle, &part, &errors)?;
+    let verdict = answered(&mut child, &errors)
+        .and_then(|()| std::fs::read(&part).map_err(|e| format!("the scanner wrote nothing: {e}")))
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| format!("the scanner's answer did not parse: {e}")));
+    // Written beside and renamed in, so two goofis scanning one bundle cannot tear the cache.
+    if serde_json::to_vec(&verdict).is_ok_and(|b| std::fs::write(&part, b).is_ok()) {
+        let _ = std::fs::rename(&part, &file);
+    }
+    let _ = std::fs::remove_file(&part);
+    verdict
+}
+
+/// What decides the verdict: the binary's own path and stamp, and the scanner's sources.
+fn key_of(binary: &Path, (len, modified): Stamp) -> String {
+    let nanos = modified.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let (len, nanos) = (len.to_le_bytes(), nanos.to_le_bytes());
+    goofi_build::digest([binary.as_os_str().as_encoded_bytes(), &len[..], &nanos[..], SCANNER.as_bytes()])
+}
+
+/// One child, its output going to a FILE, never a pipe a plugin's chatter could fill. A failed
+/// spawn is goofi's own, so [`described`] never caches it.
+fn spawn_scanner(scanner: &Path, bundle: &Path, part: &Path, errors: &Path) -> Result<goofi_supervisor::child::Child, String> {
+    let sink = std::fs::File::create(errors).map_err(|e| format!("{}: {e}", errors.display()))?;
+    let both = sink.try_clone().map_err(|e| e.to_string())?;
+    goofi_supervisor::child::run(
+        format!("vst3 scan {}", bundle.file_name().unwrap_or_default().to_string_lossy()),
+        std::process::Command::new(scanner).arg("vst3-scan").arg(bundle).arg(part),
+    )
+    .stdout(goofi_supervisor::child::Out::File(both))
+    .stderr(goofi_supervisor::child::Out::File(sink))
+    .spawn()
+    .map_err(|e| format!("could not run the scanner {}: {e}", scanner.display()))
+}
+
+/// The child's verdict, under a ceiling, in its own words where it left any.
+fn answered(child: &mut goofi_supervisor::child::Child, errors: &Path) -> Result<(), String> {
+    let status = child.wait_within(SCAN_WAIT).ok_or_else(|| format!("the scanner did not answer in {}s", SCAN_WAIT.as_secs()));
+    let said = std::fs::read_to_string(errors).unwrap_or_default().trim().to_string();
+    let _ = std::fs::remove_file(errors);
+    match status? {
+        s if s.success() => Ok(()),
+        _ if !said.is_empty() => Err(said),
+        s => Err(match s.code() {
+            Some(code) if goofi_supervisor::process::is_crash_code(code) => format!("the scanner crashed (0x{code:08X})"),
+            Some(code) => format!("the scanner exited with {code}"),
+            None => "the scanner crashed".into(),
+        }),
+    }
+}
+
+impl AudioEngine {
+    /// One class as one type: named by the plugin, or by vendor and plugin where the name is
+    /// taken or is no legal name (`3 Band EQ`). A registration from the same binary at the same
+    /// stamp is kept.
+    fn register_plugin(&mut self, vendor: &str, binary: &Path, stamp: Stamp, class: ClassInfo) -> ScannedType {
+        let Some(bare) = camel(&class.name).or_else(|| camel(&format!("{vendor} {}", class.name))) else {
+            let reason = format!("`{}` is not a legal name: {}", class.name, goofi_core::variables::NAME_RULE);
+            return ScannedType { type_name: class.name, stamp: None, outcome: Scanned::Unavailable(reason) };
+        };
+        let cid: TUID = class.cid.map(|b| b as std::ffi::c_char);
+        let same = |d: &Arc<Derived>| d.binary == binary && d.stamp == stamp && d.cid == cid;
+        // The vendor prefixes only where SOMEONE ELSE holds the name — a goofi node, or another
+        // plugin. A rescan finds this very class there and keeps the name it already had.
+        let mine = |name: &str| self.classes.get(name).is_some_and(|c| c.plugin.as_ref().is_some_and(&same));
+        let type_name = match self.classes.contains_key(bare.as_str()) && !mine(&bare) {
+            true => camel(vendor).map_or(bare.clone(), |v| format!("{v}{bare}")),
+            false => bare,
+        };
+        if mine(&type_name) {
+            let outcome = Scanned::Registered { isolation: Isolation::Native, replaced: false };
+            return ScannedType { type_name, stamp: Some(stamp), outcome };
+        }
+        let (intro, params) = introspection(vendor, &class);
+        // Refused at scan, where the palette shows it. Params are trimmed to fit; a bus is not, as
+        // dropping one would silently rechannel the plugin.
+        let widest = intro.inputs.len().max(intro.outputs.len());
+        if widest > MAX_PORTS {
+            let reason = format!("declares {widest} audio buses, and {MAX_PORTS} is the ceiling");
+            return ScannedType { type_name, stamp: Some(stamp), outcome: Scanned::Unavailable(reason) };
+        }
+        let derived = Arc::new(Derived { binary: binary.to_path_buf(), stamp, cid, inputs: class.inputs, outputs: class.outputs, params });
+        let manifest = match goofi_core::node::leak_manifest(type_name.clone(), &intro) {
+            Ok(manifest) => manifest,
+            Err(reason) => return ScannedType { type_name, stamp: Some(stamp), outcome: Scanned::Unavailable(reason) },
+        };
+        let plugin = derived.clone();
+        let make = Arc::new(move |birth: nodes::Birth| {
+            Box::new(Plugin::new(plugin.clone(), birth.ui, birth.uid, birth.shared)) as Box<dyn AudioNode>
+        });
+        let replaced = self.classes.insert(manifest.type_name, Class { manifest, make, plugin: Some(derived) }).is_some();
+        ScannedType { type_name, stamp: Some(stamp), outcome: Scanned::Registered { isolation: Isolation::Native, replaced } }
+    }
+}
+
+const OMITTED: i32 = ParameterInfo_::ParameterFlags_::kIsHidden
+    | ParameterInfo_::ParameterFlags_::kIsReadOnly
+    | ParameterInfo_::ParameterFlags_::kIsBypass;
+
+/// A program list is the plugin's PRESETS: offered without automation, as a list of the preset
+/// names.
+const PROGRAM: i32 = ParameterInfo_::ParameterFlags_::kIsProgramChange;
+
+/// A param goofi can drive says so itself. Requiring it is what keeps the 128x16 MIDI CC mapping
+/// block a JUCE plugin declares — 2080 params, every one of them flagless — out of the node.
+const AUTOMATABLE: i32 = ParameterInfo_::ParameterFlags_::kCanAutomate;
+
+/// The manifest a class derives to, and — in the same pass, so they cannot drift — how each of
+/// its params reaches the plugin.
+fn introspection(vendor: &str, class: &ClassInfo) -> (probe::Introspection, Vec<Knob>) {
+    let audio = goofi_core::SlotType::Audio.name().to_string();
+    let float = |default: f64, min: f64, max: f64| probe::ParamSpec::Num { default: vec![default], min, max, int: false, options: vec![], face: goofi_core::Face::Plain };
+    let voice = |name: &str, doc: &str, spec: probe::ParamSpec| probe::Param {
+        group: "voice".into(),
+        name: name.into(),
+        doc: Some(doc.into()),
+        expression: None,
+        section: 0,
+        show: Vec::new(),
+        role: None,
+        spec,
+    };
+    let mut params = if class.events {
+        vec![
+            voice("gate", "A note on at the rise, off at the fall — per channel, so a polyphonic gate is that many voices.", probe::ParamSpec::Bool { default: false }),
+            voice("pitch", "Volts per octave, zero at C4.", float(0.0, -5.0, 5.0)),
+            voice("velocity", "The note's velocity, 0 to 1.", float(1.0, 0.0, 1.0)),
+        ]
+    } else {
+        Vec::new()
+    };
+    let mut names: HashMap<String, Vec<String>> = HashMap::new();
+    let offered: Vec<&ParamInfo> = class
+        .params
+        .iter()
+        .filter(|p| p.flags & OMITTED == 0 && (p.flags & AUTOMATABLE != 0 || p.flags & PROGRAM != 0))
+        .collect();
+    let total = offered.len();
+    let groups = unit_groups(class);
+    // Named and specced over the WHOLE offered set, so the name a param gets never depends on
+    // whether it was chosen — which is what lets one be adopted later under that same name.
+    let catalog: Vec<(Knob, probe::Param)> = offered
+        .iter()
+        .map(|p| {
+            let group = groups.get(&p.unit).cloned().unwrap_or_else(|| "plugin".into());
+            let name = unique(lower_camel(&p.title).unwrap_or_else(|| "param".into()), names.entry(group.clone()).or_default());
+            let (spec, steps, doc) = if p.steps <= 0 {
+                let shown = format!("{} {}", p.shown, p.units);
+                (float(p.default.clamp(0.0, 1.0), 0.0, 1.0), 1.0, format!("{}, normalized; {} by default.", p.title, shown.trim()))
+            } else if p.steps <= STR_STEPS {
+                let options = distinct(&p.steps_shown, p.steps as usize + 1);
+                let at = ((p.default * p.steps as f64).round() as usize).min(options.len() - 1);
+                let default = options[at].clone();
+                (probe::ParamSpec::Str { default, options, refresh: false }, p.steps as f64, p.title.clone())
+            } else {
+                let default = (p.default * p.steps as f64).round() as i64;
+                (probe::ParamSpec::Num { default: vec![default as f64], min: 0.0, max: p.steps as f64, int: true, options: vec![], face: goofi_core::Face::Plain }, p.steps as f64, p.title.clone())
+            };
+            (Knob::new(p.id, steps, p.default), probe::Param { group, name, doc: Some(doc), expression: None, section: 0, show: Vec::new(), role: Some(probe::Role::Held), spec })
+        })
+        .collect();
+    // `chosen` bounds the KINDS too, which is what keeps a param's index and the id it writes back
+    // to in step.
+    let room = MAX_PARAMS - params.len();
+    let keep: HashSet<ParamID> = chosen(&offered, room, &groups).into_iter().map(|p| p.id).collect();
+    let mut kinds = Vec::new();
+    for (knob, param) in catalog.iter().filter(|(k, _)| keep.contains(&k.id)) {
+        params.push(param.clone());
+        kinds.push(*knob);
+    }
+    // A plugin has no tag to name its vendor, so the doc line does — unless its name already has.
+    let named = match class.name.starts_with(vendor) {
+        true => class.name.clone(),
+        false => format!("{vendor}: {}", class.name),
+    };
+    // A parameter that is simply absent reads as one the plugin does not have, so the doc says so.
+    let doc = match total > room {
+        true => format!("{named} — the first {room} of its {total} parameters"),
+        false => named,
+    };
+    let tag = match class.sub_categories.contains("Instrument") {
+        true => Tag::Generator,
+        false => Tag::Transform,
+    };
+    let intro = probe::Introspection {
+        engine: "audio".into(),
+        // A plugin is an effect or an instrument; neither closes a loop through the block.
+        feedback: false,
+        window: false,
+        state: Vec::new(),
+        gil_safe: true,
+        doc,
+        tags: vec![tag.as_str().to_string()],
+        producer: false,
+        // A plugin that takes notes takes `audio:MidiIn`'s bundle by cable too; the voice params
+        // stay as the manual override.
+        inputs: (0..class.inputs.len())
+            .map(|i| probe::Slot { name: numbered("input", i), kind: audio.clone(), trigger: false, multi: true, required: false })
+            .chain(class.events.then(|| probe::Slot {
+                name: "voice".into(),
+                kind: audio.clone(),
+                trigger: false,
+                multi: false,
+                required: false,
+            }))
+            .collect(),
+        outputs: (0..class.outputs.len()).map(|i| probe::OutSlot { name: numbered("out", i), kind: audio.clone() }).collect(),
+        params,
+    };
+    (intro, kinds)
+}
+
+/// The plugin's own units as goofi param groups. Unit 0 is the root every plugin has, and a name
+/// that cannot be an identifier has no group, so both fall to `plugin`.
+fn unit_groups(class: &ClassInfo) -> HashMap<i32, String> {
+    let mut used: Vec<String> = vec!["plugin".into(), "voice".into()];
+    class
+        .units
+        .iter()
+        .filter(|u| u.id != 0)
+        .filter_map(|u| group_name(&u.name).map(|n| (u.id, unique(n, &mut used))))
+        .collect()
+}
+
+/// A unit's name as a group identifier, which is also the tab a reader sees. A word with no lower
+/// case is lowered whole, so `VCF1` reads `vcf1` rather than the `vCF1` a plain camel would give.
+fn group_name(s: &str) -> Option<String> {
+    let words: Vec<String> = s
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| match w.chars().any(|c| c.is_ascii_lowercase()) {
+            true => w.to_string(),
+            false => w.to_ascii_lowercase(),
+        })
+        .collect();
+    let name: String =
+        words.iter().enumerate().map(|(i, w)| if i == 0 { w.clone() } else { w[..1].to_ascii_uppercase() + &w[1..] }).collect();
+    let name = match name.is_empty() {
+        true => return None,
+        false => name[..1].to_ascii_lowercase() + &name[1..],
+    };
+    goofi_core::variables::is_valid_name(&name).then_some(name)
+}
+
+/// The `room` params worth showing, out of everything the plugin offers. A named unit's params come
+/// before the root's, and one unit at a time, so no single family fills a node on its own.
+fn chosen<'a>(offered: &[&'a ParamInfo], room: usize, groups: &HashMap<i32, String>) -> Vec<&'a ParamInfo> {
+    let mut queues: Vec<Vec<&'a ParamInfo>> = Vec::new();
+    let mut at: HashMap<i32, usize> = HashMap::new();
+    let mut root: Vec<&'a ParamInfo> = Vec::new();
+    for p in offered {
+        if !groups.contains_key(&p.unit) {
+            root.push(p);
+            continue;
+        }
+        let slot = match at.get(&p.unit) {
+            Some(&slot) => slot,
+            None => {
+                queues.push(Vec::new());
+                at.insert(p.unit, queues.len() - 1);
+                queues.len() - 1
+            }
+        };
+        queues[slot].push(p);
+    }
+    let mut out: Vec<&'a ParamInfo> = Vec::new();
+    let mut round = 0;
+    while out.len() < room && queues.iter().any(|q| round < q.len()) {
+        for q in &queues {
+            if out.len() == room {
+                break;
+            }
+            if let Some(p) = q.get(round) {
+                out.push(p);
+            }
+        }
+        round += 1;
+    }
+    out.extend(root.into_iter().take(room.saturating_sub(out.len())));
+    out
+}
+
+/// The alnum words of `s`, capitalized and joined: a legal name, or none.
+fn camel(s: &str) -> Option<String> {
+    let name: String = s
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w[..1].to_ascii_uppercase() + &w[1..])
+        .collect();
+    goofi_core::variables::is_valid_name(&name).then_some(name)
+}
+
+fn lower_camel(s: &str) -> Option<String> {
+    camel(s).map(|n| n[..1].to_ascii_lowercase() + &n[1..]).filter(|n| goofi_core::variables::is_valid_name(n))
+}
+
+fn numbered(base: &str, i: usize) -> String {
+    match i {
+        0 => base.to_string(),
+        _ => format!("{base}{}", i + 1),
+    }
+}
+
+fn unique(name: String, used: &mut Vec<String>) -> String {
+    let mut candidate = name.clone();
+    let mut n = 1;
+    while used.contains(&candidate) {
+        n += 1;
+        candidate = format!("{name}{n}");
+    }
+    used.push(candidate.clone());
+    candidate
+}
+
+/// Exactly `count` options, each distinct and none empty: a `Str` param's scalar is the index of
+/// the FIRST option that matches, so a repeat would read back as the wrong step.
+fn distinct(shown: &[String], count: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(count);
+    for k in 0..count {
+        let s = shown.get(k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| k.to_string());
+        let mut candidate = s.clone();
+        let mut n = 1;
+        while out.contains(&candidate) {
+            n += 1;
+            candidate = format!("{s} ({n})");
+        }
+        out.push(candidate);
+    }
+    out
+}

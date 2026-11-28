@@ -1,7 +1,7 @@
-//! The one pipeline that turns a node's `.rs` file into a library goofi loads: generate a crate
+//! The one pipeline from a node file to what goofi loads. An `.rs` file: generate a crate
 //! against the embedded SDK, build it with cargo, cache the artifact by content, load it behind a
-//! version symbol. No engine lives here — the composition root's build script runs it over the
-//! shipped folders, and a scan runs it over a root at run time.
+//! version symbol. Any file: [`Library`] reads it into its declaration. No engine lives here —
+//! the composition root's build script runs it over the shipped folders, and a scan over a root.
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -12,6 +12,8 @@ use goofi_supervisor::layout::{self, Tool};
 use goofi_supervisor::sync::Mutex;
 
 use sha2::{Digest, Sha256};
+
+
 
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
@@ -24,32 +26,42 @@ pub fn built_against() -> String {
     format!("{VERSION}+{SDK_HASH}")
 }
 
-/// One engine's authoring crate: what a node file compiles against, the crates it may reach
-/// beyond it, and the line that makes the generated crate a cdylib of that engine.
+/// One engine as a node file names it: the module of `goofi_sdk` whose `export!` the file
+/// spells, and the crates it may reach beyond the SDK.
 pub struct Sdk {
-    pub name: &'static str,
-    pub dir: &'static str,
+    pub engine: &'static str,
     pub allow: &'static [(&'static str, &'static str)],
-    pub glue: &'static str,
+    /// Whether a library built after boot runs in a child, where the engine can call one.
+    pub hosted: bool,
 }
 
 pub const SIGNAL: Sdk = Sdk {
-    name: "goofi-signal-sdk",
-    dir: "backend/signal/goofi-signal-sdk",
+    engine: "signal",
     allow: &[("rustfft", "6.4.1"), ("realfft", "3"), ("libm", "0.2")],
-    glue: "goofi_signal_sdk::cdylib!(node, {sdk});",
+    hosted: true,
 };
 
-pub const AUDIO: Sdk = Sdk {
-    name: "goofi-audio-sdk",
-    dir: "backend/audio/goofi-audio-sdk",
-    allow: &[("libm", "0.2")],
-    glue: "goofi_audio_sdk::cdylib!(node, {sdk});",
-};
+pub const AUDIO: Sdk = Sdk { engine: "audio", allow: &[("libm", "0.2")], hosted: false };
 
-pub fn sdk(name: &str) -> Option<&'static Sdk> {
-    [&SIGNAL, &AUDIO].into_iter().find(|s| s.name == name)
+pub const GRAPHICS: Sdk = Sdk { engine: "graphics", allow: &[("libm", "0.2")], hosted: true };
+
+pub const SDKS: [&Sdk; 3] = [&SIGNAL, &AUDIO, &GRAPHICS];
+
+impl Sdk {
+    /// The line that makes the generated crate a cdylib of this engine.
+    fn glue(&self) -> String {
+        format!("goofi_sdk::{}::cdylib!(node, {:?}, {SDK_HASH:?});", self.engine, self.engine)
+    }
 }
+
+/// The SDK an `.rs` node file declares: the one whose `export!` it spells. None for a file that
+/// spells none, which is not a node yet.
+pub fn sdk_of(source: &str) -> Option<&'static Sdk> {
+    SDKS.into_iter().find(|sdk| source.contains(&format!("goofi_sdk::{}::export!", sdk.engine)))
+}
+
+/// Why an `.rs` file that names no SDK is not a node.
+pub const NO_SDK: &str = "the file exports no node: end it with `goofi_sdk::signal::export!`, `goofi_sdk::audio::export!` or `goofi_sdk::graphics::export!`";
 
 /// How long one node build may run. A first build compiles the SDK's dependency tree, which is
 /// minutes on a slow machine; a build past this is stuck, not slow.
@@ -61,12 +73,12 @@ fn cache_key(sdk: &Sdk, source: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(VERSION.as_bytes());
     hash.update(SDK_HASH.as_bytes());
-    hash.update(sdk.name.as_bytes());
+    hash.update(sdk.engine.as_bytes());
     for (name, version) in sdk.allow {
         hash.update(name.as_bytes());
         hash.update(version.as_bytes());
     }
-    hash.update(sdk.glue.as_bytes());
+    hash.update(sdk.glue().as_bytes());
     hash.update(source);
     format!("{:x}", hash.finalize())[..32].to_string()
 }
@@ -220,11 +232,10 @@ fn generate(sdk: &Sdk, source: &Path, sdk_root: &Path, crate_dir: &Path, crate_n
     let manifest = format!(
         "[package]\nname = {crate_name:?}\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n\
          [lib]\ncrate-type = [\"cdylib\"]\n\n\
-         [dependencies]\n{} = {{ path = {:?} }}\ngoofi-core = {{ path = {:?} }}\n{deps}\n\
+         [dependencies]\ngoofi-sdk = {{ path = {:?} }}\ngoofi-core = {{ path = {:?} }}\n{deps}\n\
          [profile.release]\nopt-level = 3\ndebug = false\nincremental = true\ncodegen-units = 16\npanic = \"unwind\"\n\n\
          [workspace]\n",
-        sdk.name,
-        slash(&sdk_root.join(sdk.dir)),
+        slash(&sdk_root.join("backend/goofi-sdk")),
         slash(&sdk_root.join("backend/goofi-core")),
     );
     let lib = format!(
@@ -232,7 +243,7 @@ fn generate(sdk: &Sdk, source: &Path, sdk_root: &Path, crate_dir: &Path, crate_n
          #[forbid(unsafe_code)]\n#[path = {:?}]\nmod node;\n{}\n",
         source.display(),
         slash(&std::path::absolute(source).map_err(|e| e.to_string())?),
-        sdk.glue.replace("{sdk}", &format!("{SDK_HASH:?}")),
+        sdk.glue(),
     );
     std::fs::create_dir_all(crate_dir.join("src")).map_err(|e| e.to_string())?;
     write_if_changed(&crate_dir.join("Cargo.toml"), manifest.as_bytes());

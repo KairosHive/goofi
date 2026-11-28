@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Fft {
@@ -212,4 +212,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Fft, MANIFEST);
+goofi_sdk::signal::export!(Fft, MANIFEST);

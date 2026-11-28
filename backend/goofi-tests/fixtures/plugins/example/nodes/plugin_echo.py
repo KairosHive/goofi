@@ -1,7 +1,7 @@
 """A bundled Python node used by the plugin session."""
 import goofi
 
-class PluginEcho(goofi.Node):
+class PluginEcho(goofi.SignalNode):
     """Forward the supplied frame."""
     INPUTS = {"input": goofi.DataType.ARRAY}
     OUTPUTS = {"out": goofi.DataType.ARRAY}

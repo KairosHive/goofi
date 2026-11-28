@@ -2,7 +2,7 @@
 //! of, fastest first, with whatever is left over dropped. Per frame, so it follows a Buffer.
 
 use goofi_core::{resolve_axis, stream, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Emd;
@@ -153,4 +153,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Emd, MANIFEST);
+goofi_sdk::signal::export!(Emd, MANIFEST);

@@ -5,7 +5,7 @@ import numpy as np
 import goofi
 
 
-class Axes(goofi.Node):
+class Axes(goofi.SignalNode):
     """Apply one of the meta rules to a `[2, 3]` labelled frame."""
 
     TAGS = ["transform"]

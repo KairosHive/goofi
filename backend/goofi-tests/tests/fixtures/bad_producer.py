@@ -1,7 +1,7 @@
 import goofi
 
 
-class BadProducer(goofi.Node):
+class BadProducer(goofi.SignalNode):
     """A node whose `producer` is not a bool."""
 
     OUTPUTS = {"out": goofi.DataType.ARRAY}

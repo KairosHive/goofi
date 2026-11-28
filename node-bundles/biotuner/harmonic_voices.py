@@ -12,7 +12,7 @@ import numpy as np
 import goofi
 
 
-class HarmonicVoices(goofi.Node):
+class HarmonicVoices(goofi.SignalNode):
     """Keep component fades when one harmonic frame drives sound and geometry."""
 
     TAGS = ["transform", "music"]

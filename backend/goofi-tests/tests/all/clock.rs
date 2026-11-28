@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use goofi_python::inproc::PyExprEvaluator;
+use goofi_runtime::python::inproc::PyExprEvaluator;
 use goofi_tests::{f32s, hex, j, number, Goofi};
 
 fn time(g: &Goofi) -> f64 {

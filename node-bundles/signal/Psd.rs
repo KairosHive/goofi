@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use goofi_core::{resolve_axis, stream, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Show, SlotDecl, Tag};
 
 const WELCH: &[Show] = &[Show { param: "mode", any_of: &["welch"] }];
 use rustfft::{num_complex::Complex32, FftPlanner};
@@ -190,4 +190,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Psd, MANIFEST);
+goofi_sdk::signal::export!(Psd, MANIFEST);

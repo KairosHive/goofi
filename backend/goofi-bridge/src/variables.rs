@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use goofi_graph::{Graph, Uid};
-use goofi_node::EventId;
+use goofi_core::node::EventId;
 use goofi_supervisor::sync::Mutex;
 use goofi_transport::{
     door_service, output_service, service_base, variables_base, view_door_service, Door, Doorbell, Hub, Payload, Publisher,

@@ -10,7 +10,7 @@ import pylsl
 import goofi
 
 
-class LslOut(goofi.Node):
+class LslOut(goofi.SignalNode):
     """Publish a frame as an LSL stream, with the labels and rate it arrived with."""
 
     TAGS = ["output"]

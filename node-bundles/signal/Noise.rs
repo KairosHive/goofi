@@ -3,7 +3,7 @@
 //! Perlin, simplex and ridged are smooth functions of the patch clock, layered in octaves.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec,
+use goofi_sdk::signal::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec,
     Show, Tag,
 };
 
@@ -303,4 +303,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Noise, MANIFEST);
+goofi_sdk::signal::export!(Noise, MANIFEST);

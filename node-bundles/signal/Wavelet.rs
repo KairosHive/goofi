@@ -2,7 +2,7 @@
 //! cannot show. Per frame, so it follows a Buffer.
 
 use goofi_core::{resolve_axis, stream, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Wavelet {
@@ -165,4 +165,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Wavelet, MANIFEST);
+goofi_sdk::signal::export!(Wavelet, MANIFEST);

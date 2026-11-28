@@ -85,7 +85,7 @@ CamelCasing its stem (`scale.py` → `Scale`), overriding a shipped type of the 
     # nodes_signal/scale.py
     import goofi
 
-    class Scale(goofi.Node):
+    class Scale(goofi.SignalNode):
         """Multiply every value by a factor."""
 
         INPUTS = {"input": goofi.DataType.ARRAY}
@@ -111,9 +111,10 @@ built on refresh where `cargo` exists and run in a child of goofi's own binary; 
 `nodes_graphics/` is a GPU shader (read `graphics:Life` for state kept between ticks). A Python or
 Rust node that makes a picture is a signal node: a `goofi.DataType.TEXTURE` output, returning
 `goofi.Texture(pixels)` for RGB/RGBA uint8 or float32, which a shader takes as its input. A `TEXTURE` input reads `data.numpy()`. `signal:GraphicsIn` is a texture as
-an array. The same Python file with `# goofi: graphics` as its first line, in `nodes_graphics/`,
-is a graphics node (`graphics:Camera` is one): the render thread calls it inside the tick and
-waits for its picture.
+an array. The base class is the engine: the same class on `goofi.GraphicsNode` is a graphics node
+(`graphics:Camera` is one), and the render thread calls it inside the tick and waits for its
+picture. A Rust file says its engine by the SDK of its last line: `goofi_sdk::signal::export!`,
+`goofi_sdk::audio::export!` or `goofi_sdk::graphics::export!`.
 `data.torch()` and `goofi.Texture(tensor)` keep such a node's pictures in CUDA memory where the
 device shares it; `data.cuda()`, `goofi.gpu.cuda(array)` and `goofi.gpu.numpy(tensor)` convert
 in any node.

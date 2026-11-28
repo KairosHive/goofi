@@ -12,6 +12,7 @@ use goofi_supervisor::progress;
 
 pub mod demo;
 pub mod python;
+pub mod screen;
 use python::{answers, query, run, uv};
 
 /// The repo root. Nothing is resolved, so a checkout reached through a symlink stays spelled the
@@ -206,7 +207,7 @@ fn require_uv(runtime: &layout::Runtime) -> Result<(), String> {
 /// the lock, by content. A wheel built from these bytes is this wheel, whenever it was built.
 fn wheel_key(root: &Path) -> String {
     let mut sources: Vec<PathBuf> = [
-        "backend/signal/goofi-pymod",
+        "backend/goofi-pymod",
         "backend/goofi-supervisor",
         "backend/goofi-core",
         "backend/goofi-codec",
@@ -249,7 +250,7 @@ fn build_wheel(root: &Path, runtime: &layout::Runtime, label: &str, py: &Path) -
             .arg("-o")
             .arg(&out)
             .arg("-m")
-            .arg(root.join("backend").join("signal").join("goofi-pymod").join("Cargo.toml"))
+            .arg(root.join("backend").join("goofi-pymod").join("Cargo.toml"))
             // Run from OUTSIDE the repo, or maturin's nested cargo picks `.cargo/config.toml` up
             // and builds against the free-threaded interpreter's home. Hence the absolute paths.
             .current_dir(std::env::temp_dir()),

@@ -910,14 +910,15 @@ version = "3.0.0"
 dependencies = [
  "audio_thread_priority",
  "cpal",
- "goofi-audio-sdk",
  "goofi-build",
+ "goofi-codec",
  "goofi-core",
- "goofi-node",
  "goofi-runtime",
+ "goofi-sdk",
  "goofi-supervisor",
  "goofi-transport",
  "goofi-window",
+ "indexmap",
  "libc",
  "libdbus-sys",
  "libloading 0.8.9",
@@ -926,16 +927,6 @@ dependencies = [
  "serde",
  "serde_json",
  "vst3",
-]
-
-[[package]]
-name = "goofi-audio-sdk"
-version = "3.0.0"
-dependencies = [
- "goofi-build",
- "goofi-core",
- "goofi-node",
- "libloading 0.8.9",
 ]
 
 [[package]]
@@ -954,13 +945,12 @@ dependencies = [
  "goofi-graph",
  "goofi-graphics",
  "goofi-init",
- "goofi-node",
  "goofi-record",
+ "goofi-runtime",
+ "goofi-sdk",
  "goofi-signal",
- "goofi-signal-sdk",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "midir",
  "notify",
@@ -968,6 +958,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shell-words",
+ "tiny-skia",
  "tokio",
  "toml",
  "ts-rs",
@@ -987,14 +978,14 @@ dependencies = [
 name = "goofi-cli"
 version = "3.0.0"
 dependencies = [
+ "base64",
  "goofi-audio",
  "goofi-bridge",
- "goofi-client",
+ "goofi-core",
+ "goofi-graphics",
  "goofi-init",
- "goofi-node",
- "goofi-python",
+ "goofi-record",
  "goofi-runtime",
- "goofi-screen",
  "goofi-signal",
  "goofi-supervisor",
  "goofi-transport",
@@ -1003,15 +994,6 @@ dependencies = [
  "shell-words",
  "terminal_size",
  "tokio",
-]
-
-[[package]]
-name = "goofi-client"
-version = "3.0.0"
-dependencies = [
- "base64",
- "goofi-supervisor",
- "serde_json",
 ]
 
 [[package]]
@@ -1033,11 +1015,9 @@ version = "3.0.0"
 dependencies = [
  "dunce",
  "goofi-supervisor",
- "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
- "tiny-skia",
  "ts-rs",
 ]
 
@@ -1046,10 +1026,8 @@ name = "goofi-graph"
 version = "3.0.0"
 dependencies = [
  "goofi-core",
- "goofi-node",
  "goofi-record",
  "goofi-supervisor",
- "goofi-view",
  "indexmap",
  "serde",
  "serde_json",
@@ -1067,13 +1045,10 @@ dependencies = [
  "bytes",
  "goofi-codec",
  "goofi-core",
- "goofi-host-sdk",
- "goofi-node",
- "goofi-python",
  "goofi-runtime",
+ "goofi-sdk",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "half",
  "libc",
@@ -1084,38 +1059,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "goofi-host-sdk"
-version = "3.0.0"
-dependencies = [
- "goofi-build",
- "goofi-codec",
- "goofi-core",
- "goofi-node",
- "indexmap",
- "libloading 0.8.9",
-]
-
-[[package]]
 name = "goofi-init"
 version = "3.0.0"
 dependencies = [
- "goofi-screen",
+ "console",
  "goofi-supervisor",
+ "indicatif",
  "serde",
  "sha2",
  "toml",
-]
-
-[[package]]
-name = "goofi-node"
-version = "3.0.0"
-dependencies = [
- "goofi-core",
- "goofi-supervisor",
- "goofi-view",
- "indexmap",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1134,27 +1086,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "goofi-python"
-version = "3.0.0"
-dependencies = [
- "goofi-core",
- "goofi-host-sdk",
- "goofi-node",
- "goofi-pymod",
- "goofi-runtime",
- "goofi-supervisor",
- "goofi-transport",
- "pyo3",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "goofi-record"
 version = "3.0.0"
 dependencies = [
  "goofi-core",
- "goofi-node",
  "goofi-supervisor",
  "goofi-transport",
  "serde",
@@ -1169,40 +1104,35 @@ dependencies = [
  "goofi-build",
  "goofi-codec",
  "goofi-core",
- "goofi-host-sdk",
- "goofi-node",
+ "goofi-pymod",
+ "goofi-sdk",
  "goofi-supervisor",
  "goofi-transport",
  "indexmap",
+ "libloading 0.8.9",
+ "pyo3",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
-name = "goofi-screen"
+name = "goofi-sdk"
 version = "3.0.0"
 dependencies = [
- "console",
- "goofi-supervisor",
- "indicatif",
+ "goofi-codec",
+ "goofi-core",
+ "indexmap",
 ]
 
 [[package]]
 name = "goofi-signal"
 version = "3.0.0"
 dependencies = [
- "goofi-build",
- "goofi-node",
- "goofi-python",
+ "goofi-core",
  "goofi-runtime",
- "goofi-signal-sdk",
+ "goofi-sdk",
  "goofi-supervisor",
  "goofi-transport",
-]
-
-[[package]]
-name = "goofi-signal-sdk"
-version = "3.0.0"
-dependencies = [
- "goofi-host-sdk",
 ]
 
 [[package]]
@@ -1227,24 +1157,19 @@ dependencies = [
  "futures-util",
  "goofi-agent",
  "goofi-audio",
- "goofi-audio-sdk",
  "goofi-bridge",
  "goofi-cli",
- "goofi-client",
  "goofi-codec",
  "goofi-core",
  "goofi-graph",
  "goofi-graphics",
  "goofi-init",
- "goofi-node",
- "goofi-python",
  "goofi-record",
  "goofi-runtime",
+ "goofi-sdk",
  "goofi-signal",
- "goofi-signal-sdk",
  "goofi-supervisor",
  "goofi-transport",
- "goofi-view",
  "goofi-window",
  "indexmap",
  "libc",
@@ -1268,17 +1193,9 @@ dependencies = [
  "arc-swap",
  "bytes",
  "goofi-core",
- "goofi-node",
  "goofi-supervisor",
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "goofi-view"
-version = "3.0.0"
-dependencies = [
- "serde",
 ]
 
 [[package]]

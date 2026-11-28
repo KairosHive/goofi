@@ -9,17 +9,17 @@ use serde_json::Value;
 #[tokio::test]
 async fn a_tab_is_greeted_with_the_session_frame_and_the_palette_it_can_build_from() {
     // The `hello` carries the runtime overlay, the one per-node truth the doc never holds.
-    static DISCOVERED: goofi_node::NodeManifest = goofi_node::NodeManifest {
+    static DISCOVERED: goofi_core::node::NodeManifest = goofi_core::node::NodeManifest {
         type_name: "DiscoveredPyNode",
         tags: &[],
         doc: "a runtime type registered before serving",
         inputs: &[],
-        outputs: &[goofi_node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }],
+        outputs: &[goofi_core::node::OutputDecl { name: "out", kind: goofi_core::SlotType::Array }],
         params: &[],
         producer: true,
     };
     let g = Goofi::new();
-    g.register_dyn(&DISCOVERED, Box::new(|_| unreachable!()), &goofi_node::NATIVE);
+    g.register_dyn(&DISCOVERED, Box::new(|_| unreachable!()), &goofi_core::node::NATIVE);
     let base = g.serve().await;
     let (mut c, hello) = Client::connect(&base).await;
 

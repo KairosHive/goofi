@@ -30,7 +30,7 @@ import goofi
 THINKING = {"default": None, "off": False, "on": True}
 
 
-class LLM(goofi.Node):
+class LLM(goofi.SignalNode):
     """One reply per prompt from a language model, any provider, hosted or local."""
 
     TAGS = ["text", "ml"]

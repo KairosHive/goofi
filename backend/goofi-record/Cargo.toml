@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 goofi-supervisor = { path = "../goofi-supervisor" }
 goofi-core = { path = "../goofi-core" }
-goofi-node = { path = "../goofi-node" }
 goofi-transport = { path = "../goofi-transport" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

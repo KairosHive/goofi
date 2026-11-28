@@ -26,7 +26,7 @@ PRESETS = {
 }
 
 
-class Flow(goofi.Node):
+class Flow(goofi.SignalNode):
     """How every part of the picture moved since the picture before it."""
 
     TAGS = ["analysis", "motion", "image"]

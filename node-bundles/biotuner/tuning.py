@@ -30,7 +30,7 @@ from biotuner.scale_construction import (
 import goofi
 
 
-class Tuning(goofi.Node):
+class Tuning(goofi.SignalNode):
     """The ratios between a signal's peaks, as a scale inside one octave.
 
     Inputs:

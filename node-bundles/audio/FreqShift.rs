@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     FREQUENCY = ParamDecl {
         doc: Some("hertz to move every partial by, up or down; it is an addition, so harmony does not survive it"),
         ..ParamDecl::new("freq_shift", "frequency", ParamSpec::Num { default: &[0.0], min: -5000.0, max: 5000.0, int: false, options: &[], face: Face::Plain })
@@ -98,4 +98,4 @@ impl AudioNode for FreqShift {
     }
 }
 
-goofi_audio_sdk::export!(FreqShift, MANIFEST);
+goofi_sdk::audio::export!(FreqShift, MANIFEST);

@@ -2,7 +2,7 @@ import goofi
 import numpy as np
 
 
-class PulseCounter(goofi.Node):
+class PulseCounter(goofi.SignalNode):
     """Counts up, and starts over on a pulse."""
 
     OUTPUTS = {"out": goofi.DataType.ARRAY}

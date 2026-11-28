@@ -2,7 +2,7 @@
 //! the whole one. `modern` is the dense form, whose update is attention's own.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -247,4 +247,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Hopfield, MANIFEST);
+goofi_sdk::signal::export!(Hopfield, MANIFEST);

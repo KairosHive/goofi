@@ -8,9 +8,9 @@ use std::sync::Arc;
 use goofi_supervisor::sync::Mutex;
 use std::time::Duration;
 
-use goofi_audio_sdk::{Face, AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
+use goofi_sdk::audio::{Face, AudioNode, Block, ParamDecl, ParamSpec, Port, PortMut, BLOCK};
 use goofi_core::SlotType;
-use goofi_node::{
+use goofi_core::node::{
     DrainWaker, Engine, EventId, GraphView, LibraryEntry, NodeManifest, NodeStage,
     OutputDecl, ParamGroups, SlotDecl, Status, Uid,
 };
@@ -168,7 +168,7 @@ impl Engine for Skeleton {
     }
 
     fn library(&self) -> Vec<LibraryEntry> {
-        vec![LibraryEntry { manifest: self.class, isolation: &goofi_node::NATIVE }]
+        vec![LibraryEntry { manifest: self.class, isolation: &goofi_core::node::NATIVE }]
     }
 
     fn insert(
@@ -259,7 +259,7 @@ impl Engine for Skeleton {
         n
     }
 
-    fn request(&mut self, _uid: Uid, _request: goofi_node::Request) {}
+    fn request(&mut self, _uid: Uid, _request: goofi_core::node::Request) {}
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
@@ -294,7 +294,7 @@ fn rings_for(view: &GraphView<'_>, producer: Uid, slot: &'static str) -> Rings {
 /// read by index, one output filled a channel at a time.
 struct Tone;
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     LEVEL = ParamDecl {
         doc: Some("the block's level"),
         ..ParamDecl::new("tone", "level", ParamSpec::Num { default: &[0.5], min: 0.0, max: 1.0, int: false, options: &[], face: Face::Plain })

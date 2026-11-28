@@ -10,7 +10,7 @@ import pylsl
 import goofi
 
 
-class LslIn(goofi.Node):
+class LslIn(goofi.SignalNode):
     """Receive an LSL stream: [channels, samples] per tick, with its labels and rate."""
 
     TAGS = ["input"]

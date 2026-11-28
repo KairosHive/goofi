@@ -3,7 +3,7 @@
 //! on the output of its kind.
 
 use goofi_core::{Data, Meta, SlotType, Value};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Role, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamSpec, Params, Role, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Variable;
@@ -46,4 +46,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Variable, MANIFEST);
+goofi_sdk::signal::export!(Variable, MANIFEST);

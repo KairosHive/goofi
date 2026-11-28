@@ -3,7 +3,7 @@
 //! change bends the wave from where it sits and never jumps it.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show, Tag};
+use goofi_sdk::signal::{Face, ExprDecl, ExprMode, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, Show, Tag};
 
 /// The waveform's value at `t` cycles in `[0, 1)`, in `[-1, 1]`.
 fn wave(kind: &str, t: f64, duty: f64) -> f64 {
@@ -174,4 +174,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(LFO, MANIFEST);
+goofi_sdk::signal::export!(LFO, MANIFEST);

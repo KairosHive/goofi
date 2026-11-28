@@ -9,7 +9,7 @@ import numpy as np
 import goofi
 
 
-class SpectralEntropy(goofi.Node):
+class SpectralEntropy(goofi.SignalNode):
     """Spectral entropy: how flat the power spectrum is, tone to noise."""
 
     TAGS = ["analysis"]

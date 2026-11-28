@@ -1,9 +1,9 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, band_partial, band_volts, hz_of, AudioNode, Block, Lanes, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag,
     BLOCK,
 };
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     GAINS = ParamDecl {
         doc: Some("what each band is worth; an audio reference is one band per channel, and one number opens them all"),
         ..ParamDecl::new("band", "gains", ParamSpec::Num { default: &[1.0], min: 0.0, max: 4.0, int: false, options: &[], face: Face::Plain })
@@ -130,4 +130,4 @@ impl AudioNode for BandFilter {
     }
 }
 
-goofi_audio_sdk::export!(BandFilter, MANIFEST);
+goofi_sdk::audio::export!(BandFilter, MANIFEST);

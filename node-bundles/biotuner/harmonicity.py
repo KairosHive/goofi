@@ -21,7 +21,7 @@ from biotuner.metrics import (
 import goofi
 
 
-class Harmonicity(goofi.Node):
+class Harmonicity(goofi.SignalNode):
     """Harmonic similarity, Tenney height, consonance and subharmonic tension.
 
     Inputs:

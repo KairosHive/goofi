@@ -1,7 +1,7 @@
 //! A Butterworth filter with forward-backward or continuous causal processing.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// One second-order section, normalized so `a0 == 1`.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -289,4 +289,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Filter, MANIFEST);
+goofi_sdk::signal::export!(Filter, MANIFEST);

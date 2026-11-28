@@ -2,7 +2,7 @@
 //! A stacked axis takes the sender names, which is the only place a builtin may name an entry.
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Join;
@@ -118,4 +118,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Join, MANIFEST);
+goofi_sdk::signal::export!(Join, MANIFEST);

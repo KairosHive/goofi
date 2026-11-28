@@ -1,7 +1,7 @@
 import goofi
 
 
-class Producer(goofi.Node):
+class Producer(goofi.SignalNode):
     """A source that declares itself."""
 
     OUTPUTS = {"out": goofi.DataType.ARRAY}

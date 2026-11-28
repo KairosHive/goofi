@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, cross, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     MODE = ParamDecl {
         doc: Some("the texels themselves, or `min`..`max` mapped onto [-1, 1] or [0, 1]"),
         ..ParamDecl::new("graphics", "mode", ParamSpec::Str { default: "bipolar", options: cross::RANGES, refresh: false })
@@ -72,4 +72,4 @@ impl AudioNode for GraphicsIn {
     }
 }
 
-goofi_audio_sdk::export!(GraphicsIn, MANIFEST);
+goofi_sdk::audio::export!(GraphicsIn, MANIFEST);

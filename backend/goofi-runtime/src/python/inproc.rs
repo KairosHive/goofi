@@ -1,0 +1,11 @@
+//! The in-process Python tier: a node whose imports left the GIL disabled, hosted by a
+//! pyo3-embedded free-threaded CPython.
+
+mod log;
+mod discover;
+mod expr;
+mod host;
+
+pub use discover::build_routed;
+pub use expr::PyExprEvaluator;
+pub use host::{configure_embedded, interpreter_path, PyNode};

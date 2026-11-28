@@ -2,7 +2,7 @@
 //! gives one answer; in updates it holds whole frames and hands back the one from further back.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType, Stream};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Delay {
@@ -90,4 +90,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Delay, MANIFEST);
+goofi_sdk::signal::export!(Delay, MANIFEST);

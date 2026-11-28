@@ -544,9 +544,17 @@ html[data-drag] :disabled {
 .svelte-flow__edge:hover .svelte-flow__edge-path {
 	stroke: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
 }
-.svelte-flow__edge.selected .svelte-flow__edge-path {
+/* One glow for a picked cable and for the cable a drag would take: lit in the accent, and in
+   the warning ink when the release places a converter. Under two ancestors, over Flow's grey for a focused cable. */
+.svelte-flow .svelte-flow__edges .svelte-flow__edge.selected .svelte-flow__edge-path,
+.svelte-flow .svelte-flow__edges .svelte-flow__edge.cable-drop .svelte-flow__edge-path {
 	stroke: var(--accent);
-	stroke-width: 2;
+	stroke-width: 2.5;
+	filter: drop-shadow(0 0 4px var(--accent));
+}
+.svelte-flow .svelte-flow__edges .svelte-flow__edge.cable-drop.convert .svelte-flow__edge-path {
+	stroke: var(--warning);
+	filter: drop-shadow(0 0 4px var(--warning));
 }
 .svelte-flow__attribution {
 	display: none;

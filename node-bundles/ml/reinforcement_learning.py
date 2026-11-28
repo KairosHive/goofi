@@ -237,7 +237,7 @@ class _Net:
         return float(np.sqrt(sum(float(np.sum(p * p)) for p in self.params)))
 
 
-class ReinforcementLearning(goofi.Node):
+class ReinforcementLearning(goofi.SignalNode):
     """Learns to drive a continuous action so a reward keeps rising, and never settles.
 
     Wire a feature of the signal to `observations`, the feature you want raised to `reward`, and

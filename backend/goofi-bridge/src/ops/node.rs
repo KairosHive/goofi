@@ -270,7 +270,7 @@ impl WriteOp for Add {
     }
 
     fn label(a: &AddArgs, _: &Value) -> String {
-        format!("Add {}", goofi_node::split_type_id(&a.ty).1)
+        format!("Add {}", goofi_core::node::split_type_id(&a.ty).1)
     }
 }
 
@@ -421,7 +421,7 @@ impl WriteOp for ParamEdit {
         }
         Ok(json!({
             "value": tx.g.params(uid)
-                .and_then(|p| goofi_node::param_dim(&p, &group, &name))
+                .and_then(|p| goofi_core::node::param_dim(&p, &group, &name))
                 .map(|p| goofi_graph::param_value_json(&p)),
             "error": tx.g.param_source(uid, &group, &name).and_then(|s| s.error),
         }))
@@ -440,7 +440,7 @@ impl EffectOp for ParamRequest {
     /// NOT a command: a request holds no state, so there is nothing to undo. A refresh's options
     /// do not ride the reply: `node state` reports them once the hook has run.
     fn run(state: &AppState, a: ParamRequestArgs, _: &Caller) -> Result<Value, String> {
-        let kind: goofi_node::RequestKind = serde_json::from_value(json!(a.request))
+        let kind: goofi_core::node::RequestKind = serde_json::from_value(json!(a.request))
             .map_err(|_| "`request` is `refresh` or `pulse`".to_string())?;
         {
             let mut g = state.graph.lock();
@@ -448,7 +448,7 @@ impl EffectOp for ParamRequest {
             let (group, name) = a.param.split()?;
             g.request(uid, &group, &name, kind)?;
         }
-        if kind == goofi_node::RequestKind::Refresh {
+        if kind == goofi_core::node::RequestKind::Refresh {
             crate::resync_and_broadcast(state);
         }
         Ok(json!({ "ok": true }))

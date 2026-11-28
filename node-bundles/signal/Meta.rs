@@ -1,7 +1,7 @@
 //! Meta — write the rate or the labels a frame carries, for a source that does not know its own.
 
 use goofi_core::{resolve_axis, Axis, Coord, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 #[derive(Default)]
 struct Meta;
@@ -75,4 +75,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Meta, MANIFEST);
+goofi_sdk::signal::export!(Meta, MANIFEST);

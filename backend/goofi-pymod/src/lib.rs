@@ -1,0 +1,52 @@
+//! The `goofi` Python package: an abi3 cdylib wheel for subprocess GIL pythons, and an
+//! rlib linked into the free-threaded host via `pyo3::append_to_inittab!(goofi)`.
+
+// An empty crate under no features, so the default python-free workspace build stays green.
+#![cfg(any(feature = "extension-module", feature = "host"))]
+
+mod agent;
+mod data;
+mod texture;
+pub mod exec;
+mod introspect;
+pub mod loader;
+mod node;
+mod params;
+#[cfg(feature = "extension-module")]
+mod serve;
+mod stream;
+
+pub use data::{numpy_f32, Data};
+
+use pyo3::prelude::*;
+
+/// The `goofi` Python module; `pub` so the host can `append_to_inittab!` it.
+#[pymodule]
+pub fn goofi(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let source = std::ffi::CString::new(include_str!("geometry.py"))?;
+    let geometry = PyModule::from_code(m.py(), source.as_c_str(), c"goofi.geometry", c"goofi.geometry")?;
+    m.add_submodule(&geometry)?;
+    let source = std::ffi::CString::new(include_str!("gpu.py"))?;
+    m.add_submodule(&PyModule::from_code(m.py(), source.as_c_str(), c"goofi.gpu", c"goofi.gpu")?)?;
+    m.add_submodule(&agent::module(m.py())?)?;
+    m.add_class::<data::Data>()?;
+    m.add_class::<data::Ndims>()?;
+    m.add_class::<node::Node>()?;
+    m.add_class::<node::SignalNode>()?;
+    m.add_class::<node::GraphicsNode>()?;
+    m.add_class::<params::DataType>()?;
+    m.add_class::<texture::Texture>()?;
+    m.add_class::<params::InputSlot>()?;
+    m.add_class::<params::NumParam>()?;
+    m.add_class::<params::ColorParam>()?;
+    m.add_class::<params::EnvelopeParam>()?;
+    m.add_class::<params::BoolParam>()?;
+    m.add_class::<params::StringParam>()?;
+    m.add_class::<params::PulseParam>()?;
+    m.add_class::<stream::Stream>()?;
+    m.add_function(wrap_pyfunction!(introspect::introspect, m)?)?;
+    m.add_function(wrap_pyfunction!(introspect::declared_engine, m)?)?;
+    #[cfg(feature = "extension-module")]
+    m.add_function(wrap_pyfunction!(serve::serve, m)?)?;
+    Ok(())
+}

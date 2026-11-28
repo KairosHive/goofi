@@ -14,7 +14,7 @@ test('metadata fits inline and expands only when it has more to show', async ({ 
 		fs.mkdirSync(path.dirname(source), { recursive: true });
 		fs.writeFileSync(source, `import goofi
 import numpy as np
-class MetadataRows(goofi.Node):
+class MetadataRows(goofi.SignalNode):
     PRODUCER = True
     OUTPUTS = {"out": goofi.DataType.ARRAY}
     PARAMS = {"test": {"shorten": goofi.BoolParam(False)}}

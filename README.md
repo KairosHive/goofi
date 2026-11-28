@@ -112,9 +112,10 @@ audio engine's `MidiIn` opens a port and deals its notes out as voices, gate, pi
 ## Nodes
 
 Drop a file in the patch workspace's `nodes_signal/`, `nodes_audio/` or `nodes_graphics/`, or
-straight into a root: `smooth.py`, `Smooth.rs`, `Blur.wgsl`. The stem names the type, a leading `_`
-hides it, and the extension names the SDK it is written against, which is what routes it to its
-engine. The nodes goofi ships are the same kind of file under `node-bundles/`, so a toolchain is
+straight into a root: `smooth.py`, `Smooth.rs`, `Blur.wgsl`. The stem names the type and a leading
+`_` hides it. The node declares its engine: a Python class by its base (`goofi.SignalNode`,
+`goofi.GraphicsNode`), a Rust file by the SDK whose `export!` it spells (`goofi_sdk::signal`,
+`goofi_sdk::audio`, `goofi_sdk::graphics`), and a `.wgsl` file is a graphics node. The nodes goofi ships are the same kind of file under `node-bundles/`, so a toolchain is
 needed to author a Rust node and never to run one; `goofi library get <type> --source` hands back
 any node's source to copy.
 
@@ -123,7 +124,7 @@ import goofi
 import numpy as np
 
 
-class Smooth(goofi.Node):
+class Smooth(goofi.SignalNode):
     """Rolling mean over the last axis."""
 
     INPUTS = {"data": goofi.InputSlot(goofi.DataType.ARRAY, required=True)}

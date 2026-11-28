@@ -1,4 +1,3 @@
-# goofi: graphics
 """Depth — how far each pixel of a picture is from the camera, in metres, by Apple's Depth Pro 2.
 
 A graphics node: the tick calls it at its place between the shaders, so the depth a shader reads
@@ -39,7 +38,7 @@ MULTIPLE = 32  # the model pads a picture to whole multiples of this
 BRIGHTEST = 65504.0  # the largest number a texture holds: what an endless distance is drawn as
 
 
-class Depth(goofi.Node):
+class Depth(goofi.GraphicsNode):
     """Metric depth of a picture or a live feed, by Depth Pro 2 (S, B, L or H), drawn as a texture."""
 
     TAGS = ["analysis", "image", "ml"]

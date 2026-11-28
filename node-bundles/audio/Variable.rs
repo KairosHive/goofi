@@ -1,10 +1,10 @@
 //! Variable — a variable's frame crossing into the audio plane. The named variable's wire feeds
 //! `value` as a cable would; the crossing plays each frame as a waveform, a `[1]` value as a level.
 
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Role, SlotDecl, Tag};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, Role, SlotDecl, Tag};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     GROUP = ParamDecl {
         doc: Some("the variable's group; the list is the patch's groups"),
         ..ParamDecl::new("variable", "group", ParamSpec::Str { default: "", options: &[], refresh: true })
@@ -46,4 +46,4 @@ impl AudioNode for Variable {
     }
 }
 
-goofi_audio_sdk::export!(Variable, MANIFEST);
+goofi_sdk::audio::export!(Variable, MANIFEST);

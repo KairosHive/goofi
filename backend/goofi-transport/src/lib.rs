@@ -28,7 +28,7 @@ pub type ServiceName = String;
 
 /// The id a door is rung with: `0` is a control message; `1..=64` an input slot, the slots past
 /// 63 sharing 64; `65..=128` an `nd()` channel; the rest a door's own.
-pub use goofi_node::EventId;
+pub use goofi_core::node::EventId;
 
 /// The per-session registry: every slot, door and queue by name, made by whichever end asks
 /// first and gone when the last end lets go.

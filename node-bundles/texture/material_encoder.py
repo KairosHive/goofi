@@ -151,7 +151,7 @@ def as_picture(value, name):
     return np.clip(np.nan_to_num(x.astype(np.float32, copy=False)), 0.0, 1.0)
 
 
-class MaterialEncoder(goofi.Node):
+class MaterialEncoder(goofi.SignalNode):
     """Place a picture in a material space as the IP-Adapter's eye sees it, or build a space from a folder."""
 
     TAGS = ["image", "ml", "analysis"]

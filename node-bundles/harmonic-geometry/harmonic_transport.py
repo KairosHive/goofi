@@ -11,7 +11,7 @@ import goofi
 from goofi.geometry import encode, decode
 
 
-class HarmonicTransport(goofi.Node):
+class HarmonicTransport(goofi.SignalNode):
     """Apply Biotuner transport operators to an existing scalar geometry field."""
 
     TAGS = ["transform", "image"]

@@ -2,7 +2,7 @@
 //! patch. Exact, not approximate: ten qubits is a thousand amplitudes and costs nothing.
 
 use goofi_core::{Axes, Axis, Coord, Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, ParamKey, Params, ParamSpec, SlotDecl, Tag};
 
 /// xorshift64*, which needs no dependency and is far beyond what a model asks of it.
 struct Rng(u64);
@@ -225,4 +225,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Quantum, MANIFEST);
+goofi_sdk::signal::export!(Quantum, MANIFEST);

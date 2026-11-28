@@ -1,7 +1,7 @@
 //! The grid under both canvases, and the manager's answer when nobody names a place: the footprint
 //! a card takes, the packer that fills free cells, and the arrangers that tidy a whole scope.
 
-use goofi_node::Uid;
+use goofi_core::node::Uid;
 use std::collections::HashMap;
 
 use crate::{machine::Machine, subpatch::Dir, Graph};

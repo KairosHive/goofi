@@ -32,7 +32,7 @@ import goofi
 METHODS = ["anchored", "spectral", "tonotopic", "consonance", "harmonic", "tenney", "mds", "derived", "physical"]
 
 
-class BioColors(goofi.Node):
+class BioColors(goofi.SignalNode):
     """A palette from a signal's peaks or from a tuning.
 
     Inputs:

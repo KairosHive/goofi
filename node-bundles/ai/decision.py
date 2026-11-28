@@ -25,7 +25,7 @@ import goofi
 FIELD = "response"
 
 
-class Decision(goofi.Node):
+class Decision(goofi.SignalNode):
     """Which of the possible answers a text calls for, by a decision model."""
 
     TAGS = ["text", "ml"]

@@ -16,7 +16,7 @@ from pythonosc.osc_server import ThreadingOSCUDPServer
 import goofi
 
 
-class OscIn(goofi.Node):
+class OscIn(goofi.SignalNode):
     """Receive OSC messages: one table entry per address, the latest value each."""
 
     TAGS = ["input"]

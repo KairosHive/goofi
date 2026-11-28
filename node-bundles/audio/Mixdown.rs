@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     CHANNELS = ParamDecl {
         doc: Some("how many channels leave; 2 is the pair a speaker takes"),
         ..ParamDecl::new("mixdown", "channels", ParamSpec::Num { default: &[2.0], min: 1.0, max: 256.0, int: true, options: &[], face: Face::Plain })
@@ -65,4 +65,4 @@ impl AudioNode for Mixdown {
     }
 }
 
-goofi_audio_sdk::export!(Mixdown, MANIFEST);
+goofi_sdk::audio::export!(Mixdown, MANIFEST);

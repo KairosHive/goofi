@@ -2,7 +2,7 @@
 //! anywhere in the patch becomes an array of the shape a node downstream wants.
 
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, Tag};
 
 #[derive(Default)]
 struct Constant;
@@ -63,4 +63,4 @@ static MANIFEST: Manifest = Manifest {
     producer: true,
 };
 
-goofi_signal_sdk::export!(Constant, MANIFEST);
+goofi_sdk::signal::export!(Constant, MANIFEST);

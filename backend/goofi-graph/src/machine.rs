@@ -8,7 +8,7 @@ use goofi_core::control;
 use goofi_core::ease::Curve;
 use goofi_core::variables::{is_valid_identifier, Control, ControlKind};
 use goofi_core::{Data, Face, Meta, MetaValue, Param, Value};
-use goofi_node::{EvalCtx, ExprEvaluator, Field, Local};
+use goofi_core::node::{EvalCtx, ExprEvaluator, Field, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -428,7 +428,7 @@ impl Machine {
 struct Expr {
     rewritten: String,
     refs: Vec<VarRef>,
-    id: Option<goofi_node::BindingId>,
+    id: Option<goofi_core::node::BindingId>,
     error: Option<String>,
 }
 
@@ -686,7 +686,7 @@ impl Machines {
 
     /// The expressions `wanted`, each compiled once: one `held` already is kept, one no longer
     /// wanted is released.
-    fn compile_all(&self, mut held: HashMap<String, Expr>, wanted: HashSet<String>, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_node::ExprError>) -> HashMap<String, Expr> {
+    fn compile_all(&self, mut held: HashMap<String, Expr>, wanted: HashSet<String>, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_core::node::ExprError>) -> HashMap<String, Expr> {
         held.retain(|text, e| {
             let keep = wanted.contains(text);
             if let (false, Some(ev), Some(id)) = (keep, &self.evaluator, e.id) {
@@ -708,7 +708,7 @@ impl Machines {
         }
     }
 
-    fn compile(&self, text: &str, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_node::ExprError>) -> Expr {
+    fn compile(&self, text: &str, rewrite: impl Fn(&str) -> Result<(String, Vec<VarRef>), goofi_core::node::ExprError>) -> Expr {
         let none = |error: String| Expr { rewritten: String::new(), refs: Vec::new(), id: None, error: Some(error) };
         let (rewritten, refs) = match rewrite(text) {
             Ok(r) => r,
@@ -1013,7 +1013,7 @@ impl<'a> Ctx<'a> {
                 (target, _) => match (self.read)(target)? {
                     // A frame holding a functional is read at this instant, as any reader reads it.
                     Local::Frame(frame) if frame.as_functional().is_some() => match self.evaluator {
-                        Some(ev) => Local::Frame(goofi_node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?),
+                        Some(ev) => Local::Frame(goofi_core::node::at(&**ev, &frame, self.now, (0.0, 1.0)).map_err(|e| e.0)?),
                         None => Local::Frame(frame),
                     },
                     local => local,
@@ -1022,9 +1022,9 @@ impl<'a> Ctx<'a> {
             locals.push((r.var.clone(), local));
         }
         if expr_rewrite::is_bare(&e.rewritten) {
-            let (var, index) = goofi_node::mailbox::split_index(e.rewritten.trim())?;
+            let (var, index) = goofi_core::node::mailbox::split_index(e.rewritten.trim())?;
             let local = locals.iter().find(|(v, _)| v == var).map(|(_, l)| l).ok_or("no local")?;
-            return goofi_node::mailbox::pick(local, index);
+            return goofi_core::node::mailbox::pick(local, index);
         }
         match (self.evaluator, e.id) {
             (Some(ev), Some(id)) => ev.eval(id, &EvalCtx { locals: &locals, t: self.now, range: (0.0, 1.0), state: None }).map_err(|e| e.0),

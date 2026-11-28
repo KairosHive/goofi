@@ -1,8 +1,8 @@
-use goofi_audio_sdk::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, NOTES, SCALES};
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::scale::{Recipe, MASK_BITS, MAX_DEGREES, METHODS, NOTES, SCALES};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     SCALE = ParamDecl {
         doc: Some("a named scale, or `custom` to build one from the params below"),
         ..ParamDecl::new("scale", "scale", ParamSpec::Str { default: "major", options: &SCALES, refresh: false })
@@ -72,4 +72,4 @@ impl AudioNode for Quantize {
     }
 }
 
-goofi_audio_sdk::export!(Quantize, MANIFEST);
+goofi_sdk::audio::export!(Quantize, MANIFEST);

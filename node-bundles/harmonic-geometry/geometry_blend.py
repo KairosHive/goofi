@@ -29,7 +29,7 @@ def arc_sample(points, count, align):
     return np.column_stack([np.interp(at, distance, points[keep, axis]) for axis in range(3)])
 
 
-class GeometryBlend(goofi.Node):
+class GeometryBlend(goofi.SignalNode):
     """Blend scalar fields, curves, or meshes with matching connectivity."""
 
     TAGS = ["transform"]

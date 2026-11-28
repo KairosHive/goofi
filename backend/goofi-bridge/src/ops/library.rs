@@ -43,7 +43,7 @@ impl ReadOp for List {
 impl ReadOp for Get {
     fn run(tx: &mut Txn, a: GetArgs) -> Result<Value, String> {
         let mount = tx.state.mount();
-        inspect::node_source(&tx.g, &a.ty, &mount, &tx.state.node_roots(), a.source.unwrap_or(false))
+        inspect::node_source(&tx.g, &tx.state.library, &a.ty, &mount, &tx.state.node_roots(), a.source.unwrap_or(false))
     }
 }
 
@@ -55,14 +55,14 @@ impl EffectOp for Save {
         let (engine, bare, from) = {
             let g = state.graph.lock();
             let (engine, entry) = g.resolve_type(&a.ty)?;
-            let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+            let ty = goofi_core::node::qualify(engine, entry.manifest.type_name);
             let folder = match g.origin(&ty) {
-                Some(goofi_graph::Origin::Patch) => mount.join(goofi_node::folder_of(engine)),
+                Some(goofi_graph::Origin::Patch) => mount.join(goofi_core::node::folder_of(engine)),
                 Some(goofi_graph::Origin::Custom) => state.custom.clone(),
                 _ => return Err(format!("`{ty}` is not a custom node")),
             };
             let bare = entry.manifest.type_name;
-            let from = crate::node_file_in(&folder, bare, engine)
+            let from = state.library.find(&folder, bare, engine)
                 .ok_or_else(|| format!("`{ty}` has no source file under {}", folder.display()))?;
             (engine, bare.to_string(), from)
         };
@@ -76,7 +76,7 @@ impl EffectOp for Save {
                 if path.extension().is_none() {
                     path.set_extension(from.extension().ok_or("missing source extension")?);
                 }
-                if path.extension() != from.extension() || goofi_node::describe::type_name_of(&path).is_none() {
+                if path.extension() != from.extension() || goofi_core::node::describe::type_name_of(&path).is_none() {
                     return Err("use a valid node file name with the source extension".into());
                 }
                 path.into_os_string()
@@ -84,8 +84,8 @@ impl EffectOp for Save {
             None => from.file_name().ok_or("the source file has no name")?.to_owned(),
         };
         let to = library.join(&name);
-        let saved_type = goofi_node::describe::type_name_of(&to).ok_or("invalid file name")?;
-        let held = crate::node_file_in(&library, &saved_type, engine).or_else(|| to.exists().then(|| to.clone()));
+        let saved_type = goofi_core::node::describe::type_name_of(&to).ok_or("invalid file name")?;
+        let held = state.library.find(&library, &saved_type, engine).or_else(|| to.exists().then(|| to.clone()));
         if let Some(held) = &held {
             if held.extension() != from.extension() {
                 return Err(format!("{} uses another source language; choose a different name", held.display()));
@@ -134,7 +134,7 @@ impl EffectOp for Save {
             state.events.send(Event::NodeTypes { types: schemas::catalog_types(&g, Detail::Full) });
         }
         crate::resync_and_broadcast(state);
-        Ok(json!({ "type": goofi_node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
+        Ok(json!({ "type": goofi_core::node::qualify(engine, &saved_type), "path": goofi_core::path::to_slash(&to) }))
     }
 }
 

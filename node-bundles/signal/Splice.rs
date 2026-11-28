@@ -11,7 +11,7 @@
 //! 6), so about 0.05 a second at 30 frames a second makes the pieces glide.
 
 use goofi_core::{Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 const G: &str = "splice";
 const OCTAVES: i32 = 3;
@@ -229,4 +229,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Splice, MANIFEST);
+goofi_sdk::signal::export!(Splice, MANIFEST);

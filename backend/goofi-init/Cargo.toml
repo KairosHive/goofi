@@ -11,10 +11,11 @@ goofi-supervisor = { path = "../goofi-supervisor" }
 # `demo.toml`, the list of what a public demo withholds.
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# The terminal screen goofi and goofi-init draw.
+indicatif = "0.18"
+console = "0.16"
 # The wheel's content key.
 sha2 = "0.10"
-# The setup screen, the one goofi draws its startup on.
-goofi-screen = { path = "../goofi-screen" }
 
 [[bin]]
 name = "goofi-init"

@@ -15,7 +15,7 @@ import goofi
 RATE = 24000
 
 
-class TextToSpeech(goofi.Node):
+class TextToSpeech(goofi.SignalNode):
     """Every text frame spoken, by OpenAI, ElevenLabs or an OpenAI-compatible server."""
 
     TAGS = ["text", "generator"]

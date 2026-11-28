@@ -79,16 +79,12 @@ fn prebuild_nodes(started: SystemTime) {
     .expect("write shipped.rs");
 }
 
-/// The SDK a `.rs` node file is built with: the one it names.
+/// The SDK a `.rs` node file is built with: the one whose `export!` it spells.
 fn sdk_of(path: &Path) -> Option<&'static goofi_build::Sdk> {
     if path.extension().is_none_or(|e| e != "rs") {
         return None;
     }
-    match goofi_node::engine_of(path)?.as_str() {
-        "signal" => Some(&goofi_build::SIGNAL),
-        "audio" => Some(&goofi_build::AUDIO),
-        _ => None,
-    }
+    goofi_build::sdk_of(&std::fs::read_to_string(path).ok()?)
 }
 
 /// Emit `$OUT_DIR/skills.rs`: every file of every `skills/<name>/`, keyed `<name>/<within>`, so a

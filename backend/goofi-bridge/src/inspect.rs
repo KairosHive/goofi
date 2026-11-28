@@ -262,7 +262,7 @@ pub fn node(
 pub(crate) fn variable_json(g: &Graph, store: &goofi_core::variables::VariableStore, name: &str, v: &goofi_core::variables::Variable) -> Value {
     // A functional is read at this instant, as every reader reads it.
     let value = match (v.value.as_functional().is_some(), g.evaluator()) {
-        (true, Some(ev)) => goofi_node::at(&*ev, &v.value, g.time().position(), (0.0, 1.0)).unwrap_or_else(|_| v.value.clone()),
+        (true, Some(ev)) => goofi_core::node::at(&*ev, &v.value, g.time().position(), (0.0, 1.0)).unwrap_or_else(|_| v.value.clone()),
         _ => v.value.clone(),
     };
     let mut e = json!({ "name": name, "value": value });
@@ -293,6 +293,7 @@ pub fn variables(g: &Graph) -> Value {
 /// under `text`, since the entry's own `source` is where the TYPE came from.
 pub fn node_source(
     g: &Graph,
+    library: &goofi_runtime::Library,
     ty: &str,
     mount: &Path,
     roots: &[(PathBuf, goofi_graph::Origin)],
@@ -301,21 +302,21 @@ pub fn node_source(
     // A type that could not load, and a boundary port, are entries too: the row the list gives.
     let (engine, mut info) = match g.resolve_type(ty) {
         Ok((engine, entry)) => {
-            let ty = goofi_node::qualify(engine, entry.manifest.type_name);
+            let ty = goofi_core::node::qualify(engine, entry.manifest.type_name);
             (engine.to_string(), crate::schemas::palette_row(g, engine, &ty, Some(entry.manifest), None, crate::schemas::Detail::Full))
         }
         Err(unknown) => {
             let Value::Array(rows) = crate::schemas::catalog_types(g, crate::schemas::Detail::Full) else { return Err(unknown) };
-            let named = |row: &Value| row["type"].as_str().is_some_and(|t| t == ty || goofi_node::bare(t) == ty);
+            let named = |row: &Value| row["type"].as_str().is_some_and(|t| t == ty || goofi_core::node::bare(t) == ty);
             let row = rows.into_iter().find(named).ok_or(unknown)?;
-            let engine = goofi_node::split_type_id(row["type"].as_str().unwrap_or_default()).0.unwrap_or_default().to_string();
+            let engine = goofi_core::node::split_type_id(row["type"].as_str().unwrap_or_default()).0.unwrap_or_default().to_string();
             (engine, row)
         }
     };
     let (engine, ty) = (engine.as_str(), &info["type"].as_str().unwrap_or(ty).to_string());
     // `.rev()` is load-bearing: `rescan` scans the roots forwards and lets each overwrite the
     // last, so a first-match search walks them backwards.
-    let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| mount.join(goofi_node::folder_of(id))).collect();
+    let workspace: Vec<PathBuf> = g.engine_ids().into_iter().map(|id| mount.join(goofi_core::node::folder_of(id))).collect();
     let word = |o: &goofi_graph::Origin| match o {
         goofi_graph::Origin::Patch => "patch",
         goofi_graph::Origin::Custom => "custom",
@@ -326,15 +327,15 @@ pub fn node_source(
         .filter(|_| g.origin(ty) == Some(&goofi_graph::Origin::Patch))
         .map(|d| (d, "patch"))
         .chain(roots.iter().rev().map(|(d, o)| (d.clone(), word(o))));
-    // The file names the type, so the path re-derives without a registry; the registry says only
-    // whether the patch's folder is where it lives.
+    // The file names the type and says its engine, so the path re-derives without a registry;
+    // the registry says only whether the patch's folder is where it lives.
     let mut files = dirs.into_iter().filter_map(|(dir, provenance)| {
-        Some((crate::node_file_in(&dir, goofi_node::bare(ty), engine)?, provenance))
+        Some((library.find(&dir, goofi_core::node::bare(ty), engine)?, provenance))
     });
     let found = files.next();
     let tier = g.type_tier(ty);
-    info["language"] = json!(tier.map(goofi_node::Isolation::language));
-    info["tier"] = json!(tier.map(goofi_node::Isolation::wire));
+    info["language"] = json!(tier.map(goofi_core::node::Isolation::language));
+    info["tier"] = json!(tier.map(goofi_core::node::Isolation::wire));
     info["provenance"] = json!(match &found {
         Some((_, p)) => *p,
         None => "no source file under any node root",

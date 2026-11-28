@@ -1,7 +1,7 @@
-use goofi_audio_sdk::goofi_core::SlotType;
-use goofi_audio_sdk::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
+use goofi_sdk::audio::goofi_core::SlotType;
+use goofi_sdk::audio::{Face, AudioNode, Block, Manifest, OutputDecl, ParamDecl, ParamSpec, SlotDecl, Lanes, Tag, BLOCK};
 
-goofi_audio_sdk::params! {
+goofi_sdk::audio::params! {
     RISE = ParamDecl {
         doc: Some("seconds to climb one unit"),
         ..ParamDecl::new("slew", "rise", ParamSpec::Num { default: &[0.01], min: 0.0, max: 10.0, int: false, options: &[], face: Face::Plain })
@@ -58,4 +58,4 @@ impl AudioNode for Slew {
     }
 }
 
-goofi_audio_sdk::export!(Slew, MANIFEST);
+goofi_sdk::audio::export!(Slew, MANIFEST);

@@ -1,0 +1,119 @@
+//! The base classes Python node authors derive from, one per engine: `goofi.SignalNode` and
+//! `goofi.GraphicsNode`. The base IS the node's engine. A node declares the rest in the
+//! `INPUTS`/`OUTPUTS`/`PARAMS`/`TAGS` class constants and the `PRODUCER` flag; each may be omitted.
+//! A `pulse_<group>_<name>(self)` method answers the `goofi.PulseParam` it names.
+
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+
+#[pyclass(subclass)]
+pub struct Node {
+    pub(crate) clear_inputs: Option<Vec<String>>,
+    /// The engine's clock, in seconds, as of the call in progress: `self.now` in `setup` and `process`.
+    #[pyo3(get)]
+    pub(crate) now: f64,
+    /// The params `self.params` was last built from: an equal set is not built again.
+    pub(crate) applied: Option<crate::exec::Groups>,
+}
+
+#[pymethods]
+impl Node {
+    #[new]
+    fn new() -> Node {
+        Node { clear_inputs: None, now: 0.0, applied: None }
+    }
+
+    /// Clear a held input after this process call succeeds.
+    fn clear_input(&mut self, name: String) -> PyResult<()> {
+        let slots = self.clear_inputs.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("clear_input() is only available inside process()")
+        })?;
+        if !slots.contains(&name) {
+            slots.push(name);
+        }
+        Ok(())
+    }
+
+    /// `{slot_name: DataType | InputSlot}` — the node's input slots.
+    #[classattr]
+    #[pyo3(name = "INPUTS")]
+    fn inputs(py: Python<'_>) -> Bound<'_, PyDict> {
+        PyDict::new(py)
+    }
+
+    /// `{slot_name: DataType}` — the node's output slots.
+    #[classattr]
+    #[pyo3(name = "OUTPUTS")]
+    fn outputs(py: Python<'_>) -> Bound<'_, PyDict> {
+        PyDict::new(py)
+    }
+
+    /// `{group: {name: <Param descriptor>}}` — the node's params.
+    #[classattr]
+    #[pyo3(name = "PARAMS")]
+    fn params(py: Python<'_>) -> Bound<'_, PyDict> {
+        PyDict::new(py)
+    }
+
+    /// Whether the node paces itself rather than waiting for a frame.
+    #[classattr]
+    #[pyo3(name = "PRODUCER")]
+    fn producer() -> bool {
+        false
+    }
+
+    /// The palette facets, from goofi's closed tag vocabulary — `["analysis", "eeg"]`.
+    #[classattr]
+    #[pyo3(name = "TAGS")]
+    fn tags(py: Python<'_>) -> Bound<'_, PyList> {
+        PyList::empty(py)
+    }
+
+    /// Init after params are seeded, once it succeeds; a raise is retried on this same instance,
+    /// so release what was acquired before failing.
+    fn setup(&self) -> PyResult<()> {
+        Ok(())
+    }
+    /// The tick body. `**inputs` is one keyword argument per DECLARED input slot: a `Data`, or
+    /// `None` where the slot holds no frame; a `multi` slot is `list[tuple[str, Data]]`, each
+    /// frame with the `node.slot` that sent it, in wire order.
+    #[pyo3(signature = (**_inputs))]
+    fn process(&self, _inputs: Option<&Bound<'_, PyDict>>) -> Option<Py<PyAny>> {
+        None
+    }
+    /// Release what `setup` acquired — a thread, a socket, a device. Called once, when the node
+    /// goes; a raise here is printed and nothing else, because there is no next call to retry on.
+    fn stop(&self) -> PyResult<()> {
+        Ok(())
+    }
+}
+
+/// A node of the signal engine: it runs when a frame arrives, or on its own schedule.
+#[pyclass(extends = Node, subclass)]
+pub struct SignalNode;
+
+#[pymethods]
+impl SignalNode {
+    #[new]
+    fn new() -> PyClassInitializer<SignalNode> {
+        PyClassInitializer::from(Node::new()).add_subclass(SignalNode)
+    }
+}
+
+/// A node of the graphics engine: the render tick calls it at its place in the frame and waits
+/// for the one picture it makes.
+#[pyclass(extends = Node, subclass)]
+pub struct GraphicsNode;
+
+#[pymethods]
+impl GraphicsNode {
+    #[new]
+    fn new() -> PyClassInitializer<GraphicsNode> {
+        PyClassInitializer::from(Node::new()).add_subclass(GraphicsNode)
+    }
+}
+
+/// The engine bases by engine id: what a node class derives from, and what names its engine.
+pub fn engines(py: Python<'_>) -> [(&'static str, Bound<'_, pyo3::types::PyType>); 2] {
+    [("signal", py.get_type::<SignalNode>()), ("graphics", py.get_type::<GraphicsNode>())]
+}

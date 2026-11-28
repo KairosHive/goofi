@@ -9,10 +9,10 @@ use goofi_supervisor::sync::{Condvar, Mutex};
 
 use goofi_core::{Data, Meta, SlotType};
 use goofi_graph::Graph;
-use goofi_node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
+use goofi_core::node::{Face, EditorAction, Engine, GraphView, LibraryEntry, NodeManifest, NodeStage, OutputDecl, ParamDecl, ParamGroups,
     ParamKey, ParamSpec, Params, SlotDecl, Status, Uid,
 };
-use goofi_signal_sdk::{Inputs, Node, NodeCtx, NodeResult, Outputs};
+use goofi_sdk::node::{Inputs, Node, NodeCtx, NodeResult, Outputs};
 
 const fn manifest(
     type_name: &'static str,
@@ -27,7 +27,7 @@ const fn manifest(
 
 fn add(g: &mut Graph, manifest: NodeManifest, make: fn() -> Box<dyn Node>) {
     let manifest: &'static NodeManifest = Box::leak(Box::new(manifest));
-    goofi_bridge::register_dyn_type(g, manifest, Box::new(move |_| make()), &goofi_node::NATIVE);
+    goofi_bridge::register_dyn_type(g, manifest, Box::new(move |_| make()), &goofi_core::node::NATIVE);
 }
 
 /// Every fixture into `g`.
@@ -107,7 +107,7 @@ impl LibraryEngine {
             .map(|name| {
                 let name: &'static str = Box::leak(name.to_string().into_boxed_str());
                 let m = manifest(name, "a name a second engine also offers", &[], OUT_ARRAY, NO_PARAMS, true);
-                LibraryEntry { manifest: Box::leak(Box::new(m)), isolation: &goofi_node::NATIVE }
+                LibraryEntry { manifest: Box::leak(Box::new(m)), isolation: &goofi_core::node::NATIVE }
             })
             .collect();
         LibraryEngine { id, types, pending: Vec::new(), shown: Arc::default(), born: Arc::default() }
@@ -167,7 +167,7 @@ impl Engine for LibraryEngine {
         n
     }
 
-    fn request(&mut self, _uid: Uid, _request: goofi_node::Request) {}
+    fn request(&mut self, _uid: Uid, _request: goofi_core::node::Request) {}
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
@@ -234,7 +234,7 @@ impl Latch {
     pub fn busy(&self, g: &crate::Goofi, type_name: &'static str) {
         let gate = self.0.clone();
         let m = manifest(type_name, "every run waits at a latch", &[], OUT_ARRAY, NO_PARAMS, true);
-        g.register_dyn(Box::leak(Box::new(m)), Box::new(move |_| Box::new(Busy(gate.clone()))), &goofi_node::NATIVE);
+        g.register_dyn(Box::leak(Box::new(m)), Box::new(move |_| Box::new(Busy(gate.clone()))), &goofi_core::node::NATIVE);
     }
 
     /// Register `type_name`, an echo whose build waits here.
@@ -244,7 +244,7 @@ impl Latch {
         g.register_dyn(Box::leak(Box::new(m)), Box::new(move |_| {
             gate.pass();
             Box::new(Echo)
-        }), &goofi_node::NATIVE);
+        }), &goofi_core::node::NATIVE);
     }
 }
 

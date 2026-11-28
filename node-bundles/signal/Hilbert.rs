@@ -2,7 +2,7 @@
 //! how fast that is turning. Per frame, so it follows a Buffer.
 
 use goofi_core::{resolve_axis, stream, Data, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 use rustfft::{num_complex::Complex32, FftPlanner};
 
 struct Hilbert {
@@ -111,4 +111,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(Hilbert, MANIFEST);
+goofi_sdk::signal::export!(Hilbert, MANIFEST);

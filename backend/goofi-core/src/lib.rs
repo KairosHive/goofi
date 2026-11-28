@@ -7,8 +7,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 pub mod variables;
+pub mod view;
 pub mod control;
-pub mod drawing;
+pub mod node;
 pub mod ease;
 pub mod normalize;
 pub mod path;
@@ -597,7 +598,7 @@ impl PartialEq for Data {
 }
 
 /// Non-array frames report an empty shape.
-impl goofi_view::Reducible for Data {
+impl crate::view::Reducible for Data {
     fn dtype_tag(&self) -> u8 {
         self.0.value.dtype_tag()
     }
@@ -855,11 +856,11 @@ impl SlotType {
         self == into
     }
 
-    /// How a node that makes this kind is written, where ONE engine alone makes it and it never
-    /// crosses the wire. `None` for a kind any engine makes.
+    /// The engine that alone makes this kind, which never crosses the wire. `None` for a kind
+    /// any engine makes.
     pub fn engine_local(self) -> Option<&'static str> {
         match self {
-            SlotType::Audio => Some("audio — an audio node is written against goofi_audio_sdk"),
+            SlotType::Audio => Some("audio"),
             SlotType::Array | SlotType::String | SlotType::Table | SlotType::Texture => None,
         }
     }

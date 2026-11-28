@@ -4,7 +4,7 @@
 
 use goofi_core::reduce::{note_reduced, origin_of, reduce_axis};
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
+use goofi_sdk::signal::{Face, Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, ParamDecl, Params, ParamSpec, SlotDecl, Tag};
 
 /// Rec. 709 luminance, over whatever of R, G and B the frame has.
 const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
@@ -120,4 +120,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(GraphicsIn, MANIFEST);
+goofi_sdk::signal::export!(GraphicsIn, MANIFEST);

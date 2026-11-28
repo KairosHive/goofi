@@ -3,7 +3,7 @@
 
 use goofi_core::indexmap::IndexMap;
 use goofi_core::{Data, Meta, SlotType};
-use goofi_signal_sdk::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl, Tag};
+use goofi_sdk::signal::{Inputs, Manifest, Node, NodeCtx, NodeResult, OutputDecl, Outputs, Params, SlotDecl, Tag};
 
 #[derive(Default)]
 struct FromJson;
@@ -235,4 +235,4 @@ static MANIFEST: Manifest = Manifest {
     producer: false,
 };
 
-goofi_signal_sdk::export!(FromJson, MANIFEST);
+goofi_sdk::signal::export!(FromJson, MANIFEST);

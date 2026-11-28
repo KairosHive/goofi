@@ -423,7 +423,7 @@ def photograph(path, w, h):
     return np.asarray(im.resize((w, h), Image.LANCZOS), np.float32) / 255.0
 
 
-class MaterialSpace(goofi.Node):
+class MaterialSpace(goofi.SignalNode):
     """Move through a set of photographs as the IP-Adapter's eye places them, and hand on the photographs."""
 
     TAGS = ["image", "ml", "generator"]

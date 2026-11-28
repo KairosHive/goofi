@@ -10,7 +10,7 @@ from scipy.signal import resample_poly
 import goofi
 
 
-class Resample(goofi.Node):
+class Resample(goofi.SignalNode):
     """Change the sample rate of a complete window; use Buffer to set its length."""
 
     TAGS = ["transform"]
